@@ -1,11 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig, resolveStateDir } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { readBackupEngine } from "../snapshot/database-backup.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import type { SnapshotDatabaseManifest } from "../snapshot/snapshot-provider.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -32,8 +35,27 @@ export async function backupSqliteCreateCommand(
   options: BackupSqliteCreateOptions,
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
+  const globalPath = options.global === true ? resolveOpenClawStateSqlitePath() : undefined;
+  if (globalPath) {
+    assertNotUpdateCapturePath(globalPath, resolveStateDir());
+  }
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   try {
-    const database = await resolveSnapshotDatabase(options);
+    const database = await resolveSnapshotDatabase(options, config, globalPath);
+    let postgres = false;
+    try {
+      postgres = readBackupEngine(database.path).engine === "postgres";
+    } catch (error) {
+      if (!isSqliteCorruptionError(error)) {
+        throw error;
+      }
+      // Preserve the native snapshot owner's corruption diagnostics and cleanup.
+    }
+    if (postgres) {
+      throw new Error(
+        "backup sqlite cannot copy a PostgreSQL anchor. Use openclaw backup create; stop through the service owner, then rerun.",
+      );
+    }
     const result = await createLocalSqliteSnapshotProvider({ repositoryPath }).create(database);
     const report = {
       ok: true as const,
@@ -145,7 +167,11 @@ export async function backupSqliteRestoreCommand(
   return report;
 }
 
-async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions) {
+async function resolveSnapshotDatabase(
+  options: BackupSqliteCreateOptions,
+  config: OpenClawConfig,
+  globalPath: string | undefined,
+) {
   const rawAgentId = options.agent?.trim();
   if (options.agent !== undefined && !rawAgentId) {
     throw new Error("--agent must not be blank");
@@ -156,15 +182,12 @@ async function resolveSnapshotDatabase(options: BackupSqliteCreateOptions) {
   if (options.global !== true && !rawAgentId) {
     throw new Error("Choose a SQLite snapshot source: --global or --agent <id>.");
   }
-  if (options.global === true) {
-    const selectedPath = resolveOpenClawStateSqlitePath();
-    assertNotUpdateCapturePath(selectedPath, resolveStateDir());
+  if (globalPath) {
     return {
-      path: await fs.realpath(selectedPath),
+      path: await fs.realpath(globalPath),
       identity: { role: "global" as const },
     };
   }
-  const config = getRuntimeConfig({ skipPluginValidation: true });
   const agentId = resolveConfiguredAgentId(config, normalizeAgentId(rawAgentId));
   const agentRoot = await resolveBackupAgentRoot(config, agentId);
   assertNotUpdateCapturePath(agentRoot.databasePath, resolveStateDir());

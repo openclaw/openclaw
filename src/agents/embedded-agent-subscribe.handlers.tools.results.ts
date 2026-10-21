@@ -142,10 +142,6 @@ export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
 }
 
-export function isCronAddAction(args: unknown): boolean {
-  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
-}
-
 export function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
@@ -198,7 +194,7 @@ export function extractExecOutput(result: unknown): string | undefined {
 
 export function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
-  return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+  return output !== undefined ? truncateLiveExecOutput(output) : undefined;
 }
 
 function isOpenClawExecutable(token: string | undefined): boolean {

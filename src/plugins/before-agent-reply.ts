@@ -1,9 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
-import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
@@ -40,22 +39,6 @@ export function withBeforeAgentReplyObserver<T>(
 /** Preserves the full plugin reply contract, including private payload metadata. */
 export function buildHandledBeforeAgentReplyPayloads(reply?: ReplyPayload): ReplyPayload[] {
   return [reply ?? { text: SILENT_REPLY_TOKEN }];
-}
-
-/** A claim with no reply content is deliberate silence, not a model that said nothing. */
-export function buildHandledBeforeAgentReplyMeta(reply?: ReplyPayload) {
-  const finalText = reply?.text ?? SILENT_REPLY_TOKEN;
-  const silent =
-    !reply ||
-    !hasReplyPayloadContent(
-      { ...reply, text: isSilentReplyPayloadText(reply.text) ? undefined : reply.text },
-      { trimText: true },
-    );
-  return {
-    finalAssistantVisibleText: finalText,
-    finalAssistantRawText: finalText,
-    ...(silent ? { intentionalTerminalCompletion: "silent-claim" as const } : {}),
-  };
 }
 
 /** Runs the reply claim hook once for one admitted turn, across model fallbacks. */

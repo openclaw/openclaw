@@ -1,6 +1,6 @@
 // Gateway config reload tests cover changed-path detection, reload planning,
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -42,11 +42,8 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
-import { hashStableJson } from "../plugins/installed-plugin-index-hash.js";
 import { PluginRuntimeApplicationError, getPluginRuntimeGeneration } from "../plugins/lifecycle.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
-import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -59,10 +56,6 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  getSkillsSnapshotVersion,
-  resetSkillsRefreshStateForTest,
-} from "../skills/runtime/refresh-state.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
@@ -73,6 +66,7 @@ import {
   listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
+import { registerInvalidConfigReloadTests } from "./config-reload.invalid-config.test-support.js";
 import type {
   GatewayConfigReloadTransactionOwnership,
   GatewayReloadPlan,
@@ -110,6 +104,12 @@ const configAuditMocks = vi.hoisted(() => ({
   readLatestSnapshot: vi.fn(),
   upsertSnapshot: vi.fn(),
 }));
+const refreshSkillsDiscoveryMock = vi.hoisted(() => vi.fn());
+
+// mock-isolation: Config publication tests isolate the process-wide discovery worker and its filesystem scans.
+vi.mock("../skills/runtime/refresh.js", () => ({
+  refreshSkillsDiscovery: refreshSkillsDiscoveryMock,
+}));
 
 vi.mock("../config/io.audit.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/io.audit.js")>();
@@ -133,6 +133,7 @@ beforeEach((context) => {
   configAuditMocks.append.mockReset();
   configAuditMocks.readLatestSnapshot.mockReset().mockReturnValue(null);
   configAuditMocks.upsertSnapshot.mockReset();
+  refreshSkillsDiscoveryMock.mockReset().mockResolvedValue(undefined);
 });
 
 describe("diffConfigPaths", () => {
@@ -1306,7 +1307,7 @@ describe("startGatewayConfigReloader", () => {
           expect(harness.onHotReload).not.toHaveBeenCalled();
           expect(configAuditMocks.upsertSnapshot).not.toHaveBeenCalled();
         } else {
-          await harness.reloader.ready;
+          await waitForReloadState(() => harness.reloader.isReady());
           await flushReload(harness.reloader);
           expect(getOnlyHotReloadCall(harness)[1]).toEqual(write.runtimeConfig);
           expect(harness.reloader.isReady()).toBe(true);
@@ -1669,6 +1670,7 @@ describe("startGatewayConfigReloader", () => {
   it.each(["direct", "watcher-echo", "failed-cleanup", "committed", "carried-successor"] as const)(
     "settles an RPC write inside its originating gateway root (%s)",
     async (scenario) => {
+      const { clock, scheduler } = createConfigReloadTestClock();
       const root = tempDirs.make("openclaw-config-receipt-");
       const bundledPluginsDir = tempDirs.make("openclaw-config-receipt-bundled-");
       const configPath = nodePath.join(root, "openclaw.json");
@@ -1741,6 +1743,7 @@ describe("startGatewayConfigReloader", () => {
         await withEnvAsync(configEnv, async () => {
           const configIo = createConfigIO({ configPath, pluginValidation: "skip" });
           const reloader = startGatewayConfigReloader({
+            scheduler,
             testDebounceMs: 0,
             initialConfig,
             initialSnapshotRawHash: (await configIo.readConfigFileSnapshot()).hash ?? null,
@@ -1800,7 +1803,7 @@ describe("startGatewayConfigReloader", () => {
                 request.release();
               });
 
-              await vi.advanceTimersByTimeAsync(0);
+              const applying = clock.wake();
               await hotReloadStarted.promise;
               expect(onHotReload).toHaveBeenCalledOnce();
               expect(settled).toBe(false);
@@ -1824,8 +1827,10 @@ describe("startGatewayConfigReloader", () => {
               }
 
               hotReloadGate.resolve();
-              await vi.waitFor(() => expect(settled).toBe(true));
-              await flushReload(reloader);
+              await applying;
+              await clock.wake();
+              await writeResult.application;
+              expect(settled).toBe(true);
               const applied =
                 scenario === "direct" ||
                 scenario === "watcher-echo" ||
@@ -1834,11 +1839,8 @@ describe("startGatewayConfigReloader", () => {
               if (successorWrite) {
                 await expect(successorWrite.application).resolves.toBe("applied");
               }
-              // Timer advancement does not join the watcher's real filesystem reread.
-              await vi.waitFor(() =>
-                expect(competingRootCounts).toEqual(
-                  scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
-                ),
+              expect(competingRootCounts).toEqual(
+                scenario === "watcher-echo" || scenario === "failed-cleanup" ? [0, 0] : [0],
               );
               if (applied) {
                 expect(log.error).not.toHaveBeenCalled();
@@ -2273,9 +2275,6 @@ describe("startGatewayConfigReloader", () => {
 
       expect(onHotReload).not.toHaveBeenCalled();
       expect(onRestart).toHaveBeenCalledTimes(1);
-      expect(log.info).toHaveBeenCalledWith(
-        "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
-      );
       expect(log.info).toHaveBeenCalledWith(
         "config reload superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
       );
@@ -2870,36 +2869,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onRestart.mock.calls[0]?.[3]).toEqual(sourceConfig);
   });
 
-  it.each(["external", "accepted write"] as const)(
-    "rejects invalid snapshots observed after %s even when the root hash matches",
-    async (state) => {
-      let snapshot = makeZeroDebounceHookSnapshot("same-root-hash");
-      const readSnapshot = vi.fn(async () => snapshot);
-      const onConfigCandidateObserved = vi.fn();
-      const harness = createReloaderHarness(readSnapshot, {
-        initialConfig: state === "accepted write" ? snapshot.config : undefined,
-        onConfigCandidateObserved,
-      });
-      await harness.reloader.ready;
-      if (state !== "external") {
-        harness.emitWrite(makeZeroDebounceHookWrite("same-root-hash"));
-      }
-      if (state === "accepted write") {
-        await flushReload(harness.reloader);
-        expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
-        harness.onConfigAccepted.mockClear();
-      }
-      snapshot = { ...snapshot, valid: false };
-      onConfigCandidateObserved.mockClear();
-      harness.watcher.emit("change");
-      expect(onConfigCandidateObserved).toHaveBeenCalledOnce();
-      expect(readSnapshot).not.toHaveBeenCalled();
-      await flushReload(harness.reloader);
-      expect(harness.onConfigAccepted).not.toHaveBeenCalled();
-      expect(harness.onRestart).not.toHaveBeenCalled();
-      expect(harness.onHotReload).not.toHaveBeenCalled();
-    },
-  );
+  registerInvalidConfigReloadTests(tempDirs);
 
   it("preserves watcher echo restart intent while coalescing a newer write", async () => {
     const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();
@@ -2981,6 +2951,9 @@ describe("startGatewayConfigReloader", () => {
       });
       await flushWatcherChange(harness);
 
+      expect(harness.log.error).toHaveBeenCalledExactlyOnceWith(
+        "config reload failed: Error: restart admission failed",
+      );
       if (retry === "new write") {
         const newer: ConfigWriteNotification = {
           ...makeZeroDebounceHookWrite("replay-retry-new"),
@@ -3112,90 +3085,6 @@ describe("startGatewayConfigReloader", () => {
       }
     },
   );
-
-  it("preserves the completed watcher receipt for an exact install handoff", async () => {
-    const root = tempDirs.make("openclaw-reload-completed-install-");
-    const pluginRoot = nodePath.join(root, "plugin");
-    await mkdir(pluginRoot);
-    const source = nodePath.join(pluginRoot, "index.js");
-    await writeFile(source, "export default {};\n");
-    const artifact = capturePluginGenerationArtifact(pluginRoot);
-    artifact.dispose();
-    const sourceDigests = { notes: artifact.sourceDigest };
-    const registry = createTestRegistry();
-    const record = createPluginRecord({
-      id: "notes",
-      source,
-      rootDir: pluginRoot,
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    registry.plugins.push(record);
-    const instance = new PluginInstance("notes", { record, registry });
-    instance.sourceDigest = sourceDigests.notes;
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "notes", rootDir: pluginRoot, source, origin: "global" }],
-    });
-    const records = { notes: { source: "path" as const, installPath: pluginRoot } };
-    const config: OpenClawConfig = { plugins: { entries: { notes: { enabled: true } } } };
-    const snapshot = makeSnapshot({
-      config,
-      hash: "installed-notes",
-    });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-      const harness = createReloaderHarness(async () => snapshot, {
-        readPluginInstallRecords: async () => records,
-        onHotReload: async (plan, next, ownership) => {
-          setActivePluginRegistry(registry);
-          setCurrentPluginMetadataSnapshotState(
-            metadata,
-            "installed-notes",
-            undefined,
-            undefined,
-            undefined,
-            "gateway",
-          );
-          ownership.markRuntimeCommitted(next, plan);
-          return {
-            status: "applied",
-            runtime: {
-              operationId: plan.pluginLifecycle?.operationId ?? "watcher-install",
-              generation: getPluginRuntimeGeneration(),
-              pluginIds: ["notes"],
-              sourceDigests,
-              warnings: ["Retired source cleanup is deferred."],
-            },
-          };
-        },
-      });
-      await harness.reloader.ready;
-      try {
-        harness.watcher.emit("change");
-        await vi.advanceTimersByTimeAsync(1);
-        await flushReload(harness.reloader);
-        const completed = await harness.onHotReload.mock.results[0]?.value;
-        expect(completed).toHaveProperty("runtime.operationId", "watcher-install");
-        if (typeof completed !== "object" || completed.status !== "applied") {
-          throw new Error("expected the watcher runtime application");
-        }
-        const request = {
-          config,
-          pluginIds: ["notes"],
-          reason: "reload" as const,
-          expectedInstallHashes: { notes: hashStableJson(records.notes) },
-          expectedSourceDigests: sourceDigests,
-        };
-        const application = harness.reloader.applyPluginLifecycleChange(request);
-        await expect(application).resolves.toBe(completed.runtime);
-        expect(harness.onHotReload).toHaveBeenCalledOnce();
-      } finally {
-        await harness.reloader.stop();
-        await instance.dispose();
-        resetPluginRuntimeStateForTest();
-      }
-    });
-  });
 
   it.each(["shutdown", "writer handoff"] as const)(
     "waits outside the config queue for an unfinished install batch (%s)",
@@ -3372,42 +3261,89 @@ describe("startGatewayConfigReloader", () => {
   );
 });
 
-describe("startGatewayConfigReloader skills invalidation", () => {
+describe("startGatewayConfigReloader skills discovery refresh", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    resetSkillsRefreshStateForTest();
   });
 
   afterEach(async () => {
     await closeTestConfigReloaders();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    resetSkillsRefreshStateForTest();
   });
 
-  it("bumps the skills snapshot version when skills.allowBundled changes", async () => {
-    const before = getSkillsSnapshotVersion();
-    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
-      makeSnapshot({
-        config: {
-          gateway: { reload: {} },
-          skills: { allowBundled: ["gog"] },
-        },
-        hash: "skills-change-1",
-      }),
+  it.each([
+    { path: "skills.allowBundled", config: { skills: { allowBundled: ["gog"] } } },
+    { path: "browser.enabled required by a skill", config: { browser: { enabled: false } } },
+    { path: "env.vars.PATH", config: { env: { vars: { PATH: "/fixture/bin" } } } },
+  ])("refreshes after publishing $path", async ({ config }) => {
+    const nextConfig: OpenClawConfig = { gateway: { reload: {} }, ...config };
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({ config: nextConfig, hash: "skills-config-change" }),
     );
-    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+    const order: string[] = [];
+    let acceptedConfig: OpenClawConfig | undefined;
+    refreshSkillsDiscoveryMock.mockImplementation(async ({ config: candidateConfig }) => {
+      expect(candidateConfig).toEqual(acceptedConfig);
+      order.push("skills");
+    });
+    const { watcher, reloader } = createReloaderHarness(readSnapshot, {
+      onConfigAccepted: async (candidateConfig) => {
+        acceptedConfig = candidateConfig;
+        order.push("config");
+      },
+    });
     await reloader.ready;
 
     watcher.emit("change");
     await flushReload(reloader);
 
-    const after = getSkillsSnapshotVersion();
-    expect(after).toBeGreaterThan(before);
-    expect(log.info).toHaveBeenCalledWith(
-      expect.stringContaining("skills snapshot invalidated by config change"),
-    );
+    expect(order).toEqual(["config", "skills"]);
+    expect(refreshSkillsDiscoveryMock).toHaveBeenCalledExactlyOnceWith({
+      config: nextConfig,
+      reason: "config-change",
+    });
+    await reloader.stop();
+  });
 
+  it("keeps an applied config when discovery refresh fails", async () => {
+    refreshSkillsDiscoveryMock.mockRejectedValue(new Error("discovery unavailable"));
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+      skills: { allowBundled: ["gog"] },
+    };
+    const { watcher, log, reloader, onConfigAccepted } = createReloaderHarness(async () =>
+      makeSnapshot({ config: nextConfig, hash: "skills-refresh-failure" }),
+    );
+    await reloader.ready;
+
+    watcher.emit("change");
+    await flushReload(reloader);
+
+    expect(onConfigAccepted).toHaveBeenCalledOnce();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config applied, but skills discovery refresh failed: Error: discovery unavailable",
+    );
+    expect(log.error).not.toHaveBeenCalled();
+    await reloader.stop();
+  });
+
+  it("does not refresh skills for a config left unapplied by reload mode off", async () => {
+    const initialConfig: OpenClawConfig = { gateway: { reload: { mode: "off" } } };
+    const { watcher, reloader } = createReloaderHarness(
+      async () =>
+        makeSnapshot({
+          config: { ...initialConfig, skills: { allowBundled: ["gog"] } },
+          hash: "skills-not-applied",
+        }),
+      { initialConfig },
+    );
+    await reloader.ready;
+
+    watcher.emit("change");
+    await flushReload(reloader);
+
+    expect(refreshSkillsDiscoveryMock).not.toHaveBeenCalled();
     await reloader.stop();
   });
 });

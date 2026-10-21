@@ -12,15 +12,15 @@ import {
 } from "../sessions/session-key-utils.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
-  doesApprovalRequestMatchChannelAccount,
-  doesApprovalRequestSelectChannelAccount,
-  resolveApprovalRequestAccountId,
-  resolveApprovalRequestChannelAccountId,
+  doesApprovalRequestMatchChannelAccountAsync,
+  doesApprovalRequestSelectChannelAccountAsync,
+  resolveApprovalRequestAccountIdAsync,
+  resolveApprovalRequestChannelAccountIdAsync,
 } from "./approval-request-account-binding.js";
 import {
   resolveApprovalRequestSessionConversation,
-  resolveApprovalRequestOriginTarget,
-  resolveExecApprovalSessionTarget,
+  resolveApprovalRequestOriginTargetAsync,
+  resolveExecApprovalSessionTargetAsync,
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
@@ -61,9 +61,9 @@ const baseRequest: ExecApprovalRequest = {
 };
 
 describe("native approval account selection", () => {
-  it("selects only the sole eligible account when no owner is recorded", () => {
+  it("selects only the sole eligible account when no owner is recorded", async () => {
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: {},
         request: baseRequest,
         channel: "telegram",
@@ -73,7 +73,7 @@ describe("native approval account selection", () => {
       }),
     ).toBe(true);
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: {},
         request: baseRequest,
         channel: "telegram",
@@ -84,7 +84,7 @@ describe("native approval account selection", () => {
     ).toBe(false);
   });
 
-  it("rejects foreign-channel fallback but preserves explicit forwarding", () => {
+  it("rejects foreign-channel fallback but preserves explicit forwarding", async () => {
     const request = buildRequest({ turnSourceChannel: "whatsapp" });
     const explicitTargetConfig: OpenClawConfig = {
       approvals: {
@@ -96,7 +96,7 @@ describe("native approval account selection", () => {
       },
     };
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: {},
         request,
         channel: "telegram",
@@ -106,7 +106,7 @@ describe("native approval account selection", () => {
       }),
     ).toBe(false);
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: explicitTargetConfig,
         request,
         channel: "telegram",
@@ -117,13 +117,13 @@ describe("native approval account selection", () => {
     ).toBe(true);
   });
 
-  it("selects the recorded account even when several accounts are eligible", () => {
+  it("selects the recorded account even when several accounts are eligible", async () => {
     const request = buildRequest({
       turnSourceChannel: "telegram",
       turnSourceAccountId: "ops",
     });
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: {},
         request,
         channel: "telegram",
@@ -133,7 +133,7 @@ describe("native approval account selection", () => {
       }),
     ).toBe(true);
     expect(
-      doesApprovalRequestSelectChannelAccount({
+      await doesApprovalRequestSelectChannelAccountAsync({
         cfg: {},
         request,
         channel: "telegram",
@@ -144,7 +144,7 @@ describe("native approval account selection", () => {
     ).toBe(false);
   });
 
-  it("maps unscoped explicit targets to default and preserves scoped targets", () => {
+  it("maps unscoped explicit targets to default and preserves scoped targets", async () => {
     const cfg = {
       approvals: {
         exec: {
@@ -163,7 +163,7 @@ describe("native approval account selection", () => {
       ["other", false],
     ] as const) {
       expect(
-        doesApprovalRequestSelectChannelAccount({
+        await doesApprovalRequestSelectChannelAccountAsync({
           cfg,
           request: baseRequest,
           channel: "telegram",
@@ -175,7 +175,7 @@ describe("native approval account selection", () => {
     }
   });
 
-  it("selects the source account and explicit targets in both mode", () => {
+  it("selects the source account and explicit targets in both mode", async () => {
     const cfg = {
       approvals: {
         exec: {
@@ -196,7 +196,7 @@ describe("native approval account selection", () => {
       ["other", false],
     ] as const) {
       expect(
-        doesApprovalRequestSelectChannelAccount({
+        await doesApprovalRequestSelectChannelAccountAsync({
           cfg,
           request,
           channel: "telegram",
@@ -220,6 +220,7 @@ type SessionEntryFixture = Partial<SessionEntry> & {
 async function writeStoreFile(
   storePath: string,
   entries: Record<string, SessionEntryFixture>,
+  agentId?: string,
 ): Promise<OpenClawConfig> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   await Promise.all(
@@ -228,6 +229,7 @@ async function writeStoreFile(
         {
           storePath,
           sessionKey,
+          agentId,
         },
         normalizeLegacySessionEntryDelivery({
           sessionId: entry.sessionId ?? sessionKey,
@@ -242,11 +244,11 @@ async function writeStoreFile(
   } as OpenClawConfig;
 }
 
-function expectResolvedSessionTarget(
+async function expectResolvedSessionTarget(
   cfg: OpenClawConfig,
   request: ExecApprovalRequest,
-): ReturnType<typeof resolveExecApprovalSessionTarget> {
-  return resolveExecApprovalSessionTarget({ cfg, request });
+): ReturnType<typeof resolveExecApprovalSessionTargetAsync> {
+  return await resolveExecApprovalSessionTargetAsync({ cfg, request });
 }
 
 function buildRequest(
@@ -277,8 +279,11 @@ function buildPluginRequest(
   };
 }
 
-function resolveSlackPluginOriginTarget(params: { cfg: OpenClawConfig; turnSourceTo: string }) {
-  return resolveApprovalRequestOriginTarget({
+async function resolveSlackPluginOriginTarget(params: {
+  cfg: OpenClawConfig;
+  turnSourceTo: string;
+}) {
+  return await resolveApprovalRequestOriginTargetAsync({
     cfg: params.cfg,
     request: buildPluginRequest({
       turnSourceChannel: "slack",
@@ -302,7 +307,7 @@ describe("exec approval session target", () => {
     relativeStoreDir: string;
     entries: Record<string, SessionEntryFixture>;
     request: ExecApprovalRequest;
-    expected: ReturnType<typeof resolveExecApprovalSessionTarget>;
+    expected: Awaited<ReturnType<typeof resolveExecApprovalSessionTargetAsync>>;
   };
 
   it("returns null for blank session keys, missing entries, and unresolved targets", async () => {
@@ -323,7 +328,7 @@ describe("exec approval session target", () => {
     ] satisfies ExecApprovalRequest[];
 
     for (const request of requests) {
-      expect(expectResolvedSessionTarget(cfg, request)).toBeNull();
+      expect(await expectResolvedSessionTarget(cfg, request)).toBeNull();
     }
   });
 
@@ -340,7 +345,7 @@ describe("exec approval session target", () => {
     });
 
     expect(
-      resolveExecApprovalSessionTarget({
+      await resolveExecApprovalSessionTargetAsync({
         cfg,
         request: baseRequest,
         turnSourceChannel: " whatsapp ",
@@ -408,9 +413,10 @@ describe("exec approval session target", () => {
       const cfg = await writeStoreFile(
         path.join(tmpDir, relativeStoreDir, "sessions.json"),
         entries,
+        relativeStoreDir,
       );
       cfg.session = { store: path.join(tmpDir, "{agentId}", "sessions.json") };
-      expect(expectResolvedSessionTarget(cfg, request)).toEqual(expected);
+      expect(await expectResolvedSessionTarget(cfg, request)).toEqual(expected);
     },
   );
 
@@ -427,16 +433,18 @@ describe("exec approval session target", () => {
     ).toBeNull();
   });
 
-  it("rejects mismatched channel bindings before account checks", () => {
+  it("rejects mismatched channel bindings before account checks", async () => {
     const cfg = {} as OpenClawConfig;
     const request = buildRequest({
       turnSourceChannel: "discord",
       turnSourceAccountId: "work",
     });
 
-    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBeNull();
     expect(
-      doesApprovalRequestMatchChannelAccount({
+      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "slack" }),
+    ).toBeNull();
+    expect(
+      await doesApprovalRequestMatchChannelAccountAsync({
         cfg,
         request,
         channel: "slack",
@@ -468,8 +476,12 @@ describe("exec approval session target", () => {
       turnSourceAccountId: "work",
     });
 
-    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "matrix" })).toBeNull();
-    expect(resolveApprovalRequestChannelAccountId({ cfg, request, channel: "matrix" })).toBe("ops");
+    expect(
+      await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "matrix" }),
+    ).toBeNull();
+    expect(
+      await resolveApprovalRequestChannelAccountIdAsync({ cfg, request, channel: "matrix" }),
+    ).toBe("ops");
   });
 
   it("falls back to the session-bound account when no turn-source account is present", async () => {
@@ -485,11 +497,11 @@ describe("exec approval session target", () => {
       },
     });
 
-    expect(resolveApprovalRequestAccountId({ cfg, request: baseRequest, channel: "slack" })).toBe(
-      "ops",
-    );
     expect(
-      doesApprovalRequestMatchChannelAccount({
+      await resolveApprovalRequestAccountIdAsync({ cfg, request: baseRequest, channel: "slack" }),
+    ).toBe("ops");
+    expect(
+      await doesApprovalRequestMatchChannelAccountAsync({
         cfg,
         request: baseRequest,
         channel: "slack",
@@ -515,9 +527,11 @@ describe("exec approval session target", () => {
       turnSourceAccountId: "work",
     });
 
-    expect(resolveApprovalRequestAccountId({ cfg, request, channel: "slack" })).toBe("work");
+    expect(await resolveApprovalRequestAccountIdAsync({ cfg, request, channel: "slack" })).toBe(
+      "work",
+    );
     expect(
-      doesApprovalRequestMatchChannelAccount({
+      await doesApprovalRequestMatchChannelAccountAsync({
         cfg,
         request,
         channel: "slack",
@@ -525,7 +539,7 @@ describe("exec approval session target", () => {
       }),
     ).toBe(true);
     expect(
-      doesApprovalRequestMatchChannelAccount({
+      await doesApprovalRequestMatchChannelAccountAsync({
         cfg,
         request,
         channel: "slack",
@@ -546,7 +560,7 @@ describe("exec approval session target", () => {
       },
     });
 
-    const target = resolveSlackPluginOriginTarget({
+    const target = await resolveSlackPluginOriginTarget({
       cfg,
       turnSourceTo: "channel:C123",
     });
@@ -566,7 +580,7 @@ describe("exec approval session target", () => {
       },
     });
 
-    const target = resolveSlackPluginOriginTarget({
+    const target = await resolveSlackPluginOriginTarget({
       cfg,
       turnSourceTo: "channel:C999",
     });
@@ -574,8 +588,8 @@ describe("exec approval session target", () => {
     expect(target).toBeNull();
   });
 
-  it("falls back to a legacy origin target when no turn-source or session target exists", () => {
-    const target = resolveApprovalRequestOriginTarget({
+  it("falls back to a legacy origin target when no turn-source or session target exists", async () => {
+    const target = await resolveApprovalRequestOriginTargetAsync({
       cfg: {} as OpenClawConfig,
       request: buildPluginRequest({ sessionKey: "agent:main:missing" }),
       channel: "discord",

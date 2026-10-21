@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { assertConversationAuthority } from "./conversation-authority.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
+  captureConversationBindingFacts,
   listConversations,
   readConversation,
   registerConversationAddresses,
@@ -10,11 +12,25 @@ import {
   withConversationAuthority,
 } from "./conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "./conversation-route-fingerprint.js";
-import type { SessionActorAuthority } from "./session-actor-contract.js";
-import { createMemorySessionActorOwner } from "./session-actor-memory.js";
-import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
+import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import type { SessionActorStorageWrites } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+
+function mutate<Key extends keyof SessionActorStorageWrites>(
+  actor: SessionActor,
+  type: Key,
+  input: SessionActorStorageWrites[Key]["input"],
+) {
+  return actor.storage!.mutate({ type, input }, authority);
+}
+async function commit<Key extends keyof SessionActorStorageWrites>(
+  ...args: Parameters<typeof mutate<Key>>
+) {
+  return readSessionActorStorageResult(await mutate(...args));
+}
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -31,14 +47,26 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
-const scope = { agentId: "main", storePath: "/synthetic/memory-conversation-registry" };
+const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-conversation-registry" };
+const scope = {
+  agentId: "main",
+  env,
+  storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
+};
 const sessionKey = "agent:main:dashboard:incognito-conversation-registry";
-const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
-afterEach(() => {
-  for (const owner of owners.splice(0)) {
-    owner.close();
-  }
-});
+const read = (ref: string) => readConversation(scope, ref);
+const ownerTarget = { agentId: scope.agentId, path: scope.storePath };
+const readOwner = () => memorySessionActorOwners.read(ownerTarget)!;
+afterEach(() => memorySessionActorOwners.reset());
+const primary = (sessionId: string) =>
+  resolveCurrentSessionPrimaryConversation({ ...scope, sessionKey, sessionId });
+const address = (peerId: string) =>
+  buildConversationIdentity({
+    channel: "reef",
+    kind: "direct",
+    peerId,
+    deliveryTarget: `reef:${peerId}`,
+  })!;
 
 function entry(target: string, updatedAt = 1): SessionEntry {
   return {
@@ -54,143 +82,126 @@ function entry(target: string, updatedAt = 1): SessionEntry {
   };
 }
 async function fixture() {
-  const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
-  owners.push(owner);
-  const acquire = () => owner.acquire({ database: owner.identity, sessionKey }, lifetime);
+  const acquire = async () =>
+    (await acquireSessionActorStorage(
+      { ...scope, sessionKey },
+      { authority, lifetime, create: true },
+    ))!.actor;
   const actor = await acquire();
-  const created = readSessionActorStorageResult(
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: entry("channel:ops"),
-          routeContext: { peerId: "canonical-ops", guildId: "guild-a" },
-        },
-      },
-      authority,
-    ),
-  );
+  const created = await commit(actor, "session.entry.create", {
+    entry: entry("channel:ops"),
+    routeContext: { peerId: "canonical-ops", guildId: "guild-a" },
+  });
   return {
-    owner,
+    owner: readOwner(),
     actor,
     created,
     acquire,
-    binding: { actor, authority, agentId: scope.agentId, path: scope.storePath },
   };
 }
 
 describe("memory conversation registry", () => {
+  it("observes a memory owner created after capturing absent conversation authority", async () => {
+    const identity = buildConversationIdentity({
+      channel: "discord",
+      accountId: "default",
+      kind: "channel",
+      peerId: "canonical-ops",
+      deliveryTarget: "channel:ops",
+    })!;
+    const captured = await captureConversationBindingFacts(scope, [identity.conversationRef]);
+    try {
+      expect(captured.currentSessionKey(identity.conversationRef)).toBeNull();
+      await fixture();
+      expect(captured.currentSessionKey(identity.conversationRef)).toBe(sessionKey);
+    } finally {
+      captured.release();
+    }
+  });
+
+  it("registers an address catalogue without manufacturing a session", async () => {
+    const identity = address("catalogue");
+    await registerConversationAddresses(scope, [identity], 1);
+    expect(await read(identity.conversationRef)).toHaveProperty("target", "reef:catalogue");
+    expect(readOwner().listSessions(authority)).toEqual([]);
+  });
   it("retains observed identity through generic writes and changes current bindings at rebind/reset", async () => {
-    const { actor, acquire, created, binding } = await fixture();
-    await runWithSessionActorStorage(binding, async () => {
-      const initial = await resolveCurrentSessionPrimaryConversation({
-        ...scope,
-        sessionKey,
-        sessionId: created.sessionId,
-      });
-      expect(initial).toMatchObject({
-        peerId: "canonical-ops",
-        routeContext: { guildId: "guild-a" },
-        routeContextObserved: true,
-      });
-      const updated = readSessionActorStorageResult(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.patch",
-            input: { operation: { kind: "fields", patch: { label: "renamed", updatedAt: 2 } } },
-          },
-          authority,
-        ),
-      );
-      expect(await readConversation(scope, initial!.conversationRef)).toMatchObject({
-        conversationRef: initial!.conversationRef,
-        peerId: "canonical-ops",
-        label: "renamed",
-        routeContext: { guildId: "guild-a" },
-      });
-      const rebound = readSessionActorStorageResult(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.replace",
-            input: { expected: updated, entry: entry("channel:other", 3) },
-          },
-          authority,
-        ),
-      );
-      expect(resolveCurrentConversationSession(scope, initial!.conversationRef)).toBeUndefined();
-      const current = await resolveCurrentSessionPrimaryConversation({
-        ...scope,
-        sessionKey,
-        sessionId: "first",
-      });
-      expect(current).toMatchObject({ target: "channel:other", role: "primary" });
-      expect(await readConversation(scope, initial!.conversationRef)).toMatchObject({
-        role: "related",
-      });
-      readSessionActorStorageResult(
-        await actor.storage!.mutate(
-          {
-            type: "session.lifecycle.reset",
-            input: {
-              expected: rebound,
-              nextEntry: { ...rebound!, sessionId: "second", updatedAt: 4 },
-            },
-          },
-          authority,
-        ),
-      );
-      const replacement = await acquire();
-      await runWithSessionActorStorage({ ...binding, actor: replacement }, async () => {
-        expect(resolveCurrentConversationSession(scope, current!.conversationRef)).toEqual({
-          sessionKey,
-          sessionId: "second",
-        });
-        expect(
-          await resolveCurrentSessionPrimaryConversation({
-            ...scope,
-            sessionKey,
-            sessionId: "first",
-          }),
-        ).toBeUndefined();
-      });
+    const { actor, acquire, created } = await fixture();
+    const initial = await primary(created.sessionId);
+    expect(initial).toMatchObject({
+      peerId: "canonical-ops",
+      routeContext: { guildId: "guild-a" },
+      routeContextObserved: true,
     });
+    await commit(actor, "session.lifecycle.reset", {
+      expected: created,
+      nextEntry: { ...created, updatedAt: 2 },
+    });
+    const resumed = await read(initial!.conversationRef);
+    expect(resumed).toEqual({ ...initial, lastSeenAt: 2 });
+    await commit(actor, "session.entry.patch", {
+      operation: { kind: "fields", patch: { totalTokens: 42, updatedAt: 3 } },
+    });
+    expect(await read(initial!.conversationRef)).toEqual(resumed);
+    expect(await primary(created.sessionId)).toEqual(resumed);
+    const updated = await commit(actor, "session.entry.patch", {
+      operation: { kind: "fields", patch: { label: "renamed", updatedAt: 2 } },
+    });
+    expect(await read(initial!.conversationRef)).toMatchObject({
+      conversationRef: initial!.conversationRef,
+      peerId: "canonical-ops",
+      label: "renamed",
+      routeContext: { guildId: "guild-a" },
+    });
+    const rebound = await commit(actor, "session.entry.replace", {
+      expected: updated,
+      entry: entry("channel:other", 3),
+    });
+    expect(resolveCurrentConversationSession(scope, initial!.conversationRef)).toBeUndefined();
+    const current = await primary("first");
+    expect(current).toMatchObject({ target: "channel:other", role: "primary" });
+    expect(await read(initial!.conversationRef)).toHaveProperty("role", "related");
+    await commit(actor, "session.lifecycle.reset", {
+      expected: rebound,
+      nextEntry: { ...rebound!, sessionId: "second", updatedAt: 4 },
+    });
+    await acquire();
+    expect(resolveCurrentConversationSession(scope, current!.conversationRef)).toEqual({
+      sessionKey,
+      sessionId: "second",
+    });
+    expect(await primary("first")).toBeUndefined();
   });
 
   it("uses stored associations for source predicates and the route fingerprint at external effects", async () => {
-    const { actor, owner, binding } = await fixture();
-    await runWithSessionActorStorage(binding, async () => {
-      const conversation = (await listConversations(scope))[0]!;
-      const expected = {
-        conversationRef: conversation.conversationRef,
-        expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
-        expectedSessionId: "first",
-        expectedSessionKey: sessionKey,
-      };
-      const source = {
-        source: {
-          agentId: scope.agentId,
-          path: scope.storePath,
-          databaseIdentity: owner.identity.incarnation,
-        },
-        sessionKey,
-        fields: ["sessionId" as const],
-        expected: { sessionId: "first" },
-        conversationAlternatives: [[{ conversationRef: conversation.conversationRef, sessionKey }]],
-      };
-      const patch = () =>
-        actor.storage!.mutate(
-          {
-            type: "session.entry.patch",
-            input: {
-              operation: { kind: "fields", patch: { label: "allowed" } },
-              guards: { sources: [source] },
-            },
-          },
-          authority,
-        );
-      expect((await patch()).kind).toBe("committed");
-      const sent = vi.fn();
-      await withConversationAuthority(
+    const { actor, owner } = await fixture();
+    const conversation = (await listConversations(scope))[0]!;
+    const expected = {
+      conversationRef: conversation.conversationRef,
+      expectedRouteFingerprint: resolveConversationRouteFingerprint(conversation),
+      expectedSessionId: "first",
+      expectedSessionKey: sessionKey,
+    };
+    const source = {
+      source: {
+        agentId: scope.agentId,
+        path: scope.storePath,
+        databaseIdentity: owner.identity.incarnation,
+      },
+      sessionKey,
+      fields: ["sessionId" as const],
+      expected: { sessionId: "first" },
+      conversationAlternatives: [[{ conversationRef: conversation.conversationRef, sessionKey }]],
+    };
+    const patch = () =>
+      mutate(actor, "session.entry.patch", {
+        operation: { kind: "fields", patch: { label: "allowed" } },
+        guards: { sources: [source] },
+      });
+    expect((await patch()).kind).toBe("committed");
+    const sent = vi.fn();
+    const send = () =>
+      withConversationAuthority(
         scope,
         { conversationRef: conversation.conversationRef },
         (facts) => {
@@ -198,93 +209,61 @@ describe("memory conversation registry", () => {
           return () => sent();
         },
       );
-      expect(sent).toHaveBeenCalledOnce();
-      readSessionActorStorageResult(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.patch",
-            input: {
-              operation: { kind: "fields", patch: { delivery: entry("channel:new").delivery } },
-            },
-          },
-          authority,
-        ),
-      );
-      expect(await patch()).toMatchObject({
-        kind: "rolled-back",
-        error: { message: "Session source changed before entry mutation" },
-      });
-      const changedAddress = buildConversationIdentity({
-        channel: conversation.channel,
-        accountId: conversation.accountId,
-        kind: conversation.kind,
-        peerId: conversation.peerId,
-        deliveryTarget: "channel:retargeted",
-      })!;
-      await registerConversationAddresses(scope, [changedAddress], 20);
-      expect(
-        await actor.storage!.mutate(
-          {
-            type: "session.entry.patch",
-            input: {
-              operation: { kind: "fields", patch: { label: "stale" } },
-              guards: { conversation: expected },
-            },
-          },
-          authority,
-        ),
-      ).toMatchObject({ kind: "rolled-back", error: { name: "ConversationAuthorityError" } });
-      await expect(
-        withConversationAuthority(
-          scope,
-          { conversationRef: conversation.conversationRef },
-          (facts) => {
-            assertConversationAuthority(facts.conversation, expected);
-            return () => sent();
-          },
-        ),
-      ).rejects.toThrow("Conversation is no longer available");
-      expect(sent).toHaveBeenCalledOnce();
+    await send();
+    expect(sent).toHaveBeenCalledOnce();
+    await commit(actor, "session.entry.patch", {
+      operation: { kind: "fields", patch: { delivery: entry("channel:new").delivery } },
     });
+    expect(await patch()).toMatchObject({
+      kind: "rolled-back",
+      error: { message: "Session source changed before entry mutation" },
+    });
+    const changedAddress = buildConversationIdentity({
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      kind: conversation.kind,
+      peerId: conversation.peerId,
+      deliveryTarget: "channel:retargeted",
+    })!;
+    await registerConversationAddresses(scope, [changedAddress], 20);
+    expect(
+      await mutate(actor, "session.entry.patch", {
+        operation: { kind: "fields", patch: { label: "stale" } },
+        guards: { conversation: expected },
+      }),
+    ).toMatchObject({ kind: "rolled-back", error: { name: "ConversationAuthorityError" } });
+    await expect(send()).rejects.toThrow("Conversation is no longer available");
+    expect(sent).toHaveBeenCalledOnce();
   });
 
   it("selects eligible addresses once at registration and never exposes mutable owner records", async () => {
-    const { actor, binding } = await fixture();
-    await runWithSessionActorStorage(binding, async () => {
-      const eligible = buildConversationIdentity({
-        channel: "reef",
-        kind: "direct",
-        peerId: "yes",
-        deliveryTarget: "reef:yes",
-      })!;
-      const excluded = buildConversationIdentity({
-        channel: "reef",
-        kind: "direct",
-        peerId: "no",
-        deliveryTarget: "reef:no",
-      })!;
-      const select = vi.fn(() => [true, false]);
-      const registered = await registerConversationAddresses(
-        scope,
-        [eligible, excluded],
-        100,
-        select,
-        { channel: "reef" },
-      );
-      expect(select).toHaveBeenCalledOnce();
-      expect(registered).toHaveLength(1);
-      registered![0]!.target = "changed-by-reader";
-      expect(await readConversation(scope, eligible.conversationRef)).toMatchObject({
-        target: "reef:yes",
-      });
-      expect(await readConversation(scope, excluded.conversationRef)).toBeUndefined();
-      await expect(readConversation(scope, " ")).rejects.toThrow("Invalid conversationRef");
-      const pending = registerConversationAddresses(scope, [excluded], 200, () => {
-        throw new Error("transport closed");
-      });
-      await expect(pending).rejects.toThrow("transport closed");
-      expect(await readConversation(scope, excluded.conversationRef)).toBeUndefined();
-      expect((await actor.read(authority)).entry?.sessionId).toBe("first");
+    const { actor } = await fixture();
+    const eligible = address("yes");
+    const excluded = address("no");
+    const select = vi.fn(() => [true, false]);
+    const registered = await registerConversationAddresses(
+      scope,
+      [eligible, excluded],
+      100,
+      select,
+      { channel: "reef" },
+    );
+    expect(select).toHaveBeenCalledOnce();
+    expect(registered).toHaveLength(1);
+    registered![0]!.target = "changed-by-reader";
+    expect(await read(eligible.conversationRef)).toHaveProperty("target", "reef:yes");
+    expect(await read(excluded.conversationRef)).toBeUndefined();
+    await expect(read(" ")).rejects.toThrow("Invalid conversationRef");
+    const pending = registerConversationAddresses(scope, [excluded], 200, () => {
+      throw new Error("transport closed");
     });
+    await expect(pending).rejects.toThrow("transport closed");
+    expect(await read(excluded.conversationRef)).toBeUndefined();
+    expect((await actor.read(authority)).entry?.sessionId).toBe("first");
+    await commit(actor, "session.lifecycle.delete", {});
+    expect(await read(eligible.conversationRef)).toHaveProperty("target", "reef:yes");
+    expect(resolveCurrentConversationSession(scope, eligible.conversationRef)).toBeUndefined();
+    memorySessionActorOwners.closeDatabase(ownerTarget);
+    expect(await listConversations(scope)).toEqual([]);
   });
 });

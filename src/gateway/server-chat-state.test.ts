@@ -1,38 +1,75 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createChatAbortMarker,
   createChatRunState,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 
+type ReplayMode = Parameters<ReturnType<typeof createChatRunState>["recordProgressEvent"]>[2];
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+const resultMetadata = { phase: "result", toolCallId: "done", name: "read" };
+
+function progressHarness(mode?: ReplayMode, timeOffset = 0, sessionKey?: string) {
+  const state = createChatRunState();
+  const context = { runId: "run-1", ...(sessionKey ? { sessionKey } : {}) };
+  const wire = (seq: number, stream: string, data: Record<string, unknown>) => ({
+    ...context,
+    seq,
+    stream,
+    ts: timeOffset + seq,
+    data,
+  });
+  const event = (seq: number, stream: string, data: Record<string, unknown>) =>
+    state.recordProgressEvent(context.runId, wire(seq, stream, data), mode);
+  const snapshot = () => state.runs.get("run-1")?.progressSnapshot;
+  let seq = 0;
+  const send = (stream: string, data: Record<string, unknown>) => event(++seq, stream, data);
+  return { state, wire, event, send, snapshot, events: () => snapshot()?.events };
+}
+
+function withUnreadTail(field: string, value: unknown, onRead: () => void) {
+  return {
+    [field]: value,
+    get later() {
+      onRead();
+      return "unused";
+    },
+  };
+}
+
+function mockClock(now: number) {
+  const clock = { now };
+  const spy = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+  onTestFinished(() => spy.mockRestore());
+  return clock;
+}
+
+const sessionKey = "agent:main:main";
+function subscriptionHarness() {
+  const registry = createSessionMessageSubscriberRegistry();
+  return {
+    registry,
+    subscribe: (options?: Parameters<typeof registry.subscribe>[2]) =>
+      registry.subscribe("conn", sessionKey, options),
+    snapshot: (key = sessionKey) => [
+      [...registry.get(key)],
+      [...registry.getApprovals(key)],
+      [...registry.getNarration(key)],
+    ],
+  };
+}
+
 describe("createChatRunState", () => {
   it("replays complete prepared items and evicts raw and item siblings together", () => {
-    const state = createChatRunState();
-    let seq = 0;
-    const send = (stream: string, data: Record<string, unknown>) => {
-      state.recordProgressEvent("run", { runId: "run", stream, data, seq: ++seq, ts: seq });
-    };
-    send("item", {
-      itemId: "preamble",
-      kind: "preamble",
-      phase: "end",
-      status: "completed",
-      title: "Status",
-      progressText: "Ready",
-    });
-    send("item", {
-      itemId: "preamble",
-      kind: "preamble",
-      phase: "update",
-      status: "running",
-      title: "Status",
-      progressText: "Checking",
-    });
-    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+    const { send, events: getEvents } = progressHarness();
+    const preamble = { itemId: "preamble", kind: "preamble", title: "Status" };
+    send("item", { ...preamble, phase: "end", status: "completed", progressText: "Ready" });
+    send("item", { ...preamble, phase: "update", status: "running", progressText: "Checking" });
+    expect(getEvents()).toMatchObject([
       { data: { phase: "end", progressText: "Ready", title: "Status", status: "completed" } },
     ]);
     send("item", { itemId: "preamble", kind: "preamble", phase: "start", progressText: "" });
-    expect(state.runs.get("run")?.progressSnapshot?.events).toEqual([]);
+    expect(getEvents()).toEqual([]);
     for (let index = 0; index < 30; index += 1) {
       const toolCallId = `call-${index}`;
       send("tool", { toolCallId, name: "read", phase: "start", args: { path: "README.md" } });
@@ -47,7 +84,7 @@ describe("createChatRunState", () => {
         extraTypedFact: "retained",
       });
     }
-    const events = state.runs.get("run")?.progressSnapshot?.events ?? [];
+    const events = getEvents() ?? [];
     expect(events).toHaveLength(50);
     expect(
       events.filter((event) => event.stream === "item").map((event) => event.data.toolCallId),
@@ -65,76 +102,65 @@ describe("createChatRunState", () => {
     { finalized: true, keepState: false },
     { finalized: true, keepState: true },
     { finalized: false, keepState: false },
-  ])(
-    "expires recipients without dropping active runs or other state: %j",
-    ({ finalized, keepState }) => {
-      let now = 1_000;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      try {
-        const state = createChatRunState();
-        state.toolEventRecipients.add("expired", "conn-expired");
-        state.toolEventRecipients.add("active", "conn-active");
-        if (keepState) {
-          state.getOrCreate("expired").buffer = "retained";
-        }
-        if (finalized) {
-          state.toolEventRecipients.markFinal("expired");
-        } else {
-          now = 301_000;
-          expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-        }
-        now = 1_000 + (finalized ? 30_000 : 600_000) - 1;
-        if (finalized) {
-          expect(state.toolEventRecipients.get("expired")).toEqual(new Set(["conn-expired"]));
-        } else {
-          state.toolEventRecipients.get("active");
-          expect(state.runs.has("expired")).toBe(true);
-        }
-        now += 1;
-        if (!finalized) {
-          state.toolEventRecipients.get("active");
-        }
-        expect(state.toolEventRecipients.get("expired")).toBeUndefined();
-        expect(state.toolEventRecipients.get("expired")).toBeUndefined();
-        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-        expect(state.runs.has("expired")).toBe(keepState);
-      } finally {
-        clock.mockRestore();
-      }
-    },
-  );
+  ])("expires recipients but retains active runs/state: %j", ({ finalized, keepState }) => {
+    const clock = mockClock(1_000);
+    const state = createChatRunState();
+    state.toolEventRecipients.add("expired", "conn-expired");
+    state.toolEventRecipients.add("active", "conn-active");
+    if (keepState) {
+      state.getOrCreate("expired").buffer = "retained";
+    }
+    if (finalized) {
+      state.toolEventRecipients.markFinal("expired");
+    } else {
+      clock.now = 301_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    }
+    clock.now = 1_000 + (finalized ? 30_000 : 600_000) - 1;
+    if (finalized) {
+      expect(state.toolEventRecipients.get("expired")).toEqual(new Set(["conn-expired"]));
+    } else {
+      state.toolEventRecipients.get("active");
+      expect(state.runs.has("expired")).toBe(true);
+    }
+    clock.now += 1;
+    if (!finalized) {
+      state.toolEventRecipients.get("active");
+    }
+    expect(state.toolEventRecipients.get("expired")).toBeUndefined();
+    expect(state.toolEventRecipients.get("expired")).toBeUndefined();
+    expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+    expect(state.runs.has("expired")).toBe(keepState);
+  });
 
   it.each([false, true])(
     "expires new recipients after clock rollback (clear previous state: %s)",
     (clear) => {
-      let now = 1_000_000;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-      try {
-        const state = createChatRunState();
-        state.toolEventRecipients.add("previous", "conn-previous");
-        if (clear) {
-          state.clear();
-        }
-        now = 1_000;
-        state.toolEventRecipients.add("early", "conn-early");
-        now = 500_000;
-        state.toolEventRecipients.add("active", "conn-active");
-        now = 601_000;
-        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
-        expect(state.runs.has("early")).toBe(false);
-        expect(state.runs.has("previous")).toBe(!clear);
-      } finally {
-        clock.mockRestore();
+      const clock = mockClock(1_000_000);
+      const state = createChatRunState();
+      state.toolEventRecipients.add("previous", "conn-previous");
+      if (clear) {
+        state.clear();
       }
+      clock.now = 1_000;
+      state.toolEventRecipients.add("early", "conn-early");
+      clock.now = 500_000;
+      state.toolEventRecipients.add("active", "conn-active");
+      clock.now = 601_000;
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+      expect(state.runs.has("early")).toBe(false);
+      expect(state.runs.has("previous")).toBe(!clear);
     },
   );
 
-  it("clears transient projection state without dropping run ownership or abort tombstones", () => {
-    const state = createChatRunState();
+  it("clears projections but retains ownership and abort tombstones", () => {
+    const { state, event } = progressHarness();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });
     state.toolEventRecipients.add("run-1", "conn-1");
     const run = state.getOrCreate("run-1");
+    const releaseBufferAuthority = vi.fn();
     Object.assign(run, {
+      releaseBufferAuthority,
       rawBuffer: "raw",
       buffer: "projected",
       planSnapshot: { steps: [{ step: "Inspect", status: "in_progress" }] },
@@ -143,18 +169,13 @@ describe("createChatRunState", () => {
       abortMarker: createChatAbortMarker(4),
     });
     state.takeBufferDelta("run-1", "projected");
-    state.recordProgressEvent("run-1", {
-      runId: "run-1",
-      seq: 1,
-      stream: "item",
-      ts: 1,
-      data: { kind: "preamble", progressText: "Inspecting" },
-    });
+    event(1, "item", { kind: "preamble", progressText: "Inspecting" });
 
     state.updateBuffer("run-1", { itemId: "reused", text: "Saved." });
     state.retireBuffer("run-1", ["reused"]);
     state.clearRun("run-1");
 
+    expect(releaseBufferAuthority).toHaveBeenCalledOnce();
     expect(state.registry.peek("run-1")?.clientRunId).toBe("client-1");
     expect(state.toolEventRecipients.get("run-1")).toEqual(new Set(["conn-1"]));
     expect(state.runs.get("run-1")).toEqual({
@@ -170,9 +191,7 @@ describe("createChatRunState", () => {
   it.each(["full", "summary"] as const)(
     "retains the latest usage through %s reconnect eviction",
     (mode) => {
-      const state = createChatRunState();
-      const event = (seq: number, stream: string, data: Record<string, unknown>) =>
-        state.recordProgressEvent("run-1", { runId: "run-1", seq, stream, ts: seq, data }, mode);
+      const { state, wire, event, snapshot: getSnapshot } = progressHarness(mode);
       event(1, "usage", { outputTokens: 100 });
       event(2, "usage", { outputTokens: 170 });
       event(1, "usage", { outputTokens: 100 });
@@ -180,16 +199,9 @@ describe("createChatRunState", () => {
       for (let seq = 4; seq < 65; seq += 1) {
         event(seq, "tool", { phase: "start", toolCallId: `tool-${seq}`, name: "read" });
       }
-      const snapshot = state.runs.get("run-1")?.progressSnapshot;
-      expect(snapshot?.events.filter((candidate) => candidate.stream === "usage")).toEqual([
-        {
-          runId: "run-1",
-          seq: 3,
-          stream: "usage",
-          ts: 3,
-          data: { outputTokens: 170, activeContextTokens: 900 },
-        },
-      ]);
+      const snapshot = getSnapshot();
+      const usage = snapshot?.events.filter((candidate) => candidate.stream === "usage");
+      expect(usage).toEqual([wire(3, "usage", { outputTokens: 170, activeContextTokens: 900 })]);
       expect(snapshot?.events).toHaveLength(50);
       expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
       state.clearRun("run-1");
@@ -197,198 +209,157 @@ describe("createChatRunState", () => {
     },
   );
 
-  it.each(["memory_flushing"])(
-    "retains only the latest startup status (%s) until observable run activity begins",
-    (phase) => {
-      const state = createChatRunState();
-      const event = (seq: number, stream: string, data: Record<string, unknown>) =>
-        state.recordProgressEvent("run-1", {
-          runId: "run-1",
-          seq,
-          stream,
-          ts: 1_000 + seq,
-          sessionKey: "main",
-          data,
-        });
+  it("retains the latest startup status until observable run activity begins", () => {
+    const phase = "memory_flushing";
+    const { event, events } = progressHarness();
 
-      event(1, "run_status", { phase: "preparing_workspace" });
-      event(2, "run_status", { phase });
-      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-        { seq: 2, stream: "run_status", data: { phase } },
-      ]);
+    event(1, "run_status", { phase: "preparing_workspace" });
+    event(2, "run_status", { phase });
+    expect(events()).toMatchObject([{ seq: 2, stream: "run_status", data: { phase } }]);
 
-      event(3, "tool", { phase: "start", name: "read", toolCallId: "read-1" });
-      event(4, "run_status", { phase: "starting_model" });
-      expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-        { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
-      ]);
-    },
-  );
+    event(3, "tool", { phase: "start", name: "read", toolCallId: "read-1" });
+    event(4, "run_status", { phase: "starting_model" });
+    expect(events()).toMatchObject([
+      { seq: 3, stream: "tool", data: { phase: "start", toolCallId: "read-1" } },
+    ]);
+    event(5, "run_status", { phase: "waiting_for_model", reason: "slot" });
+    expect(events()).toMatchObject([
+      { seq: 3, stream: "tool" },
+      { seq: 5, stream: "run_status", data: { phase: "waiting_for_model", reason: "slot" } },
+    ]);
+    event(6, "run_status", { phase: "starting_model" });
+    expect(events()).toMatchObject([
+      { seq: 3, stream: "tool" },
+      { seq: 6, stream: "run_status", data: { phase: "starting_model" } },
+    ]);
+  });
+
+  const fallbackTransition = {
+    phase: "fallback_step",
+    fallbackStepFromModel: "primary/model",
+    fallbackStepToModel: "backup/model",
+    fallbackStepFinalOutcome: "next_fallback",
+  };
+  it.each([
+    { mode: "full", data: { phase: "finishing" } },
+    { mode: "summary", data: { phase: "finishing" } },
+    { mode: "full", data: fallbackTransition },
+    { mode: "summary", data: fallbackTransition },
+  ] as const)("retains $data.phase until resumed $mode activity", ({ mode, data }) => {
+    const { event, events } = progressHarness(mode);
+    event(1, "lifecycle", data);
+    expect(events()).toMatchObject([{ stream: "lifecycle", data }]);
+    event(2, "assistant", { text: "Recovered" });
+    expect(events()).toMatchObject([{ stream: "assistant", seq: 2 }]);
+  });
+
+  it.each(["full", "summary"] as const)("retains retry waits until resumed %s activity", (mode) => {
+    const { wire, send, events } = progressHarness(mode);
+    let seq = 1;
+    send("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
+    for (const [stream, data] of [
+      ["assistant", { text: "Continuing" }],
+      ["tool", { phase: "start", toolCallId: "read-2", name: "read" }],
+      ["item", { kind: "preamble", itemId: "resumed", progressText: "Continuing" }],
+    ] as const) {
+      const retry = {
+        phase: "retrying",
+        message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
+        retryAttempt: 2,
+        maxRetries: 8,
+        delayMs: 2_000,
+        retryAt: 1_800_000_002_000,
+      };
+      send("run_status", retry);
+      send("usage", { outputTokens: 100 });
+      expect(events()).toContainEqual(
+        expect.objectContaining({ stream: "run_status", data: retry }),
+      );
+      send(stream, data);
+      seq += 3;
+      expect(events()?.some((entry) => entry.stream === "run_status")).toBe(false);
+      if (stream === "assistant") {
+        expect(events()).toContainEqual(wire(seq, "assistant", {}));
+      }
+      expect(events()).toContainEqual(
+        expect.objectContaining({
+          stream: "tool",
+          data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
+        }),
+      );
+    }
+  });
 
   it.each(["full", "summary"] as const)(
-    "retains retry waits after completed work and clears them on resumed %s activity",
+    "retains permission notices for %s reconnect history",
     (mode) => {
-      const state = createChatRunState();
-      let seq = 0;
-      const event = (stream: string, data: Record<string, unknown>) =>
-        state.recordProgressEvent(
-          "run-1",
-          { runId: "run-1", seq: ++seq, stream, ts: seq, data },
-          mode,
-        );
-      event("tool", { phase: "result", toolCallId: "read-1", name: "read", result: "done" });
-      for (const stream of ["assistant", "tool", "item"]) {
-        const retry = {
-          phase: "retrying",
-          message: "Rate limited. Retrying in 2 seconds (attempt 2/8).",
-          retryAttempt: 2,
-          maxRetries: 8,
-          delayMs: 2_000,
-        };
-        event("run_status", retry);
-        event("usage", { outputTokens: 100 });
-        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
-          expect.objectContaining({ stream: "run_status", data: retry }),
-        );
-        event(
-          stream,
-          stream === "assistant"
-            ? { text: "Continuing" }
-            : stream === "tool"
-              ? { phase: "start", toolCallId: "read-2", name: "read" }
-              : { kind: "preamble", itemId: "resumed", progressText: "Continuing" },
-        );
-        expect(
-          state.runs
-            .get("run-1")
-            ?.progressSnapshot?.events.some((entry) => entry.stream === "run_status"),
-        ).toBe(false);
-        if (stream === "assistant") {
-          expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual({
-            runId: "run-1",
-            seq,
-            stream: "assistant",
-            ts: seq,
-            data: {},
-          });
-        }
-        expect(state.runs.get("run-1")?.progressSnapshot?.events).toContainEqual(
-          expect.objectContaining({
-            stream: "tool",
-            data: expect.objectContaining({ toolCallId: "read-1", phase: "result" }),
-          }),
-        );
-      }
+      const { wire, event, events } = progressHarness(mode, 999, "main");
+      const data = {
+        phase: "warning",
+        kind: "permission_missing",
+        permissionMissing: {
+          nodeId: "mac-node",
+          command: "screen.snapshot",
+          capabilities: ["screenRecording"],
+          state: "not-determined",
+        },
+      };
+      event(1, "notice", data);
+      expect(events()).toEqual([wire(1, "notice", data)]);
     },
   );
 
-  it("keeps completed owners and standalone notices reconstructable until bounded eviction", () => {
-    const state = createChatRunState();
-    const event = (seq: number, stream: string, data: Record<string, unknown>) =>
-      state.recordProgressEvent("run-1", {
-        runId: "run-1",
-        seq,
-        stream,
-        ts: 1_000 + seq,
-        sessionKey: "main",
-        data,
-      });
+  it("replays completed owners and standalone notices until bounded eviction", () => {
+    const { event, events, snapshot: getSnapshot } = progressHarness(undefined, 1_000, "main");
+    const tool = (
+      seq: number,
+      phase: string,
+      toolCallId: string,
+      data: Record<string, unknown> = {},
+    ) => event(seq, "tool", { phase, toolCallId, ...data });
+    const review = (seq: number, id: string, status: string) =>
+      tool(seq, "review", "active", { review: { id, label: "Guardian", status } });
+    const preamble = (seq: number, itemId: string, progressText: string) =>
+      event(seq, "item", { kind: "preamble", itemId, progressText });
 
-    event(1, "item", { kind: "preamble", itemId: "p-1", progressText: "Inspecting" });
-    event(2, "tool", {
-      phase: "start",
-      name: "read",
-      toolCallId: "active",
-      args: { path: "a" },
-    });
-    event(3, "tool", {
-      phase: "input_delta",
-      name: "edit",
-      toolCallId: "active",
-      diff: { added: 3, removed: 1 },
-    });
-    event(4, "tool", {
-      phase: "update",
-      name: "read",
-      toolCallId: "active",
-      partialResult: "halfway",
-    });
-    event(5, "tool", {
-      phase: "review",
-      toolCallId: "active",
-      review: { id: "review-1", label: "Guardian", status: "in_progress" },
-    });
-    event(6, "tool", {
-      phase: "review",
-      toolCallId: "active",
-      review: { id: "review-1", label: "Guardian", status: "approved" },
-    });
-    event(7, "tool", {
-      phase: "review",
-      toolCallId: "active",
-      review: { id: "review-2", label: "Guardian", status: "denied" },
-    });
-    event(8, "tool", { phase: "start", name: "exec", toolCallId: "done", args: {} });
-    event(9, "tool", {
-      phase: "result",
-      name: "exec",
-      toolCallId: "done",
-      result: "x".repeat(256_000),
-    });
-    event(10, "item", {
-      kind: "preamble",
-      itemId: "p-1",
-      progressText: "Inspection complete",
-    });
-    event(11, "item", {
-      kind: "preamble",
-      itemId: "p-2",
-      progressText: "Running autoreview",
-    });
-    event(4, "tool", { phase: "result", name: "read", toolCallId: "active" });
+    preamble(1, "p-1", "Inspecting");
+    tool(2, "start", "active", { name: "read", args: { path: "a" } });
+    tool(3, "input_delta", "active", { name: "edit", diff: { added: 3, removed: 1 } });
+    tool(4, "update", "active", { name: "read", partialResult: "halfway" });
+    review(5, "review-1", "in_progress");
+    review(6, "review-1", "approved");
+    review(7, "review-2", "denied");
+    tool(8, "start", "done", { name: "exec", args: {} });
+    tool(9, "result", "done", { name: "exec", result: "x".repeat(256_000) });
+    preamble(10, "p-1", "Inspection complete");
+    preamble(11, "p-2", "Running autoreview");
+    tool(4, "result", "active", { name: "read" });
 
-    expect(state.runs.get("run-1")?.progressSnapshot?.events).toMatchObject([
-      { seq: 2, stream: "tool", data: { phase: "start", toolCallId: "active" } },
-      {
-        seq: 3,
-        stream: "tool",
-        data: { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } },
-      },
-      { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
-      {
-        seq: 6,
-        stream: "tool",
-        data: {
-          phase: "review",
-          toolCallId: "active",
-          review: { id: "review-1", status: "approved" },
-        },
-      },
-      {
-        seq: 7,
-        stream: "tool",
-        data: {
-          phase: "review",
-          toolCallId: "active",
-          review: { id: "review-2", status: "denied" },
-        },
-      },
-      { seq: 8, stream: "tool", data: { phase: "start", toolCallId: "done" } },
-      { seq: 9, stream: "tool", data: { phase: "result", toolCallId: "done" } },
-      {
-        seq: 10,
-        stream: "item",
-        ts: 1_001,
-        data: { itemId: "p-1", progressText: "Inspection complete" },
-      },
-      { seq: 11, stream: "item", data: { itemId: "p-2", progressText: "Running autoreview" } },
+    expect(events()?.map(({ seq, stream, data }) => [seq, stream, data])).toMatchObject([
+      [2, "tool", { phase: "start", toolCallId: "active" }],
+      [3, "tool", { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } }],
+      [4, "tool", { phase: "update", toolCallId: "active" }],
+      [
+        6,
+        "tool",
+        { phase: "review", toolCallId: "active", review: { id: "review-1", status: "approved" } },
+      ],
+      [
+        7,
+        "tool",
+        { phase: "review", toolCallId: "active", review: { id: "review-2", status: "denied" } },
+      ],
+      [8, "tool", { phase: "start", toolCallId: "done" }],
+      [9, "tool", { phase: "result", toolCallId: "done" }],
+      [10, "item", { itemId: "p-1", progressText: "Inspection complete" }],
+      [11, "item", { itemId: "p-2", progressText: "Running autoreview" }],
     ]);
+    expect(events()?.find(({ seq }) => seq === 10)?.ts).toBe(1_001);
 
-    event(12, "tool", { phase: "result", name: "read", toolCallId: "active" });
+    tool(12, "result", "active", { name: "read" });
     expect(
-      state.runs
-        .get("run-1")
-        ?.progressSnapshot?.events.filter((candidate) => candidate.data.toolCallId === "active")
+      events()
+        ?.filter((candidate) => candidate.data.toolCallId === "active")
         .map((candidate) => candidate.data.phase),
     ).toEqual(["start", "input_delta", "update", "review", "review", "result"]);
 
@@ -408,7 +379,7 @@ describe("createChatRunState", () => {
       targetItemId: null,
       status: "denied",
     });
-    expect(state.runs.get("run-1")?.progressSnapshot?.events.slice(-2)).toMatchObject([
+    expect(events()?.slice(-2)).toMatchObject([
       { seq: 14, data: { phase: "warning" } },
       { seq: 15, data: { reviewId: "network-review", targetItemId: null } },
     ]);
@@ -421,7 +392,7 @@ describe("createChatRunState", () => {
         args: { payload: "y".repeat(80_000) },
       });
     }
-    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    const snapshot = getSnapshot();
     expect(snapshot?.events).toHaveLength(50);
     expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
     expect(snapshot?.events.at(-1)?.data).toEqual({
@@ -431,48 +402,8 @@ describe("createChatRunState", () => {
     });
   });
 
-  it.each(["tool", "notice"])(
-    "isolates captured payloads from producer mutation before %s activity",
-    (stream) => {
-      const state = createChatRunState();
-      const args = { text: "x".repeat(1_024) };
-      for (let seq = 1; seq <= 50; seq += 1) {
-        state.recordProgressEvent("run-1", {
-          runId: "run-1",
-          seq,
-          stream: "tool",
-          ts: seq,
-          data: { phase: "start", toolCallId: `tool-${seq}`, args },
-        });
-      }
-      // Tool producers can retain and update nested payload objects between events.
-      args.text = "é".repeat(2_048);
-      state.recordProgressEvent("run-1", {
-        runId: "run-1",
-        seq: 51,
-        stream,
-        ts: 51,
-        data:
-          stream === "tool"
-            ? { phase: "start", toolCallId: "latest" }
-            : { phase: "warning", message: "Still running" },
-      });
-      const snapshot = state.runs.get("run-1")?.progressSnapshot;
-      expect(snapshot?.events.at(-1)?.seq).toBe(51);
-      expect(snapshot?.events).toHaveLength(50);
-      expect(snapshot?.events[0]?.data.args).toEqual({ text: "x".repeat(1_024) });
-      expect(snapshot?.byteLength).toBe(
-        snapshot?.events.reduce(
-          (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
-          0,
-        ),
-      );
-      expect(snapshot?.byteLength).toBeLessThanOrEqual(128 * 1024);
-    },
-  );
-
-  it("captures native tool JSON once with frozen wire values and exact byte accounting", () => {
-    const state = createChatRunState();
+  it("captures native JSON once, frozen and byte-exact", () => {
+    const { event, snapshot: getSnapshot } = progressHarness();
     let serializations = 0;
     let reads = 0;
     const details = {
@@ -505,32 +436,20 @@ describe("createChatRunState", () => {
         return value;
       },
     });
-    state.recordProgressEvent("run-1", {
-      runId: "run-1",
-      seq: 1,
-      stream: "tool",
-      ts: 1,
-      data: {
-        phase: "result",
-        toolCallId: "done",
-        result: { details, first: shared, again: shared, last: revocable.proxy },
-      },
+    event(1, "tool", {
+      phase: "result",
+      toolCallId: "done",
+      result: { details, first: shared, again: shared, last: revocable.proxy },
     });
-    const firstSnapshot = state.runs.get("run-1")?.progressSnapshot;
-    expect(firstSnapshot?.byteLength).toBe(
-      Buffer.byteLength(JSON.stringify(firstSnapshot?.events[0])),
-    );
-    state.recordProgressEvent("run-1", {
-      runId: "run-1",
-      seq: 2,
-      stream: "tool",
-      ts: 2,
-      data: { phase: "input_delta", toolCallId: "active", diff: { added: 1, removed: 0 } },
+    const firstSnapshot = getSnapshot();
+    expect(firstSnapshot?.byteLength).toBe(jsonBytes(firstSnapshot?.events[0]));
+    event(2, "tool", {
+      phase: "input_delta",
+      toolCallId: "active",
+      diff: { added: 1, removed: 0 },
     });
-    expect(serializations).toBe(1);
-    expect(reads).toBe(1);
-    expect(numberHints).toEqual(["number", "number"]);
-    const snapshot = state.runs.get("run-1")?.progressSnapshot;
+    expect([serializations, reads, numberHints]).toEqual([1, 1, ["number", "number"]]);
+    const snapshot = getSnapshot();
     expect(snapshot?.events[0]?.data.result).toEqual({
       details: { text: "é", values: [null, null] },
       first: { value: -3.25, text: "é", enabled: false },
@@ -540,14 +459,13 @@ describe("createChatRunState", () => {
     const captured = snapshot!.events[0]!.data.result as {
       details: { text: string; values: null[] };
     };
-    expect(Reflect.set(captured, "details", {})).toBe(false);
-    expect(Reflect.set(captured.details, "text", "changed")).toBe(false);
-    expect(Reflect.set(captured.details.values, "0", "changed")).toBe(false);
+    expect([
+      Reflect.set(captured, "details", {}),
+      Reflect.set(captured.details, "text", "changed"),
+      Reflect.set(captured.details.values, "0", "changed"),
+    ]).toEqual([false, false, false]);
     expect(snapshot?.byteLength).toBe(
-      snapshot?.events.reduce(
-        (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
-        0,
-      ),
+      snapshot?.events.reduce((sum, entry) => sum + jsonBytes(entry), 0),
     );
   });
 
@@ -567,7 +485,7 @@ describe("createChatRunState", () => {
     };
     const field = raw ? "raw" : "text";
     const state = createChatRunState();
-    const metadata = { phase: "result", toolCallId: "done", ...(raw ? {} : { name: "read" }) };
+    const metadata = raw ? { phase: "result", toolCallId: "done" } : resultMetadata;
     const event = {
       runId: "run-1",
       seq: 1,
@@ -575,108 +493,72 @@ describe("createChatRunState", () => {
       ts: 1,
       data: { ...metadata, result: { [field]: encode(prefix) } },
     };
-    const text = prefix + "x".repeat(64 * 1024 - Buffer.byteLength(JSON.stringify(event)));
+    const text = prefix + "x".repeat(64 * 1024 - jsonBytes(event));
     event.data.result[field] = encode(text);
     state.recordProgressEvent("run-1", event);
     expect(state.runs.get("run-1")?.progressSnapshot?.byteLength).toBe(64 * 1024);
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data.result).toEqual({
       [field]: text,
     });
-    let laterReads = 0;
+    const laterRead = vi.fn();
     state.recordProgressEvent("run-1", {
       ...event,
       seq: 2,
       data: {
         ...metadata,
-        result: {
-          [field]: encode(`${text}x`),
-          get later() {
-            laterReads += 1;
-            return "unused";
-          },
-        },
+        result: withUnreadTail(field, encode(`${text}x`), laterRead),
       },
     });
-    expect(laterReads).toBe(0);
+    expect(laterRead).not.toHaveBeenCalled();
     expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
   });
 
-  const unreplayable: { label: string; result: () => unknown; oversized?: boolean }[] = [
-    { label: "single oversized", oversized: true, result: () => "x".repeat(80_000) },
-    {
-      label: "cumulative oversized",
-      oversized: true,
-      result: () => Array.from({ length: 100 }, () => "x".repeat(1_024)),
-    },
-    {
-      label: "cyclic",
-      result: () => {
+  const unreplayable: [label: string, result: () => unknown, field?: string][] = [
+    ["container-only oversized", () => Array.from({ length: 32_768 }, () => ({})), "rows"],
+    ["single oversized", () => "x".repeat(80_000), "body"],
+    ["cumulative oversized", () => Array.from({ length: 100 }, () => "x".repeat(1_024)), "body"],
+    [
+      "cyclic",
+      () => {
         const result: { self?: unknown } = {};
         result.self = result;
         return result;
       },
-    },
-    { label: "bigint", result: () => 1n },
-    {
-      label: "boxed number coercing to bigint",
-      result: () => Object.assign(Object(1), { [Symbol.toPrimitive]: () => 2n }),
-    },
-    {
-      label: "throwing toJSON",
-      result: () => ({
+    ],
+    ["bigint", () => 1n],
+    [
+      "boxed number coercing to bigint",
+      () => Object.assign(Object(1), { [Symbol.toPrimitive]: () => 2n }),
+    ],
+    [
+      "throwing toJSON",
+      () => ({
         toJSON: () => {
           throw new Error("unserializable tool result");
         },
       }),
-    },
+    ],
   ];
   it.each(unreplayable)(
-    "retains metadata without reading beyond a $label result",
-    ({ result, oversized }) => {
-      const state = createChatRunState();
-      let laterReads = 0;
+    "retains metadata without reading beyond a %s result",
+    (_label, result, field) => {
+      const { event, snapshot: getSnapshot } = progressHarness();
+      const laterRead = vi.fn();
       const value = result();
-      state.recordProgressEvent("run-1", {
-        runId: "run-1",
-        seq: 1,
-        stream: "tool",
-        ts: 1,
-        data: {
-          phase: "result",
-          toolCallId: "done",
-          name: "read",
-          result: oversized
-            ? {
-                body: value,
-                get later() {
-                  laterReads += 1;
-                  return "unused";
-                },
-              }
-            : value,
-        },
+      event(1, "tool", {
+        ...resultMetadata,
+        result: field ? withUnreadTail(field, value, laterRead) : value,
       });
-      expect(laterReads).toBe(0);
-      const snapshot = state.runs.get("run-1")?.progressSnapshot;
-      expect(snapshot?.events[0]?.data).toEqual({
-        phase: "result",
-        toolCallId: "done",
-        name: "read",
-      });
-      expect(snapshot?.byteLength).toBe(Buffer.byteLength(JSON.stringify(snapshot?.events[0])));
+      expect(laterRead).not.toHaveBeenCalled();
+      const snapshot = getSnapshot();
+      expect(snapshot?.events[0]?.data).toEqual(resultMetadata);
+      expect(snapshot?.byteLength).toBe(jsonBytes(snapshot?.events[0]));
     },
   );
 
-  it("keeps a review-heavy reconnect bounded, adverse, and attached to its owner", () => {
-    const state = createChatRunState();
-    const event = (seq: number, data: Record<string, unknown>) =>
-      state.recordProgressEvent("run-1", {
-        runId: "run-1",
-        seq,
-        stream: "tool",
-        ts: 1_000 + seq,
-        data,
-      });
+  it("bounds review-heavy reconnects with adverse outcomes attached to owners", () => {
+    const { event: record, events: getEvents } = progressHarness(undefined, 1_000);
+    const event = (seq: number, data: Record<string, unknown>) => record(seq, "tool", data);
     event(1, {
       phase: "start",
       name: "exec",
@@ -696,7 +578,7 @@ describe("createChatRunState", () => {
       });
     }
 
-    const events = state.runs.get("run-1")?.progressSnapshot?.events ?? [];
+    const events = getEvents() ?? [];
     expect(events[0]?.data).toMatchObject({ phase: "start", toolCallId: "reviewed" });
     const reviews = events.filter((candidate) => candidate.data.phase === "review");
     expect(reviews).toHaveLength(16);
@@ -706,69 +588,25 @@ describe("createChatRunState", () => {
       ),
     );
     expect(reviews.at(-1)?.data.approvalReviewOutcome).toBe("denied");
-    expect(
-      events.every(
-        (candidate) =>
-          candidate.data.phase === "start" ||
-          events.some(
-            (owner) =>
-              owner.data.phase === "start" && owner.data.toolCallId === candidate.data.toolCallId,
-          ),
-      ),
-    ).toBe(true);
+    const owners = new Set(
+      events.filter(({ data }) => data.phase === "start").map(({ data }) => data.toolCallId),
+    );
+    expect(events.every(({ data }) => data.phase === "start" || owners.has(data.toolCallId))).toBe(
+      true,
+    );
   });
 });
 
 describe("createSessionMessageSubscriberRegistry", () => {
-  const key = "agent:main:main";
-  it.each([
-    { mode: "narration", includeApprovals: false },
-    { mode: undefined, includeApprovals: true },
-  ] as const)("replaces subscription intent (%j) before notifying observers", (intent) => {
-    const subscribers = createSessionMessageSubscriberRegistry();
-    subscribers.subscribe("plain", key);
-    const modes: string[] = [];
-    subscribers.onChange((changedKey, connId) => {
-      modes.push(
-        !subscribers.get(changedKey).has(connId)
-          ? "none"
-          : subscribers.getNarration(changedKey).has(connId)
-            ? "narration"
-            : "full",
-      );
-    });
-    subscribers.subscribe("conn", key, intent);
-    subscribers.subscribe("conn", key, intent);
-    expect([...subscribers.get(key)]).toEqual(["plain", "conn"]);
-    expect([...subscribers.getApprovals(key)]).toEqual(intent.includeApprovals ? ["conn"] : []);
-    subscribers.subscribe("conn", key);
-    expect([...subscribers.get(key)]).toEqual(["plain", "conn"]);
-    expect([...subscribers.getApprovals(key)]).toEqual([]);
-    subscribers.subscribe("conn", key, intent);
-    expect([...subscribers.getApprovals(key)]).toEqual(intent.includeApprovals ? ["conn"] : []);
-    if (intent.mode) {
-      subscribers.unsubscribeAll("conn");
-    } else {
-      subscribers.unsubscribe("conn", key);
-    }
-    expect([...subscribers.get(key)]).toEqual(["plain"]);
-    expect([...subscribers.getApprovals(key)]).toEqual([]);
-    expect([...subscribers.getNarration(key)]).toEqual([]);
-    expect(modes).toEqual(
-      intent.mode ? ["narration", "full", "narration", "none"] : ["full", "none"],
-    );
-  });
-
+  const key = sessionKey;
   it("removes approval subscriptions only for the disconnected connection", () => {
-    const subscribers = createSessionMessageSubscriberRegistry();
+    const { registry: subscribers, snapshot } = subscriptionHarness();
     subscribers.subscribe("reviewer", key, { includeApprovals: true });
     subscribers.subscribe("reviewer", "child", { includeApprovals: true });
     subscribers.subscribe("other", "child", { includeApprovals: true });
     subscribers.unsubscribeAll("reviewer");
-    expect([...subscribers.get(key)]).toEqual([]);
-    expect([...subscribers.getApprovals(key)]).toEqual([]);
-    expect([...subscribers.get("child")]).toEqual(["other"]);
-    expect([...subscribers.getApprovals("child")]).toEqual(["other"]);
+    expect(snapshot()).toEqual([[], [], []]);
+    expect(snapshot("child")).toEqual([["other"], ["other"], []]);
   });
 
   it.each([
@@ -779,29 +617,21 @@ describe("createSessionMessageSubscriberRegistry", () => {
     { order: "first", firstSucceeds: true, secondSucceeds: true },
     { order: "second", firstSucceeds: true, secondSucceeds: true },
   ])("settles concurrent replay intent: %j", ({ order, firstSucceeds, secondSucceeds }) => {
-    const subscribers = createSessionMessageSubscriberRegistry();
+    const { registry: subscribers, subscribe, snapshot } = subscriptionHarness();
     if (secondSucceeds) {
       subscribers.subscribe("conn", "other");
     }
-    const first = subscribers.subscribe("conn", key, {
-      provisional: true,
-      includeApprovals: true,
-      mode: "narration",
-    })!;
-    const second = subscribers.subscribe("conn", key, { provisional: true })!;
+    const first = subscribe({ provisional: true, includeApprovals: true, mode: "narration" })!;
+    const second = subscribe({ provisional: true })!;
     const settleFirst = firstSucceeds ? first.commit : first;
     const settleSecond = secondSucceeds ? second.commit : second;
-    if (order === "first") {
-      settleFirst();
-      settleSecond();
-    } else {
-      settleSecond();
-      settleFirst();
+    for (const settle of order === "first"
+      ? [settleFirst, settleSecond]
+      : [settleSecond, settleFirst]) {
+      settle();
     }
-    expect([...subscribers.get(key)]).toEqual(secondSucceeds ? ["conn"] : []);
+    expect(snapshot()).toEqual([secondSucceeds ? ["conn"] : [], [], []]);
     expect([...subscribers.get("other")]).toEqual(secondSucceeds ? ["conn"] : []);
-    expect([...subscribers.getApprovals(key)]).toEqual([]);
-    expect([...subscribers.getNarration(key)]).toEqual([]);
   });
 
   it.each([
@@ -810,23 +640,25 @@ describe("createSessionMessageSubscriberRegistry", () => {
     { mode: undefined, includeApprovals: false, changeMode: false },
     { mode: undefined, includeApprovals: true, changeMode: false },
   ] as const)(
-    "restores committed intent after replay failure: %j",
+    "restores intent after replay failure: %j",
     ({ mode, includeApprovals, changeMode }) => {
-      const subscribers = createSessionMessageSubscriberRegistry();
+      const { registry: subscribers, subscribe, snapshot } = subscriptionHarness();
       const onChange = vi.fn();
       subscribers.onChange(onChange);
-      subscribers.subscribe("conn", key, { mode, includeApprovals });
+      subscribe({ mode, includeApprovals });
       subscribers.subscribe("conn", "child");
-      const rollback = subscribers.subscribe("conn", key, {
+      const rollback = subscribe({
         provisional: true,
         includeApprovals: !includeApprovals,
         mode: changeMode && mode !== "narration" ? "narration" : undefined,
       })!;
       rollback();
-      expect([...subscribers.get(key)]).toEqual(["conn"]);
+      expect(snapshot()).toEqual([
+        ["conn"],
+        includeApprovals ? ["conn"] : [],
+        mode === "narration" ? ["conn"] : [],
+      ]);
       expect([...subscribers.get("child")]).toEqual(["conn"]);
-      expect([...subscribers.getNarration(key)]).toEqual(mode === "narration" ? ["conn"] : []);
-      expect([...subscribers.getApprovals(key)]).toEqual(includeApprovals ? ["conn"] : []);
       if (!changeMode) {
         expect(onChange.mock.calls).toEqual([
           [key, "conn"],
@@ -841,120 +673,60 @@ describe("createSessionMessageSubscriberRegistry", () => {
     { action: "disconnect", subscriptionId: undefined },
     { action: "unsubscribe", subscriptionId: "owner" },
     { action: "disconnect", subscriptionId: "owner" },
-  ])(
-    "fences pending settlements after invalidation and ID reuse: %j",
-    ({ action, subscriptionId }) => {
-      const subscribers = createSessionMessageSubscriberRegistry();
-      const old = subscribers.subscribe("conn", key, {
-        subscriptionId,
-        provisional: true,
-        includeApprovals: true,
-        mode: subscriptionId ? undefined : "narration",
-      })!;
-      if (action === "disconnect") {
-        subscribers.unsubscribeAll("conn");
-      } else {
-        subscribers.unsubscribe("conn", key, subscriptionId);
-      }
-      expect([...subscribers.get(key)]).toEqual([]);
-      expect([...subscribers.getApprovals(key)]).toEqual([]);
-      const replacement = subscribers.subscribe("conn", key, {
-        subscriptionId,
-        provisional: !subscriptionId,
-        mode: subscriptionId ? "narration" : undefined,
-      });
-      old.commit();
-      expect([...subscribers.get(key)]).toEqual(["conn"]);
-      expect([...subscribers.getApprovals(key)]).toEqual([]);
-      expect([...subscribers.getNarration(key)]).toEqual(subscriptionId ? ["conn"] : []);
-      if (replacement) {
-        replacement();
-      } else {
-        subscribers.subscribe("conn", key, { subscriptionId: "another" });
-        subscribers.unsubscribeAll("conn");
-      }
-      expect([...subscribers.get(key)]).toEqual([]);
-      expect([...subscribers.getApprovals(key)]).toEqual([]);
-      expect([...subscribers.getNarration(key)]).toEqual([]);
-    },
-  );
-  it("aggregates full streams and approvals while releasing only the named observer", () => {
-    const registry = createSessionMessageSubscriberRegistry();
-    const changes = vi.fn(() => ({
-      subscribed: registry.get(key).has("conn"),
-      narration: registry.getNarration(key).has("conn"),
-      approvals: registry.getApprovals(key).has("conn"),
-    }));
-    registry.onChange(changes);
-    registry.subscribe("conn", key, { subscriptionId: "foreground" });
-    registry.subscribe("conn", key, {
-      subscriptionId: "sidebar",
-      mode: "narration",
+  ])("fences settlement after invalidation and ID reuse: %j", ({ action, subscriptionId }) => {
+    const { registry: subscribers, subscribe, snapshot } = subscriptionHarness();
+    const old = subscribe({
+      subscriptionId,
+      provisional: true,
       includeApprovals: true,
+      mode: subscriptionId ? undefined : "narration",
+    })!;
+    if (action === "disconnect") {
+      subscribers.unsubscribeAll("conn");
+    } else {
+      subscribers.unsubscribe("conn", key, subscriptionId);
+    }
+    expect(snapshot()).toEqual([[], [], []]);
+    const replacement = subscribe({
+      subscriptionId,
+      provisional: !subscriptionId,
+      mode: subscriptionId ? "narration" : undefined,
     });
-    expect([...registry.getNarration(key)]).toEqual([]);
-    expect([...registry.getApprovals(key)]).toEqual(["conn"]);
-
-    registry.unsubscribe("conn", key, "foreground");
-    expect(changes.mock.results.at(-1)?.value).toEqual({
-      subscribed: true,
-      narration: true,
-      approvals: true,
-    });
-    registry.subscribe("conn", key);
-    expect([...registry.getNarration(key)]).toEqual([]);
-    registry.unsubscribe("conn", key);
-    expect([...registry.getNarration(key)]).toEqual(["conn"]);
-    registry.unsubscribe("conn", key, "unknown");
-    expect([...registry.get(key)]).toEqual(["conn"]);
-
-    registry.unsubscribe("conn", key, "sidebar");
-    expect(changes.mock.results.at(-1)?.value).toEqual({
-      subscribed: false,
-      narration: false,
-      approvals: false,
-    });
+    old.commit();
+    expect(snapshot()).toEqual([["conn"], [], subscriptionId ? ["conn"] : []]);
+    if (replacement) {
+      replacement();
+    } else {
+      subscribe({ subscriptionId: "another" });
+      subscribers.unsubscribeAll("conn");
+    }
+    expect(snapshot()).toEqual([[], [], []]);
   });
-
   it.each([
     { separateOwners: true, succeeds: false },
     { separateOwners: false, succeeds: false },
     { separateOwners: false, succeeds: true },
-  ])(
-    "retains foreground delivery until pending ownership settles: %j",
-    ({ separateOwners, succeeds }) => {
-      const registry = createSessionMessageSubscriberRegistry();
-      const foregroundId = separateOwners ? "foreground" : "owner";
-      const narrationId = separateOwners ? "sidebar" : "owner";
-      if (separateOwners) {
-        registry.subscribe("conn", key, { subscriptionId: narrationId, mode: "narration" });
-      }
-      const foreground = registry.subscribe("conn", key, {
-        subscriptionId: foregroundId,
-        provisional: true,
-        includeApprovals: separateOwners,
-      })!;
-      const narration = registry.subscribe("conn", key, {
-        subscriptionId: narrationId,
-        provisional: true,
-        mode: "narration",
-      })!;
-      expect([...registry.getNarration(key)]).toEqual([]);
-      expect([...registry.getApprovals(key)]).toEqual(separateOwners ? ["conn"] : []);
-      if (separateOwners) {
-        narration();
-      } else {
-        narration.commit();
-      }
-      expect([...registry.getNarration(key)]).toEqual([]);
-      expect([...registry.getApprovals(key)]).toEqual(separateOwners ? ["conn"] : []);
-      if (succeeds) {
-        foreground.commit();
-      } else {
-        foreground();
-      }
-      expect([...registry.getNarration(key)]).toEqual(["conn"]);
-      expect([...registry.getApprovals(key)]).toEqual([]);
-    },
-  );
+  ])("retains foreground until ownership settles: %j", ({ separateOwners, succeeds }) => {
+    const { subscribe, snapshot } = subscriptionHarness();
+    const foregroundId = separateOwners ? "foreground" : "owner";
+    const narrationId = separateOwners ? "sidebar" : "owner";
+    if (separateOwners) {
+      subscribe({ subscriptionId: narrationId, mode: "narration" });
+    }
+    const foreground = subscribe({
+      subscriptionId: foregroundId,
+      provisional: true,
+      includeApprovals: separateOwners,
+    })!;
+    const narration = subscribe({
+      subscriptionId: narrationId,
+      provisional: true,
+      mode: "narration",
+    })!;
+    expect(snapshot().slice(1)).toEqual([separateOwners ? ["conn"] : [], []]);
+    (separateOwners ? narration : narration.commit)();
+    expect(snapshot().slice(1)).toEqual([separateOwners ? ["conn"] : [], []]);
+    (succeeds ? foreground.commit : foreground)();
+    expect(snapshot().slice(1)).toEqual([[], ["conn"]]);
+  });
 });

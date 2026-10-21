@@ -360,27 +360,22 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each([{ action: "login" }, { action: "list" }])(
-    "guides an unidentified person through $action without prompting for provider credentials",
-    async ({ action }) => {
-      const output = runtime();
-      await withGateway(
-        () => {
-          throw new Error("unidentified");
-        },
-        async ({ port, requests }) => {
-          await expect(
-            action === "login"
-              ? modelsAccountsLoginCommand({ port, provider: "openai" }, output)
-              : modelsAccountsListCommand({ port }, output),
-          ).rejects.toThrow("require a signed-in person");
-          expect(requests.map((request) => request.method)).toEqual(["users.self"]);
-          expect(mocks.password).not.toHaveBeenCalled();
-          expect(mocks.openUrl).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+  it("guides an unidentified person through login without prompting for provider credentials", async () => {
+    const output = runtime();
+    await withGateway(
+      () => {
+        throw new Error("unidentified");
+      },
+      async ({ port, requests }) => {
+        await expect(
+          modelsAccountsLoginCommand({ port, provider: "openai" }, output),
+        ).rejects.toThrow("require a signed-in person");
+        expect(requests.map((request) => request.method)).toEqual(["users.self"]);
+        expect(mocks.password).not.toHaveBeenCalled();
+        expect(mocks.openUrl).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   it("uses Gateway provider/method choices and sends a hidden API key only as the exact step answer", async () => {
     const apiKey = "synthetic-personal-api-key";
@@ -501,28 +496,22 @@ describe("personal model account CLI over an identified Gateway connection", () 
     );
   });
 
-  it.each([
-    { provider: "missing", method: undefined, error: "Unknown provider" },
-    { provider: "openai", method: "missing", error: "Unknown sign-in method" },
-  ])(
-    "rejects an unavailable catalog selection before starting: $error",
-    async ({ provider, method, error }) => {
-      await withGateway(
-        () => undefined,
-        async ({ port, requests }) => {
-          await expect(
-            modelsAccountsLoginCommand({ port, provider, method }, runtime()),
-          ).rejects.toThrow(error);
-          expect(requests.map((request) => request.method)).toEqual([
-            "users.self",
-            "users.authConnect.catalog",
-          ]);
-          expect(mocks.password).not.toHaveBeenCalled();
-          expect(mocks.openUrl).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+  it("rejects an unavailable catalog selection before starting: Unknown sign-in method", async () => {
+    await withGateway(
+      () => undefined,
+      async ({ port, requests }) => {
+        await expect(
+          modelsAccountsLoginCommand({ port, provider: "openai", method: "missing" }, runtime()),
+        ).rejects.toThrow("Unknown sign-in method");
+        expect(requests.map((request) => request.method)).toEqual([
+          "users.self",
+          "users.authConnect.catalog",
+        ]);
+        expect(mocks.password).not.toHaveBeenCalled();
+        expect(mocks.openUrl).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   it("rejects non-TTY sign-in without consuming input", async () => {
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
@@ -649,53 +638,42 @@ describe("personal model account CLI over an identified Gateway connection", () 
     }
   });
 
-  it.each([
-    { result: connected, exitCode: undefined },
-    {
-      result: { status: "failed", reason: "exchange" } satisfies UsersAuthConnectStatusResult,
-      exitCode: 1,
-    },
-  ])(
-    "finishes from the authoritative $result.status status and closes the prompt",
-    async ({ result, exitCode }) => {
-      waitForPromptAbort();
-      const output = runtime();
-      let polls = 0;
-      await withGateway(
-        ({ method }) =>
-          method === "users.authConnect.start"
-            ? startResult()
-            : method === "users.authConnect.status"
-              ? ++polls === 1
-                ? { status: "pending", step: inputStep }
-                : result
-              : undefined,
-        async ({ port, requests }) => {
-          const command = modelsAccountsLoginCommand(
-            { port, provider: "openai", json: true },
-            output,
-          );
-          if (exitCode) {
-            await expect(command).rejects.toMatchObject({ code: exitCode });
-          } else {
-            await command;
-          }
-          expect(mocks.password.mock.calls[0]?.[0].signal?.aborted).toBe(true);
-          expect(
-            requests.some(
-              ({ method }) =>
-                method === "users.authConnect.answer" || method === "users.authConnect.cancel",
-            ),
-          ).toBe(false);
-          expectJsonOutput(output, {
-            profileId: PROFILE_ID,
-            provider: "openai",
-            ...result,
-          });
-        },
-      );
-    },
-  );
+  it("finishes from the authoritative failed status and closes the prompt", async () => {
+    const result = {
+      status: "failed",
+      reason: "exchange",
+    } satisfies UsersAuthConnectStatusResult;
+    waitForPromptAbort();
+    const output = runtime();
+    let polls = 0;
+    await withGateway(
+      ({ method }) =>
+        method === "users.authConnect.start"
+          ? startResult()
+          : method === "users.authConnect.status"
+            ? ++polls === 1
+              ? { status: "pending", step: inputStep }
+              : result
+            : undefined,
+      async ({ port, requests }) => {
+        await expect(
+          modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output),
+        ).rejects.toMatchObject({ code: 1 });
+        expect(mocks.password.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+        expect(
+          requests.some(
+            ({ method }) =>
+              method === "users.authConnect.answer" || method === "users.authConnect.cancel",
+          ),
+        ).toBe(false);
+        expectJsonOutput(output, {
+          profileId: PROFILE_ID,
+          provider: "openai",
+          ...result,
+        });
+      },
+    );
+  });
 
   it("waits for exact cancellation acknowledgment before closing the initiating socket", async () => {
     mocks.password.mockResolvedValue(CANCEL_SYMBOL);

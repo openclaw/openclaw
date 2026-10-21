@@ -1,46 +1,45 @@
 // Idle-eviction under pool pressure: one busy agent must not brick terminal
 // opens gateway-wide until restart.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import {
   agentTerminalOwner,
   baseOpenRequest,
+  expectTerminalOpen,
   type FakeTerminalPty,
   makeFakePty,
 } from "./session-manager.test-helpers.js";
 
+afterEach(() => vi.useRealTimers());
+
 const agentOwner = agentTerminalOwner("agent:main:main");
 
-function trackingManager(maxSessions: number) {
+function trackingManager(maxSessions: number, spawn = async () => makeFakePty()) {
   const ptys: FakeTerminalPty[] = [];
   const manager = new TerminalSessionManager({
     emit: vi.fn(),
     spawn: async () => {
-      const pty = makeFakePty();
+      const pty = await spawn();
       ptys.push(pty);
       return pty;
     },
     maxSessions,
   });
-  return { manager, ptys };
+  const open = (overrides: Parameters<typeof baseOpenRequest>[0] = {}) =>
+    manager.open(baseOpenRequest({ owner: agentOwner, ...overrides }));
+  return { manager, ptys, open };
 }
 
 describe("TerminalSessionManager idle eviction", () => {
   it("never evicts viewer-attached or connection-owned sessions under pressure", async () => {
-    const { manager, ptys } = trackingManager(2);
-    const connOwned = await manager.open(baseOpenRequest());
-    const viewed = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    if (!connOwned.ok || !viewed.ok) {
-      throw new Error("expected opens");
-    }
+    const { manager, ptys, open } = trackingManager(2);
+    expectTerminalOpen(await manager.open(baseOpenRequest()));
+    const viewed = expectTerminalOpen(await open());
     expect(manager.attach("viewer-1", viewed.sessionId)?.sessionId).toBe(viewed.sessionId);
 
-    const denied = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    expect(denied.ok).toBe(false);
-    if (!denied.ok) {
-      expect(denied.code).toBe("limit");
-    }
+    await expect(open()).resolves.toMatchObject({ ok: false, code: "limit" });
     expect(manager.size).toBe(2);
     expect(ptys.some((pty) => pty.killed)).toBe(false);
   });
@@ -48,193 +47,131 @@ describe("TerminalSessionManager idle eviction", () => {
   it("spares a victim that gains a viewer during the replacement spawn", async () => {
     const victimPty = makeFakePty();
     const replacementPty = makeFakePty();
-    let releaseSpawn: (() => void) | undefined;
+    const gate = createDeferred();
     let spawnCount = 0;
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => {
-        spawnCount += 1;
-        if (spawnCount === 1) {
-          return victimPty;
-        }
-        await new Promise<void>((resolve) => {
-          releaseSpawn = resolve;
-        });
-        return replacementPty;
-      },
-      maxSessions: 1,
+    const { manager, open } = trackingManager(1, async () => {
+      if (spawnCount++ === 0) {
+        return victimPty;
+      }
+      await gate.promise;
+      return replacementPty;
     });
-    const victim = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    if (!victim.ok) {
-      throw new Error("expected open");
-    }
+    const victim = expectTerminalOpen(await open());
 
-    const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
-    await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
-    // The claimed victim becomes viewer-attached while the replacement spawns.
+    const opening = open();
+    // The replacement stays gated while the idle victim gains a viewer.
     expect(manager.attach("viewer-1", victim.sessionId)?.sessionId).toBe(victim.sessionId);
-    releaseSpawn?.();
+    gate.resolve();
 
-    const outcome = await opening;
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) {
-      expect(outcome.code).toBe("limit");
-    }
-    // The now-viewered session survives; the orphaned replacement is killed.
+    await expect(opening).resolves.toMatchObject({ ok: false, code: "limit" });
     expect(victimPty.killed).toBe(false);
     expect(replacementPty.killed).toBe(true);
     expect(manager.size).toBe(1);
     expect(manager.write("viewer-1", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
-  it("evicts the freshly idlest session when the claimed victim becomes active mid-spawn", async () => {
+  it("evicts the freshly idlest session when the oldest becomes active mid-spawn", async () => {
     vi.useFakeTimers();
-    try {
-      const ptys: FakeTerminalPty[] = [];
-      let releaseSpawn: (() => void) | undefined;
-      let gateNextSpawn = false;
-      const manager = new TerminalSessionManager({
-        emit: vi.fn(),
-        spawn: async () => {
-          const pty = makeFakePty();
-          ptys.push(pty);
-          if (gateNextSpawn) {
-            await new Promise<void>((resolve) => {
-              releaseSpawn = resolve;
-            });
-          }
-          return pty;
-        },
-        maxSessions: 2,
-      });
-      const oldest = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      await vi.advanceTimersByTimeAsync(5_000);
-      const newer = await manager.open(baseOpenRequest({ owner: agentOwner }));
-      if (!oldest.ok || !newer.ok) {
-        throw new Error("expected agent opens");
+    const gate = createDeferred();
+    let gateNextSpawn = false;
+    const { manager, ptys, open } = trackingManager(2, async () => {
+      if (gateNextSpawn) {
+        await gate.promise;
       }
+      return makeFakePty();
+    });
+    expectTerminalOpen(await open());
+    await vi.advanceTimersByTimeAsync(5_000);
+    expectTerminalOpen(await open());
 
-      gateNextSpawn = true;
-      const opening = manager.open(baseOpenRequest({ owner: agentOwner }));
-      await vi.waitFor(() => expect(releaseSpawn).toBeDefined());
-      // The claimed (oldest) session becomes active during the spawn, making
-      // the newer session the genuinely idlest candidate.
-      await vi.advanceTimersByTimeAsync(5_000);
-      expectDefined(ptys[0], "oldest pty invariant").emitData("busy\n");
-      releaseSpawn?.();
+    gateNextSpawn = true;
+    const opening = open();
+    // The oldest session becomes active during the spawn, making
+    // the newer session the genuinely idlest candidate.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expectDefined(ptys[0], "oldest pty invariant").emitData("busy\n");
+    gate.resolve();
 
-      const outcome = await opening;
-      expect(outcome.ok).toBe(true);
-      expect(manager.size).toBe(2);
-      expect(expectDefined(ptys[0], "oldest pty invariant").killed).toBe(false);
-      expect(expectDefined(ptys[1], "newer pty invariant").killed).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    expectTerminalOpen(await opening);
+    expect(manager.size).toBe(2);
+    expect(expectDefined(ptys[0], "oldest pty invariant").killed).toBe(false);
+    expect(expectDefined(ptys[1], "newer pty invariant").killed).toBe(true);
   });
 
   it("holds the cap when concurrent opens complete out of order", async () => {
     const gates: Array<(pty: FakeTerminalPty) => void> = [];
-    const spawned: FakeTerminalPty[] = [];
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => {
-        const pty = await new Promise<FakeTerminalPty>((resolve) => {
+    const { manager, open } = trackingManager(
+      2,
+      () =>
+        new Promise<FakeTerminalPty>((resolve) => {
           gates.push(resolve);
-        });
-        spawned.push(pty);
-        return pty;
-      },
-      maxSessions: 2,
-    });
-    const seeded = manager.open(baseOpenRequest({ owner: agentOwner }));
+        }),
+    );
+    const seeded = open();
     await vi.waitFor(() => expect(gates).toHaveLength(1));
     gates[0]?.(makeFakePty());
-    const seededOutcome = await seeded;
-    expect(seededOutcome.ok).toBe(true);
+    expectTerminalOpen(await seeded);
 
-    // A reserves the free slot; B sees the reservation and claims the seeded
-    // session for eviction. B's spawn completes first.
-    const openA = manager.open(baseOpenRequest({ owner: agentOwner }));
+    // A reserves the free slot; B sees the reservation and an idle eviction
+    // candidate. B's spawn completes first.
+    const openA = open();
     await vi.waitFor(() => expect(gates).toHaveLength(2));
-    const openB = manager.open(baseOpenRequest({ owner: agentOwner }));
+    const openB = open();
     await vi.waitFor(() => expect(gates).toHaveLength(3));
+    const excess = open();
+    expect(gates).toHaveLength(3);
+    await expect(excess).resolves.toMatchObject({ ok: false, code: "limit" });
     gates[2]?.(makeFakePty());
     const outcomeB = await openB;
     gates[1]?.(makeFakePty());
     const outcomeA = await openA;
 
-    expect(outcomeA.ok).toBe(true);
-    expect(outcomeB.ok).toBe(true);
-    // The hard cap survives the out-of-order completion.
+    expect([outcomeA.ok, outcomeB.ok]).toEqual([true, true]);
     expect(manager.size).toBeLessThanOrEqual(2);
   });
 
-  it("releases the eviction claim when a cancelled open's spawn never settles", async () => {
+  it("allows idle eviction after a cancelled open's spawn never settles", async () => {
     let hangNextSpawn = false;
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => {
-        if (hangNextSpawn) {
-          hangNextSpawn = false;
-          return await new Promise<never>(() => {});
-        }
-        return makeFakePty();
-      },
-      maxSessions: 1,
+    const { manager, open } = trackingManager(1, async () => {
+      if (hangNextSpawn) {
+        hangNextSpawn = false;
+        return await new Promise<never>(() => {});
+      }
+      return makeFakePty();
     });
-    const victim = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    if (!victim.ok) {
-      throw new Error("expected open");
-    }
-
+    expectTerminalOpen(await open());
     hangNextSpawn = true;
     const controller = new AbortController();
-    const hung = manager.open(baseOpenRequest({ owner: agentOwner, signal: controller.signal }));
+    const hung = open({ signal: controller.signal });
     await vi.waitFor(() => expect(hangNextSpawn).toBe(false));
     controller.abort(new Error("cancelled"));
 
-    // The cancelled open's claim is gone, so a later open can evict the victim.
-    const next = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    expect(next.ok).toBe(true);
+    expectTerminalOpen(await open());
     expect(manager.size).toBe(1);
     // The hung open stays pending forever by design; do not await it.
     void hung;
   });
 
-  it("keeps the claimed victim alive when the replacement spawn fails", async () => {
+  it("keeps the idle victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
     let failNextSpawn = false;
-    const manager = new TerminalSessionManager({
-      emit: vi.fn(),
-      spawn: async () => {
-        if (failNextSpawn) {
-          throw new Error("pty exhausted");
-        }
-        return pty;
-      },
-      maxSessions: 1,
+    const { manager, open } = trackingManager(1, async () => {
+      if (failNextSpawn) {
+        throw new Error("pty exhausted");
+      }
+      return pty;
     });
-    const victim = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    if (!victim.ok) {
-      throw new Error("expected open");
-    }
+    const victim = expectTerminalOpen(await open());
 
     failNextSpawn = true;
-    const failed = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    expect(failed.ok).toBe(false);
-    if (!failed.ok) {
-      expect(failed.code).toBe("spawn_failed");
-    }
-    // The victim survives a failed replacement and stays claimable later.
+    await expect(open()).resolves.toMatchObject({ ok: false, code: "spawn_failed" });
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(false);
     pty.emitData("still-alive\n");
     expect(manager.snapshotAgent(agentOwner, victim.sessionId)).toContain("still-alive");
 
     failNextSpawn = false;
-    const replacement = await manager.open(baseOpenRequest({ owner: agentOwner }));
-    expect(replacement.ok).toBe(true);
+    expectTerminalOpen(await open());
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(true);
   });

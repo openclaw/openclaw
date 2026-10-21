@@ -7,7 +7,10 @@ import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
+import {
+  PreparedModelRuntimeClosedError,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
@@ -35,7 +38,10 @@ export function refreshCommittedProviderCatalogs(
     }
     owner.catalogRecovery = undefined;
     void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      if (
+        !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
+        !(error instanceof PreparedModelRuntimeClosedError)
+      ) {
         log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
       }
     });
@@ -106,6 +112,7 @@ export function listConfiguredRefreshInputs(
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
       preservedWorkspaceByAgentDir,
+      options.pluginMetadataSnapshot,
     ).map(normalizePreparedModelRuntimeInput),
   );
 }

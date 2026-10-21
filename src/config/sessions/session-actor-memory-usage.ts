@@ -4,6 +4,11 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus-policy.js";
 import type { SessionTranscriptCorpusEntry } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
 import {
+  decodeUsageCostRollupEnvelope,
+  type UsageCostFreshnessCheckpoint,
+} from "../../infra/session-cost-usage-rollup-codec.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../utils/delivery-context.read.js";
@@ -110,10 +115,79 @@ export function readSessionActorMemoryUsage(
 
   if (query.type === "session.usage.snapshot") {
     const ids = query.input.sessionIds && new Set(query.input.sessionIds);
+    const budget = query.input.reportBudget;
+    let remainingBytes = budget?.remainingBytes ?? Number.POSITIVE_INFINITY;
+    let metadataCount = 0;
     return selected.flatMap(({ sessionKey, window }) => {
+      getAsyncWorkSignal()?.throwIfAborted();
       const entry = window.hot.entry;
       if (!entry || (ids && !ids.has(entry.sessionId))) {
         return [];
+      }
+      let rollup: SessionActorMemoryUsageSnapshot["rollup"];
+      let rollupDeferred = false;
+      let deferredRollupMetadata: SessionActorMemoryUsageSnapshot["deferredRollupMetadata"];
+      const cached = window.usageRollup;
+      if (cached) {
+        const headerBytes = 2 * cached.valueJson.length;
+        const bodyBytes = cached.blob.byteLength;
+        const headerAllowed =
+          !budget ||
+          (Buffer.byteLength(cached.valueJson) <= 64 * 1024 && headerBytes <= remainingBytes);
+        const bodyAllowed =
+          !budget || (bodyBytes <= 1024 * 1024 && headerBytes + bodyBytes <= remainingBytes);
+        if (budget && (!headerAllowed || !bodyAllowed)) {
+          // Validate the owner's envelope before treating an omitted body as a current cache hit.
+          const envelope =
+            Buffer.byteLength(cached.valueJson) <= 64 * 1024
+              ? decodeUsageCostRollupEnvelope(cached.valueJson, budget.pricingFingerprint)
+              : undefined;
+          rollupDeferred = Boolean(envelope && envelope.body.storedBytes === bodyBytes);
+          if (
+            rollupDeferred &&
+            envelope &&
+            !headerAllowed &&
+            metadataCount < budget.metadataLimit
+          ) {
+            const source = envelope.checkpoint;
+            const checkpoint: UsageCostFreshnessCheckpoint =
+              source.kind === "jsonl"
+                ? {
+                    kind: source.kind,
+                    observedSize: source.observedSize,
+                    observedMtimeMs: source.observedMtimeMs,
+                    device: source.device,
+                    inode: source.inode,
+                  }
+                : {
+                    kind: source.kind,
+                    maxSeq: source.maxSeq,
+                    eventCount: source.eventCount,
+                    size: source.size,
+                    mtimeMs: source.mtimeMs,
+                  };
+            if (
+              Object.entries(checkpoint).every(
+                ([key, value]) =>
+                  key === "kind" || (typeof value === "number" && Number.isFinite(value)),
+              ) &&
+              Number.isFinite(envelope.scannedAt)
+            ) {
+              deferredRollupMetadata = { checkpoint, scannedAt: envelope.scannedAt };
+              metadataCount += 1;
+            }
+          }
+        }
+        if (headerAllowed) {
+          rollup = {
+            valueJson: cached.valueJson,
+            updatedAt: cached.updatedAt,
+            ...(budget || query.input.includeEvents ? { bodyBytes } : {}),
+            ...(query.input.includeRollupBodies && bodyAllowed ? { blob: cached.blob } : {}),
+          };
+          remainingBytes -=
+            headerBytes + (query.input.includeRollupBodies && bodyAllowed ? bodyBytes : 0);
+        }
       }
       return [
         {
@@ -121,11 +195,9 @@ export function readSessionActorMemoryUsage(
           sessionId: entry.sessionId,
           updatedAtMs: window.hot.transcript.version.updatedAt ?? entry.updatedAt,
           stats: readSessionActorMemoryTranscriptStats(window),
-          rollup: window.usageRollup && {
-            valueJson: window.usageRollup.valueJson,
-            updatedAt: window.usageRollup.updatedAt,
-            ...(query.input.includeRollupBodies ? { blob: window.usageRollup.blob } : {}),
-          },
+          rollup,
+          ...(rollupDeferred ? { rollupDeferred: true } : {}),
+          ...(deferredRollupMetadata ? { deferredRollupMetadata } : {}),
           ...(query.input.includeEvents
             ? {
                 events: window.events.map(({ rawSeq, eventJson }) => ({ seq: rawSeq, eventJson })),
@@ -155,6 +227,7 @@ export function readSessionActorMemoryUsage(
         agentId: context.agentId,
         sessionKey,
         sessionId: entry.sessionId,
+        ...(entry.pluginOwnerId ? { pluginOwnerId: entry.pluginOwnerId } : {}),
         sessionFile: sessionKey,
         storePath: context.path,
         transcriptSource: "sqlite",

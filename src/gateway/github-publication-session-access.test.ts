@@ -9,9 +9,11 @@ import {
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
+import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import {
   createRequesterPublicationFixture,
   guestScopes,
@@ -24,6 +26,21 @@ import { createOperatorWsClient } from "./server/ws-connection/authenticated-req
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
 
 const mocks = githubPublicationTestMocks();
+const createFixture = () =>
+  createRequesterPublicationFixture(vi.fn(), "local", {
+    sessionId: SESSION_ID,
+    sessionKey: SESSION_KEY,
+  });
+
+async function worktreeState(
+  workspace: NonNullable<Awaited<ReturnType<typeof createFixture>>["local"]>,
+) {
+  return {
+    head: await workspace.git("rev-parse", "HEAD"),
+    index: await fs.readFile(path.join(workspace.cwd, ".git/index")),
+    diff: await workspace.git("diff", "HEAD"),
+  };
+}
 
 describe("registered session GitHub publication access", () => {
   installGitHubPublicationTestHarness({
@@ -46,21 +63,19 @@ describe("registered session GitHub publication access", () => {
   ] as const)(
     "checks $target target for $actor with role policy=$policy",
     async ({ target, policy, actor, outcome }) => {
-      const f = await createRequesterPublicationFixture(vi.fn(), "local", {
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-      });
+      const f = await createFixture();
       if (!f.local) {
         throw new Error("Expected a local publication fixture.");
       }
       const workspace = f.local;
-      const roles = f.config.gateway!.roles!;
+      const gateway = f.config.gateway!;
+      const roles = gateway.roles!;
       const requestScopes: OperatorScope[] =
         actor === "mixed" ? ["operator.read", "operator.approvals", ...guestScopes] : guestScopes;
       setRuntimeConfigSnapshot({
         ...f.config,
         gateway: {
-          ...f.config.gateway,
+          ...gateway,
           roles:
             policy === "absent"
               ? undefined
@@ -102,13 +117,19 @@ describe("registered session GitHub publication access", () => {
         );
         expect(inserted).toBe(true);
       }
-      const { loadGatewaySessionEntryReadOnly } =
-        await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
-      mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnly);
+      const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+        typeof import("./session-utils-store-worker.js")
+      >("./session-utils-store-worker.js");
+      mocks.loadSession.mockImplementation((key: string, options?: { agentId?: string }) =>
+        loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: getRuntimeConfig(),
+          key,
+          ...options,
+          readOnly: true,
+        }),
+      );
       const request = vi.spyOn(f.coordinator, "requestForSessionV2");
-      const head = await workspace.git("rev-parse", "HEAD");
-      const index = await fs.readFile(path.join(workspace.cwd, ".git/index"));
-      const before = await workspace.git("diff", "HEAD");
+      const before = await worktreeState(workspace);
       const respond = vi.fn();
       const params = {
         sessionKey: target === "missing" ? "agent:main:dashboard:missing" : SESSION_KEY,
@@ -130,24 +151,38 @@ describe("registered session GitHub publication access", () => {
         isWebchatConnect: () => false,
         respond,
       });
-      if (outcome === "published") {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ status: "published" }),
-        );
-        expect(workspace.effects).toEqual(["push", "pull_request"]);
-      } else {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: outcome }),
-        );
+      expect(respond).toHaveBeenCalledWith(
+        ...(outcome === "published"
+          ? [true, expect.objectContaining({ status: "published" })]
+          : [false, undefined, expect.objectContaining({ code: outcome })]),
+      );
+      expect(workspace.effects).toEqual(outcome === "published" ? ["push", "pull_request"] : []);
+      if (outcome !== "published") {
         expect(request).not.toHaveBeenCalled();
-        expect(workspace.effects).toEqual([]);
-        expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
-        expect(await fs.readFile(path.join(workspace.cwd, ".git/index"))).toEqual(index);
-        expect(await workspace.git("diff", "HEAD")).toBe(before);
+        expect(await worktreeState(workspace)).toEqual(before);
       }
     },
   );
+
+  it("invalidates publication metadata after committed workspace and lifecycle updates", async () => {
+    await createFixture();
+    using session = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
+    const initial = session.loaded.entry!;
+    const scope = {
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      storePath: session.loaded.storePath,
+    };
+    await upsertSessionEntryCore(scope, { label: "renamed publication" });
+    expect(session.readCurrent().entry?.sessionId).toBe(SESSION_ID);
+    const worktree = { ...initial.worktree!, branch: "updated-publication-branch" };
+    await upsertSessionEntryCore(scope, { worktree });
+    expect(() => session.readCurrent()).toThrow("GitHub publication session lifecycle changed.");
+    using replacement = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
+    expect(replacement.readCurrent().entry?.worktree).toEqual(worktree);
+    await upsertSessionEntryCore(scope, { lifecycleRevision: "replacement-publication" });
+    expect(() => replacement.readCurrent()).toThrow(
+      "GitHub publication session lifecycle changed.",
+    );
+  });
 });

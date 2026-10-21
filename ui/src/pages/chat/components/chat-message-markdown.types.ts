@@ -7,6 +7,7 @@ export type MessageActionDetails = {
   /** Source for context copy, independent of footer visibility and reply truncation. */
   copyMarkdown?: string;
   markdown?: string;
+  readAloudText?: string;
   fullMessage?: { messageId: string; state: AssistantMessageExpansionState | undefined };
   replyTarget?: MessageReplyTarget;
   reactionMessageId?: string;

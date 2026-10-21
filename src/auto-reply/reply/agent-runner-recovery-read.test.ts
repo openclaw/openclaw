@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
 import {
   rootDir,
   runEmbeddedAgentMock,
@@ -9,11 +11,11 @@ import {
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
 import { enqueueFollowupRun } from "./queue.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { bindReplySourceInput } from "./reply-source-binding.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
 
 setupAgentRunnerTestHooks();
@@ -28,7 +30,7 @@ it("queues non-steering input while recovery metadata is unavailable", async () 
     .mockRejectedValueOnce(new Error("Recovery metadata is unavailable"));
   vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
   const state: ReplyOperationRunState = {};
-  const { run } = createBaseRun({
+  const { run, resolvedQueue } = createBaseRun({
     context: { Provider: "webchat" },
     reply: {
       sessionKey: "main",
@@ -41,6 +43,7 @@ it("queues non-steering input while recovery metadata is unavailable", async () 
     },
   });
 
+  resolvedQueue.mode = "followup";
   await run();
 
   expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
@@ -49,20 +52,20 @@ it("queues non-steering input while recovery metadata is unavailable", async () 
 });
 
 it.each(["source", "steer"] as const)(
-  "releases reply admission and typing when the %s recovery read fails",
+  "retires the captured source and typing when the %s recovery read fails",
   async (reason) => {
     const failure = new Error("synthetic recovery read failure");
-    vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
-    const ticket = reserveReplyAdmissionTicket(["main"]);
-    if (!ticket) {
-      throw new Error("expected a reply admission ticket");
-    }
-    const release = vi.spyOn(ticket, "release");
+    const read = vi.spyOn(entryReads, "readSessionEntryInWorker").mockRejectedValueOnce(failure);
+    const storePath = path.join(rootDir, "sessions.json");
+    const input = reserveSessionControllerSource("main", {
+      target: captureSessionTarget({ storeScope: storePath, sessionKey: "main", agentId: "main" }),
+      policy: { mode: "interrupt" },
+    });
     const { run, typing, sessionCtx } = createBaseRun({
       reply: {
         sessionKey: "main",
-        opts: { [REPLY_ADMISSION_TICKET]: ticket },
-        storePath: path.join(rootDir, "sessions.json"),
+        opts: bindReplySourceInput({ abortSignal: input.abortSignal }, input),
+        storePath,
         shouldSteer: reason === "steer",
         isActive: reason === "steer",
       },
@@ -73,7 +76,10 @@ it.each(["source", "steer"] as const)(
 
     await expect(run()).rejects.toBe(failure);
 
-    expect(release).toHaveBeenCalledOnce();
+    await input.settlement.promise;
+    expect(input.phase).toBe("consumed");
+    expect(input.mailbox.entries).not.toContain(input);
+    expect(read).toHaveBeenCalledOnce();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   },

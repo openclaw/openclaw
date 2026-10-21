@@ -38,6 +38,7 @@ export const AgentToolSurfacePresentationSchema = closedObject({
     searchDefaultLimit: Type.Integer({ minimum: 1 }),
     maxSearchLimit: Type.Integer({ minimum: 1 }),
   }),
+  toolSearchDirectoryLean: Type.Optional(Type.Boolean()),
   forceDirectMessageTool: Type.Boolean(),
   skills: Type.Optional(
     Type.Array(

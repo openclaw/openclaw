@@ -6,10 +6,7 @@ import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-ru
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  composeSessionEntryCommitGuards,
-  type captureSessionEntryCurrentCheckAsync,
-} from "openclaw/plugin-sdk/session-binding-runtime";
+import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   asBoolean,
   asOptionalRecord,
@@ -185,8 +182,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
         return {
           sessionId,
-          // Lock policy loads later; keep the session fields observed at admission.
-          entry: entry ? { ...entry } : undefined,
+          entry,
         };
       };
 
@@ -217,7 +213,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         );
       }
       const run = async (archiveThreadId?: string) => {
-        const { captureSessionEntryCurrentCheckAsync } =
+        const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
           await import("openclaw/plugin-sdk/session-binding-runtime");
         prepared =
           sessionKey && agentId
@@ -229,6 +225,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 errorMessage: "Codex native thread ownership changed; retry the request.",
               })
             : undefined;
+        using _ = { [Symbol.dispose]: () => prepared?.release() };
         options.context.assertInvocationCurrent?.();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {
@@ -281,7 +278,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           ) {
             const connection = await resolveCodexBindingAppServerConnection({
               binding,
-              pluginConfig: admissionConfig,
+              pluginConfig: admissionPlugin,
               config: base.config,
               agentDir: base.agentDir,
               assertCurrent,
@@ -302,7 +299,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           return {
             ...base,
             startOptions: resolveCodexSupervisionAppServerRuntimeOptions({
-              pluginConfig: admissionConfig,
+              pluginConfig: admissionPlugin,
             }).start,
             authProfileId: null,
             assertCurrent,
@@ -312,7 +309,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const scopedRequest = async <M extends CodexControlMethod & CodexAppServerRequestMethod>(
           method: M,
           requestParams: CodexAppServerRequestParams<M>,
-        ) => request(admissionConfig, method, requestParams, await requestOptions());
+        ) => request(admissionPlugin, method, requestParams, await requestOptions());
         if (action === "list") {
           const cursor = readStringParam(params, "cursor");
           const searchTerm = readStringParam(params, "search");
@@ -440,7 +437,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe
           // local status and the exact source identity before App Server may create that snapshot.
           const current = await request(
-            admissionConfig,
+            admissionPlugin,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
             forkOptions,
@@ -448,7 +445,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           assertThreadIdle(current, threadId, "fork");
         }
         const response = await request(
-          admissionConfig,
+          admissionPlugin,
           CODEX_CONTROL_METHODS.forkThread,
           { threadId, threadSource: "user", excludeTurns: true },
           {

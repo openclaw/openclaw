@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as brokerReply from "../../infra/sqlite-worker-broker-reply.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -12,27 +11,22 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
+import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile-recovery.js";
 import { createWorkspaceResultJournal } from "./workspace-result-settlement.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeStateDatabaseForTest();
-    cleanup();
-  });
-});
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 describe("worker placement workspace journal", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
@@ -46,13 +40,11 @@ describe("worker placement workspace journal", () => {
   const prune = () => store.pruneOrphanedWorkspaceReconciliations();
 
   const seedJournal = async () => {
-    seedAttachedPlacementEnvironment(database, {
+    const active = await advancePlacementFixtureToActive(store, database, REQUEST, {
       environmentId: "worker-1",
-      sessionId: REQUEST.sessionId,
-      ownerEpoch: 7,
+      remoteWorkspaceDir: "/worker/workspace",
+      seedEnvironment: "before-dispatch",
     });
-    const active = await seedActivePlacement(store, { environmentId: "worker-1", ownerEpoch: 7 });
-    assert(active.state === "active", "expected active placement");
     const owner = {
       sessionId: active.sessionId,
       environmentId: active.environmentId,
@@ -68,11 +60,21 @@ describe("worker placement workspace journal", () => {
       baseEntries: [],
       appliedEntries: [],
       baseTree: "e".repeat(40),
-      basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+      basePackSha256: sha256(basePack),
       basePack,
     });
-    return { active, owner };
+    const journal = await store.loadWorkspaceReconciliation(owner);
+    assert(journal, "expected journal");
+    return { active, owner, journal };
   };
+
+  const claimWorker = () =>
+    store.claimTurn({
+      ...REQUEST,
+      claimId: "journal-worker-claim",
+      runId: "journal-worker-run",
+      owner: { kind: "worker", environmentId: "worker-1", ownerEpoch: 7 },
+    });
 
   it.each([false, true])(
     "prunes only retired journal owners (retryable rollback: %s)",
@@ -80,16 +82,12 @@ describe("worker placement workspace journal", () => {
       const { active, owner } = await seedJournal();
       expect(await prune()).toEqual([]);
       const draining = await store.startDrain({
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
+        ...owner,
         expectedGeneration: active.generation,
       });
       assert(draining.state === "draining", "expected draining placement");
       const reconciling = await store.startReconcile({
-        sessionId: draining.sessionId,
-        environmentId: draining.environmentId,
-        ownerEpoch: draining.activeOwnerEpoch,
+        ...owner,
         expectedGeneration: draining.generation,
       });
       if (retryable) {
@@ -105,30 +103,16 @@ describe("worker placement workspace journal", () => {
   );
 
   it("reads, writes and accepts the durable journal without host data SQL", async () => {
-    const { active, owner } = await seedJournal();
-    const journal = await store.loadWorkspaceReconciliation(owner);
-    assert(journal, "expected journal");
-    const claim = await store.claimTurn({
-      ...REQUEST,
-      claimId: "journal-worker-claim",
-      runId: "journal-worker-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const { active, owner, journal } = await seedJournal();
+    const claim = await claimWorker();
     await store.markWorkspaceResultPending(claim);
     const pendingResult = store.preparedWorkspaceResult(claim)!;
     const placement = store.preparedWorkspaceResultPlacement(claim)!;
     expect(store.preparedWorkspaceResult(claim)).toBe(pendingResult);
     expect(store.preparedWorkspaceResultPlacement(claim)).toBe(placement);
-    expect(() => {
-      pendingResult.claimId = "different-claim";
-    }).toThrow(TypeError);
-    expect(() => {
-      placement.turnClaim!.claimId = "different-claim";
-    }).toThrow(TypeError);
+    for (const frozen of [pendingResult, placement.turnClaim!]) {
+      expect(() => Object.assign(frozen, { claimId: "different-claim" })).toThrow(TypeError);
+    }
     expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
     const queries = observeHostDataSql();
     try {
@@ -141,6 +125,7 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
       expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
       await store.beginWorkspaceReconciliation(owner, journal);
+      expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(await prune()).toEqual([]);
       const accepted = await store.updateWorkspaceBaseManifest({
@@ -164,13 +149,11 @@ describe("worker placement workspace journal", () => {
   });
 
   it("captures streamed journal bytes and owner before asynchronous admission", async () => {
-    const { owner } = await seedJournal();
-    const journal = await store.loadWorkspaceReconciliation(owner);
-    assert(journal, "expected journal");
+    const { owner, journal } = await seedJournal();
     await store.abortWorkspaceReconciliation(owner);
     // Cross the broker's message boundary while retaining the journal's existing pack contract.
     journal.basePack = new Uint8Array(33 * 1024 * 1024).fill(7);
-    journal.basePackSha256 = createHash("sha256").update(journal.basePack).digest("hex");
+    journal.basePackSha256 = sha256(journal.basePack);
     const { basePack: _basePack, ...expectedPlan } = journal;
     const requestedOwner = { ...owner };
     const pending = store.beginWorkspaceReconciliation(requestedOwner, journal);
@@ -183,29 +166,23 @@ describe("worker placement workspace journal", () => {
     const { basePack, ...capturedPlan } = captured!;
     expect(capturedPlan).toEqual(expectedPlan);
     expect(basePack.byteLength).toBe(33 * 1024 * 1024);
-    expect(createHash("sha256").update(basePack).digest("hex")).toBe(expectedPlan.basePackSha256);
+    expect(sha256(basePack)).toBe(expectedPlan.basePackSha256);
   });
 
   it("refuses a journal write whose original caller is revoked at commit", async () => {
-    const { owner } = await seedJournal();
-    const journal = await store.loadWorkspaceReconciliation(owner);
-    assert(journal, "expected journal");
+    const { owner, journal } = await seedJournal();
     await store.abortWorkspaceReconciliation(owner);
-    let revoked = false;
+    const authority = new AbortController();
     probe.admission(operationAdmission, (request, grant, admit) => {
       if (request.stage === "commit") {
-        revoked = true;
+        authority.abort(new Error("journal caller revoked"));
       }
       admit(request, grant);
     });
     await expect(
-      store.beginWorkspaceReconciliation(owner, journal, () => {
-        if (revoked) {
-          throw new Error("journal caller revoked");
-        }
-      }),
+      store.beginWorkspaceReconciliation(owner, journal, () => authority.signal.throwIfAborted()),
     ).rejects.toThrow("journal caller revoked");
-    expect(revoked).toBe(true);
+    expect(authority.signal.aborted).toBe(true);
     expect(await store.loadWorkspaceReconciliation(owner)).toBeUndefined();
   });
 
@@ -214,54 +191,31 @@ describe("worker placement workspace journal", () => {
     { operation: "acceptance", outcome: "committed" },
     { operation: "acceptance", outcome: "unknown" },
     { operation: "acceptance", outcome: "rollback" },
-  ] as const)("preserves $operation custody when settlement is $outcome", async (scenario) => {
-    const { active, owner } = await seedJournal();
-    const journal = await store.loadWorkspaceReconciliation(owner);
-    assert(journal, "expected journal");
-    const claim =
-      scenario.operation === "acceptance"
-        ? await store.claimTurn({
-            ...REQUEST,
-            claimId: "journal-acceptance-claim",
-            runId: "journal-acceptance-run",
-            owner: {
-              kind: "worker",
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-            },
-          })
-        : undefined;
+  ] as const)("retains $operation custody after $outcome", async ({ operation, outcome }) => {
+    const { active, owner, journal } = await seedJournal();
+    const appliedJournal = { ...journal, appliedManifestRef: journal.currentManifestRef };
+    const claim = operation === "acceptance" ? await claimWorker() : undefined;
     if (claim) {
       await store.markWorkspaceResultPending(claim);
       await store.updateWorkspaceBaseManifest({ claim, manifestRef: journal.currentManifestRef });
-      expect(await store.loadWorkspaceReconciliation(owner)).toEqual({
-        ...journal,
-        appliedManifestRef: journal.currentManifestRef,
-      });
+      expect(await store.loadWorkspaceReconciliation(owner)).toEqual(appliedJournal);
       expect(store.preparedWorkspaceResult(claim)?.workspaceAcceptedAtMs).toBeNull();
     } else {
       await store.abortWorkspaceReconciliation(owner);
     }
-    if (scenario.outcome === "unknown") {
+    if (outcome === "unknown") {
       vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts").mockImplementationOnce(
         () => {},
       );
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
-        (admit, attachment) => {
-          const admission = createAdmission(admit, attachment);
-          return {
-            ...admission,
-            get committed() {
-              return undefined;
-            },
-            get settlement() {
-              return { kind: "unknown" as const };
-            },
-          };
-        },
+        (admit, attachment) => ({
+          ...createAdmission(admit, attachment),
+          committed: undefined,
+          settlement: { kind: "unknown" as const },
+        }),
       );
-    } else if (scenario.outcome === "rollback") {
+    } else if (outcome === "rollback") {
       database.db.exec(`
         CREATE TRIGGER reject_accepted_journal_cleanup
         BEFORE DELETE ON worker_workspace_reconciliations
@@ -293,13 +247,14 @@ describe("worker placement workspace journal", () => {
       expect(await store.loadWorkspaceReconciliation(owner)).toEqual(journal);
       return;
     }
+    const expectedClaim = { claimId: claim.claimId, runId: claim.runId };
     const assertCurrent = () => {
       if (!store.validateWorkspaceResultClaim(claim)) {
         throw new Error("workspace result authority lost");
       }
     };
     const acceptance = store.acceptWorkspaceResult(claim, assertCurrent);
-    if (scenario.outcome === "unknown") {
+    if (outcome === "unknown") {
       await expect(acceptance).rejects.toBeInstanceOf(
         AcceptedWorkspacePublicationIndeterminateError,
       );
@@ -316,11 +271,11 @@ describe("worker placement workspace journal", () => {
       await expect(
         recoverWorkerWorkspaceReconciliation({
           root,
-          journal: { ...journal, appliedManifestRef: journal.currentManifestRef },
+          journal: appliedJournal,
           assertCurrent,
         }),
       ).rejects.toThrow("already applied and awaits fence acceptance");
-    } else if (scenario.outcome === "rollback") {
+    } else if (outcome === "rollback") {
       await expect(acceptance).rejects.toThrow("accepted journal cleanup refused");
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(store.preparedWorkspaceResult(claim)?.workspaceAcceptedAtMs).toBeNull();
@@ -328,32 +283,25 @@ describe("worker placement workspace journal", () => {
       await expect(acceptance).resolves.toBeUndefined();
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(store.preparedWorkspaceResult(claim)).toMatchObject({
-        claimId: claim.claimId,
-        runId: claim.runId,
+        ...expectedClaim,
         workspaceAcceptedAtMs: 1_000,
       });
     }
-    expect(corrupted).toBe(scenario.outcome === "rollback" ? 0 : 1);
+    expect(corrupted).toBe(outcome === "rollback" ? 0 : 1);
     expect(await store.loadWorkspaceReconciliation(owner)).toEqual(
-      scenario.outcome === "rollback"
-        ? { ...journal, appliedManifestRef: journal.currentManifestRef }
-        : undefined,
+      outcome === "rollback" ? appliedJournal : undefined,
     );
     expect(await store.listPendingWorkspaceResultsAsync(claim.sessionId)).toMatchObject([
       {
-        claimId: claim.claimId,
-        runId: claim.runId,
+        ...expectedClaim,
         gatewayInstanceId: store.workspaceResultInstanceId(),
-        workspaceAcceptedAtMs: scenario.outcome === "rollback" ? null : 1_000,
+        workspaceAcceptedAtMs: outcome === "rollback" ? null : 1_000,
       },
     ]);
-    expect(store.validateTurnClaim(claim)).toBe(scenario.outcome !== "unknown");
-    if (scenario.outcome === "unknown") {
+    expect(store.validateTurnClaim(claim)).toBe(outcome !== "unknown");
+    if (outcome === "unknown") {
       // An uncertain receipt must be reloaded before the durable claim can authorize work.
-      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject({
-        claimId: claim.claimId,
-        runId: claim.runId,
-      });
+      expect((await store.getAsync(claim.sessionId))?.turnClaim).toMatchObject(expectedClaim);
       expect(store.validateTurnClaim(claim)).toBe(true);
     }
   });

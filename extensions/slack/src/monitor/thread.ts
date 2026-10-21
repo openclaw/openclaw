@@ -1,5 +1,5 @@
 import type { ConversationsRepliesResponse, WebClient as SlackWebClient } from "@slack/web-api";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -14,7 +14,6 @@ import {
   resolveSlackBlocksText,
   resolveSlackMessageText as resolveSharedSlackMessageText,
 } from "./block-text.js";
-import { pruneExpiredMapEntries } from "./lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./message-handler/timestamp.js";
 
 export type SlackThreadStarter = {
@@ -26,19 +25,12 @@ export type SlackThreadStarter = {
   attachments?: SlackAttachment[];
 };
 
-type SlackThreadStarterCacheEntry = {
-  value: SlackThreadStarter;
-  expiresAt: number;
-};
-
-const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarterCacheEntry>();
-const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
-const THREAD_STARTER_CACHE_MAX = 2000;
-
-function evictThreadStarterCache(): void {
-  pruneExpiredMapEntries(THREAD_STARTER_CACHE, Date.now());
-  pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
-}
+const threadStarterCache = createStaleWhileRevalidateCache<SlackThreadStarter | null>({
+  maxEntries: 2000,
+  maxPending: Number.POSITIVE_INFINITY,
+  ttlMs: 6 * 60 * 60_000,
+  cacheable: (starter) => starter !== null,
+});
 
 function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
   return `[attached: ${formatSlackFileReferenceList(files)}]`;
@@ -120,47 +112,39 @@ export async function resolveSlackThreadStarter(params: {
   workspaceScope: { accountId: string; teamId: string };
   refresh?: boolean;
 }): Promise<SlackThreadStarter | null> {
-  evictThreadStarterCache();
   const cacheKey = JSON.stringify([
     params.workspaceScope.accountId,
     params.workspaceScope.teamId,
     params.channelId,
     params.threadTs,
   ]);
-  const cached = THREAD_STARTER_CACHE.get(cacheKey);
-  if (cached && !params.refresh) {
-    return cached.value;
-  }
-  if (params.refresh) {
-    THREAD_STARTER_CACHE.delete(cacheKey);
-  }
   try {
-    const response = await params.client.conversations.replies({
-      channel: params.channelId,
-      ts: params.threadTs,
-      limit: 1,
-      inclusive: true,
-    });
-    const message = response?.messages?.[0];
-    const text = message ? resolveSlackMessageText(message) : undefined;
-    const files = message?.files?.length ? message.files : undefined;
-    if (!message || (!text && !files)) {
-      return null;
-    }
-    const starter: SlackThreadStarter = {
-      text: text || formatSlackFilePlaceholder(files),
-      userId: message.user,
-      botId: message.bot_id,
-      ts: message.ts,
-      files,
-    };
-    THREAD_STARTER_CACHE.delete(cacheKey);
-    THREAD_STARTER_CACHE.set(cacheKey, {
-      value: starter,
-      expiresAt: Date.now() + THREAD_STARTER_CACHE_TTL_MS,
-    });
-    evictThreadStarterCache();
-    return starter;
+    const { value } = await threadStarterCache.read(
+      cacheKey,
+      async () => {
+        const response = await params.client.conversations.replies({
+          channel: params.channelId,
+          ts: params.threadTs,
+          limit: 1,
+          inclusive: true,
+        });
+        const message = response?.messages?.[0];
+        const text = message ? resolveSlackMessageText(message) : undefined;
+        const files = message?.files?.length ? message.files : undefined;
+        if (!message || (!text && !files)) {
+          return null;
+        }
+        return {
+          text: text || formatSlackFilePlaceholder(files),
+          userId: message.user,
+          botId: message.bot_id,
+          ts: message.ts,
+          files,
+        };
+      },
+      { allowStale: false, refresh: params.refresh },
+    );
+    return value;
   } catch (err) {
     logVerbose(
       `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,

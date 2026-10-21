@@ -1,6 +1,6 @@
 .cmd-palette__attachments {
   --chat-composer-editor-inset-inline: 14px;
-  --chat-composer-editor-inset-block: 6px;
+  --chat-attachment-inset-block: 6px;
   --chat-attachment-hit-slop: 12px;
   --chat-box-inset: 8px;
   flex: 0 0 auto;

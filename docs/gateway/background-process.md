@@ -6,7 +6,7 @@ read_when:
 title: "Background exec and process tool"
 ---
 
-OpenClaw runs shell commands through the `exec` tool and keeps long-running tasks in memory. The `process` tool manages those background sessions.
+OpenClaw runs shell commands through the `exec` tool and keeps long-running tasks in memory. The `process` tool manages background sessions from gateway, sandbox, and worker-local execution. Remote `host=node` calls use synchronous `system.run` and never create a process session, even when `process` is enabled.
 
 ## exec tool
 
@@ -39,13 +39,17 @@ Behavior:
 - Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
 - Output stays in memory up to the per-session aggregate cap until the session is polled or cleared.
 - Finished sessions expire after their configured TTL, measured from completion. Each exec captures its agent's retention setting when admitted; using another agent's process tool does not change existing results' lifetimes. The registry also retains at most 50 finished sessions and 2,000,000 total retained output characters, evicting the oldest records first. The newest completed session retains its capped per-session aggregate even when that record alone exceeds the global limit.
-- If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+- Remote `host=node` execution ignores `background`/`yieldMs`. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. The call returns output without a process `sessionId`.
+- If the `process` tool is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
-- For long-running work that starts now: start it once and rely on automatic completion wake (when enabled). The wake fires when the command emits output or fails, and on chat channels also when it exits cleanly with no output.
-- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a deterministic notification filter, and it does not disable the completion turn.
+- For long-running work that starts now: start it once. Automatic completion wake (when enabled) can happen after the command exits. New output while it is still running does not start another turn. Ending the turn does not stop the command; use `process kill` when it is no longer needed. Completion and the configured timeout still apply; background exec is not a saved, restartable automation.
+
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
+- Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
+- Gateway-hosted background processes still end with the Gateway. After a restart, eligible owning sessions receive one lost-process completion turn: the outcome is unknown, and the agent must check side effects or saved state before re-running anything. No command or output is replayed. Reset or archived sessions, incognito sessions, subagents, ended cron runs, and disabled completion notifications do not receive a restart wake. Keeping the physical process alive requires a separate process host.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -77,9 +81,8 @@ Behavior:
 ### Disable automatic completion turns
 
 Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` even when
-`agents.defaults.heartbeat.every` is `"0m"`: that setting disables recurring polls,
-not completion follow-ups.
+model turn marked `[OpenClaw exec completion]` even when recurring automation
+jobs are disabled. A periodic schedule does not own completion follow-ups.
 
 To keep background commands running without automatic completion turns, set:
 
@@ -90,11 +93,23 @@ openclaw config set tools.exec.notifyOnExit false
 An agent's `agents.entries.<id>.tools.exec.notifyOnExit` overrides the global
 setting. Set that override to `false` too, or remove it to inherit the global
 value. Newly started commands use the updated setting; commands already running
-retain the setting they started with. Use `process poll` or `process log` to
+retain the setting they started with. Restart wakes also check the current setting,
+so disabling notifications suppresses any pending lost-process wake. Use `process poll` or `process log` to
 collect their results on demand. This disables the completion event and its
 automatic model call without disabling `background: true` or the `process` tool.
 
+For an active process, a successful `process kill` result acknowledges the cancellation request. Its
+`cancellationRequested: true` and `terminationConfirmed: false` fields mean that
+exit and backend cleanup still need confirmation. Use `process poll` until the
+terminal result arrives, and report any cleanup failure. `process remove` also
+hides the process record immediately, so use `kill` followed by `poll` when you
+need to verify a stop. Stopping a saved automation does not cancel separate
+ordinary processes created while preparing it; stop related process IDs too,
+while leaving unrelated work running.
+
 ## Worker environments
+
+For managed background work on a paired device, enable [session hosting](/nodes/session-hosting) and select that device for an OpenClaw session. Use the worker's local `exec` with `background: true` and its `process` tool when permitted by the session's tool and exec policy. This runs the session on the device instead of sending individual remote `host=node` commands.
 
 On a paired-node or node-backed cloud worker, background processes belong to the
 session's environment. Finishing or cancelling a turn leaves already-backgrounded
@@ -146,6 +161,12 @@ sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
+For retained Linux process-group cleanup, adopted zombies are reaped after the
+tracked root exits. Active groups share asynchronous direct-child discovery,
+woken by child-exit signals with a one-second fallback while descendants remain.
+Cleanup stops when the groups disappear or their cleanup budgets expire; it does
+not periodically scan the host's process table.
+
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
 before loading its main runtime.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
@@ -163,7 +184,7 @@ service relays also retain their own parent-loss cleanup.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
 
-Canonical credential readers also use the broker. If it confirms that a reader
+Readers of stored credentials also use the broker. If it confirms that a reader
 never started, the read falls back once to a local process with the original
 environment and working directory. Cancellation, timeouts, uncertain launches, and
 cleanup failures do not trigger a retry. Snapshot-backed credential readers keep
@@ -175,10 +196,11 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-Managed exec and negotiated worker workspace commands on Linux with Node use a dedicated
+Managed exec on Linux with Node or Bun uses a dedicated
 child subreaper. It acquires kernel child ownership before launch, adopts orphaned
 descendants, and stops and reaps them even if they create another process group
-or session. Completion requires the kernel to report no remaining children, the
+or session. Negotiated worker workspace commands use the same owner through their
+Node host. Completion requires the kernel to report no remaining children, the
 matching owner receipt, and output drain. It does not depend on group-directed
 signals, a process-table census, or inherited-pipe closure alone.
 
@@ -226,7 +248,7 @@ Actions:
 | `send-keys` | Send explicit key tokens or bytes to a PTY-backed session.                    |
 | `submit`    | Send Enter/carriage return to a PTY-backed session.                           |
 | `paste`     | Send literal text, optionally wrapped in bracketed paste mode.                |
-| `kill`      | Terminate a background session.                                               |
+| `kill`      | Request termination, or return retained terminal facts if already finished.   |
 | `clear`     | Remove a finished session from memory.                                        |
 | `remove`    | Kill if running, otherwise clear if finished.                                 |
 
@@ -238,7 +260,9 @@ Notes:
 - `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
-- After an explicit `kill` or task cancellation, `poll` and `log` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors. The process list retains the underlying terminal status.
+- After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
+- A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
+- Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.
 - Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.
 - Use `log` before recovering an interactive CLI, so the current transcript, stdin state, and input-wait hint are visible together.
 - Use `write`/`send-keys`/`submit`/`paste`/`kill` when you need input or intervention.
@@ -249,10 +273,21 @@ Notes:
 - `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
+Conversational requests can stop an authorized process or remove its retained status by its exact ID without another confirmation. The process owner checks the current record and scope immediately before acting. A stop request does not confirm termination; inspect the resulting process state before reporting it stopped.
+
+Refusal applies to the individual operation. Every later action still requires its
+own current authorization and policy checks, including actions from the same
+request. Runtime observations describe recorded operation outcomes; they do not
+guarantee that all assistant narration is consistent with those outcomes.
+
+Stopping a process reports that termination was requested; use a later poll to
+confirm exit and cleanup. Work already admitted follows its own lifecycle.
+
 In [Code Mode](/tools/code-mode), `process` returns its structured details directly.
 For `action: "log"`, `output` contains the requested log page, including paging,
-retention, and input-recovery hints. Failed process actions include an `error`
-message alongside `status: "failed"`, so the agent can choose the next action.
+retention, and input-recovery hints. Invalid actions and unknown session IDs include
+an `error` message alongside `status: "failed"`. Terminal process failures retain
+their exit facts, including `finalizationFailed: true` when cleanup failed.
 
 ## Examples
 

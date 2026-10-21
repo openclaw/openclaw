@@ -11,7 +11,6 @@ import {
   loadedCronStoreFromRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
-import { releaseLocalCronRunReceiptOwnership } from "../cron/store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
@@ -20,7 +19,7 @@ import type { CronRunReceiptHandle } from "../cron/store/run-receipt.types.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -45,7 +44,7 @@ import {
 } from "./operator-approval-standing-grants.js";
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.worker.js";
 import {
-  closeOrphanedOperatorApprovals,
+  recoverOperatorApprovalsOnStartup,
   listCronStandingGrants,
   revokeCronStandingGrant,
   insertOperatorApproval,
@@ -71,7 +70,6 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60_000;
 
 const tempDirs: string[] = [];
 const receipts = new WeakMap<OpenClawStateDatabaseOptions, CronRunReceiptHandle>();
-const claimedReceipts: CronRunReceiptHandle[] = [];
 
 const PREVIOUS_STANDING_GRANT_SCHEMA = OPENCLAW_STATE_SCHEMA_SQL.replace(
   `CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
@@ -115,9 +113,6 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  for (const receipt of claimedReceipts.splice(0)) {
-    releaseLocalCronRunReceiptOwnership(receipt);
-  }
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -191,7 +186,6 @@ function seedCronJob(
       job: loadedJob,
       agentId: "main",
       startedAtMs: NOW_MS,
-      observed: undefined,
     });
     receipts.set(
       databaseOptions,
@@ -200,12 +194,10 @@ function seedCronJob(
           claimCronRunReceiptInDatabaseForTest({
             database: db,
             prepared,
-            resolveAgentId: (current) => current.agentId ?? "main",
           }),
         databaseOptions,
       ),
     );
-    claimedReceipts.push(receipts.get(databaseOptions)!);
   }
   return resolveCronJobConfigRevision(loadedJob);
 }
@@ -811,7 +803,7 @@ describe("cron standing grant consumption", () => {
     closeOpenClawStateDatabaseForTest();
     // New runtime epoch: startup cancels orphaned pending approvals only; the
     // resolved allow-always parent and its grant remain valid durable truth.
-    closeOrphanedOperatorApprovals({
+    await recoverOperatorApprovalsOnStartup({
       runtimeEpoch: "epoch-2",
       nowMs: NOW_MS + 5_000,
       databaseOptions,

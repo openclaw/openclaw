@@ -22,6 +22,7 @@ import {
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -35,6 +36,7 @@ import {
 } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
@@ -59,6 +61,11 @@ function context() {
 function databaseOptions(captured: ReturnType<typeof context>) {
   return { path: captured.admission.databasePath, env: captured.environment };
 }
+
+const readBindingApprovals = {
+  type: "plugins.conversationBindingApprovals.read",
+  input: undefined,
+} as const;
 
 const readProvenance = {
   type: "claws.install-schema-versions",
@@ -155,16 +162,19 @@ describe("canonical shared-state worker admission", () => {
     "keeps typed %s errors from the existing shared worker",
     async (phase) => {
       const captured = context();
-      await executeOpenClawStateWorker(captured, {
-        type: "plugins.conversationBindingApprovals.read",
-        input: undefined,
-      });
-      const database = openOpenClawStateDatabase(databaseOptions(captured));
-      database.db.exec("PRAGMA user_version = 999999");
-      if (phase === "open") {
-        await closeOpenClawStateDatabaseAsync();
+      mkdirSync(path.dirname(captured.admission.databasePath), { recursive: true });
+      const database = nodeSqlite.openNodeSqliteDatabase(captured.admission.databasePath);
+      try {
+        database.exec("PRAGMA user_version = 999999");
+      } finally {
+        database.close();
       }
       const current = captureOpenClawStateWorkerContext(databaseOptions(captured));
+      if (phase === "execute") {
+        await runOpenClawStateWorkerOperation(current, async () => undefined, {
+          existingOnly: true,
+        });
+      }
       const record: NativeHookRelayBridgeRecord = {
         relayId: "caller-errors",
         pid: 100,
@@ -218,6 +228,7 @@ describe("canonical shared-state worker admission", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           role: "gateway",
           stateDir: captured.environment.OPENCLAW_STATE_DIR,
@@ -247,6 +258,34 @@ describe("canonical shared-state worker admission", () => {
       ).toEqual({ name: "idx_subagent_runs_child_session_key" });
     },
   );
+
+  it("keeps writer inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    await seedMetadata(captured);
+    const reopened = captureOpenClawStateWorkerContext(databaseOptions(captured));
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+        const actorWorker = messages.mock.contexts[0];
+        expect(actorWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === actorWorker)).toBe(true);
+        expect(await scope.execute(readBindingApprovals)).toEqual([]);
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
 
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
@@ -294,7 +333,7 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["config health", "device identity", "audit"] as const)(
+  it.each(["config health", "machine state", "audit"] as const)(
     "does not recreate a lazy actor's removed opening path through a warm hardlink (%s)",
     async (operation) => {
       const original = context();
@@ -327,9 +366,14 @@ describe("canonical shared-state worker admission", () => {
         expect(
           await executeOpenClawStateWorker(alias, {
             type: "audit.writer.prune",
-            input: "events",
+            input: undefined,
           }),
-        ).toMatchObject({ status: "settled", error: expect.any(String) });
+        ).toEqual([
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+          { status: "settled", error: expect.any(String) },
+        ]);
       } else {
         await expect(
           executeOpenClawStateWorker(
@@ -340,8 +384,8 @@ describe("canonical shared-state worker admission", () => {
                   input,
                 }
               : {
-                  type: "deviceIdentity.load",
-                  input: { identityKey: "warm-alias-device" },
+                  type: "machineState.write",
+                  input: { key: "warm-alias-state", value: "must-not-commit" },
                 },
           ),
         ).rejects.toThrow();
@@ -356,6 +400,7 @@ describe("canonical shared-state worker admission", () => {
       ).toEqual({
         count: 0,
       });
+      expect(readConfigMachineStateRowInDatabase(database.db, "warm-alias-state")).toBeUndefined();
     },
   );
 
@@ -502,14 +547,18 @@ describe("canonical shared-state worker admission", () => {
           );
         }
         const relocated = relocatedDuringCallback ?? relocatedDuringAliasCallback ?? relocate();
-        if (!healthyActor) {
-          await write(relocated);
-        }
-
         expect(existsSync(originalPath)).toBe(false);
         if (survivingAlias) {
           survivingAlias.admission.assertCurrent();
           expect(original.admission.assertCurrent).toThrow(/read admission changed/);
+        }
+        if (!healthyActor) {
+          // Relocation ends the old actor; reopen explicitly after its callbacks settle.
+          await closeOpenClawStateDatabaseAsync();
+          const current = relocatedMaintenance.run(() =>
+            captureOpenClawStateWorkerContext(databaseOptions(relocated)),
+          );
+          await write(current);
         }
         // Checkpoint the actor's opening path before inspecting its hardlink through B.
         await closeOpenClawStateDatabaseAsync();

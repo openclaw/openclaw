@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as clawHubSkills from "../infra/clawhub-skills.js";
 import * as catalog from "../plugins/official-external-plugin-catalog.js";
@@ -12,7 +13,7 @@ import * as inference from "./setup-inference.js";
 afterEach(() => vi.restoreAllMocks());
 
 async function getSetupAppRecommendations(
-  params: Parameters<typeof getRecommendations>[0] & {
+  params: Omit<Parameters<typeof getRecommendations>[0], "runtime"> & {
     deps?: {
       listPlugins?: typeof catalog.listOfficialExternalPluginCatalogEntries;
       listChannels?: typeof catalog.listOfficialExternalChannelCatalogEntries;
@@ -49,64 +50,76 @@ async function getSetupAppRecommendations(
       latencyMs: 0,
     }));
   }
-  return await getRecommendations(request);
+  return await getRecommendations({ ...request, runtime: defaultRuntime });
 }
 
-/** Force an "ok" result so the returned candidate `groups` can be asserted. */
+const emptyCatalogs = { listPlugins: () => [], listChannels: () => [], listProviders: () => [] };
+function skill(
+  overrides: Partial<clawHubSkills.ClawHubSkillSearchResult> = {},
+): clawHubSkills.ClawHubSkillSearchResult {
+  const ownerHandle = overrides.ownerHandle ?? "demo-owner";
+  const slug = overrides.slug ?? "notes-tools";
+  return {
+    registry: "https://clawhub.ai",
+    score: 1,
+    slug,
+    installRef: `@${ownerHandle}/${slug}`,
+    ownerHandle,
+    displayName: "Notes Tools",
+    ...overrides,
+  };
+}
+function match(candidateId = "@demo-owner/notes-tools", reason = "Looks useful") {
+  return { appLabel: "Notes", candidateId, tier: "optional", reason };
+}
+
+const completeText = (text: string) => async () => ({ ok: true as const, text });
+
 function completeMatching(
   pairs: Array<{ appLabel: string; candidateId: string }>,
 ): (prompt: string) => Promise<{ ok: true; text: string }> {
-  return async () => ({
-    ok: true,
-    text: JSON.stringify({
+  return completeText(
+    JSON.stringify({
       matches: pairs.map((pair) => ({ ...pair, tier: "optional", reason: "match" })),
     }),
-  });
+  );
 }
 
-function officialEntry(params: {
-  id: string;
-  label: string;
-  description: string;
-  kind?: "channel" | "provider";
-}): OfficialExternalPluginCatalogEntry {
+function officialEntry(
+  id: string,
+  label: string,
+  description: string,
+  channel = false,
+): OfficialExternalPluginCatalogEntry {
   return {
-    id: params.id,
-    description: params.description,
+    id,
+    description,
     openclaw: {
-      plugin: { id: params.id, label: params.label },
-      ...(params.kind === "channel" ? { channel: { id: params.id, label: params.label } } : {}),
-      ...(params.kind === "provider" ? { providers: [{ id: params.id, name: params.label }] } : {}),
+      plugin: { id, label },
+      ...(channel ? { channel: { id, label } } : {}),
     },
   };
 }
+const appInventory =
+  (...labels: string[]) =>
+  async () =>
+    labels.map((label) => ({ label }));
 
 describe("setup app recommendation candidates", () => {
   it("reports candidate and matching phases for the normalized app inventory", async () => {
     const phases: SetupAppScanPhase[] = [];
 
     await getSetupAppRecommendations({
-      inventorySource: async () => [
-        { label: "Zulu" },
-        { label: "alpha" },
-        { label: "Echo" },
-        { label: "Bravo" },
-      ],
-      runtime: defaultRuntime,
+      inventorySource: appInventory("Zulu", "alpha", "Echo", "Bravo"),
       onPhase: (phase) => phases.push(phase),
       deps: {
-        listPlugins: () => [],
-        listChannels: () => [],
-        listProviders: () => [],
+        ...emptyCatalogs,
         searchSkills: async ({ query }) => [
-          {
-            registry: "https://clawhub.ai",
-            score: 1,
+          skill({
             slug: `${query.toLocaleLowerCase("en-US")}-tools`,
             installRef: `@demo-owner/${query.toLocaleLowerCase("en-US")}-tools`,
-            ownerHandle: "demo-owner",
             displayName: `${query} Tools`,
-          },
+          }),
         ],
         complete: completeMatching([{ appLabel: "alpha", candidateId: "@demo-owner/alpha-tools" }]),
       },
@@ -125,7 +138,7 @@ describe("setup app recommendation candidates", () => {
   it.each([
     {
       reason: "unsupported",
-      inventory: { status: "unsupported" as const, platform: "linux" as const, apps: [] as [] },
+      inventory: { status: "unsupported" as const, apps: [] as [] },
     },
     { reason: "no-apps", inventory: [] },
   ])("does not report phases when the scan skips for $reason", async ({ inventory }) => {
@@ -133,7 +146,6 @@ describe("setup app recommendation candidates", () => {
 
     await getSetupAppRecommendations({
       inventorySource: async () => inventory,
-      runtime: defaultRuntime,
       onPhase,
     });
 
@@ -142,86 +154,36 @@ describe("setup app recommendation candidates", () => {
 
   it("preserves the ClawHub publisher in candidate ids", async () => {
     const result = await getSetupAppRecommendations({
-      inventorySource: async () => [{ label: "Notes" }],
-      runtime: defaultRuntime,
+      inventorySource: appInventory("Notes"),
       deps: {
-        listPlugins: () => [],
-        listChannels: () => [],
-        listProviders: () => [],
+        ...emptyCatalogs,
         searchSkills: async () => [
-          {
-            registry: "https://clawhub.ai",
-            score: 1,
-            slug: "notes-tools",
-            installRef: "@demo-owner/notes-tools",
-            ownerHandle: "demo-owner",
-            displayName: "Notes Tools",
-          },
-          {
-            registry: "https://clawhub.ai",
-            score: 0.9,
-            slug: "notes-tools",
-            installRef: "@other-owner/notes-tools",
-            ownerHandle: "other-owner",
-            displayName: "Other Notes Tools",
-          },
-          {
-            registry: "https://clawhub.ai",
-            score: 0.8,
-            slug: "legacy-notes-tools",
-            installRef: "legacy-notes-tools",
-            displayName: "Ownerless Notes Tools",
-          },
+          skill(),
+          skill({ ownerHandle: "other-owner", displayName: "Other Notes Tools" }),
+          skill({ ownerHandle: undefined }),
         ],
         complete: completeMatching([{ appLabel: "Notes", candidateId: "@demo-owner/notes-tools" }]),
       },
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.groups[0]?.candidates.map((candidate) => candidate.id)).toEqual([
-        "@demo-owner/notes-tools",
-        "@other-owner/notes-tools",
-      ]);
-      expect(result.matches[0]?.candidate.id).toBe("@demo-owner/notes-tools");
-    }
+    assert(result.status === "ok");
+    expect(result.groups[0]?.candidates.map((candidate) => candidate.id)).toEqual([
+      "@demo-owner/notes-tools",
+      "@other-owner/notes-tools",
+    ]);
+    expect(result.matches[0]?.candidate.id).toBe("@demo-owner/notes-tools");
   });
 
   it("gathers, dedupes, and sorts official and ClawHub candidates", async () => {
-    const channel = officialEntry({
-      id: "chat",
-      label: "Chat",
-      description: "Chat desktop channel",
-      kind: "channel",
-    });
-    const generic = officialEntry({
-      id: "notes",
-      label: "Notes",
-      description: "Notes integration",
-    });
+    const channel = officialEntry("chat", "Chat", "Chat desktop channel", true);
+    const generic = officialEntry("notes", "Notes", "Notes integration");
     const searchSkills = vi.fn(async () => [
-      {
-        registry: "https://clawhub.ai",
-        score: 2,
-        slug: "notes-tools",
-        installRef: "@demo-owner/notes-tools",
-        ownerHandle: "demo-owner",
-        displayName: "Duplicate notes",
-      },
-      {
-        registry: "https://clawhub.ai",
-        score: 1,
-        slug: "notes-tools",
-        installRef: "@demo-owner/notes-tools",
-        ownerHandle: "demo-owner",
-        displayName: "Notes Tools",
-        summary: "Work with notes",
-      },
+      skill({ score: 2, displayName: "Duplicate notes" }),
+      skill({ summary: "Work with notes" }),
     ]);
 
     const result = await getSetupAppRecommendations({
-      inventorySource: async () => [{ label: "Notes" }, { label: "Chat Desktop" }],
-      runtime: defaultRuntime,
+      inventorySource: appInventory("Notes", "Chat Desktop"),
       deps: {
         listPlugins: () => [generic, channel],
         listChannels: () => [channel],
@@ -231,15 +193,13 @@ describe("setup app recommendation candidates", () => {
       },
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.groups.map((group) => group.app.label)).toEqual(["Chat Desktop", "Notes"]);
-      const notes = result.groups.find((group) => group.app.label === "Notes");
-      expect(notes?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
-        ["official-plugin", "notes"],
-        ["clawhub-skill", "@demo-owner/notes-tools"],
-      ]);
-    }
+    assert(result.status === "ok");
+    expect(result.groups.map((group) => group.app.label)).toEqual(["Chat Desktop", "Notes"]);
+    const notes = result.groups.find((group) => group.app.label === "Notes");
+    expect(notes?.candidates.map((candidate) => [candidate.source, candidate.id])).toEqual([
+      ["official-plugin", "notes"],
+      ["clawhub-skill", "@demo-owner/notes-tools"],
+    ]);
     expect(searchSkills).toHaveBeenCalledTimes(2);
   });
 
@@ -248,35 +208,21 @@ describe("setup app recommendation candidates", () => {
       if (query === "Broken") {
         throw new Error("offline");
       }
-      return [
-        {
-          registry: "https://clawhub.ai",
-          score: 1,
-          slug: "working",
-          installRef: "@demo-owner/working",
-          ownerHandle: "demo-owner",
-          displayName: "Working",
-        },
-      ];
+      return [skill({ slug: "working" })];
     });
     const result = await getSetupAppRecommendations({
-      inventorySource: async () => [{ label: "Broken" }, { label: "Working" }],
-      runtime: defaultRuntime,
+      inventorySource: appInventory("Broken", "Working"),
       deps: {
-        listPlugins: () => [],
-        listChannels: () => [],
-        listProviders: () => [],
+        ...emptyCatalogs,
         searchSkills,
         complete: completeMatching([{ appLabel: "Working", candidateId: "@demo-owner/working" }]),
       },
     });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.groups.find((group) => group.app.label === "Broken")?.candidates).toEqual([]);
-      expect(result.groups.find((group) => group.app.label === "Working")?.candidates).toHaveLength(
-        1,
-      );
-    }
+    assert(result.status === "ok");
+    expect(result.groups.find((group) => group.app.label === "Broken")?.candidates).toEqual([]);
+    expect(result.groups.find((group) => group.app.label === "Working")?.candidates).toHaveLength(
+      1,
+    );
   });
 });
 
@@ -285,8 +231,7 @@ describe("official catalog candidates", () => {
     // Regression: real catalog entries carry no top-level id; keying by it
     // used to collapse the whole catalog and drop every official candidate.
     const result = await getSetupAppRecommendations({
-      inventorySource: async () => [{ label: "Discord" }, { label: "WhatsApp" }],
-      runtime: defaultRuntime,
+      inventorySource: appInventory("Discord", "WhatsApp"),
       deps: {
         searchSkills: async () => [],
         complete: completeMatching([
@@ -295,15 +240,13 @@ describe("official catalog candidates", () => {
         ]),
       },
     });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      const discord = result.groups.find((group) => group.app.label === "Discord");
-      const whatsapp = result.groups.find((group) => group.app.label === "WhatsApp");
-      expect(discord?.candidates).toContainEqual(
-        expect.objectContaining({ id: "discord", source: "official-channel" }),
-      );
-      expect(whatsapp?.candidates).toContainEqual(
-        expect.objectContaining({ id: "whatsapp", source: "official-channel" }),
+    assert(result.status === "ok");
+    for (const [label, id] of [
+      ["Discord", "discord"],
+      ["WhatsApp", "whatsapp"],
+    ]) {
+      expect(result.groups.find((group) => group.app.label === label)?.candidates).toContainEqual(
+        expect.objectContaining({ id, source: "official-channel" }),
       );
     }
   });
@@ -312,122 +255,56 @@ describe("official catalog candidates", () => {
 describe("setup app recommendation matcher", () => {
   const inventorySource = async () => [{ label: "Notes", bundleId: "com.example.notes" }];
   const candidateDeps = {
-    listPlugins: () => [],
-    listChannels: () => [],
-    listProviders: () => [],
-    searchSkills: async () => [
-      {
-        registry: "https://clawhub.ai",
-        score: 1,
-        slug: "notes-tools",
-        installRef: "@demo-owner/notes-tools",
-        ownerHandle: "demo-owner",
-        displayName: "Notes Tools",
-        summary: "Work with notes",
-      },
-    ],
+    ...emptyCatalogs,
+    searchSkills: async () => [skill({ summary: "Work with notes" })],
   };
-
-  it("accepts strict JSON", async () => {
-    const result = await getSetupAppRecommendations({
-      inventorySource,
-      runtime: defaultRuntime,
-      deps: {
-        ...candidateDeps,
-        complete: async () => ({
-          ok: true,
-          text: JSON.stringify({
-            matches: [
-              {
-                appLabel: "Notes",
-                candidateId: "@demo-owner/notes-tools",
-                tier: "recommended",
-                reason: "Connects directly to your notes",
-              },
-            ],
-          }),
-        }),
-      },
-    });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.matches[0]).toMatchObject({
-        candidateId: "@demo-owner/notes-tools",
-        tier: "recommended",
-      });
-    }
-  });
 
   it("tolerates fenced JSON with extra keys and long reasons", async () => {
     const reason = `${"a".repeat(118)}🤖suffix`;
     const result = await getSetupAppRecommendations({
       inventorySource,
-      runtime: defaultRuntime,
       deps: {
         ...candidateDeps,
-        complete: async () => ({
-          ok: true,
-          text: [
+        complete: completeText(
+          [
             "Here you go:",
             "```json",
-            JSON.stringify({
-              matches: [
-                {
-                  appLabel: "Notes",
-                  candidateId: "@demo-owner/notes-tools",
-                  tier: "optional",
-                  reason,
-                  confidence: "high",
-                },
-              ],
-            }),
+            JSON.stringify({ matches: [{ ...match(undefined, reason), confidence: "high" }] }),
             "```",
           ].join("\n"),
-        }),
+        ),
       },
     });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
-      expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
-      expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
-    }
+    assert(result.status === "ok");
+    expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
+    expect(result.matches[0]?.reason).toBe(`${"a".repeat(118)}…`);
+    expect(result.matches[0]?.reason.length).toBeLessThanOrEqual(120);
   });
 
   it("uses the first complete object when prose contains later JSON", async () => {
     const result = await getSetupAppRecommendations({
       inventorySource,
-      runtime: defaultRuntime,
       deps: {
         ...candidateDeps,
-        complete: async () => ({
-          ok: true,
-          text: `${JSON.stringify({
+        complete: completeText(
+          `${JSON.stringify({
             matches: [
-              {
-                appLabel: "Notes",
-                candidateId: "@demo-owner/notes-tools",
-                tier: "recommended",
-                reason: "Connects directly to your notes",
-              },
+              { ...match(undefined, "Connects directly to your notes"), tier: "recommended" },
             ],
           })}\nDiagnostics: {"tokens":12}`,
-        }),
+        ),
       },
     });
 
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
-    }
+    assert(result.status === "ok");
+    expect(result.matches[0]?.candidateId).toBe("@demo-owner/notes-tools");
   });
 
   it("skips garbage model output", async () => {
     await expect(
       getSetupAppRecommendations({
         inventorySource,
-        runtime: defaultRuntime,
-        deps: { ...candidateDeps, complete: async () => ({ ok: true, text: "not json" }) },
+        deps: { ...candidateDeps, complete: completeText("not json") },
       }),
     ).resolves.toEqual({ status: "skipped", reason: "model-failed" });
   });
@@ -436,22 +313,9 @@ describe("setup app recommendation matcher", () => {
     await expect(
       getSetupAppRecommendations({
         inventorySource,
-        runtime: defaultRuntime,
         deps: {
           ...candidateDeps,
-          complete: async () => ({
-            ok: true,
-            text: JSON.stringify({
-              matches: [
-                {
-                  appLabel: "Notes",
-                  candidateId: "unknown",
-                  tier: "optional",
-                  reason: "Looks useful",
-                },
-              ],
-            }),
-          }),
+          complete: completeText(JSON.stringify({ matches: [match("unknown")] })),
         },
       }),
     ).resolves.toEqual({ status: "skipped", reason: "no-matches" });

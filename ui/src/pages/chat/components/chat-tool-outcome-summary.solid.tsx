@@ -3,7 +3,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { resolveToolApprovalReviewOutcome } from "../../../lib/chat/tool-approval-reviews.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 
 export type ToolOutcomeSummaryProps = {
@@ -16,7 +15,7 @@ export type ToolOutcomeSummaryProps = {
 export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
   const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
   const outcome = () =>
-    outcomes().exitCode === undefined
+    outcomes().exitCode === undefined || outcomes().exitCode === 0
       ? t("chat.toolCards.failed")
       : t("chat.toolCards.exitCode", { code: String(outcomes().exitCode) });
   return (
@@ -40,7 +39,7 @@ export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
 }
 
 type ReviewOutcome = ReturnType<typeof resolveToolApprovalReviewOutcome>;
-function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
+export function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string }) {
   return (
     <Show when={props.outcome}>
       <span
@@ -64,24 +63,3 @@ function ToolReviewOutcome(props: { outcome: ReviewOutcome; reviewer?: string })
     </Show>
   );
 }
-
-defineSolidBridge<ToolOutcomeSummaryProps>(
-  "openclaw-chat-tool-outcome-summary",
-  ToolOutcomeSummary,
-  {
-    properties: {
-      cards: { default: [], attribute: false },
-      includeCount: { default: true, attribute: false },
-      activity: { default: undefined, attribute: false },
-    },
-  },
-);
-defineSolidBridge<{
-  outcome: ReviewOutcome;
-  reviewer: string;
-}>("openclaw-chat-tool-review-outcome", ToolReviewOutcome, {
-  properties: {
-    outcome: { default: null, attribute: false },
-    reviewer: { default: "Review", attribute: false },
-  },
-});

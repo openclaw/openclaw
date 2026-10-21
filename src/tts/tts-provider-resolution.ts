@@ -32,7 +32,6 @@ import {
   resolveVoiceModelRefs,
   resolveVoiceProviderCandidates,
   voiceProviderSupportsModel,
-  type VoiceModelProvider,
   type VoiceModelRef,
   type VoiceProviderCandidate,
 } from "./voice-models.js";
@@ -124,41 +123,6 @@ function resolveConfiguredSpeechVoiceModelRefs(
   });
 }
 
-function applyVoiceModelToSpeechProviderConfig(params: {
-  cfg: OpenClawConfig | undefined;
-  providerId: string;
-  providerConfig: SpeechProviderConfig;
-  provider?: VoiceModelProvider;
-  voiceModel?: VoiceModelRef;
-  registry?: TtsProviderRegistry;
-}): SpeechProviderConfig {
-  const registry = params.registry ?? defaultProviderRegistry;
-  const provider = params.provider ?? registry.getSpeechProvider(params.providerId, params.cfg);
-  const voiceModel = params.voiceModel
-    ? voiceProviderSupportsModel(provider, params.voiceModel.model)
-      ? params.voiceModel
-      : undefined
-    : resolveSupportedVoiceModelRefs({
-        config: params.cfg?.agents?.defaults?.voiceModel,
-        providers: provider ? [provider] : [],
-        providerId: params.providerId,
-      })[0];
-  if (!voiceModel) {
-    return params.providerConfig;
-  }
-  const hasExplicitModel =
-    normalizeOptionalString(params.providerConfig.model) ||
-    normalizeOptionalString(params.providerConfig.modelId);
-  if (hasExplicitModel) {
-    return params.providerConfig;
-  }
-  return {
-    ...params.providerConfig,
-    model: voiceModel.model,
-    modelId: voiceModel.model,
-  };
-}
-
 export function resolvePersonaProviderConfig(
   persona: ResolvedTtsPersona | undefined,
   providerId: string,
@@ -205,7 +169,7 @@ export function mergeProviderConfigWithPersona(params: {
 function resolveLazyProviderConfig(
   config: ResolvedTtsConfig,
   providerId: string,
-  cfg?: OpenClawConfig,
+  effectiveCfg: OpenClawConfig | undefined,
   voiceModel?: VoiceModelRef,
   provider?: SpeechProviderPlugin,
   registry: TtsProviderRegistry = defaultProviderRegistry,
@@ -213,7 +177,6 @@ function resolveLazyProviderConfig(
   const canonical =
     normalizeConfiguredSpeechProviderId(providerId) ?? normalizeLowercaseStringOrEmpty(providerId);
   const existing = voiceModel ? undefined : config.providerConfigs[canonical];
-  const effectiveCfg = cfg ? resolveProviderRuntimeConfig(cfg, registry) : config.sourceConfig;
   if (existing && !effectiveCfg) {
     return existing;
   }
@@ -243,14 +206,38 @@ function resolveLazyProviderConfig(
       }
     }
   }
-  const compatRawProviderConfig = applyVoiceModelToSpeechProviderConfig({
-    cfg: effectiveCfg,
-    providerId: canonical,
-    providerConfig: asProviderConfig(rawProviderConfig),
-    provider: resolvedProvider,
-    voiceModel,
-    registry,
-  });
+  const applyVoiceModelToProviderConfig = (
+    providerConfig: SpeechProviderConfig,
+  ): SpeechProviderConfig => {
+    const selectedProvider =
+      resolvedProvider ?? registry.getSpeechProvider(canonical, effectiveCfg);
+    const selectedVoiceModel = voiceModel
+      ? voiceProviderSupportsModel(selectedProvider, voiceModel.model)
+        ? voiceModel
+        : undefined
+      : resolveSupportedVoiceModelRefs({
+          config: effectiveCfg?.agents?.defaults?.voiceModel,
+          providers: selectedProvider ? [selectedProvider] : [],
+          providerId: canonical,
+        })[0];
+    if (!selectedVoiceModel) {
+      return providerConfig;
+    }
+    const hasExplicitModel =
+      normalizeOptionalString(providerConfig.model) ||
+      normalizeOptionalString(providerConfig.modelId);
+    if (hasExplicitModel) {
+      return providerConfig;
+    }
+    return {
+      ...providerConfig,
+      model: selectedVoiceModel.model,
+      modelId: selectedVoiceModel.model,
+    };
+  };
+  const compatRawProviderConfig = applyVoiceModelToProviderConfig(
+    asProviderConfig(rawProviderConfig),
+  );
   const shouldInjectCanonicalProviderConfig =
     hasRawProviderConfig || Boolean(voiceModel) || Object.keys(rawProviders).length === 0;
   const rawConfigForProvider = {
@@ -272,14 +259,7 @@ function resolveLazyProviderConfig(
             timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
           }),
         )
-      : applyVoiceModelToSpeechProviderConfig({
-          cfg: effectiveCfg,
-          providerId: canonical,
-          providerConfig: rawConfig,
-          provider: resolvedProvider,
-          voiceModel,
-          registry,
-        });
+      : applyVoiceModelToProviderConfig(rawConfig);
   if (!voiceModel) {
     config.providerConfigs[canonical] = next;
   }
@@ -499,7 +479,7 @@ export function resolvePrimaryTtsProviderCandidate(
   });
 }
 
-/** @deprecated Use isTtsProviderConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isTtsProviderConfiguredAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
@@ -561,8 +541,15 @@ export async function isTtsProviderConfiguredAsync(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
   cfg?: OpenClawConfig,
+  onError?: (error: unknown) => void,
 ): Promise<boolean> {
-  return await isSpeechProviderConfiguredAsync(config, provider, cfg, defaultProviderRegistry);
+  return await isSpeechProviderConfiguredAsync(
+    config,
+    provider,
+    cfg,
+    defaultProviderRegistry,
+    onError,
+  );
 }
 
 async function isSpeechProviderConfiguredAsync(
@@ -570,19 +557,28 @@ async function isSpeechProviderConfiguredAsync(
   provider: TtsProvider | SpeechProviderPlugin,
   cfg: OpenClawConfig | undefined,
   registry: TtsProviderRegistry,
+  onError?: (error: unknown) => void,
 ): Promise<boolean> {
   try {
     const configured = resolveSpeechProviderConfiguration(config, provider, cfg, registry);
     if (!configured) {
       return false;
     }
+    if (!configured.provider.isConfiguredAsync) {
+      warnPluginSdkDeprecation({
+        family: "provider-sync-configuration",
+        method: "SpeechProviderPlugin.isConfigured",
+        replacement: "isConfiguredAsync",
+      });
+    }
     return (
       (await (configured.provider.isConfiguredAsync
         ? configured.provider.isConfiguredAsync(configured.context)
         : configured.provider.isConfigured(configured.context))) ?? false
     );
-  } catch {
-    // A broken provider must not hide other usable providers in selection or status.
+  } catch (error) {
+    // Snapshot owners retain last-good readiness when a provider check fails.
+    onError?.(error);
     return false;
   }
 }

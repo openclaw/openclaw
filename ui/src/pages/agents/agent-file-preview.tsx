@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, flush, onSettled, type Accessor } from "solid-js";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 
 type PreviewScope = readonly [agentId: string, fileName: string, loaded: boolean];
 
@@ -25,13 +26,12 @@ export function AgentFilePreview<T>(props: {
   const show = (event: Event) => {
     if (event.target === modal) {
       setOpen(true);
-      flush();
+      flush(); // The modal must focus the newly committed preview during overlay-show.
     }
   };
   const hide = (event: Event) => {
     if (event.target === modal) {
       setOpen(false);
-      flush();
     }
   };
   onSettled(() => {
@@ -40,12 +40,8 @@ export function AgentFilePreview<T>(props: {
       throw new Error("Agent file preview must be a modal child");
     }
     setOpen(modal.open);
-    modal.addEventListener("wa-show", show);
-    modal.addEventListener("wa-hide", hide);
-    return () => {
-      modal?.removeEventListener("wa-show", show);
-      modal?.removeEventListener("wa-hide", hide);
-    };
+    const stops = [listen(modal, "overlay-show", show), listen(modal, "overlay-hide", hide)];
+    return () => stops.forEach((stop) => stop());
   });
   return (
     <span

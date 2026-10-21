@@ -16,14 +16,30 @@ import {
 } from "./tsdown-declaration-fixture.js";
 
 const it = createDeclarationTest();
+const generatorInputs = () =>
+  resolveTsdownDeclarationGeneratorInputs(process.cwd(), "scripts/write-unified-entry-dts.ts");
+
+function expectInvalidSource(file: string, transform: (source: string) => string, message: string) {
+  const readFileSync = fs.readFileSync.bind(fs);
+  const read = vi.spyOn(fs, "readFileSync").mockImplementation((candidate, options) => {
+    const contents = readFileSync(candidate, options);
+    return typeof contents === "string" && String(candidate).endsWith(file)
+      ? transform(contents)
+      : contents;
+  });
+  try {
+    expect(generatorInputs).toThrow(message);
+  } finally {
+    read.mockRestore();
+  }
+}
 
 describe("write-unified-entry-dts", () => {
   it("owns the executable generator closure without unrelated CI planning code", () => {
     const root = process.cwd();
-    const closure = resolveTsdownDeclarationGeneratorInputs(
-      root,
-      "scripts/write-unified-entry-dts.ts",
-    ).map((file) => path.relative(root, file).split(path.sep).join("/"));
+    const closure = generatorInputs().map((file) =>
+      path.relative(root, file).split(path.sep).join("/"),
+    );
 
     expect(closure).toEqual(
       expect.arrayContaining([
@@ -32,9 +48,10 @@ describe("write-unified-entry-dts", () => {
         "scripts/lib/plugin-sdk-entrypoints.json",
         "scripts/windows-cmd-helpers.mjs",
         "packages/normalization-core/src/mountinfo-path.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
+        "src/infra/runtime-process-manifest.ts",
         "src/state/openclaw-state-schema.sql",
         "src/state/openclaw-agent-schema.sql",
+        "src/state/postgres-schema.generated/sqlite-state-catalogs.json",
         "src/shared/freebsd-process-identity.ts",
         "src/infra/update-managed-service-handoff-native-loader.ts",
         "src/infra/package-update-activation-native-loader.ts",
@@ -45,72 +62,28 @@ describe("write-unified-entry-dts", () => {
   });
 
   it("still traverses a compiler source when the generator also imports it", () => {
-    const readFileSync = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const contents = readFileSync(file, options);
-      return typeof contents === "string" &&
-        String(file).endsWith("managed-handoff-build-config.mts")
-        ? `${contents}\nimport "../../src/infra/update-managed-service-handoff-native-loader.ts";\n`
-        : contents;
-    });
-    try {
-      expect(() =>
-        resolveTsdownDeclarationGeneratorInputs(
-          process.cwd(),
-          "scripts/write-unified-entry-dts.ts",
-        ),
-      ).toThrow(
-        "Unresolved dynamic module edges in src/infra/update-managed-service-handoff-native-loader.ts",
-      );
-    } finally {
-      read.mockRestore();
-    }
+    expectInvalidSource(
+      "managed-handoff-build-config.mts",
+      (contents) =>
+        `${contents}\nimport "../../src/infra/update-managed-service-handoff-native-loader.ts";\n`,
+      "Unresolved dynamic module edges in src/infra/update-managed-service-handoff-native-loader.ts",
+    );
   });
 
   it.each([
     ["unowned dynamic", "\nvoid import(generatorTarget);\n", "Unresolved dynamic module edges"],
     ["unresolved static", '\nimport "./missing-generator-owner.mts";\n', "Unresolved import"],
   ])("rejects an %s edge in the real generator graph", (_name, injected, message) => {
-    const readFileSync = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const contents = readFileSync(file, options);
-      return typeof contents === "string" && String(file).endsWith("numeric-options.mjs")
-        ? `${contents}${injected}`
-        : contents;
-    });
-    try {
-      expect(() =>
-        resolveTsdownDeclarationGeneratorInputs(
-          process.cwd(),
-          "scripts/write-unified-entry-dts.ts",
-        ),
-      ).toThrow(message);
-    } finally {
-      read.mockRestore();
-    }
+    expectInvalidSource("numeric-options.mjs", (contents) => `${contents}${injected}`, message);
   });
 
   it("rejects a same-count computed import retarget", () => {
-    const readFileSync = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const contents = readFileSync(file, options);
-      return typeof contents === "string" && String(file).endsWith("tsx-cli-shim.mjs")
-        ? contents.replace(
-            "resolveTsxImport(SHIM_CHECKOUT_ROOT)",
-            "resolveTsxImport(process.cwd())",
-          )
-        : contents;
-    });
-    try {
-      expect(() =>
-        resolveTsdownDeclarationGeneratorInputs(
-          process.cwd(),
-          "scripts/write-unified-entry-dts.ts",
-        ),
-      ).toThrow("Unresolved dynamic module edges");
-    } finally {
-      read.mockRestore();
-    }
+    expectInvalidSource(
+      "tsx-cli-shim.mjs",
+      (contents) =>
+        contents.replace("resolveTsxImport(SHIM_CHECKOUT_ROOT)", "resolveTsxImport(process.cwd())"),
+      "Unresolved dynamic module edges",
+    );
   });
 
   it("leaves physical and external installed dependencies to lockfile topology", () => {
@@ -137,52 +110,28 @@ describe("write-unified-entry-dts", () => {
 
   it("compiles declarations once and restores them while rebuilding runtime after input edits", ({
     command,
-    onTestFailed,
   }) =>
     command.lifetime.run(async () => {
-      const phases: Array<{
-        phase: string;
-        durationMs: number;
-        outcome: "returned" | "threw";
-        exitStatus?: number | null;
-      }> = [];
-      // Timeout reporting can precede this body's final phase receipt.
-      onTestFailed(() => {
-        console.error(`[unified-entry-dts phases] ${JSON.stringify(phases)}`);
-      });
-      const measurePhase = async <T>(
-        phase: string,
-        run: () => T | Promise<T>,
-        readExitStatus?: (result: T) => number | null,
-      ): Promise<T> => {
-        const started = performance.now();
-        let outcome: "returned" | "threw" = "threw";
-        let exitStatus: number | null | undefined;
-        try {
-          const result = await run();
-          exitStatus = readExitStatus?.(result);
-          outcome = "returned";
-          return result;
-        } finally {
-          phases.push({
-            phase,
-            durationMs: Math.round(performance.now() - started),
-            outcome,
-            ...(readExitStatus ? { exitStatus } : {}),
-          });
-        }
-      };
-      const { root, write, production, declarations } = await measurePhase("fixture", () =>
-        createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS),
+      const { root, write, production, declarations } = createFixture(
+        command,
+        TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
       );
+      const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8");
+      const exists = (file: string) => fs.existsSync(path.join(root, file));
+      const hashDist = () => treeHashes(path.join(root, "dist"));
+      const runBuild = async (invocations: number) => {
+        const result = await runUnifiedBuild(command, root, runtimeConfig);
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(
+          (result.stdout + result.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
+        ).toHaveLength(invocations);
+      };
       expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
       expect(production).toHaveLength(Object.values(declarations).flat().length);
-      write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
-      write("extensions/fixture-a/typed-runtime.js", 'export const typedRuntime = "typed";');
-      write(
-        "extensions/fixture-a/typed-runtime.d.ts",
-        'export declare const typedRuntime: "typed";',
-      );
+      const pluginFile = (file: string) => `extensions/fixture-a/${file}`;
+      write(pluginFile("runtime-only.js"), 'export const runtimeOnly = "runtime";');
+      write(pluginFile("typed-runtime.js"), 'export const typedRuntime = "typed";');
+      write(pluginFile("typed-runtime.d.ts"), 'export declare const typedRuntime: "typed";');
       fs.appendFileSync(
         path.join(root, "extensions/fixture-a/index.ts"),
         [
@@ -234,48 +183,40 @@ describe("write-unified-entry-dts", () => {
           files: ["consumer.ts"],
         }),
       );
-      const initial = await measurePhase(
-        "initial-build",
-        async () => await runUnifiedBuild(command, root),
-        (result) => result.status,
+      // Declaration reuse needs the shared runtime graph, not unrelated standalone workers.
+      const runtimeConfig = "tsdown.fixture-runtime.config.ts";
+      write(
+        runtimeConfig,
+        `import configs from "./tsdown.config.ts";
+export default configs.filter(config => Object.hasOwn(config.entry ?? {}, "index"));
+`,
       );
-      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      expect(
-        (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
-      ).toHaveLength(2);
+      await runBuild(2);
       for (const entry of production) {
         expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
       }
-      const readPluginDeclaration = () =>
-        fs.readFileSync(path.join(root, "dist/extensions/fixture-a/index.d.ts"), "utf8");
+      const readPluginDeclaration = () => read("dist/extensions/fixture-a/index.d.ts");
       const originalFunction = readPluginDeclaration().match(
         /^(?:export )?declare function literalOrder\(.*;$/mu,
       )?.[0];
       expect(originalFunction).toBeDefined();
-      const consumer = await measurePhase(
-        "consumer-typecheck",
-        async () =>
-          await runFixture(command, root, [
-            path.resolve("scripts/run-tsgo.mjs"),
-            "-p",
-            "consumer.json",
-            "--noEmit",
-          ]),
-        (result) => result.status,
-      );
+      const consumer = await runFixture(command, root, [
+        path.resolve("scripts/run-tsgo.mjs"),
+        "-p",
+        "consumer.json",
+        "--noEmit",
+      ]);
       expect(consumer.status, consumer.stdout + consumer.stderr).toBe(0);
       for (const name of ["runtime-only", "typed-runtime"]) {
         expect(
           fs.statSync(path.join(root, `dist/extensions/fixture-a/${name}.js`)).size,
         ).toBeGreaterThan(0);
-        expect(fs.existsSync(path.join(root, `dist/extensions/fixture-a/${name}.d.ts`))).toBe(
-          false,
-        );
+        expect(exists(`dist/extensions/fixture-a/${name}.d.ts`)).toBe(false);
       }
-      expect(fs.existsSync(path.join(root, "dist/obsolete.d.ts"))).toBe(false);
-      expect(fs.existsSync(path.join(root, "dist/extensions/removed/api.d.ts"))).toBe(false);
+      expect(exists("dist/obsolete.d.ts")).toBe(false);
+      expect(exists("dist/extensions/removed/api.d.ts")).toBe(false);
       for (const [file, bytes] of Object.entries(preserved)) {
-        expect(fs.readFileSync(path.join(root, file), "utf8")).toBe(bytes);
+        expect(read(file)).toBe(bytes);
       }
       const cache = path.join(root, ".artifacts/build-all-cache");
       const records = declarationCacheRecords(root);
@@ -294,10 +235,8 @@ describe("write-unified-entry-dts", () => {
           .flatMap((record) => Object.keys(record.outputs))
           .some((file) => file.includes(".app/") || file.includes("control-ui/")),
       ).toBe(false);
-      const cached = await measurePhase("initial-cache-hash", () => treeHashes(cache));
-      const before = await measurePhase("initial-dist-hash", () =>
-        treeHashes(path.join(root, "dist")),
-      );
+      const cached = treeHashes(cache);
+      const before = hashDist();
       write("test/unrelated.test.ts", "export const test = 2;\n");
       write("ui/unrelated.ts", "export const view = 2;\n");
       write(".github/workflows/unrelated.yml", "name: unrelated after\n");
@@ -309,38 +248,19 @@ describe("write-unified-entry-dts", () => {
       for (const [file, bytes] of Object.entries(preserved)) {
         write(file, bytes);
       }
-      const repeated = await measurePhase(
-        "unchanged-build",
-        async () => await runUnifiedBuild(command, root),
-        (result) => result.status,
-      );
-      expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
-      expect(
-        (repeated.stdout + repeated.stderr).match(/\[tsdown-build\] invocation \d\/\d finished/gu),
-      ).toHaveLength(1);
-      expect(
-        await measurePhase("unchanged-dist-hash", () => treeHashes(path.join(root, "dist"))),
-      ).toEqual(before);
-      expect(await measurePhase("unchanged-cache-hash", () => treeHashes(cache))).toEqual(cached);
+      await runBuild(1);
+      expect(hashDist()).toEqual(before);
+      expect(treeHashes(cache)).toEqual(cached);
       const pluginInput = "extensions/fixture-a/index.ts";
       // A prior literal allocation must not reorder the unchanged function's public type.
       write(
         pluginInput,
-        fs
-          .readFileSync(path.join(root, pluginInput), "utf8")
-          .replace('pluginRevision = "fixture_zeta"', 'pluginRevision = "fixture_alpha"'),
-      );
-      const isolatedEdit = await measurePhase(
-        "edited-build",
-        async () => await runUnifiedBuild(command, root),
-        (result) => result.status,
-      );
-      expect(isolatedEdit.status, isolatedEdit.stdout + isolatedEdit.stderr).toBe(0);
-      expect(
-        (isolatedEdit.stdout + isolatedEdit.stderr).match(
-          /\[tsdown-build\] invocation \d\/\d finished/gu,
+        read(pluginInput).replace(
+          'pluginRevision = "fixture_zeta"',
+          'pluginRevision = "fixture_alpha"',
         ),
-      ).toHaveLength(2);
+      );
+      await runBuild(2);
       expect(records).toHaveLength(TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
       expect(records.filter((record) => record.inputs?.includes(pluginInput))).toHaveLength(1);
       expect(records.filter((record) => record.inputs?.includes("src/shared.ts"))).toHaveLength(
@@ -352,26 +272,18 @@ describe("write-unified-entry-dts", () => {
         changedDeclaration.match(/^(?:export )?declare function literalOrder\(.*;$/mu)?.[0],
       ).toBe(originalFunction);
       const changedCacheGroups = new Set(
-        Object.entries(await measurePhase("edited-cache-hash", () => treeHashes(cache)))
+        Object.entries(treeHashes(cache))
           .filter(([file, digest]) => cached[file] !== digest)
           .map(([file]) => file.split("/")[0]),
       );
       expect(changedCacheGroups.size).toBe(1);
-      const mixedGeneration = await measurePhase("edited-dist-hash", () =>
-        treeHashes(path.join(root, "dist")),
-      );
-      const cold = await measurePhase(
-        "cold-writer",
-        async () => await runUnifiedWriter(command, root, { OPENCLAW_BUILD_CACHE: "0" }),
-        (result) => result.status,
-      );
+      const mixedGeneration = hashDist();
+      const cold = await runUnifiedWriter(command, root, { OPENCLAW_BUILD_CACHE: "0" });
       expect(cold.status, cold.stdout + cold.stderr).toBe(0);
       expect(
         (cold.stdout + cold.stderr).match(/\[tsdown-build\] invocation \d\/1 finished/gu),
       ).toHaveLength(1);
-      expect(
-        await measurePhase("cold-dist-hash", () => treeHashes(path.join(root, "dist"))),
-      ).toEqual(mixedGeneration);
+      expect(hashDist()).toEqual(mixedGeneration);
       expectStagingClean(root);
     }));
 
@@ -379,7 +291,37 @@ describe("write-unified-entry-dts", () => {
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
+      const { root, write } = createFixture(command, TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
+      for (const [file, marker, flag] of [
+        [
+          "scripts/lib/tsdown-declaration-generator-inputs.mts",
+          '  configEntry = "tsdown.config.ts",\n) {',
+          "DECLARATION_TEST_DENY_CACHE_SNAPSHOT",
+        ],
+        [
+          "scripts/lib/compiler-input-snapshot.mts",
+          "constructor(rootDir: string, policy: CompilerInputPolicy) {",
+          "DECLARATION_TEST_DENY_CACHE_SNAPSHOT",
+        ],
+        [
+          "scripts/tsdown-build.mts",
+          "  const args = params.args ?? [];\n  const plan = resolveTsdownBuildPlan(params);",
+          "DECLARATION_TEST_DENY_COMPILER_PLAN",
+        ],
+      ] as const) {
+        const current = fs.readFileSync(path.join(root, file), "utf8");
+        expect(current).toContain(marker);
+        write(
+          file,
+          current.replace(
+            marker,
+            marker +
+              "\nif (process.env[" +
+              JSON.stringify(flag) +
+              '] === "1") throw new Error("Unexpected declaration preparation");\n',
+          ),
+        );
+      }
       const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
       const initial = await runUnifiedWriter(command, root, env);
       expect(initial.status, initial.stdout + initial.stderr).toBe(0);
@@ -394,13 +336,25 @@ describe("write-unified-entry-dts", () => {
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-a/index.d.ts"))).toBe(true);
       expect(fs.existsSync(path.join(root, "dist/extensions/fixture-b/index.d.ts"))).toBe(false);
       const before = treeHashes(path.join(root, "dist"));
-      const repeated = await runUnifiedWriter(command, root, env);
+      const repeated = await runUnifiedWriter(command, root, {
+        ...env,
+        DECLARATION_TEST_DENY_COMPILER_PLAN: "1",
+      });
       expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
       for (const group of TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
         expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
       }
       expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
       expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      const cached = treeHashes(path.join(root, ".artifacts/build-all-cache"));
+      const uncached = await runUnifiedWriter(command, root, {
+        ...env,
+        OPENCLAW_BUILD_CACHE: "0",
+        DECLARATION_TEST_DENY_CACHE_SNAPSHOT: "1",
+      });
+      expect(uncached.status, uncached.stdout + uncached.stderr).toBe(0);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(before);
+      expect(treeHashes(path.join(root, ".artifacts/build-all-cache"))).toEqual(cached);
       expectStagingClean(root);
     }));
 

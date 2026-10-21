@@ -5,10 +5,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupFailureExitCode } from "../cli/gateway-cli/startup-maintenance.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { activateGatewayAgentDatabaseStartup } from "../gateway/server-agent-database-startup.js";
 import { prepareGatewayStartupSessions } from "../gateway/server-startup-session-migration.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import {
+  readSqliteDatabaseCleanClose,
+  retireSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -21,13 +28,15 @@ import {
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
+  databaseFixture,
+  agentConfig,
+  openRawDatabase,
+} from "./database-preflight-fixtures.test-support.js";
+import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
@@ -37,6 +46,7 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
   await flushLogger();
+  clearRuntimeConfigSnapshot();
   setLoggerOverride(null);
   resetLogger();
   vi.restoreAllMocks();
@@ -45,7 +55,8 @@ afterEach(async () => {
 
 async function createFixture(ids: string[], damage: "missing" | "drifted" | "missing table") {
   const stateDir = fs.realpathSync.native(tempDirs.make("startup-index-"));
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  const base = databaseFixture(stateDir, process.env);
+  const { env } = base;
   const logPath = path.join(stateDir, "startup.log");
   const configPath = path.join(stateDir, "openclaw.json");
   const config = {
@@ -63,8 +74,14 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     configPath,
     JSON.stringify({ ...config, logging: { level: "warn", file: logPath } }),
   );
+  setRuntimeConfigSnapshot(config);
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
-  const agents = [];
+  const agents: Array<{
+    agentId: string;
+    path: string;
+    session: { agentId: string; env: typeof env; sessionKey: string };
+    entry: Awaited<ReturnType<typeof replaceSessionEntry>>;
+  }> = [];
   for (const agentId of ids) {
     const session = { agentId, env, sessionKey: `agent:${agentId}:retained` };
     const entry = await replaceSessionEntry(session, {
@@ -77,42 +94,43 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
-  const { DatabaseSync } = requireNodeSqlite();
   for (const agent of agents) {
-    const writer = new DatabaseSync(agent.path);
-    writer.exec("DROP INDEX idx_agent_session_nodes_active;");
-    writer.exec("UPDATE schema_meta SET app_version = '2026.9.1';");
+    const writer = openRawDatabase(agent.path);
+    writer.exec(
+      "DROP INDEX idx_agent_session_nodes_active; UPDATE schema_meta SET app_version = '2026.9.1';",
+    );
     if (damage === "drifted") {
       writer.exec("CREATE INDEX idx_agent_session_nodes_active ON session_nodes(session_key);");
     } else if (damage === "missing table") {
       writer.exec("DROP TABLE session_key_contract;");
     }
     writer.close();
+    retireSqliteDatabaseAdmissionForPath(agent.path);
   }
+  const bytes = () => agents.map((agent) => fs.readFileSync(agent.path));
   return {
-    env,
+    ...base,
     config,
     agents,
     logPath,
-    before: agents.map((agent) => fs.readFileSync(agent.path)),
+    bytes,
+    before: bytes(),
+    ready: (
+      cfg: Parameters<typeof base.ready>[0] = config,
+      operation: "gateway-startup" | "gateway-restart" = "gateway-startup",
+    ) => base.ready(cfg, operation),
+    prepare: () =>
+      prepareGatewayStartupSessions({ cfg: config, env, log: { info: vi.fn(), warn: vi.fn() } }),
   };
 }
 
 it.for(["missing", "drifted"] as const)(
   "defers every agent's %s index repair until startup activation and repairs it once",
   async (damage, { signal }) => {
-    const { env, config, agents, logPath, before } = await createFixture(
-      ["memes", "main", "friends"],
-      damage,
-    );
-    const prepareStartup = () =>
-      prepareGatewayStartupSessions({
-        cfg: config,
-        env,
-        log: { info: vi.fn(), warn: vi.fn() },
-      });
+    const fixture = await createFixture(["memes", "main", "friends"], damage);
+    const { env, config, agents } = fixture;
     for (const agent of agents) {
-      expect(readOpenClawAgentIntegrityVerification(agent.path, env)?.clean_close).toBe(1);
+      expect(readSqliteDatabaseCleanClose(agent.path)).toBe(false);
     }
     const allAdmitted = createDeferredCore();
     const admitted = new Set<string>();
@@ -134,7 +152,7 @@ it.for(["missing", "drifted"] as const)(
     });
     try {
       await withAgentDatabaseStartupAdmission(async (admission) => {
-        await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config });
+        await fixture.ready();
         const owner = admission.adopt();
         try {
           for (const agent of agents) {
@@ -144,20 +162,17 @@ it.for(["missing", "drifted"] as const)(
               code: "UNAVAILABLE",
               retryable: true,
             });
-            expect(() => openOpenClawAgentDatabase({ ...agent, env })).toThrow(
+            expect(() => fixture.agent(agent.agentId, agent.path)).toThrow(
               "has not completed startup inspection and preparation",
             );
           }
-          await expect(prepareStartup()).resolves.toEqual([]);
+          await expect(fixture.prepare()).resolves.toEqual([]);
           expect(
             listAgentDatabaseAdmissionRefusals({ env })
               .map(({ agentId }) => agentId)
               .toSorted(),
           ).toEqual(agents.map(({ agentId }) => agentId).toSorted());
-          deepStrictEqual(
-            agents.map((agent) => fs.readFileSync(agent.path)),
-            before,
-          );
+          deepStrictEqual(fixture.bytes(), fixture.before);
           const activate = admission.activate.bind(admission);
           // Keep real worker opening and session preparation; model publication is unrelated.
           vi.spyOn(admission, "activate").mockImplementation((activation) =>
@@ -166,6 +181,7 @@ it.for(["missing", "drifted"] as const)(
           activateGatewayAgentDatabaseStartup({
             admission,
             preparationReady: Promise.resolve(),
+            waitForPostReadyWork: async () => {},
             getConfig: () => config,
             getPluginRegistry: vi.fn(),
             getPluginMetadataSnapshot: () => undefined,
@@ -181,16 +197,14 @@ it.for(["missing", "drifted"] as const)(
       unsubscribe();
     }
     for (const agent of agents) {
-      const reader = new (requireNodeSqlite().DatabaseSync)(agent.path, { readOnly: true });
-      try {
+      {
+        using reader = openRawDatabase(agent.path, { readOnly: true });
         expect(
           reader
             .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_session_nodes_active'")
             .get()?.sql,
         ).toMatch(/WHERE archived_at IS NULL/i);
         expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        reader.close();
       }
       expect(loadSessionEntry(agent.session)).toEqual(agent.entry);
     }
@@ -199,7 +213,7 @@ it.for(["missing", "drifted"] as const)(
     await flushLogger();
     const repairs = () =>
       fs
-        .readFileSync(logPath, "utf8")
+        .readFileSync(fixture.logPath, "utf8")
         .trim()
         .split("\n")
         .map((line): { message?: string; "1"?: unknown } => JSON.parse(line))
@@ -218,10 +232,8 @@ it.for(["missing", "drifted"] as const)(
         }),
       ),
     );
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-restart", config }),
-    ).resolves.toBeUndefined();
-    await prepareStartup();
+    await expect(fixture.ready(config, "gateway-restart")).resolves.toBeUndefined();
+    await fixture.prepare();
     await closeOpenClawAgentDatabasesAsync();
     await flushLogger();
     expect(repairs()).toHaveLength(3);
@@ -237,7 +249,7 @@ it.each([
   ["scoped", "unavailable", "schema", 1],
 ] as const)("classifies %s %s / %s startup as exit %i", async (scope, first, second, exitCode) => {
   const allSchema = first === "schema" && second === "schema";
-  const { env, config, agents, before } = await createFixture(
+  const { env, config, agents, before, bytes, ready } = await createFixture(
     allSchema ? ["work", "memes", "main", "friends"] : ["main", "worker"],
     "missing table",
   );
@@ -265,19 +277,7 @@ it.each([
     }
   }
   const inspect = () =>
-    assertOpenClawDatabasesReady({
-      env,
-      operation: "gateway-startup",
-      config:
-        scope === "scoped"
-          ? {
-              agents: {
-                entries: { main: {}, worker: {} },
-                defaults: { systemAgent: { agentId: "main" } },
-              },
-            }
-          : config,
-    });
+    ready(scope === "scoped" ? agentConfig(["main", "worker"], "main") : config);
   const failure = await (
     scope === "scoped"
       ? withAgentDatabaseStartupAdmission(inspect, { deferInspections: false })
@@ -312,8 +312,5 @@ it.each([
     );
   }
   expect(resolveGatewayStartupFailureExitCode(failure)).toBe(exitCode);
-  deepStrictEqual(
-    agents.map((agent) => fs.readFileSync(agent.path)),
-    before,
-  );
+  deepStrictEqual(bytes(), before);
 });

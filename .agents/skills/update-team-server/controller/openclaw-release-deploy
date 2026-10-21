@@ -33,13 +33,13 @@ root_uid="${OPENCLAW_TEAM_ROOT_UID:-0}"
 root_gid="${OPENCLAW_TEAM_ROOT_GID:-0}"
 ancestor_boundary="${OPENCLAW_TEAM_ANCESTOR_BOUNDARY:-/}"
 fetch_budget="${OPENCLAW_TEAM_FETCH_BUDGET:-180}"
-# Cloning the multi-GB mirror is single-threaded CPU work and starves under host load.
+# Candidate checkout has its own budget, independent of the upstream fetch.
 clone_budget="${OPENCLAW_TEAM_CLONE_BUDGET:-600}"
 # Mirror operations must never run a foreground auto-gc inside a bounded step.
 mirror_git_config=(-c gc.auto=0 -c maintenance.auto=false)
 build_budget="${OPENCLAW_TEAM_BUILD_BUDGET:-2400}"
 verification_budget="${OPENCLAW_TEAM_VERIFICATION_BUDGET:-600}"
-drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-600}"
+drain_budget="${OPENCLAW_TEAM_DRAIN_BUDGET:-30}"
 drain_poll_interval="${OPENCLAW_TEAM_DRAIN_POLL_INTERVAL:-5}"
 official_origin=https://github.com/openclaw/openclaw.git
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -87,10 +87,8 @@ rollback_armed=0
 predecessor_stopped=0
 restart_failed=0
 held_suspension=""
-suspension_request=""
 suspension_cleanup_only=0
 suspension_handoff_started=0
-suspension_prearm_renewal_attempted=0
 suspension_expiry=""
 suspension_state=""
 suspension_active_count=0
@@ -102,12 +100,11 @@ suspension_generation=""
 suspension_instance=""
 suspension_blockers=""
 suspension_write_custody=unknown
-custody_wait_budget=60
+custody_wait_budget=5
 # explicit operator waiver for terminal-persistence holders that never settle (dead runs).
 waive_terminal_persistence=0
 terminal_persistence_waiver_armed=0
 custody_wait_interval=2
-last_suspension_prepare=0
 previous_release=""
 previous_info=""
 candidate_release=""
@@ -408,7 +405,8 @@ run_gateway_node() {
 	fi
 	if ((drain_deadline > 0)); then
 		remaining=$((drain_deadline - SECONDS))
-		((remaining > 0)) || return 1
+		# Expiry before dispatch is the same budget exhaustion as bounded's timeout.
+		((remaining > 0)) || return 124
 		if ((remaining < rpc_budget)); then
 			rpc_budget="$remaining"
 		fi
@@ -446,6 +444,14 @@ try {
     process.stderr.write(`MARKER_ADMISSION_PENDING agent=${String(error.details.agentId)}\n`);
     process.stdout.write("RETRYABLE_ADMISSION_PENDING");
     process.exitCode = 76;
+  } else if (method === "agent" && isGatewayTransportError(error) && error.kind === "timeout") {
+    process.stderr.write("MARKER_DISPATCH_TIMEOUT reconciliation=same-idempotency-key\n");
+    process.stdout.write("RETRYABLE_DISPATCH_TIMEOUT");
+    process.exitCode = 77;
+  } else if (method === "system.info" && isGatewayTransportError(error) &&
+    (error.kind === "timeout" || [undefined, 1006, 1012].includes(error.code))) {
+    process.stdout.write("RETRYABLE_READINESS_TRANSPORT");
+    process.exitCode = 78;
   } else {
     // Only a read of an acknowledged run may recover transport uncertainty.
     if (method !== "agent.wait" || !isGatewayTransportError(error) ||
@@ -600,7 +606,8 @@ assert_single_listener() {
 	LISTENER_SNAPSHOT="$listing" EXPECTED_PID="$expected_pid" EXPECTED_PORT="$gateway_port" \
 		"$node_bin" -e '
 const lines = (process.env.LISTENER_SNAPSHOT ?? "").split("\n").filter(Boolean);
-if (lines.length < 1 || lines.length > 2) process.exit(2);
+if (!lines.length) process.exit(75);
+if (lines.length > 2) process.exit(2);
 const families = new Set();
 for (const line of lines) {
   const address = line.match(new RegExp("(?:^|\\s)(127\\.0\\.0\\.1|\\[::1\\]):" + process.env.EXPECTED_PORT + "(?:\\s|$)"))?.[1];
@@ -748,41 +755,23 @@ retain_suspension_cleanup_offer() {
 
 request_suspension() {
 	local release="$1" request="$2" response parsed offered_lease offered_expiry _terminal_blocked
-	local failure_code failure_category failure_stage=initial
-	local expected_id="${held_suspension:-}" prior_expiry="${suspension_expiry:-}"
-	((suspension_cleanup_only == 0)) || { fail 'suspension offer is cleanup-only, not continued authority'; return 1; }
-	((suspension_handoff_started == 0)) || { fail 'cannot renew an attempted suspension handoff'; return 1; }
+	local failure_code failure_category
+	[[ -z "$held_suspension" ]] || { fail 'cannot replace an owned suspension'; return 1; }
 	if response="$(run_gateway "$release" gateway call gateway.suspend.prepare \
 		--params "$request" --json --timeout 30000)"; then
 		:
 	else
 		failure_code=$?
-		[[ -z "$expected_id" ]] || failure_stage=renewal
-		if [[ -n "$expected_id" ]]; then
-			suspension_cleanup_only=1
-			retain_suspension_cleanup_offer "$response"
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-		fi
 		failure_category="$(proof_json suspension-prepare-failure "$response" "$failure_code" 2>/dev/null)" || failure_category=unclassified
-		printf 'SUSPENSION_PREPARE_FAILED stage=%s exit=%s category=%s\n' \
-			"$failure_stage" "$failure_code" "$failure_category" >&2
-		printf 'DEFERRED renewable preserve-only drain preparation unavailable or conflicting\n'
+		printf 'SUSPENSION_PREPARE_FAILED stage=initial exit=%s category=%s\n' \
+			"$failure_code" "$failure_category" >&2
+		printf 'DEFERRED preserve-only drain preparation unavailable or conflicting\n'
 		return 75
 	fi
-	last_suspension_prepare="$SECONDS"
-	[[ -z "$expected_id" ]] || suspension_cleanup_only=1
-	# An offered lease remains cleanup-only until the complete response and any
-	# renewal identity/expiry binding pass. A raced replacement never grants stop.
+	# An offered lease remains cleanup-only until its complete response passes.
 	retain_suspension_cleanup_offer "$response"
-	if [[ -n "$expected_id" ]]; then
-		if ! parsed="$(proof_json suspension-prepare "$response" "$expected_id" "$prior_expiry")"; then
-			printf 'SUSPENSION_RENEWAL_UNCERTAIN expected=%s cleanup=exact-observed-only\n' "$expected_id" >&2
-			printf 'DEFERRED renewable preserve-only drain lease changed, regressed, or expired blockers=%s\n' \
-				"$suspension_blockers"
-			return 75
-		fi
-	elif ! parsed="$(proof_json suspension-prepare "$response")"; then
-		printf 'DEFERRED renewable preserve-only drain lease malformed or expired\n'
+	if ! parsed="$(proof_json suspension-prepare "$response")"; then
+		printf 'DEFERRED preserve-only drain lease malformed or expired\n'
 		return 75
 	fi
 	read -r suspension_state offered_lease offered_expiry suspension_active_count suspension_retry_after_ms _terminal_blocked suspension_blockers suspension_write_custody <<<"$parsed"
@@ -797,16 +786,19 @@ request_suspension() {
 }
 
 poll_suspension() {
-	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit
+	local release="$1" response params parsed observed_expiry _terminal_blocked rpc_exit category
+	local timeout_ms=5000 rpc_budget=5
 	params="$(proof suspension-lease-params "$held_suspension")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=params method=gateway.suspend.status exit=%s\n' "$?" >&2
 		return 1
 	}
-	response="$(run_gateway "$release" gateway call gateway.suspend.status \
-		--params "$params" --json --timeout 30000)" || {
+	response="$(OPENCLAW_TEAM_RPC_BUDGET="$rpc_budget" run_gateway "$release" gateway call gateway.suspend.status \
+		--params "$params" --json --timeout "$timeout_ms")" || {
 		rpc_exit=$?
+		category="$(proof_json suspension-poll-failure "$response" "$rpc_exit" 2>/dev/null)" || category=fatal
 		printf 'SUSPENSION_POLL_FAILED stage=rpc method=gateway.suspend.status exit=%s\n' "$rpc_exit" >&2
-		return "$rpc_exit"
+		[[ "$category" != retry ]] || return 76
+		return 1
 	}
 	parsed="$(proof_json suspension-status "$response" "$held_suspension" "$suspension_expiry")" || {
 		printf 'SUSPENSION_POLL_FAILED stage=proof method=gateway.suspend.status exit=%s\n' "$?" >&2
@@ -821,10 +813,14 @@ poll_suspension() {
 
 prepare_suspension() {
 	local release="$1" request request_id now_ms remaining_ms
-	local remaining_budget sleep_seconds renewal_wait retry_seconds poll_exit
+	local remaining_budget sleep_seconds retry_seconds poll_exit
 	if [[ ! "$drain_budget" =~ ^[1-9][0-9]*$ ]] || ((drain_budget > 3600)); then
 		fail 'preserve-only drain budget must be between 1 and 3600 seconds'
 		return 1
+	fi
+	if ((drain_budget > 30)); then
+		printf 'DRAIN_BUDGET_CAPPED requested=%s effective=30\n' "$drain_budget" >&2
+		drain_budget=30
 	fi
 	if [[ ! "$drain_poll_interval" =~ ^[1-9][0-9]*$ ]] || ((drain_poll_interval > 300)); then
 		fail 'preserve-only drain status poll interval must be between 1 and 300 seconds'
@@ -832,15 +828,14 @@ prepare_suspension() {
 	fi
 	suspension_release="$release"
 	((suspension_handoff_started == 0)) || [[ -z "$held_suspension" ]] || {
-		fail 'cannot prepare or renew an attempted suspension handoff'; return 1;
+		fail 'cannot prepare during an attempted suspension handoff'; return 1;
 	}
 	if [[ -z "$held_suspension" ]]; then
-		suspension_handoff_started=0; suspension_prearm_renewal_attempted=0; suspension_cleanup_only=0
+		suspension_handoff_started=0; suspension_cleanup_only=0
 	fi
 	drain_budget_elapsed=0
 	request_id="team-release-$$-$(date -u +%Y%m%dT%H%M%SZ)"
 	request="$(proof suspension-prepare-params "$request_id")" || return 1
-	suspension_request="$request"
 	drain_deadline=$((SECONDS + drain_budget))
 	if ! request_suspension "$release" "$request"; then
 		return 75
@@ -861,34 +856,14 @@ prepare_suspension() {
 		now_ms="$(proof suspension-now)" || return 1
 		remaining_ms=$((suspension_expiry - now_ms))
 		if ((remaining_ms <= 5000)); then
-			printf 'DEFERRED preserve-only Gateway drain lease expired before renewal blockers=%s\n' \
+			printf 'DEFERRED preserve-only Gateway drain lease expired before cutover blockers=%s\n' \
 				"$suspension_blockers"
 			return 75
-		fi
-		if ((remaining_ms <= 30000)); then
-			renewal_wait=$((3 - (SECONDS - last_suspension_prepare)))
-			if ((renewal_wait > 0)); then
-				if ((renewal_wait >= remaining_budget || remaining_ms <= (renewal_wait + 5) * 1000)); then
-					printf 'DEFERRED preserve-only Gateway drain cannot safely renew before its deadline blockers=%s\n' \
-						"$suspension_blockers"
-					return 75
-				fi
-				sleep "$renewal_wait"
-				continue
-			fi
-			if ! request_suspension "$release" "$request"; then
-				return 75
-			fi
-			continue
 		fi
 		retry_seconds=$(((suspension_retry_after_ms + 999) / 1000))
 		sleep_seconds="$drain_poll_interval"
 		if ((retry_seconds > sleep_seconds)); then
 			sleep_seconds="$retry_seconds"
-		fi
-		renewal_wait=$(((remaining_ms - 30000 + 999) / 1000))
-		if ((renewal_wait < sleep_seconds)); then
-			sleep_seconds="$renewal_wait"
 		fi
 		if ((sleep_seconds > remaining_budget)); then
 			sleep_seconds="$remaining_budget"
@@ -899,29 +874,35 @@ prepare_suspension() {
 		if ((SECONDS >= drain_deadline)); then
 			continue
 		fi
-		if poll_suspension "$release"; then
-			:
-		else
-			poll_exit=$?
-			# A deadline-owned timeout enters the same fresh lease/generation check as
-			# expiry between polls. Other failed observations never authorize interruption.
-			if ((poll_exit == 124 && SECONDS >= drain_deadline)); then continue; fi
-			if ((SECONDS >= drain_deadline)); then
-				printf 'DEFERRED preserve-only Gateway drain exceeded its %s-second budget blockers=%s\n' \
-					"$drain_budget" "$suspension_blockers"
-			else
+		retry_seconds=1
+		while true; do
+			if poll_suspension "$release"; then break; else poll_exit=$?; fi
+			if ((poll_exit != 76)); then
 				printf 'DEFERRED preserve-only Gateway drain status changed, expired, or became unavailable blockers=%s\n' \
 					"$suspension_blockers"
+				return 75
 			fi
-			return 75
-		fi
+			# Failed reads grant no authority. Deadline expiry still needs fresh lease,
+			# generation, and write-custody proof before any authorized interruption.
+			remaining_budget=$((drain_deadline - SECONDS))
+			((remaining_budget > 0)) || break
+			sleep_seconds="$retry_seconds"
+			if ((sleep_seconds > remaining_budget)); then sleep_seconds="$remaining_budget"; fi
+			printf 'SUSPENSION_POLL_RETRY backoffSeconds=%s remainingSeconds=%s\n' "$sleep_seconds" "$remaining_budget" >&2
+			sleep "$sleep_seconds"
+			((SECONDS < drain_deadline)) || break
+			now_ms="$(proof suspension-now)" || return 1
+			# Leave time for exact-lease cleanup; the drain lease cannot be renewed.
+			((suspension_expiry - now_ms > 5000)) || break
+			if ((retry_seconds < 4)); then retry_seconds=$((retry_seconds * 2)); fi
+		done
 	done
-	drain_deadline=0
+	custody_wait_deadline=$((drain_deadline + custody_wait_budget))
+	drain_deadline="$custody_wait_deadline"
 	if [[ "$suspension_state" != READY ]]; then
 		# Write custody is transient (a protected final chat write in flight), so a single
 		# refusal on custody alone wastes the whole prepared release. Re-poll for a bounded
 		# window while the only refusal is held custody; every other refusal stays final.
-		custody_wait_deadline=$((SECONDS + custody_wait_budget))
 		until check_suspension; do
 			if [[ "$suspension_state" == DRAINING && "$suspension_write_custody" == held ]] &&
 				{ [[ ",$suspension_blockers," != *,terminal-persistence:* ]] || ((${waive_terminal_persistence:-0})); } &&
@@ -949,6 +930,7 @@ prepare_suspension() {
 			return 75
 		done
 	fi
+	drain_deadline=0
 	if [[ "$suspension_state" == DRAINING ]]; then
 		printf 'INTERRUPTING authorized after %s-second graceful drain activeCount=%s blockers=%s custody=%s\n' \
 			"$drain_budget" "$suspension_active_count" "$suspension_blockers" "$suspension_write_custody"
@@ -993,24 +975,6 @@ arm_suspension_handoff() {
 	# Arming does not renew the lease. A refused or uncertain arm is resumed by the existing exit owner.
 	assert_protected_identity && assert_policy && check_suspension || return 1
 	printf 'HANDOFF_ARMED lease=%s expiresAtMs=%s pid=%s\n' "$held_suspension" "$suspension_expiry" "$suspension_pid"
-}
-
-renew_suspension_before_handoff() {
-	local now_ms
-	[[ -n "$held_suspension" && -n "$suspension_request" ]] &&
-		((suspension_handoff_started == 0 && suspension_prearm_renewal_attempted == 0)) || {
-		fail 'pre-arm renewal requires the original unarmed suspension request'; return 1;
-	}
-	recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation" || return 1
-	now_ms="$(proof suspension-now)" || return 1
-	((suspension_expiry > now_ms)) || { fail 'pre-arm renewal refuses an expired original suspension'; return 1; }
-	suspension_prearm_renewal_attempted=1
-	request_suspension "$suspension_release" "$suspension_request" || return 1
-	if ! recheck_generation "$suspension_scope" "$suspension_pid" "$suspension_generation"; then
-		suspension_cleanup_only=1
-		printf 'SUSPENSION_RENEWAL_UNCERTAIN stage=generation lease=%s expiresAtMs=%s cleanup=exact-observed-only\n' "$held_suspension" "$suspension_expiry" >&2
-		return 1
-	fi
 }
 
 resume_suspension() {
@@ -1125,9 +1089,10 @@ read_probe() {
 	local endpoint="$1" remaining response
 	remaining=$((verification_deadline - SECONDS))
 	((remaining > 0)) || return 1
+	if [[ -n "${2:-}" ]] && ((remaining > $2)); then remaining="$2"; fi
 	response="$(bounded "$remaining" "$curl_bin" --silent --show-error \
 		--connect-timeout "$remaining" --max-time "$remaining" --write-out $'\n%{http_code}' \
-		"http://127.0.0.1:$gateway_port/$endpoint")" || return 1
+		"http://127.0.0.1:$gateway_port/$endpoint")" || return "$?"
 	[[ "$response" == *$'\n'* ]] || return 1
 	probe_body="${response%$'\n'*}"
 	probe_status="${response##*$'\n'}"
@@ -1159,13 +1124,21 @@ verification_step() {
 verify_convergence() {
 	local release="$1" expected_info="$2" scope="${3:-system}" expected_build channels gateway_json
 	local observed_process health_json health_status startup_json startup_status ready_json ready_status
-	local convergence_state channel_state timeout_ms verification_result_started
+	local convergence_state channel_state timeout_ms verification_result_started listener_exit
 	local -a probe_args channel_args
 	cpu_degraded_waived=0
 	profile_convergence=""
 	expected_build="$(INFO_JSON="$expected_info" verification_step convergence.expected-build "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.INFO_JSON).buildId)')" || return 1
 	verification_step convergence.release proof validate-release "$release" "$(basename "$release")" "$root_uid" sealed >/dev/null || return 1
-	verification_step convergence.generation capture_generation "$scope" || return 1
+	verification_step convergence.generation capture_service_generation "$scope" || return 1
+	if assert_single_listener "$service_pid"; then :; else
+		listener_exit=$?
+		# An empty socket table is normal while this bound generation starts.
+		((listener_exit == 75)) && return 75
+		verification_failure convergence.generation "$listener_exit" "$SECONDS" invalid-listener
+		fail 'Gateway does not own one exact loopback listener'
+		return 1
+	fi
 	verified_pid="$service_pid"
 	verified_generation="$service_generation"
 	if [[ "$scope" == system ]]; then
@@ -1238,9 +1211,56 @@ process.stdout.write(processInfo.processInstanceId);
 	return 0
 }
 
+wait_for_marker_readiness() {
+	local release="$1" scope="$2" startup_json startup_status readiness_state
+	local remaining timeout_ms observed_process pause probe_exit
+	while :; do
+		verification_step marker.readiness-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-budget test "$remaining" -gt 0 || return 1
+		readiness_state=RECOVERING
+		probe_exit=0
+		verification_step marker.startupz read_probe startupz 10 || probe_exit=$?
+		if ((probe_exit == 0)); then
+			startup_json="$probe_body"; startup_status="$probe_status"
+			verification_step marker.readyz read_probe readyz 10 || probe_exit=$?
+			if ((probe_exit == 0)); then
+				readiness_state="$(verification_step marker.readiness proof marker-readiness "$startup_json" "$startup_status" "$probe_body" "$probe_status")" || return 1
+			fi
+		fi
+		# curl connection/timeout and the outer process deadline report no snapshot.
+		if ((probe_exit != 0)); then
+			[[ "$probe_exit" == 7 || "$probe_exit" == 28 || "$probe_exit" == 124 ]] || return "$probe_exit"
+		fi
+		case "$readiness_state" in
+		READY)
+			timeout_ms=$(((verification_deadline - SECONDS) * 1000)); ((timeout_ms <= 10000)) || timeout_ms=10000
+			verification_step marker.readiness-rpc-budget test "$timeout_ms" -gt 0 || return 1
+			probe_exit=0
+			observed_process="$(verification_step marker.readiness-rpc run_marker_rpc "$release" system.info '{}' "$timeout_ms")" || probe_exit=$?
+			if ((probe_exit == 0)); then
+				PROCESS_JSON="$observed_process" EXPECTED_PID="$verified_pid" EXPECTED_INSTANCE="$verified_instance" verification_step marker.readiness-process "$node_bin" -e '
+const p=JSON.parse(process.env.PROCESS_JSON);
+if(p.pid!==Number(process.env.EXPECTED_PID)||p.processInstanceId!==process.env.EXPECTED_INSTANCE)process.exit(2);
+' || return 1
+				verification_step marker.readiness-generation-after recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
+				return 0
+			fi
+			[[ "$probe_exit" == 78 && "$observed_process" == RETRYABLE_READINESS_TRANSPORT ]] || return "$probe_exit"
+			;;
+		RECOVERING) ;;
+		*) return 1 ;;
+		esac
+		remaining=$((verification_deadline - SECONDS))
+		verification_step marker.readiness-pause-budget test "$remaining" -gt 0 || return 1
+		pause=3; ((pause <= remaining)) || pause="$remaining"
+		verification_step marker.readiness-pause bounded "$remaining" sleep "$pause" || return 1
+	done
+}
+
 verify_marker() {
 	local release="$1" scope="${2:-system}"
-	local marker session approvals_before approvals_after reply expected_model payload run_id terminal_state
+	local marker session approvals_before approvals_after reply payload run_id terminal_state marker_policy
 	local observed_process timeout_ms remaining observation_pause observation_pause_ms observation_exit
 	# Logical entries may retire while their exact transcript generation stays preserved.
 	printf '%s' "$session_witness" | verification_step marker.session-preservation proof session-preservation-verify "$release" "$release" "$state_database" >/dev/null || return 1
@@ -1251,10 +1271,18 @@ verify_marker() {
 		fail 'verification session already has approval history'
 		return 1
 	}
+	marker_policy="$(verification_step marker.model-policy run_gateway_node --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const [release, raw] = process.argv.slice(1), policy = JSON.parse(raw);
+const { splitTrailingAuthProfile } = await import(pathToFileURL(`${release}/dist/plugin-sdk/model-ref-parse.js`).href);
+process.stdout.write(JSON.stringify({model:splitTrailingAuthProfile(policy.model).model,
+  fallbacks:policy.fallbacks.map(value=>splitTrailingAuthProfile(value).model)}));
+' "$release" "$policy_identity")" || return 1
+	wait_for_marker_readiness "$release" "$scope" || return 1
 	remaining=$((verification_deadline - SECONDS))
 	verification_step marker.run-budget test "$remaining" -gt 0 || return 1
 	# Native ACK plus same-run observations keep proof independent of one long-lived
-	# response socket. Never redispatch a run when acknowledgment or observation fails.
+	# response socket; the native idempotency key also reconciles a lost ACK.
 	payload="$(MARKER="$marker" SESSION="$session" REMAINING="$remaining" "$node_bin" -e '
 const session=process.env.SESSION,agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
 process.stdout.write(JSON.stringify({agentId,sessionId:session,
@@ -1262,29 +1290,33 @@ process.stdout.write(JSON.stringify({agentId,sessionId:session,
   message:`Output only this exact string, byte-for-byte, with no prefix or suffix: ${process.env.MARKER}`,
   timeout:Number(process.env.REMAINING),idempotencyKey:require("node:crypto").randomUUID()}));
 ')" || return 1
-	# Readiness probes can pass while startup still inspects an agent store (the listener
-	# serves before store validation). That refusal is pre-dispatch, so the identical
-	# payload is re-sent until the agent admits it or the verification budget ends.
+	# Native idempotency owns uncertain dispatch: reconcile only with the identical
+	# payload and live readiness, never mint another run or renew this deadline.
 	while :; do
 		timeout_ms=$((remaining * 1000)); ((timeout_ms <= 60000)) || timeout_ms=60000
 		observation_exit=0
 		reply="$(verification_step marker.run run_marker_rpc "$release" agent "$payload" "$timeout_ms")" || observation_exit=$?
 		((observation_exit == 0)) && break
-		[[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] || return "$observation_exit"
+		{ [[ "$observation_exit" == 76 && "$reply" == RETRYABLE_ADMISSION_PENDING ]] ||
+			[[ "$observation_exit" == 77 && "$reply" == RETRYABLE_DISPATCH_TIMEOUT ]]; } || return "$observation_exit"
 		verification_step marker.admission-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
-		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required\n' >&2
+		printf 'MARKER_ADMISSION_RETRY same-payload=required same-generation=required exit=%s\n' "$observation_exit" >&2
 		remaining=$((verification_deadline - SECONDS))
 		verification_step marker.admission-budget test "$remaining" -gt 3 || return 1
 		verification_step marker.admission-pause bounded "$remaining" sleep 3 || return 1
+		wait_for_marker_readiness "$release" "$scope" || return 1
 		remaining=$((verification_deadline - SECONDS))
 	done
-	run_id="$(REPLY_JSON="$reply" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
+	run_id="$(REPLY_JSON="$reply" REQUEST_JSON="$payload" SESSION="$session" verification_step marker.accepted "$node_bin" -e '
 const reply=JSON.parse(process.env.REPLY_JSON),agentId=JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent;
-if(reply.status!=="accepted"||typeof reply.runId!=="string"||!reply.runId.trim()||reply.agentId!==agentId||
-  reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)process.exit(2);
+if(reply.runId!==JSON.parse(process.env.REQUEST_JSON).idempotencyKey)process.exit(2);
+// Native replay can acknowledge an in-flight reservation or return its terminal cache.
+if(!["accepted","in_flight","ok"].includes(reply.status)||
+  (reply.agentId!==undefined&&reply.agentId!==agentId)||
+  (reply.sessionKey!==undefined&&reply.sessionKey!==`agent:${agentId}:explicit:${process.env.SESSION.toLowerCase()}`)||
+  (reply.status==="accepted"&&(reply.agentId!==agentId||reply.sessionKey===undefined)))process.exit(2);
 process.stdout.write(reply.runId);
 ')" || return 1
-	expected_model="$(POLICY_JSON="$policy_identity" verification_step marker.expected-model "$node_bin" -e 'process.stdout.write(JSON.parse(process.env.POLICY_JSON).model)')" || return 1
 	while :; do
 		verification_step marker.wait-generation recheck_generation "$scope" "$verified_pid" "$verified_generation" || return 1
 		remaining=$((verification_deadline - SECONDS))
@@ -1301,8 +1333,8 @@ process.stdout.write(reply.runId);
 			[[ "$observation_exit" == 75 && "$reply" == RETRYABLE_OBSERVATION_TRANSPORT ]] || return "$observation_exit"
 			printf 'MARKER_OBSERVATION_RETRY same-run=required same-generation=required\n' >&2
 		else
-			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" EXPECTED_MODEL="$expected_model" verification_step marker.reply-check "$node_bin" -e '
-const r=JSON.parse(process.env.REPLY_JSON), receipt=r.terminalReceipt;
+			terminal_state="$(REPLY_JSON="$reply" RUN_ID="$run_id" SESSION="$session" EXPECTED_REPLY="$marker" POLICY_JSON="$marker_policy" verification_step marker.reply-check "$node_bin" -e '
+const r=JSON.parse(process.env.REPLY_JSON), receipt=r.terminalReceipt, policy=JSON.parse(process.env.POLICY_JSON);
 // A length stop can omit the visible truncation notice from terminalReply.
 if(r.runId!==process.env.RUN_ID||r.error||r.pendingError===true||
   (r.stopReason!==undefined&&r.stopReason!=="stop"))process.exit(2);
@@ -1312,7 +1344,8 @@ if((r.status==="pending"||r.status==="timeout")&&!r.endedAt&&!receipt&&!r.termin
   if(r.status!=="ok"||r.pendingError===true||r.terminalReply?.disposition!=="visible"||
     r.terminalReply.text!==process.env.EXPECTED_REPLY||receipt?.runId!==process.env.RUN_ID||
     receipt.sessionId!==process.env.SESSION||typeof receipt.turnId!=="string"||!receipt.turnId.trim()||
-    receipt.terminalDisposition!=="visible"||receipt.effective?.provider+"/"+receipt.effective?.model!==process.env.EXPECTED_MODEL)process.exit(2);
+    receipt.terminalDisposition!=="visible"||receipt.requested?.provider+"/"+receipt.requested?.model!==policy.model||
+    ![policy.model,...policy.fallbacks].includes(receipt.effective?.provider+"/"+receipt.effective?.model))process.exit(2);
   process.stdout.write("VERIFIED");
 }
 ')" || return 1
@@ -1356,7 +1389,7 @@ load_journal_witness() {
 }
 
 wait_for_live() {
-	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline
+	local release="$1" expected_info="$2" scope="${3:-system}" sleep_seconds verification_deadline convergence_exit listener_wait_logged=0
 	local verification_owned_pid="${4:-}" verification_owned_generation="${5:-}" verification_owned_scope="$scope"
 	local +x cpu_degraded_waived=0
 	# Descriptor-less legacy recovery and no-journal checks can prove only fresh current state.
@@ -1379,6 +1412,12 @@ wait_for_live() {
 					"$(basename "$release")" "$verified_pid" "$verified_generation" "$scope" >&2
 			fi
 			return 0
+		else
+			convergence_exit=$?
+			if ((convergence_exit == 75 && listener_wait_logged == 0)); then
+				printf 'VERIFICATION_WAITING stage=convergence.listener outcome=not-bound\n' >&2
+				listener_wait_logged=1
+			fi
 		fi
 		sleep_seconds="${OPENCLAW_TEAM_RETRY_SECONDS:-2}"
 		((SECONDS < verification_deadline)) || break
@@ -2869,9 +2908,6 @@ cleanup_candidate_failure() {
 	if [[ -n "${candidate_build_identity:-}" && -e "$candidate_build_path" ]]; then
 		clean_candidate "$candidate_build_path" "$work_root" "$deploy_file_uid" "$deploy_gid" "$candidate_build_identity" || exit_code=1
 	fi
-	if [[ -n "${candidate_cache_identity:-}" && -e "$candidate_cache_path" ]]; then
-		clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity" || exit_code=1
-	fi
 	exit "$exit_code"
 }
 
@@ -2892,30 +2928,27 @@ publish_release() (
 	local published="$releases_root/$target_sha" origin_after published_info
 	candidate_build_path="$build_directory"
 	candidate_staging_path="$staging"
-	candidate_cache_path="$build_home/cache/$target_sha.$$"
 	candidate_build_identity=""
 	candidate_staging_identity=""
-	candidate_cache_identity=""
 	if [[ -e "$published" ]]; then
 		published_info="$(proof validate-release "$published" "$target_sha" "$root_uid" sealed)"
 		proof release-capacity activate "$published" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
-		bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$published"
 		prewarm_release "$published"
 		printf '%s\n' "$published_info"
 		return 0
 	fi
-	[[ ! -e "$build_directory" && ! -e "$staging" && ! -e "$candidate_cache_path" && ! -L "$candidate_cache_path" ]] || fail 'candidate path already exists'
+	[[ ! -e "$build_directory" && ! -e "$staging" ]] || fail 'candidate path already exists'
 	proof release-capacity build "$reference_release" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	trap 'cleanup_candidate_failure "$?"' EXIT
 	run_build mkdir -m 0700 -- "$build_directory"
 	candidate_build_identity="$(proof stat-identity "$build_directory")"
-	run_build mkdir -m 0700 -- "$candidate_cache_path"
-	candidate_cache_identity="$(proof stat-identity "$candidate_cache_path")"
-	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$candidate_cache_path/store" "PNPM_HOME=$candidate_cache_path/pnpm" "XDG_CACHE_HOME=$candidate_cache_path/metadata")
-	bounded_build "$clone_budget" git "${mirror_git_config[@]}" clone --no-local --no-hardlinks --no-checkout \
-		"file://$mirror" "$build_directory" >&2
+	# pnpm owns content integrity and pruning; imports must never share writable store inodes.
+	local cache_environment=(env "PNPM_CONFIG_STORE_DIR=$build_home/cache/store" "BUILD_ALL_CACHE_ROOT=$build_home/cache/build-artifacts" PNPM_CONFIG_PACKAGE_IMPORT_METHOD=clone-or-copy PNPM_CONFIG_VERIFY_STORE_INTEGRITY=true)
+	run_build git init "$build_directory" >&2
+	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" fetch --depth=1 --no-tags \
+		"file://$mirror" "$target_sha" >&2
 	bounded_build "$clone_budget" git "${mirror_git_config[@]}" -C "$build_directory" checkout --detach "$target_sha" >&2
-	run_build git -C "$build_directory" remote set-url origin "$official_origin" >&2
+	run_build git -C "$build_directory" remote add origin "$official_origin" >&2
 	origin_after="$(run_build git -C "$build_directory" remote get-url origin)"
 	[[ "$origin_after" == "$official_origin" &&
 		"$(run_build git -C "$build_directory" rev-parse HEAD)" == "$target_sha" &&
@@ -2926,16 +2959,13 @@ publish_release() (
 	bounded_build "$build_budget" "${cache_environment[@]}" env NODE_OPTIONS=--max-old-space-size=24576 OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
 		pnpm -C "$build_directory" build >&2
 	proof validate-release "$build_directory" "$target_sha" "$root_uid" candidate >/dev/null
-	# Every runtime symlink is release-local; installed hardlinks/reflinks survive cache unlink.
-	clean_candidate "$candidate_cache_path" "$build_home/cache" "$deploy_file_uid" "$deploy_gid" "$candidate_cache_identity"
-	candidate_cache_identity=""
 	proof release-capacity stage "$build_directory" "$mirror" "$build_home" "$serving_root" "$runtime_home" >&2
 	install -d -m 0700 "$staging"
 	candidate_staging_identity="$(proof stat-identity "$staging")"
-	cp -a "$build_directory/." "$staging"
+	cp -a --reflink=auto "$build_directory/." "$staging"
 	chown -hR "$root_uid:$root_uid" "$staging"
 	proof manifest "$staging" "$target_sha" "$root_uid" "$frozen_main" >/dev/null
-	bounded 120 "$node_bin" --no-warnings "$release_lib" seal-tree "$staging"
+	"$node_bin" --no-warnings "$release_lib" seal-tree "$staging" 8>&- 9>&-
 	proof validate-release "$staging" "$target_sha" "$root_uid" sealed >/dev/null
 	[[ "$(proof stat-identity "$staging" | cut -d' ' -f1)" == "$(proof stat-identity "$releases_root" | cut -d' ' -f1)" ]] ||
 		fail 'candidate publication crosses filesystem devices'
@@ -3057,16 +3087,22 @@ activate_release() {
 	# its admitted predecessor through the ordinary activation owner.
 	old_instance="$(read_process_instance "$previous_release" "$old_pid")"
 	assert_frozen_predecessor "$old_instance"
+	# Sealed release audits belong before admission closes; the deployment lock
+	# excludes other pointer writers while the Gateway cannot modify these trees.
+	if [[ -L "$current_link" ]]; then
+		prior_current_sha="$(read_pointer "$current_link")" || return 1
+		prior_current_sha="${prior_current_sha##*/}"
+	fi
+	if [[ -L "$previous_link" ]]; then
+		prior_previous_sha="$(read_pointer "$previous_link")" || return 1
+		prior_previous_sha="${prior_previous_sha##*/}"
+	fi
 	suspension_instance="$old_instance"
 	if prepare_suspension "$previous_release"; then
 		:
 	else
 		suspension_result=$?
 		return "$suspension_result"
-	fi
-	if ! check_suspension; then
-		printf 'DEFERRED preserved Gateway suspension changed before activation\n'
-		return 75
 	fi
 	assert_protected_identity
 	assert_policy
@@ -3076,13 +3112,12 @@ activate_release() {
 		printf 'DEFERRED preserved Gateway suspension expired during compatibility proof\n'
 		return 75
 	fi
-	if [[ -L "$current_link" ]]; then
-		prior_current_sha="$(basename "$(read_pointer "$current_link")")"
-		[[ "$prior_current_sha" == "$predecessor_sha" ]] ||
+	if [[ "$prior_current_sha" != absent || -L "$current_link" ]]; then
+		[[ "$prior_current_sha" == "$predecessor_sha" && -L "$current_link" &&
+			"$(realpath "$current_link")" == "$previous_release" ]] || {
 			fail 'current release changed before journal publication'
-	fi
-	if [[ -L "$previous_link" ]]; then
-		prior_previous_sha="$(basename "$(read_pointer "$previous_link")")"
+			return 1
+		}
 	fi
 	set -- "$journal_file" "$previous_info" "$candidate_info" "$topology" \
 		"$old_pid" "$old_generation" "$old_instance" "$protected_identity" \
@@ -3895,12 +3930,21 @@ fi
 
 exec 9>"$lock_file"
 flock -n 9 || {
-		if [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
+	if [[ "$mode" == deploy ]]; then
+		# Maintenance joins its descendants under this same lock; let it settle.
+		printf 'DEPLOY_LOCK_WAIT waiting up to 180 seconds for deployment or maintenance\n'
+		flock -w 180 -E 75 9 || {
+			lock_exit=$?
+			printf 'DEPLOY_LOCK_UNAVAILABLE exit=%s; retry after the current owner finishes\n' "$lock_exit" >&2
+			exit "$lock_exit"
+		}
+	elif [[ "$mode" == operator-restart || "$mode" == guard-install || "$mode" == steady-profile || "$mode" == worker-config || "$mode" == runtime || "$mode" == prepare-release || "$mode" == continue-frozen || "$mode" == handoff-* || -n "$reconcile_config_hash" || "$start_stopped_current" == 1 ]]; then
 		fail 'bound maintenance action refused: canonical deployment lock is busy'
 		exit 1
+	else
+		printf 'SKIP another release deployment is running\n'
+		exit 0
 	fi
-	printf 'SKIP another release deployment is running\n'
-	exit 0
 }
 proof maintenance-idle "$ancestor_boundary" >/dev/null ||
 	fail 'scheduled maintenance has not settled; deployment admission refused'

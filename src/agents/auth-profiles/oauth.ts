@@ -10,13 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseSecretRef } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
-import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
-import {
-  formatProviderAuthProfileApiKeyWithPlugin,
-  resolveProviderOAuthCredentialWithPlugin,
-  resolveProviderOAuthRefreshCapabilityWithPlugin,
-} from "../../plugins/provider-runtime.runtime.js";
 import { secretRefKey } from "../../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
 import {
@@ -32,8 +25,8 @@ import {
   resolveTokenExpiryState,
 } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { refreshOAuthCredential } from "./oauth-provider-operations.js";
 import {
   OAuthManagerRefreshError,
   isSettledOAuthRefreshFailure,
@@ -51,11 +44,11 @@ import {
 import { getSetupCredentialRuntimeProfile, isSetupCredentialAccessible } from "./setup-access.js";
 import {
   loadAuthProfileStoreForRuntimeAsync,
+  prepareAuthProfileCredentialRead,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "./store-runtime.js";
+import { resolveRuntimeAuthProfileAgentDir } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 
 function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
@@ -81,19 +74,22 @@ type ResolveApiKeyForProfileResult = {
   profileId: string;
   profileType: AuthProfileCredential["type"];
   credential?: AuthProfileCredential;
+  /** Retained credential authority; null denotes a runtime-only credential. */
+  readCurrentCredential: (() => AuthProfileCredential | undefined) | null;
 };
 
 function buildApiKeyProfileResult(
-  params: ResolveApiKeyForProfileResult,
+  params: Omit<ResolveApiKeyForProfileResult, "readCurrentCredential"> &
+    Partial<Pick<ResolveApiKeyForProfileResult, "readCurrentCredential">>,
 ): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
     provider: params.provider,
     email: params.email,
   };
-  for (const key of ["profileId", "profileType", "credential"] as const) {
+  for (const key of ["profileId", "profileType", "credential", "readCurrentCredential"] as const) {
     Object.defineProperty(result, key, {
-      value: params[key],
+      value: key === "readCurrentCredential" ? (params[key] ?? null) : params[key],
       enumerable: false,
     });
   }
@@ -124,32 +120,6 @@ type ResolveApiKeyForProfileParams = {
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-async function refreshOAuthCredential(
-  credential: OAuthCredential,
-  context: { cfg?: OpenClawConfig } = {},
-): Promise<OAuthCredentials | null> {
-  const pluginResult = await resolveProviderOAuthCredentialWithPlugin({
-    provider: credential.provider,
-    config: context.cfg,
-    credential,
-    refresh: true,
-  });
-  if (pluginResult.status === "available") {
-    return pluginResult.credential;
-  }
-  if (pluginResult.status === "configured-unavailable") {
-    throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-  }
-
-  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
-    return null;
-  }
-  const result = await getOAuthApiKey(credential.provider, {
-    [credential.provider]: credential,
-  });
-  return result?.newCredentials ?? null;
-}
-
 /** Refresh one OAuth credential and merge provider-returned token fields. */
 export async function refreshOAuthCredentialForRuntime(params: {
   credential: OAuthCredential;
@@ -165,31 +135,7 @@ export async function refreshOAuthCredentialForRuntime(params: {
     : null;
 }
 
-const oauthManager = createOAuthManager({
-  async buildApiKey(provider, credentials, context) {
-    const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
-      provider,
-      config: context.cfg,
-      context: credentials,
-    });
-    return typeof formatted === "string" && formatted.length > 0 ? formatted : credentials.access;
-  },
-  refreshCredential: refreshOAuthCredential,
-  async canRefreshCredential(credential, context) {
-    const pluginCapability = await resolveProviderOAuthRefreshCapabilityWithPlugin({
-      provider: credential.provider,
-      config: context.cfg,
-    });
-    if (pluginCapability.status === "available") {
-      return true;
-    }
-    if (pluginCapability.status === "configured-unavailable") {
-      throw new OAuthProviderConfiguredUnavailableError(credential.provider);
-    }
-    return OAUTH_PROVIDER_IDS.has(credential.provider);
-  },
-  readBootstrapCredential: readExternalCliBootstrapCredential,
-});
+const oauthManager = createOAuthManager();
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
@@ -203,6 +149,10 @@ async function resolveOAuthProfileAccess(
   credential: OAuthCredential,
   personalStore?: PersonalAuthProfileStore,
 ): Promise<ResolveApiKeyForProfileResult | null> {
+  const readCurrentCredential =
+    !personalStore && credential.authFlow === "chatgpt-token-sharing"
+      ? await prepareAuthProfileCredentialRead(params)
+      : null;
   const resolved = await oauthManager.resolveOAuthAccess({
     personalStore,
     store: params.store,
@@ -222,6 +172,7 @@ async function resolveOAuthProfileAccess(
         profileId: params.profileId,
         profileType: credential.type,
         credential: resolved.credential,
+        readCurrentCredential: personalStore?.readCurrentCredential ?? readCurrentCredential,
       })
     : null;
 }
@@ -311,12 +262,14 @@ function resolveRuntimeAuthProfile(params: {
 export async function resolveApiKeyForProfile(
   params: ResolveApiKeyForProfileParams,
 ): Promise<ResolveApiKeyForProfileResult | null> {
+  // Credential and degraded-owner lookups must share the store read's bounded auth scope.
+  const scopedParams = { ...params, agentDir: resolveRuntimeAuthProfileAgentDir(params.agentDir) };
   params.signal?.throwIfAborted();
   const resolved = isUserModelAuthProfileId(params.profileId)
     ? ((await withPersonalAuthProfileStore(params.profileId, (owner) =>
-        resolveApiKeyForProfileOwned(params, owner),
+        resolveApiKeyForProfileOwned(scopedParams, owner),
       )) ?? null)
-    : await resolveApiKeyForProfileOwned(params);
+    : await resolveApiKeyForProfileOwned(scopedParams);
   params.signal?.throwIfAborted();
   return resolved;
 }
@@ -411,6 +364,7 @@ async function resolveApiKeyForProfileOwned(
       email: cred.email,
       profileId,
       profileType: cred.type,
+      readCurrentCredential: personalStore?.readCurrentCredential,
     });
   }
 

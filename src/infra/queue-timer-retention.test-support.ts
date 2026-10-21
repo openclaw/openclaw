@@ -103,6 +103,14 @@ async function timerFixture(): Promise<Fixture> {
       }
     },
   });
+  const trackTimers = async (run: () => unknown) => {
+    hook.enable();
+    try {
+      return await completedCaller(run);
+    } finally {
+      hook.disable();
+    }
+  };
   const assertAlive = () => {
     assert.ok(
       timers.some((timer) => timer.deref()),
@@ -111,23 +119,17 @@ async function timerFixture(): Promise<Fixture> {
   };
   if (resource === "terminal") {
     let uploadedPath = "";
-    hook.enable();
-    let references: WeakRef<object>[];
-    try {
-      references = await completedCaller(async () => {
-        const uploaded = await stageTerminalUpload(
-          {
-            name: "retention.txt",
-            contentBase64: Buffer.from("retention fixture").toString("base64"),
-            assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
-          },
-          { tempRoot: root },
-        );
-        uploadedPath = uploaded.path;
-      });
-    } finally {
-      hook.disable();
-    }
+    const references = await trackTimers(async () => {
+      const uploaded = await stageTerminalUpload(
+        {
+          name: "retention.txt",
+          contentBase64: Buffer.from("retention fixture").toString("base64"),
+          assertCommitAllowed: () => assert.equal(context.getStore()?.label, resource),
+        },
+        { tempRoot: root },
+      );
+      uploadedPath = uploaded.path;
+    });
     return {
       references,
       assertAlive,
@@ -144,15 +146,9 @@ async function timerFixture(): Promise<Fixture> {
   }
   assert.equal(resource, "wake");
   const dispose = setSessionEventWakeHandler(async () => ({ status: "ran", durationMs: 0 }));
-  hook.enable();
-  let references: WeakRef<object>[];
-  try {
-    references = await completedCaller(() => {
-      requestSessionEventWake({ source: "other", intent: "event", coalesceMs: 120_000 });
-    });
-  } finally {
-    hook.disable();
-  }
+  const references = await trackTimers(() => {
+    requestSessionEventWake({ source: "other", intent: "event", coalesceMs: 120_000 });
+  });
   return {
     references,
     assertAlive,

@@ -21,15 +21,21 @@ import { listRouteBindings } from "../../config/bindings.js";
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
+import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import {
   normalizeAccountId,
   normalizeAgentId,
+  parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../routing/session-key.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { listChannelSupportedActionsSteps } from "../channel-tools.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
@@ -39,7 +45,8 @@ export type MessageToolDiscoveryParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  currentPromptReaction?: boolean;
+  /** Stable source capability, independent of the current turn's authority. */
+  supportsPromptReactions?: boolean;
   currentAccountId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -172,10 +179,31 @@ function inferDeliveryFromSessionKey(
   };
 }
 
+/** Dashboard ingress stays local even when delivery resolves to an external conversation. */
+export function supportsMessageToolPromptReactions(options?: MessageToolCurrentContextOptions) {
+  return (
+    parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:") ||
+    normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
+  );
+}
+
 export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions) {
   return projectCurrentChannelContext(
     options,
     inferDeliveryFromSessionKey(options?.agentSessionKey),
+  );
+}
+
+/** Use the message tool's effective route and target defaulting for reply guidance. */
+export function hasMessageToolSourceConversation(
+  options?: MessageToolCurrentContextOptions,
+): boolean {
+  const context = resolveEffectiveCurrentChannelContext(options);
+  const channel = normalizeMessageChannel(context.currentChannelProvider);
+  return Boolean(
+    channel &&
+    isDeliverableMessageChannel(channel) &&
+    resolveImplicitMessageActionTarget(context, "send"),
   );
 }
 
@@ -339,7 +367,7 @@ function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<string[]> {
   const discoveredActions = yield* resolveMessageToolSchemaActionsSteps(params);
-  if (params.currentPromptReaction && !discoveredActions.includes("react")) {
+  if (params.supportsPromptReactions && !discoveredActions.includes("react")) {
     discoveredActions.push("react");
   }
   const allowedActions = resolveAllowedMessageActions({
@@ -437,7 +465,7 @@ function* buildMessageToolSchemaSteps(
     includeDeliveryPin,
     includeBestEffort,
     extraProperties:
-      params.currentPromptReaction && actions.includes("react")
+      params.supportsPromptReactions && actions.includes("react")
         ? {
             ...extraProperties,
             emoji: Type.Optional(

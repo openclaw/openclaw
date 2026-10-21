@@ -8,18 +8,16 @@ import { preparePersonalGitHubSessionReceiptDeletion } from "../../state/github-
 import type { GitHubSessionReceiptGeneration } from "../../state/github-publication-read.types.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import type { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 
-export type IncognitoDeletionSource = Pick<
-  IncognitoAgentDatabaseExecution,
-  "agentId" | "path" | "assertCurrent"
-> & {
-  sessions: Pick<IncognitoAgentDatabaseExecution["sessions"], "captureSnapshot" | "readSharing">;
-};
+export type MemorySessionDeletionSource = Pick<
+  ReturnType<typeof memorySessionActorOwners.get>,
+  "agentId" | "path" | "assertCurrent" | "readSession"
+>;
 
 type ReceiptDeletionSource =
-  | { actor: IncognitoDeletionSource }
+  | { memory: MemorySessionDeletionSource }
   | {
       databaseOptions: OpenClawAgentDatabaseOptions & { agentId: string };
       database: DatabasePathIdentity;
@@ -29,13 +27,12 @@ export type SessionReceiptDeletionGeneration = GitHubSessionReceiptGeneration & 
 
 export function pinSqliteSessionReceiptDeletionDatabase(
   databaseOptions: OpenClawAgentDatabaseOptions & { agentId: string },
-  actor?: IncognitoDeletionSource,
+  memory?: MemorySessionDeletionSource,
 ): ReceiptDeletionSource | undefined {
-  if (actor) {
-    return { actor };
+  if (memory) {
+    return { memory };
   }
-  // Native-only scopes (incognito paths, maintenance authority) cannot be read off the main
-  // thread and may not be regular files; their deletions keep main's receipt behavior.
+  // Explicit native maintenance may not select a regular file.
   if (!supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
     return undefined;
   }
@@ -115,8 +112,8 @@ export async function prepareSqliteSessionReceiptDeletions(
       }
       const assertSourceCurrent = () => {
         assertRepositoryCurrent();
-        if ("actor" in source) {
-          source.actor.assertCurrent();
+        if ("memory" in source) {
+          source.memory.assertCurrent();
         } else {
           const { database } = source;
           assertExistingDatabaseIdentity(database.canonicalPath, database.key, database.birthtime);
@@ -124,10 +121,14 @@ export async function prepareSqliteSessionReceiptDeletions(
       };
       const sessionKeys = receiptOnlyTargets.map((target) => target.sessionKey);
       const readPresentKeys = async (): Promise<Set<string>> => {
-        if ("actor" in source) {
+        if ("memory" in source) {
           return new Set(
             sessionKeys.filter(
-              (sessionKey) => source.actor.sessions.readSharing(sessionKey)?.entry,
+              (sessionKey) =>
+                source.memory.readSession(sessionKey, {
+                  assertCurrent: assertSourceCurrent,
+                  authorize() {},
+                })?.entry,
             ),
           );
         }

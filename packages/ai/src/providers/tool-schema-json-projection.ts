@@ -1,4 +1,6 @@
 import { types as utilTypes } from "node:util";
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { SCHEMA_MAP_KEYS } from "./schema-walk.js";
 import {
@@ -10,6 +12,7 @@ import {
   type ToolSchemaPosition,
 } from "./tool-schema-depth.js";
 import type { PreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
+import { SCHEMA_LITERAL_KEYS } from "./tool-schema-refs.js";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
@@ -25,6 +28,61 @@ export type RuntimeToolInputSchemaProjection = {
   readonly schema: RuntimeToolInputSchemaJson;
   readonly violations: readonly string[];
 };
+
+type PublishedRuntimeToolInputSchema = {
+  readonly projection: RuntimeToolInputSchemaProjection;
+  readonly json: string;
+  readonly fingerprint: string;
+  readonly canonicalFingerprint: string;
+};
+
+const publishedSchemas = new WeakMap<object, PublishedRuntimeToolInputSchema>();
+
+export function getPublishedRuntimeToolInputSchema(
+  schema: unknown,
+): PublishedRuntimeToolInputSchema | undefined {
+  return schema !== null && typeof schema === "object" ? publishedSchemas.get(schema) : undefined;
+}
+
+/** Only an owner's detached JSON publication can bypass later schema traversals. */
+export function publishRuntimeToolInputSchema(
+  schema: unknown,
+  path = "parameters",
+  toolName?: string,
+): RuntimeToolInputSchemaProjection {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    return projectRuntimeToolInputSchema(schema, path, toolName);
+  }
+  let json = "";
+  const projection = projectToolInputSchema(schema, path, (text) => (json = text), toolName);
+  if (projection.violations.length > 0 || !isJsonObject(projection.schema)) {
+    return projection;
+  }
+  inheritToolSchemaTruncation(schema, projection.schema);
+  const pending: RuntimeToolInputSchemaJson[] = [projection.schema];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) {
+        pending.push(child);
+      }
+      Object.freeze(value);
+    }
+  }
+  Object.freeze(projection.violations);
+  Object.freeze(projection);
+  publishedSchemas.set(
+    projection.schema,
+    Object.freeze({
+      projection,
+      json,
+      fingerprint: sha256Hex(json),
+      canonicalFingerprint: sha256Hex(stableStringify(projection.schema)),
+    }),
+  );
+  return projection;
+}
 
 function isNonFiniteNumberValue(value: unknown): boolean {
   if (typeof value === "number") {
@@ -133,12 +191,13 @@ function inspectJsonSchema(
   schema: RuntimeToolInputSchemaJson,
   path: (string | number)[],
   violations: string[],
+  inspectKeywords = true,
 ): boolean {
   if (Array.isArray(schema)) {
     let index = 0;
     for (const entry of schema) {
       path.push("[", index++, "]");
-      const valid = inspectJsonSchema(entry, path, violations);
+      const valid = inspectJsonSchema(entry, path, violations, inspectKeywords);
       path.length -= 3;
       if (!valid) {
         return false;
@@ -151,9 +210,11 @@ function inspectJsonSchema(
     // through the stringify replacer's non-finite number check.
     return typeof schema !== "number" || Number.isFinite(schema);
   }
-  for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
-    if (key in schema) {
-      violations.push(`${path.join("")}.${key}`);
+  if (inspectKeywords) {
+    for (const key of ["$dynamicRef", "$dynamicAnchor"] as const) {
+      if (key in schema) {
+        violations.push(`${path.join("")}.${key}`);
+      }
     }
   }
   for (const [key, value] of Object.entries(schema)) {
@@ -164,7 +225,9 @@ function inspectJsonSchema(
       continue;
     }
     path.push(".", key);
-    if (SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
+    // Literal subtrees contain instance data, but still need JSON number checks.
+    const inspectChildKeywords = inspectKeywords && !SCHEMA_LITERAL_KEYS.has(key);
+    if (inspectChildKeywords && SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
       for (const [schemaName, childSchema] of Object.entries(value)) {
         path.push(".", schemaName);
         const valid = inspectJsonSchema(childSchema, path, violations);
@@ -173,7 +236,7 @@ function inspectJsonSchema(
           return false;
         }
       }
-    } else if (!inspectJsonSchema(value, path, violations)) {
+    } else if (!inspectJsonSchema(value, path, violations, inspectChildKeywords)) {
       return false;
     }
     path.length -= 2;
@@ -187,6 +250,13 @@ export function projectRuntimeToolInputSchema(
   path = "parameters",
   toolName?: string,
 ): RuntimeToolInputSchemaProjection {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    if (wasToolSchemaTruncated(schema)) {
+      reportToolSchemaTruncation(schema, toolName);
+    }
+    return published.projection;
+  }
   return projectToolInputSchema(schema, path, undefined, toolName);
 }
 
@@ -199,6 +269,10 @@ export function prepareRuntimeToolInputSchema(
   projection: RuntimeToolInputSchemaProjection;
   normalization?: PreparedToolSchemaNormalization;
 } {
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  if (published) {
+    return { projection: projectRuntimeToolInputSchema(schema, path, toolName) };
+  }
   let inputJson: string | undefined;
   const projection = projectToolInputSchema(
     schema,

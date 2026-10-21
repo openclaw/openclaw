@@ -1,7 +1,6 @@
 // Provides the process-local plugin approval path used by embedded TUI runs.
 import { randomUUID } from "node:crypto";
 import { createDeferredCore } from "../shared/deferred.js";
-import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import type {
@@ -26,10 +25,14 @@ let activeBroker: EmbeddedPluginApprovalBroker | null = null;
 
 export class EmbeddedPluginApprovalBroker {
   private readonly pending = new Map<string, PendingApproval>();
-  private readonly listeners = new Set<(event: ApprovalEvent) => void>();
+  constructor(private readonly onEvent?: (event: ApprovalEvent) => void) {}
 
-  subscribe(listener: (event: ApprovalEvent) => void): () => void {
-    return registerListener(this.listeners, listener);
+  private notify(event: ApprovalEvent): void {
+    try {
+      this.onEvent?.(event);
+    } catch {
+      // Presentation cannot interrupt approval settlement.
+    }
   }
 
   listPending(): PluginApprovalRequest[] {
@@ -65,7 +68,7 @@ export class EmbeddedPluginApprovalBroker {
       }
       this.pending.delete(id);
       entry.resolve(null);
-      notifyListeners(this.listeners, { event: "plugin.approval.removed", payload: { id } });
+      this.notify({ event: "plugin.approval.removed", payload: { id } });
     }, params.timeoutMs);
     timer.unref?.();
     this.pending.set(id, { record, timer, resolve, reject });
@@ -78,11 +81,11 @@ export class EmbeddedPluginApprovalBroker {
       clearTimeout(entry.timer);
       this.pending.delete(id);
       entry.reject(params.signal?.reason ?? new Error("approval request aborted"));
-      notifyListeners(this.listeners, { event: "plugin.approval.removed", payload: { id } });
+      this.notify({ event: "plugin.approval.removed", payload: { id } });
     };
     params.signal?.addEventListener("abort", abort, { once: true });
 
-    notifyListeners(this.listeners, { event: "plugin.approval.requested", payload: record });
+    this.notify({ event: "plugin.approval.requested", payload: record });
     try {
       return { id, decision: await decision };
     } finally {
@@ -103,7 +106,7 @@ export class EmbeddedPluginApprovalBroker {
     clearTimeout(entry.timer);
     this.pending.delete(id);
     entry.resolve(decision);
-    notifyListeners(this.listeners, {
+    this.notify({
       event: "plugin.approval.resolved",
       payload: {
         id,
@@ -120,10 +123,9 @@ export class EmbeddedPluginApprovalBroker {
     for (const [id, entry] of this.pending) {
       clearTimeout(entry.timer);
       entry.reject(reason);
-      notifyListeners(this.listeners, { event: "plugin.approval.removed", payload: { id } });
+      this.notify({ event: "plugin.approval.removed", payload: { id } });
     }
     this.pending.clear();
-    this.listeners.clear();
   }
 }
 

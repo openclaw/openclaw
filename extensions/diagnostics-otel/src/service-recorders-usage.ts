@@ -3,14 +3,16 @@ import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { assignOtelContentAttr } from "./service-content-normalization.js";
 import {
   assignGenAiSpanIdentityAttrs,
   assignPositiveNumberAttr,
 } from "./service-genai-attributes.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
-import type { MessageDeliveryDiagnosticEvent, TrustedSpanAliasOwner } from "./service-types.js";
+import type { MessageDeliveryDiagnosticEvent } from "./service-types.js";
 
 export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
   const messageDeliveryAttrs = (evt: MessageDeliveryDiagnosticEvent): Record<string, string> => ({
@@ -29,6 +31,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId),
         "openclaw.provider": evt.provider ?? "unknown",
         "openclaw.model": evt.model ?? "unknown",
+        ...(evt.purpose ? { "openclaw.purpose": evt.purpose } : {}),
+        ...(evt.runtimeKind ? { "openclaw.runtime.kind": evt.runtimeKind } : {}),
       };
       const genAiAttrs: Record<string, string> = {
         "gen_ai.operation.name": "chat",
@@ -206,6 +210,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordMessageProcessed(
       evt: Extract<DiagnosticEventPayload, { type: "message.processed" }>,
       metadata: DiagnosticEventMetadata,
+      privateData: DiagnosticEventPrivateData,
     ) {
       const attrs = {
         "openclaw.channel": normalizeDiagnosticValue(evt.channel),
@@ -222,6 +227,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.addRunAttrs(spanAttrs, evt);
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
+      }
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
       const span =
@@ -288,7 +297,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       const spanAttrs: Record<string, string | number | boolean> = {};
       runtime.addRunAttrs(spanAttrs, evt);
-      const span = runtime.trackTrustedSpan(
+      const span = runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,
         runtime.spanWithDuration("openclaw.run", spanAttrs, undefined, {
@@ -298,7 +307,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       );
       const parentSpanId = runtime.trustedTraceContext(evt, metadata)?.parentSpanId;
       if (parentSpanId && !runtime.activeTrustedSpans.has(parentSpanId)) {
-        const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
+        const owner = evt.runId;
         runtime.activeTrustedSpanAliases.set(runtime.trustedSpanAliasKey(parentSpanId, owner), {
           span,
           spanId: parentSpanId,

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -6,7 +7,10 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  getSubagentDepthFromSessionStore,
+  getSubagentDepthFromSessionStoreInWorker,
+} from "./subagent-depth.js";
 import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -17,6 +21,24 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+async function depthStore(
+  entries: Array<[string, { spawnDepth?: number; spawnedBy?: string }, string?]>,
+  fixed = false,
+) {
+  const store = path.join(
+    tempDirs.make("subagent-depth-"),
+    fixed ? "sessions.sqlite" : "sessions-{agentId}.json",
+  );
+  for (const [sessionKey, fields, owner] of entries) {
+    const agentId = expectDefined(owner ?? sessionKey.split(":")[1], "fixture owner");
+    await replaceSessionEntry(
+      { agentId, sessionKey, storePath: store.replaceAll("{agentId}", agentId) },
+      { sessionId: sessionKey, updatedAt: Date.now(), ...fields },
+    );
+  }
+  return store;
+}
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("ignores non-decimal and unsafe stored spawnDepth strings", () => {
@@ -32,113 +54,46 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("ignores parentSessionKey threading when resolving spawn depth", () => {
-    // parentSessionKey is UI threading (dashboard auto-parenting, forks); only
-    // stored spawnDepth and spawnedBy lineage may contribute depth.
     const store = createSessionCapabilityLookup({
-      "agent:main:main": { sessionId: "root" },
-      "agent:main:dashboard:operator": {
-        sessionId: "operator",
-        spawnDepth: 0,
-        parentSessionKey: "agent:main:main",
-      },
-      "agent:main:dashboard:legacy": {
-        sessionId: "legacy",
-        parentSessionKey: "agent:main:main",
-      },
+      "agent:main:main": {},
+      "agent:main:dashboard:operator": { spawnDepth: 0, parentSessionKey: "agent:main:main" },
+      "agent:main:dashboard:legacy": { parentSessionKey: "agent:main:main" },
     });
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:operator", { store })).toBe(0);
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:legacy", { store })).toBe(0);
   });
 
-  it("resolves depth when caller is identified by sessionId", () => {
-    const key1 = "agent:main:subagent:one";
-    const key2 = "agent:main:subagent:two";
-    const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionStore("subagent-three-session", {
-      store: createSessionCapabilityLookup({
-        [key1]: { sessionId: "subagent-one-session", spawnedBy: "agent:main:main" },
-        [key2]: { sessionId: "subagent-two-session", spawnedBy: key1 },
-        [key3]: { sessionId: "subagent-three-session", spawnedBy: key2 },
-      }),
-    });
-    expect(depth).toBe(3);
-  });
-
   it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-");
-    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
-    const prefixedKey = "agent:main:subagent:flat";
-    const storePath = storeTemplate.replaceAll("{agentId}", "main");
-    await replaceSessionEntry(
-      {
-        storePath,
-        sessionKey: prefixedKey,
-      },
-      {
-        sessionId: "subagent-flat",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
-      },
-    );
-
-    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
-      cfg: {
-        session: {
-          store: storeTemplate,
-        },
-      },
-    });
-
-    expect(depth).toBe(2);
+    const store = await depthStore([["agent:main:subagent:flat", { spawnDepth: 2 }]]);
+    expect(
+      await getSubagentDepthFromSessionStoreInWorker("subagent:flat", {
+        cfg: { session: { store } },
+      }),
+    ).toBe(2);
   });
 
   it("reads a bare fixed-store key through its persisted owner", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-shared-");
-    const storePath = path.join(tmpDir, "sessions.sqlite");
-    await replaceSessionEntry(
-      { agentId: "ops", storePath, sessionKey: "global" },
-      {
-        sessionId: "global-session",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
-      },
-    );
+    const store = await depthStore([["global", { spawnDepth: 2 }, "ops"]], true);
     const cfg = {
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
         entries: { ops: {}, research: {} },
       },
-      session: { scope: "global", store: storePath },
+      session: { scope: "global", store },
     } satisfies OpenClawConfig;
 
-    expect(getSubagentDepthFromSessionStore("global", { cfg })).toBe(2);
+    expect(await getSubagentDepthFromSessionStoreInWorker("global", { cfg })).toBe(2);
   });
 
   it("resolves a cross-agent parent outside the supplied child store", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-cross-agent-");
-    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const parentKey = "agent:main:dashboard:parent";
-    await replaceSessionEntry(
-      {
-        agentId: "main",
-        storePath: storeTemplate.replaceAll("{agentId}", "main"),
-        sessionKey: parentKey,
-      },
-      {
-        sessionId: "parent",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
-      },
-    );
+    const store = await depthStore([[parentKey, { spawnDepth: 2 }]]);
 
-    const depth = getSubagentDepthFromSessionStore("agent:work:dashboard:child", {
-      cfg: { session: { store: storeTemplate } },
+    const depth = await getSubagentDepthFromSessionStoreInWorker("agent:work:dashboard:child", {
+      cfg: { session: { store } },
       store: createSessionCapabilityLookup({
-        "agent:work:dashboard:child": {
-          sessionId: "child",
-          spawnedBy: parentKey,
-        },
+        "agent:work:dashboard:child": { spawnedBy: parentKey },
       }),
     });
 
@@ -146,32 +101,21 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("keeps agent-scoped views separate for a fixed shared store", async () => {
-    const tmpDir = tempDirs.make("openclaw-subagent-depth-fixed-");
-    const storePath = path.join(tmpDir, "sessions.sqlite");
     const childKey = "agent:ops:dashboard:child";
     const parentKey = "agent:research:dashboard:parent";
-    await replaceSessionEntry(
-      { agentId: "ops", storePath, sessionKey: childKey },
-      {
-        sessionId: "child",
-        updatedAt: Date.now(),
-        spawnedBy: parentKey,
-      },
-    );
-    await replaceSessionEntry(
-      { agentId: "research", storePath, sessionKey: parentKey },
-      {
-        sessionId: "parent",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
-      },
+    const store = await depthStore(
+      [
+        [childKey, { spawnedBy: parentKey }],
+        [parentKey, { spawnDepth: 2 }],
+      ],
+      true,
     );
 
     expect(
-      getSubagentDepthFromSessionStore(childKey, {
+      await getSubagentDepthFromSessionStoreInWorker(childKey, {
         cfg: {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { store: storePath },
+          session: { store },
         },
       }),
     ).toBe(3);
@@ -179,13 +123,10 @@ describe("getSubagentDepthFromSessionStore", () => {
 });
 
 describe("resolveAgentTimeoutMs", () => {
-  it.each([["unlimited", 0, MAX_TIMER_TIMEOUT_MS]])(
-    "resolves config timeoutSeconds %s",
-    (_label, timeoutSeconds, expected) => {
-      const cfg = { agents: { defaults: { timeoutSeconds } } } as OpenClawConfig;
-      expect(resolveAgentTimeoutMs({ cfg })).toBe(expected);
-    },
-  );
+  it("resolves unlimited config timeoutSeconds", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 0 } } } satisfies OpenClawConfig;
+    expect(resolveAgentTimeoutMs({ cfg })).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
 
   it("uses a timer-safe sentinel for no-timeout overrides", () => {
     expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(MAX_TIMER_TIMEOUT_MS);

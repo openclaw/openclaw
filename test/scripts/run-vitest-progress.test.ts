@@ -14,11 +14,19 @@ import {
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
-import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
+import {
+  captureOutput,
+  captureWatchdog,
+  cleanRunnerEnv,
+  repoRoot,
+  scriptFiles,
+  waitAtGate,
+} from "./run-vitest.test-support.js";
 import { createControlledWorkerCompiler } from "./vitest-worker-artifacts.test-support.js";
 
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 const posixDescribe = process.platform === "win32" ? describe.skip : describe.concurrent;
 const posixSerialDescribe = process.platform === "win32" ? describe.skip : describe;
 const silenceMs = 1_000;
@@ -81,18 +89,15 @@ posixDescribe.each([false, true])(
     const tempDirs = useAutoCleanupTempDirTracker(cleanupAfterProgressBody);
     const testProgress = joinedProgressTest(async ({ expect, signal }) => {
       const root = tempDirs.make("oc-vt-progress-");
-      fs.symlinkSync(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
-      const configPath = path.join(root, "vitest.config.mjs");
+      const files = scriptFiles(root);
+      files.linkModules();
+      const configPath = files.path("vitest.config.mjs");
       // Vitest can batch a case result until later task activity. A file boundary
       // explicitly flushes updates, so waiting for its case line cannot deadlock
       // against the next case's release barrier.
       for (let index = 0; index < 5; index++) {
-        fs.writeFileSync(
-          path.join(root, `progress-${index}.test.ts`),
+        files.write(
+          `progress-${index}.test.ts`,
           `import fs from "node:fs";
 import { expect, it } from "vitest";
 ${fixtureReceiptClientSource(receipts.endpoint)}
@@ -129,13 +134,7 @@ export default {
 };
 `,
       );
-      const env = { ...process.env };
-      for (const key of Object.keys(env)) {
-        if (key.startsWith("VITEST") || key.startsWith("OPENCLAW_")) {
-          delete env[key];
-        }
-      }
-      Object.assign(env, {
+      const env = cleanRunnerEnv({
         AI_AGENT: "vitest-progress-test",
         GITHUB_ACTIONS: "false",
         NO_COLOR: "1",
@@ -146,15 +145,9 @@ export default {
         OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: path.join(root, "diagnostics"),
       });
 
-      // Register and uninstall without awaiting so each watchdog captures its
-      // own Sinon clock. Transport, readiness, diagnostics and process-group
-      // joins must use real timers while the watchdog retains its fake clock.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { clock } = setTimeout as typeof setTimeout & { clock: { tick(ms: number): void } };
       const onNoOutputTimeout = vi.fn();
-      let watched: ReturnType<typeof spawnWatchedVitestProcess>;
-      try {
-        watched = spawnWatchedVitestProcess({
+      const { handle: watched, clock } = captureWatchdog(() =>
+        spawnWatchedVitestProcess({
           pnpmArgs: [
             "exec",
             "node",
@@ -167,10 +160,8 @@ export default {
           spawnParams: { cwd: repoRoot, ...resolveVitestSpawnParams(env) },
           env,
           onNoOutputTimeout,
-        });
-      } finally {
-        vi.useRealTimers();
-      }
+        }),
+      );
       let output = "";
       const caseCompletions = Array.from({ length: 5 }, () => createDeferred());
       const casePassed = (index: number) =>
@@ -187,41 +178,34 @@ export default {
       };
       watched.child.stdout!.on("data", observeOutput);
       watched.child.stderr!.on("data", observeOutput);
+      const waitForReady = (index: number) =>
+        withinTest(
+          fixtureReadyBeforeSettlement(
+            files.path(`ready-${index}`),
+            watched.completion,
+            `case ${index} readiness\n${output}`,
+          ),
+          signal,
+        );
       let workerPid: number | undefined;
       try {
         for (let index = 0; index < 4; index++) {
-          const readyPath = path.join(root, `ready-${index}`);
-          await withinTest(
-            fixtureReadyBeforeSettlement(
-              readyPath,
-              watched.completion,
-              `case ${index} readiness\n${output}`,
-            ),
-            signal,
-          );
+          const readyPath = files.path(`ready-${index}`);
+          await waitForReady(index);
           workerPid = Number(fs.readFileSync(readyPath, "utf8"));
           clock.tick(600);
           expect(onNoOutputTimeout, output).not.toHaveBeenCalled();
           receipts.release(readyPath, "continue");
           // Release receipts never enter the watched pipes. Only Vitest's completed
           // case output can reset the watchdog before the next 600ms advance.
-          await withinTest(
-            awaitGateBeforeSettlement(
-              caseCompletions[index]!.promise,
-              watched.completion,
-              `Timed out waiting for Vitest completion for case ${index}\n${output}`,
-            ),
+          await waitAtGate(
+            caseCompletions[index]!.promise,
+            watched.completion,
             signal,
+            `Timed out waiting for Vitest completion for case ${index}\n${output}`,
           );
         }
-        await withinTest(
-          fixtureReadyBeforeSettlement(
-            path.join(root, "ready-4"),
-            watched.completion,
-            "final case readiness",
-          ),
-          signal,
-        );
+        await waitForReady(4);
         expect(isProcessAlive(watched.child.pid!)).toBe(true);
         expect(onNoOutputTimeout).not.toHaveBeenCalled();
         if (stall) {
@@ -241,12 +225,7 @@ export default {
         expect(isProcessAlive(workerPid!)).toBe(false);
         const reports = fs.readdirSync(path.join(root, "diagnostics"));
         expect(reports).toHaveLength(1);
-        const diagnostic = JSON.parse(
-          fs.readFileSync(
-            path.join(root, "diagnostics", reports[0]!, "failure.public.json"),
-            "utf8",
-          ),
-        );
+        const diagnostic = files.json(`diagnostics/${reports[0]!}/failure.public.json`);
         expect(diagnostic.kind).toBe("vitest-progress");
         if (stall) {
           expect(diagnostic.active).toEqual([
@@ -278,11 +257,10 @@ posixSerialDescribe("compiled subprocess preparation progress", { concurrent: fa
   const testPreparation = (verification: "valid" | "tampered") =>
     joinedProgressTest(async ({ expect, signal }) => {
       const directory = tempDirs.make("oc-vt-preparation-progress-");
-      const env = {
-        ...process.env,
+      const env = testRunnerFixtureEnv({
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "120000",
         OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
-      };
+      });
       const controlled = createControlledWorkerCompiler(directory, env);
       const owner = createVitestWorkerRun(env);
       const generation = owner.descriptor.directory;
@@ -337,12 +315,8 @@ process.send({event:"ready"});
       let watched: ReturnType<typeof spawnWatchedVitestProcess> | undefined;
       let disposalFailure: unknown;
       try {
-        // Capture only this watchdog's clock. Native IPC, compiler exit, artifact
-        // verification, diagnostics and process joins keep their real timers.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const { clock } = setTimeout as typeof setTimeout & { clock: { tick(ms: number): void } };
-        try {
-          watched = spawnWatchedVitestProcess({
+        const { handle, clock } = captureWatchdog(() =>
+          spawnWatchedVitestProcess({
             workerRun: owner,
             homeMode: "tooling",
             pnpmArgs: ["exec", "node", borrower],
@@ -354,17 +328,15 @@ process.send({event:"ready"});
             },
             env,
             onNoOutputTimeout,
-          });
-        } finally {
-          vi.useRealTimers();
-        }
-        const handle = watched;
+          }),
+        );
+        watched = handle;
         const ready = createDeferred();
         let duplicateAcknowledged = createDeferred();
         let duplicates = 0;
         const replied = createDeferred();
         const replies: unknown[] = [];
-        let output = "";
+        const output = captureOutput(handle.child.stdout!, handle.child.stderr!);
         handle.child.on("message", (message: unknown) => {
           if (!message || typeof message !== "object" || !("event" in message)) {
             return;
@@ -381,21 +353,8 @@ process.send({event:"ready"});
             replied.resolve();
           }
         });
-        handle.child.stdout!.on("data", (chunk: string) => {
-          output += chunk;
-        });
-        handle.child.stderr!.on("data", (chunk: string) => {
-          output += chunk;
-        });
         const waitForBorrower = (gate: PromiseLike<unknown>, description: string) =>
-          withinTest(
-            awaitGateBeforeSettlement(
-              gate,
-              handle.completion,
-              `Timed out waiting for ${description}`,
-            ),
-            signal,
-          );
+          waitAtGate(gate, handle.completion, signal, `Timed out waiting for ${description}`);
         const duplicate = async () => {
           const expected = duplicates + 1;
           duplicateAcknowledged = createDeferred();
@@ -410,7 +369,7 @@ process.send({event:"ready"});
         clock.tick(100_000);
         // No watched pipe output exists: only accepted owner work can keep
         // this real borrower alive past its original 120-second deadline.
-        expect(output).toBe("");
+        expect(output.text).toBe("");
         expect(onNoOutputTimeout).not.toHaveBeenCalled();
         expect(isProcessAlive(handle.child.pid!)).toBe(true);
         await duplicate();
@@ -425,7 +384,7 @@ process.send({event:"ready"});
         releaseVerification.resolve();
         await waitForBorrower(replied.promise, "verified borrower reply");
         expect(replies).toHaveLength(1);
-        expect(output).toBe("");
+        expect(output.text).toBe("");
         if (verification === "valid") {
           expect(replies[0]).toEqual({ event: "reply", ok: true });
           clock.tick(60_000);
@@ -445,7 +404,7 @@ process.send({event:"ready"});
         expect(onNoOutputTimeout).toHaveBeenCalledOnce();
         const result = await withinTest(handle.completion, signal);
         expect(handle.child.exitCode).toBe(0);
-        expect(result).toEqual({ code: 1, signal: null, groupJoined: true });
+        expect(result).toEqual({ code: 2, signal: null, groupJoined: true });
         expect(isProcessAlive(handle.child.pid!)).toBe(false);
       } finally {
         releaseCompiler.resolve();
@@ -457,14 +416,10 @@ process.send({event:"ready"});
             await watched.completion;
           }
         } finally {
-          try {
-            await owner.dispose();
-          } catch (error) {
-            disposalFailure = error;
-          } finally {
-            verificationRead.mockRestore();
-            compilerLaunch.mockRestore();
-          }
+          const [disposal] = await Promise.allSettled([owner.dispose()]);
+          disposalFailure = disposal.status === "rejected" ? disposal.reason : undefined;
+          verificationRead.mockRestore();
+          compilerLaunch.mockRestore();
         }
       }
       if (verification === "tampered") {

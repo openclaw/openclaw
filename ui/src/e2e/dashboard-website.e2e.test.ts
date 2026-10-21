@@ -3,7 +3,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
+import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -178,14 +178,55 @@ suite.define(() => {
             page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
           )
           .toBeLessThanOrEqual(0);
-        await expect.poll(viewportFits).toBe(true);
+        const host = page.locator(".chat-mobile-host");
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        const dockHeight = (await host.boundingBox())!.height;
+        await selectChatLayoutAction(page, "Focus");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        await expect
+          .poll(async () => (await host.boundingBox())!.height)
+          .toBeGreaterThan(dockHeight);
+        const mobileViewport = await frame.evaluate((element) => {
+          const outer = element.closest(".chat-mobile-host__panels")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            width: inner.width,
+            visibleHeight: Math.min(inner.bottom, outer.bottom) - Math.max(inner.top, outer.top),
+            contained: inner.left >= outer.left - 1 && inner.right <= outer.right + 1,
+          };
+        });
+        expect(mobileViewport.width).toBeGreaterThan(280);
+        expect(mobileViewport.visibleHeight).toBeGreaterThan(200);
+        expect(mobileViewport.contained).toBe(true);
+        expect(
+          await frame.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
         await selectChatLayoutAction(page, "Restore split");
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await selectChatLayoutAction(page, "Minimize side panel");
+        await frame.waitFor({ state: "hidden" });
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        await selectChatLayoutAction(page, "Side panel");
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",
         );
+        await openChatSidePanelType(page, "Files");
+        const files = page.locator('[data-panel-slot="workspace"]:not([hidden])');
+        await files.waitFor();
+        expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
+        expect(await frame.isVisible()).toBe(false);
+        await page.getByRole("button", { name: "Close Files", exact: true }).click();
+        await selectChatLayoutAction(page, "Dashboard");
+        await frame.waitFor();
+        await selectChatLayoutAction(page, "Focus");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        expect(
+          await frame.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
         await clickBoardWidgetControl(page, content.getByRole("link", { name: "View details" }));
         await content.getByRole("heading", { name: "Service details" }).waitFor();
         const opened = context.waitForEvent("page");

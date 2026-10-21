@@ -25,6 +25,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  reconcileOpenClawStateSchemaPublication,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -37,10 +38,15 @@ const observation = vi.hoisted(() => ({
   previousDriver: "dead" as "dead" | "alive",
   context: vi.fn(),
   http: vi.fn(),
-  inspect: vi.fn(),
   settle: vi.fn(),
 }));
 // Keep the real ledger kernels; worker transport has separate boundary coverage.
+vi.mock("../state/openclaw-state-schema-publication.async.js", async (original) => ({
+  ...(await original<typeof import("../state/openclaw-state-schema-publication.async.js")>()),
+  reconcileOpenClawStateSchemaPublicationAsync: async (
+    ...args: Parameters<typeof reconcileOpenClawStateSchemaPublication>
+  ) => reconcileOpenClawStateSchemaPublication(...args),
+}));
 vi.mock("../infra/update-run-reconciliation.js", async (original) => ({
   ...(await original<typeof import("../infra/update-run-reconciliation.js")>()),
   reconcileAbandonedUpdateRunsAsync: async (
@@ -100,13 +106,9 @@ vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
   resolveGatewayRestartProbeContext: observation.context,
   waitForGatewayHttpReadiness: observation.http,
 }));
-vi.mock("../cli/daemon-cli/restart-health.js", () => ({
-  inspectGatewayRestart: observation.inspect,
+vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
+  ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   waitForGatewayHealthyRestart: observation.settle,
-  isSameGatewayRestartGeneration: (
-    left: { gatewayBootId: string },
-    right: { gatewayBootId: string },
-  ) => left.gatewayBootId === right.gatewayBootId,
 }));
 vi.mock("./update-run-notice.runtime.js", () => ({ notifyUpdateRunPhase: vi.fn() }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -131,7 +133,6 @@ beforeEach(() => {
   observation.previousDriver = "dead";
   observation.context.mockReset().mockResolvedValue({ config: { gateway: { port: 18789 } } });
   observation.http.mockReset().mockResolvedValue({ healthz: 200, readyz: 200 });
-  observation.inspect.mockReset().mockImplementation(async () => health());
   observation.settle.mockReset().mockImplementation(async () => health());
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.mocked(note).mockClear();
@@ -196,8 +197,8 @@ it("settles a verified abandoned CLI run", async () => {
   });
   watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   await published.promise;
-  expect(getUpdateRun(runId)?.status).toBe("succeeded");
   expect(getUpdateRun(runId)).toMatchObject({
+    status: "succeeded",
     reason: null,
     after: { version: "2026.9.4", buildId: "candidate-build" },
     verification: { versionMatch: true, readyz: true, runningBuildId: "candidate-build" },
@@ -206,10 +207,9 @@ it("settles a verified abandoned CLI run", async () => {
     "update.run.changed",
     expect.objectContaining({ runId, status: "succeeded" }),
   );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
-    "Updater exited before recording completion",
-  );
-  expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+  const report = renderUpdateRunReport(getUpdateRun(runId)!).markdown;
+  expect(report).toContain("Updater exited before recording completion");
+  expect(report).toContain("settle check: settled");
   expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
 });
 
@@ -271,24 +271,25 @@ it.each(["absent", "driver-revived", "newer-completed-run"])(
     const candidate = candidateState === "absent" ? undefined : getUpdateRun(runId);
     vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
     if (candidateState !== "absent") {
-      observation.inspect.mockImplementationOnce(async () => {
+      observation.http.mockImplementationOnce(async () => {
         if (candidateState === "driver-revived") {
           observation.driver = "alive";
         } else {
           const newer = createUpdateRun({ trigger: "cli" });
           finishUpdateRun(newer.runId, { status: "succeeded" });
         }
-        return health();
+        return { healthz: 200, readyz: 200 };
       });
     }
     expect(await reconcileInterruptedUpdateRuns({ candidate })).toEqual([]);
     expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
-    expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
-    expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
+    const run = getUpdateRun(runId)!;
+    expect(run.status).not.toBe("succeeded");
+    expect(run.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();
     if (candidateState === "absent") {
       expect(observation.settle).not.toHaveBeenCalled();
-      expect(getUpdateRun(runId)?.status).toBe("running");
+      expect(run.status).toBe("running");
     }
   },
 );
@@ -360,7 +361,7 @@ it.each(["missing-receipt", "read-only", "settle", "repair", "acknowledgement"])
         "Update history",
       );
       expect(getUpdateRun(runId)?.reason).toBe("abandoned");
-      expect(observation.inspect).not.toHaveBeenCalled();
+      expect(observation.settle).not.toHaveBeenCalled();
     } else {
       expect(observation.settle).not.toHaveBeenCalled();
       if (evidence === "repair" || evidence === "acknowledgement") {
@@ -447,7 +448,6 @@ it("records an unmanaged skip when the restart step is skipped", async () => {
   expect(observation.context).not.toHaveBeenCalled();
   expect(observation.settle).not.toHaveBeenCalled();
   expect(observation.http).not.toHaveBeenCalled();
-  expect(observation.inspect).not.toHaveBeenCalled();
 });
 
 it("records cleanup uncertainty instead of settling an interrupted update", async () => {

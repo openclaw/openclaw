@@ -159,7 +159,7 @@ local turns, including the Gateway's resolved model settings and limits. Code
 Mode runs on the node and calls each catalog tool at its declared execution
 location. Its catalog and pending cells belong to the current turn; a retained
 worker receives a fresh presentation on the next turn.
-Node workers use `tool_call` for Tool Search, including when directory mode is configured.
+Node workers use `dispatch_action` for Tool Search, including when directory mode is configured.
 
 Concurrent Gateway tool calls wait for the existing transport budget, so larger
 model tool batches do not lose calls. Cancellation and heartbeats remain independent.
@@ -203,6 +203,9 @@ for a durable slot. A slot occupied only by an idle worker can be reclaimed for
 new work; active turns and background commands keep their slots. When no free
 or reclaimable slot remains, the node stays available for status and cancellation
 but is not selected for a new session turn.
+
+If a capacity refresh fails, the node logs a warning and advertises no available
+slots. Restart the node host if its capacity does not recover.
 
 Capacity, host-stat, and skill-bin updates do not interrupt active node work or
 change its pairing authority. This behavior requires an updated Gateway; node
@@ -271,6 +274,9 @@ not merely its declared capabilities. A declared command is usable only when
 the approved pairing and Gateway command allowlist both authorize it.
 Connected non-hosts, ineligible or saturated hosts, update-required devices,
 and unavailable hosts remain visible but disabled with an actionable reason.
+The session picker and command palette show a warning icon and **Unavailable**
+for these computers. Focus or tap the row to read why it cannot host the session;
+the command palette shows one unavailable row instead of repeating project choices.
 For an already-paired headless node, enable `nodeHost.workerRuns.enabled` and
 run `openclaw node install --force` as shown above. Update-required hosts must
 be upgraded and restarted before selection.
@@ -350,6 +356,65 @@ turns or workspace writes.
 See [Anthropic: Claude sessions across computers](/providers/anthropic#claude-sessions-across-computers)
 for the Control UI behavior and storage sources.
 
+### Work in an existing device folder
+
+Session hosting allows existing folders by default. To restrict sessions to specific
+directory roots, configure the paired device:
+
+```json5
+{
+  nodeHost: {
+    workerRuns: {
+      enabled: true,
+      folders: ["~/Projects"],
+    },
+  },
+}
+```
+
+`nodeHost.workerRuns.folders` has three modes:
+
+- Unset: any existing directory is allowed, except filesystem roots and directories
+  overlapping private worker storage. The node advertises existing-folder support.
+- A non-empty list: only those roots and their subdirectories are allowed.
+- `[]`: existing-folder sessions are disabled and the node does not advertise support.
+
+Paths must be absolute or home-relative (`~/`). The node resolves symlinks and
+checks the directory on every use; symlinks cannot escape configured roots.
+Restart the node host after changing the setting.
+
+This default uses the existing session-host trust boundary: operators can already
+run agents with exec on the node. Folder restrictions are an optional guardrail,
+not an exec sandbox. Only enable session hosting on a trusted device; use a narrow
+root list or `[]` if you do not want unrestricted in-place folder selection. The
+selected folder becomes the session workspace root, so deployments that contain
+`operator.write` sessions with `tools.fs.workspaceOnly` should also set a root list.
+
+For a specific paired device that advertises `workerHost.deviceFolders: true`,
+choose **Existing folder on device** in the workspace picker and enter an
+absolute path on that device. This option is not available for **Auto**, cloud
+workers, runtimes without worker-turn execution, or devices that do not advertise
+the capability. Operators with `operator.admin` can also choose **Browse folders
+on** _device_ to list folders on that device through its `fs.listDir` command.
+The listing is not limited to `folders` roots; the device validates the chosen
+folder when the session is created. The Gateway never browses or resolves this
+path locally.
+
+The session records `deviceFolder: { deviceId, path }` and dispatches to that
+exact device. Do not combine `deviceFolder` with a project, repository,
+managed worktree, or Gateway `cwd`. The worker uses the existing folder in place:
+OpenClaw does not create a worktree, transfer a workspace, or reconcile its files
+back to the Gateway. Back up important files before giving an agent write access.
+The session display retains the device and folder path. Deleting the session
+does not remove the existing folder.
+
+Device-folder sessions cannot move to another device or continue on the Gateway.
+Attachment staging is not supported for these sessions; use a managed workspace
+when you need to upload attachments. The Gateway Files panel and workspace reveal
+are unavailable for device-folder sessions; use the agent's file tools on the
+selected device instead. Gateway file operations reject these sessions rather
+than reading or writing a similarly named local workspace.
+
 ### Isolate hosted worker sessions in containers
 
 By default, hosted OpenClaw worker sessions run directly on the paired node.
@@ -373,6 +438,14 @@ Restart the node host after changing either setting. Isolation defaults to
 `"none"`, preserving the existing direct-process behavior. This setting is
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
+
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
 
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original
@@ -406,15 +479,21 @@ Existing explicit image settings are preserved; replace unsupported Node images 
 upgrading OpenClaw. Worker startup requires a supported runtime; older releases may
 fail before the runtime diagnostic can run.
 
-Each worker container receives only two host bind mounts: its verified worker
-bundle root is read-only, and its assigned session workspace is read-write.
-Both are mounted at their original absolute host paths so the sealed bundle
-and workspace descriptor remain valid; the session workspace is also the
-container working directory. OpenClaw passes only the existing frozen,
+Each worker container mounts its verified worker bundle root read-only and its
+assigned session workspace read-write. When the worker's private HOME differs
+from that workspace, it receives a third, read-write mount for HOME. For
+existing-folder sessions, this private HOME belongs to OpenClaw's namespaced
+session-generation storage and follows its lease and retention lifecycle; it
+is not the node user's home directory. Collecting that private state does not
+remove the user-owned existing folder.
+
+These directories are mounted at their original absolute host paths so the
+sealed bundle and workspace descriptor remain valid; the session workspace is
+also the container working directory. OpenClaw passes only the existing frozen,
 non-secret worker environment allowlist and adds no other host mounts.
 Container isolation protects the rest of the host filesystem and separates
 the worker process, but the worker can still modify its assigned workspace
-and connect to the Gateway.
+and private HOME and connect to the Gateway.
 
 The container uses the engine's normal outbound networking and must be able
 to reach the Gateway worker WebSocket endpoint. A Gateway address such as

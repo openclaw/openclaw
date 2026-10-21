@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -10,15 +11,11 @@ import {
 } from "./sqlite-database-admission.js";
 import { inspectDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
-type AdmissionTurn = {
-  keys: ReadonlySet<string>;
-  completion: Promise<void>;
-};
 type AdmissionTurnScope = { active: boolean };
 
 const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
-  () => new Map<string, AdmissionTurn>(),
+  () => new Map<string, Promise<void>>(),
 );
 const current = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurnContext"),
@@ -59,23 +56,19 @@ function reserveAdmissionTurn(locations: string | readonly string[], families: r
     return undefined;
   }
   const predecessors = new Set([...keys].flatMap((key) => pending.get(key) ?? []));
-  const completion = createDeferredCore();
-  const turn: AdmissionTurn = {
-    keys,
-    completion: completion.promise,
-  };
+  const { promise: completion, resolve: completeTurn } = createDeferredCore();
   for (const key of keys) {
-    pending.set(key, turn);
+    pending.set(key, completion);
   }
   const release = () => {
-    for (const key of turn.keys) {
-      if (pending.get(key) === turn) {
+    for (const key of keys) {
+      if (pending.get(key) === completion) {
         pending.delete(key);
       }
     }
-    completion.resolve();
+    completeTurn();
   };
-  const ready = Promise.all([...predecessors].map((predecessor) => predecessor.completion));
+  const ready = Promise.all(predecessors);
   return { ready, release };
 }
 
@@ -93,20 +86,28 @@ export function runWithSqliteDatabaseAdmissionTurn<T>(
   locations: readonly string[],
   operation: () => Promise<T>,
   families: readonly string[] = [],
+  signal?: AbortSignal,
 ): Promise<T> {
   const turn = reserveAdmissionTurn(locations, families);
   if (!turn) {
     return operation();
   }
-  return turn.ready.then(() => {
-    const scope: AdmissionTurnScope = { active: true };
-    return current.run(scope, async () => {
-      try {
-        return await operation();
-      } finally {
-        scope.active = false;
-        turn.release();
-      }
-    });
-  });
+  return racePromiseWithAbortSignal(turn.ready, signal, (aborted) => aborted.reason).then(
+    () => {
+      const scope: AdmissionTurnScope = { active: true };
+      return current.run(scope, async () => {
+        try {
+          return await operation();
+        } finally {
+          scope.active = false;
+          turn.release();
+        }
+      });
+    },
+    (error: unknown) => {
+      // A cancelled waiter still carries its predecessors for later reservations.
+      void turn.ready.then(turn.release);
+      throw error;
+    },
+  );
 }

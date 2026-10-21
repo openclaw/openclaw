@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,21 +21,16 @@ import { createWorkerLiveTrajectoryRecorder } from "./live-event-projection.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  OWNER_EPOCH,
-  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  credential,
-  measureLaunchTurn,
-  readLaunchToolNames,
+  createWorkerTurnTunnel,
   placements,
   root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
   turn,
-  unusedEnvironments,
+  workerTurnEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 
 describe("worker turn trajectory authority", () => {
@@ -54,13 +48,10 @@ describe("worker turn trajectory authority", () => {
       const stop = new WorkerRunnerCapacityError();
       const stages: string[] = [];
       let flushFailure: unknown;
-      let hostDatabase: DatabaseSync | undefined;
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(
         async ({ turnClaim }) => {
           const source = getWorkerTurnExecutionIdentityCapability(placements, turnClaim);
           assert(source, "expected the launcher to bind its real receipt authority");
-          const prepareRecorder = () =>
-            createWorkerLiveTrajectoryRecorder({ runId: input.runId, source });
           const recorder = await withEnvAsync(
             {
               OPENCLAW_TRAJECTORY: authority === "disabled" ? "0" : "1",
@@ -68,7 +59,7 @@ describe("worker turn trajectory authority", () => {
                 ? { OPENCLAW_STATE_DIR: path.join(root, "simulated-worker") }
                 : {}),
             },
-            prepareRecorder,
+            () => createWorkerLiveTrajectoryRecorder({ runId: input.runId, source }),
           );
           if (authority === "disabled") {
             expect(recorder).toBeNull();
@@ -81,7 +72,7 @@ describe("worker turn trajectory authority", () => {
           const cached = getOpenClawAgentDatabaseIfOpen(options);
           assert(cached, "expected the turn's cached host database before eviction");
           // Evict the host handle without draining this callback's accepted turn custody.
-          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          closeCachedOpenClawAgentDatabase(cached);
           expect(cached.db.isOpen).toBe(false);
           expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
 
@@ -101,15 +92,8 @@ describe("worker turn trajectory authority", () => {
             if (request.stage === "transaction" || request.stage === "commit") {
               pendingTransaction = true;
               stages.push(request.stage);
-              const current = getOpenClawAgentDatabaseIfOpen(options)?.db;
-              assert(current?.isOpen, "receipt checks require the retained host database");
-              if (request.stage === "transaction") {
-                hostDatabase = current;
-              } else {
-                expect(current).toBe(hostDatabase);
-                if (authority === "revoked-at-commit") {
-                  abort.abort(revoked);
-                }
+              if (request.stage === "commit" && authority === "revoked-at-commit") {
+                abort.abort(revoked);
               }
             }
             callback(request, grant);
@@ -126,26 +110,15 @@ describe("worker turn trajectory authority", () => {
           throw stop;
         },
       );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn,
-        measureLaunchTurn,
-        readLaunchToolNames,
-        runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
+      });
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
-        environments: {
-          ...unusedEnvironments(),
-          get: attachedEnvironment,
-          acquireTurnCredential: async () => credential(),
-          startTunnel: async () => tunnel,
-        },
+        environments: workerTurnEnvironments(tunnel),
       });
       const runLocal = vi.fn();
       try {

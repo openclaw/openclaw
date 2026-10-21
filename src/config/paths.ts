@@ -106,14 +106,12 @@ export function isDefaultInstallIdentity(
   homedir: () => string = resolveSystemAccountHomeDir,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const accountHome = resolveRequiredHomeDir({}, homedir);
+  const accountHome = normalizePathForComparison(resolveRequiredHomeDir({}, homedir));
   // Native service paths use the process home independently of OPENCLAW_HOME.
   // A canonical runtime override must not hide a relocated service home.
   if (
-    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome) ||
-    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !==
-      normalizePathForComparison(accountHome)
+    normalizePathForComparison(resolveRequiredOsHomeDir(env, homedir)) !== accountHome ||
+    normalizePathForComparison(resolveRequiredHomeDir(env, homedir)) !== accountHome
   ) {
     return false;
   }
@@ -215,11 +213,7 @@ export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
-  if (override) {
-    return resolveUserPath(override, env, envHomedir(env));
-  }
-  return path.join(stateDir ?? resolveStateDir(env, envHomedir(env)), CONFIG_FILENAME);
+  return resolveConfigPath(env, stateDir);
 }
 
 /**
@@ -229,12 +223,7 @@ export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
-  if (override) {
-    // Explicit selection is independent of existence, including during bootstrap.
-    return resolveUserPath(override, env, homedir);
-  }
-  return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
+  return resolveConfigPath(env, undefined, homedir);
 }
 
 /**
@@ -286,12 +275,7 @@ export function resolveDefaultConfigCandidates(
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
-  if (explicit) {
-    return [resolveUserPath(explicit, env, effectiveHomedir)];
-  }
-
-  return [path.join(resolveStateDir(env, effectiveHomedir), CONFIG_FILENAME)];
+  return [resolveConfigPath(env, undefined, effectiveHomedir)];
 }
 
 export const DEFAULT_GATEWAY_PORT = 18789;

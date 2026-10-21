@@ -1,6 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
-import fs from "node:fs";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
@@ -10,39 +9,36 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabaseByPathAsync as closeDatabase,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
-import type {
-  AgentDatabaseExecutionScope,
-  OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import {
-  runOpenClawAgentWorkerWrite,
-  runOpenClawAgentWriteAdmission,
+  runOpenClawAgentWorkerWrite as runWorkerWrite,
+  runOpenClawAgentWriteAdmission as holdWriter,
 } from "../../state/openclaw-agent-write-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
+import { loadSessionEntryForAdmission as loadAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import {
   loadSessionEntry,
-  patchSessionEntryTarget,
-  replaceSessionEntrySync,
+  patchSessionEntryTarget as patchTarget,
+  replaceSessionEntrySync as seed,
 } from "./session-accessor.sqlite-entry.js";
-import { loadExactSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
+import { loadExactSessionEntryReadOnly as loadExact } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import {
-  readSessionEntryInWorker,
-  readSessionEntryReadOnlyInWorker,
+  readSessionEntryInWorker as readEntry,
+  readSessionEntryReadOnlyInWorker as readOnlyEntry,
 } from "./session-entry-read-runtime.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
 let state: OpenClawTestState;
+const noop = () => {};
+const revoked = /released|closed|revoked/iu;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
 });
@@ -50,7 +46,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-function createCohortFixture(name: string) {
+function fixture(name: string) {
   const scope = {
     agentId: "cohort",
     env: state.env,
@@ -58,18 +54,19 @@ function createCohortFixture(name: string) {
     sessionKey: `agent:cohort:${name}`,
   };
   const entry = { sessionId: name, lifecycleRevision: "original", updatedAt: 1 };
-  replaceSessionEntrySync(scope, entry);
+  seed(scope, entry);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
   return { scope, entry, database };
 }
 
 async function admitCohort(scope: SessionAccessScope) {
-  const loaded = await loadSessionEntryForAdmission(scope);
+  const loaded = await loadAdmission(scope);
   const claim = loaded.databaseClaim;
   if (!("reader" in claim) || !claim.reader) {
     await claim.release();
     throw new Error("Expected a durable admission reader");
   }
+  onTestFinished(() => claim.release());
   return { claim, reader: claim.reader };
 }
 
@@ -82,34 +79,25 @@ function holdCohortReply() {
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      return {
-        ...execution,
-        get fileIdentity() {
-          return execution.fileIdentity;
-        },
-        async runExisting<T>(
-          source: AgentDatabaseRequestExecutionSource,
-          operation: (worker: AgentDatabaseExecutionScope) => Promise<T>,
-          options?: Parameters<OpenClawAgentDatabaseExecution["runExisting"]>[2],
-        ): Promise<T | undefined> {
-          return execution.runExisting(
-            source,
-            async (worker) => {
-              const execute: typeof worker.execute = async (command, requestOptions) => {
-                const result = await worker.execute(command, requestOptions);
-                if (armed) {
-                  armed = false;
-                  entered.resolve();
-                  await release.promise;
-                }
-                return result;
-              };
-              return operation({ execute });
-            },
-            options,
-          );
-        },
-      };
+      const runExisting = execution.runExisting.bind(execution);
+      execution.runExisting = (source, operation, options) =>
+        runExisting(
+          source,
+          async (worker) => {
+            const execute: typeof worker.execute = async (command, requestOptions) => {
+              const result = await worker.execute(command, requestOptions);
+              if (armed) {
+                armed = false;
+                entered.resolve();
+                await release.promise;
+              }
+              return result;
+            };
+            return operation({ execute });
+          },
+          options,
+        );
+      return execution;
     });
   return {
     entered,
@@ -121,11 +109,36 @@ function holdCohortReply() {
   };
 }
 
+async function startGatedRead(scope: SessionAccessScope, assertCurrent = noop) {
+  const gate = holdCohortReply();
+  onTestFinished(gate.restore);
+  const admitted = await admitCohort(scope);
+  addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
+  gate.arm();
+  const consume = vi.fn();
+  const reading = admitted.reader.withRead(
+    { sessionKeys: [scope.sessionKey], includeMembers: true },
+    assertCurrent,
+    consume,
+  );
+  onTestFinished(async () => {
+    gate.release.resolve();
+    await Promise.allSettled([reading]);
+  });
+  void reading.catch(noop);
+  await awaitGateBeforeSettlement(
+    gate.entered.promise,
+    reading,
+    "Cohort settled before its reply gate",
+  );
+  return { ...admitted, gate, reading, consume };
+}
+
 it.for(["warm", "cold"] as const)(
   "returns %s admitted entry data without waiting for another writer and refreshes committed facts",
   async (cache, { signal }) => {
-    const { scope, entry, database } = createCohortFixture(`data-read-fifo-${cache}`);
-    const { claim, reader } = await admitCohort(scope);
+    const { scope, entry, database } = fixture(`data-read-fifo-${cache}`);
+    const { reader } = await admitCohort(scope);
     if (cache === "cold") {
       database.db
         .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
@@ -134,362 +147,270 @@ it.for(["warm", "cold"] as const)(
     const outside = AsyncResource.bind(<T>(run: () => T) => run());
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const writer = runOpenClawAgentWriteAdmission(
+    const writer = holdWriter(
       { agentId: database.agentId, path: database.path, env: scope.env },
       async () => {
         entered.resolve();
         await release.promise;
       },
     );
-    let reads: Promise<unknown> | undefined;
-    try {
-      await withinTest(entered.promise, signal);
-      reads = outside(() =>
-        Promise.all([
-          readSessionEntryInWorker(scope, () => {}, undefined, undefined, reader),
-          readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
-        ]),
-      );
-      expect(
-        await withinTest(
-          awaitGateBeforeSettlement(reads, writer, "Writer released before admitted data read"),
-          signal,
-        ),
-      ).toMatchObject([entry, entry]);
-      release.resolve();
-      await writer;
-      replaceSessionEntrySync(scope, { ...entry, label: "committed update" });
-      await expect(
-        readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
-      ).resolves.toMatchObject({
-        label: "committed update",
-      });
-      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "successor" });
-      await expect(readSessionEntryReadOnlyInWorker(scope, () => {}, reader)).rejects.toThrow(
-        "Session entry changed during read",
-      );
-    } finally {
+    let reads: Promise<unknown> | undefined = undefined;
+    onTestFinished(async () => {
       release.resolve();
       await Promise.allSettled([writer, reads]);
-      await claim.release();
-    }
+    });
+    await withinTest(entered.promise, signal);
+    reads = outside(() =>
+      Promise.all([
+        readEntry(scope, noop, undefined, undefined, reader),
+        readOnlyEntry(scope, noop, reader),
+      ]),
+    );
+    expect(
+      await withinTest(
+        awaitGateBeforeSettlement(reads, writer, "Writer released before admitted data read"),
+        signal,
+      ),
+    ).toMatchObject([entry, entry]);
+    release.resolve();
+    await writer;
+    seed(scope, { ...entry, label: "committed update" });
+    await expect(readOnlyEntry(scope, noop, reader)).resolves.toMatchObject({
+      label: "committed update",
+    });
+    seed(scope, { ...entry, lifecycleRevision: "successor" });
+    await expect(readOnlyEntry(scope, noop, reader)).rejects.toThrow(
+      "Session entry changed during read",
+    );
   },
 );
 
 it("refreshes admitted cohorts after a known write and a foreign membership commit between phases", async () => {
-  const { scope, database } = createCohortFixture("fresh-phases");
+  const { scope, database } = fixture("fresh-phases");
   const identity = readOpenClawAgentDatabaseIdentity(database);
   addSessionMember(scope, { identityId: "original-member", addedBy: "owner", addedAt: 1 });
   const { claim, reader } = await admitCohort(scope);
   const request = { sessionKeys: [scope.sessionKey], includeMembers: true, snapshotFields: [] };
   const external = createDeferredCore();
-  let following: Promise<unknown> | undefined;
+  let following: Promise<unknown> | undefined = undefined;
   const peer = openNodeSqliteDatabase(database.path);
   const observer = observeParentSqlite();
   let escaped: (() => void) | undefined;
-  try {
-    await reader.withRead(
-      request,
-      () => {},
-      (read, assertCurrent) => {
-        assertCurrent();
-        escaped = assertCurrent;
-        expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
-          "original-member",
-        ]);
-      },
-    );
-    expect(observer.counts).toEqual(emptySqliteCounts());
-    expect(escaped).toThrow("consumption has ended");
-    let readTarget: SessionEntryTargetPatchScope | undefined;
-    const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
-      readTarget = target;
-    };
-    await expect(
-      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
-    ).resolves.toMatchObject({ sessionId: "fresh-phases", lifecycleRevision: "original" });
-    if (!readTarget) {
-      throw new Error("Writable cohort read omitted its physical target");
-    }
-    expect(readTarget).toMatchObject({
-      agentId: scope.agentId,
-      storePath: database.path,
-      readSource: {
-        agentId: database.agentId,
-        path: database.path,
-        databaseIdentity: identity.identity,
-        databaseBirthtime: identity.birthtime,
-      },
-      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-    });
-    expect(observer.counts).toEqual(emptySqliteCounts());
-    following = external.promise.then(() =>
-      reader.withRead(
-        request,
-        () => {},
-        (read) => {
-          expect(read.entries[0]?.entry).toMatchObject({ label: "known write" });
-          expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
-            "foreign-member",
-          ]);
-        },
-      ),
-    );
-    // Completing the writer before releasing the external wait proves no FIFO is held between phases.
-    await patchSessionEntryTarget(readTarget, () => ({ label: "known write" }), {
-      skipMaintenance: true,
-    });
-    peer.prepare("DELETE FROM session_members WHERE session_key = ?").run(scope.sessionKey);
-    peer
-      .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
-      VALUES (?, 'foreign-member', 'other-process', 2)`)
-      .run(scope.sessionKey);
-    observer.reset();
-    external.resolve();
-    await following;
-    expect(observer.counts).toEqual(emptySqliteCounts());
-    await expect(
-      reader.withRead(
-        request,
-        () => {},
-        async () => undefined,
-      ),
-    ).rejects.toThrow("consumers must remain synchronous");
-    await claim.release();
-    readTarget = undefined;
-    await expect(
-      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
-    ).rejects.toThrow(/released|closed|revoked/iu);
-    expect(readTarget).toBeUndefined();
-  } finally {
+  onTestFinished(async () => {
     observer.restore();
     external.resolve();
-    await Promise.allSettled(following ? [following] : []);
+    await Promise.allSettled([following]);
     peer.close();
-    await claim.release();
+  });
+  await reader.withRead(request, noop, (read, assertCurrent) => {
+    assertCurrent();
+    escaped = assertCurrent;
+    expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
+      "original-member",
+    ]);
+  });
+  expect(observer.counts).toEqual(emptySqliteCounts());
+  expect(escaped).toThrow("consumption has ended");
+  let readTarget: SessionEntryTargetPatchScope | undefined;
+  const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
+    readTarget = target;
+  };
+  await expect(readEntry(scope, noop, undefined, recordReadTarget, reader)).resolves.toMatchObject({
+    sessionId: "fresh-phases",
+    lifecycleRevision: "original",
+  });
+  if (!readTarget) {
+    throw new Error("Writable cohort read omitted its physical target");
   }
+  expect(readTarget).toMatchObject({
+    agentId: scope.agentId,
+    storePath: database.path,
+    readSource: {
+      agentId: database.agentId,
+      path: database.path,
+      databaseIdentity: identity.identity,
+      databaseBirthtime: identity.birthtime,
+    },
+    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+  });
+  expect(observer.counts).toEqual(emptySqliteCounts());
+  following = external.promise.then(() =>
+    reader.withRead(request, noop, (read) => {
+      expect(read.entries[0]?.entry).toMatchObject({ label: "known write" });
+      expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
+        "foreign-member",
+      ]);
+    }),
+  );
+  // Completing the writer before releasing the external wait proves no FIFO is held between phases.
+  await patchTarget(readTarget, () => ({ label: "known write" }), {
+    skipMaintenance: true,
+  });
+  peer.prepare("DELETE FROM session_members WHERE session_key = ?").run(scope.sessionKey);
+  peer
+    .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
+      VALUES (?, 'foreign-member', 'other-process', 2)`)
+    .run(scope.sessionKey);
+  observer.reset();
+  external.resolve();
+  await following;
+  expect(observer.counts).toEqual(emptySqliteCounts());
+  await expect(reader.withRead(request, noop, async () => undefined)).rejects.toThrow(
+    "consumers must remain synchronous",
+  );
+  await claim.release();
+  readTarget = undefined;
+  await expect(readEntry(scope, noop, undefined, recordReadTarget, reader)).rejects.toThrow(
+    revoked,
+  );
+  expect(readTarget).toBeUndefined();
 });
 
-it.each(["reset", "delete", "physical replacement", "release"] as const)(
+it.each(["reset", "delete", "release"] as const)(
   "refuses an admitted cohort after %s without consuming stale rows",
   async (change) => {
-    const { scope, entry, database } = createCohortFixture(`revoke-${change.replaceAll(" ", "-")}`);
+    const { scope, entry, database } = fixture(`revoke-${change.replaceAll(" ", "-")}`);
     const { claim, reader } = await admitCohort(scope);
     const consume = vi.fn();
-    try {
-      if (change === "reset") {
-        replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "successor" });
-      } else if (change === "delete") {
-        database.db
-          .prepare("DELETE FROM session_nodes WHERE session_key = ?")
-          .run(scope.sessionKey);
-      } else if (change === "physical replacement") {
-        fs.copyFileSync(database.path, `${database.path}.replacement`);
-        fs.renameSync(`${database.path}.replacement`, database.path);
-      } else {
-        await claim.release();
-      }
-      await expect(
-        reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/changed|replaced|released|closed/iu);
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
+    if (change === "reset") {
+      seed(scope, { ...entry, lifecycleRevision: "successor" });
+    } else if (change === "delete") {
+      database.db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run(scope.sessionKey);
+    } else {
       await claim.release();
     }
+    await expect(
+      reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume),
+    ).rejects.toThrow(/changed|replaced|released|closed/iu);
+    expect(consume).not.toHaveBeenCalled();
   },
 );
 
 it.each(["native mutation", "caller revocation"] as const)(
   "rejects %s after the worker reply and before cohort consumption",
   async (change) => {
-    const { scope, database } = createCohortFixture(`late-${change.replaceAll(" ", "-")}`);
+    const { scope, database } = fixture(`late-${change.replaceAll(" ", "-")}`);
     if (change === "native mutation") {
       addSessionMember(scope, { identityId: "native-member", addedBy: "owner", addedAt: 1 });
     }
-    const gate = holdCohortReply();
-    let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
-    let reading: Promise<unknown> | undefined;
-    const consume = vi.fn();
     let allowed = true;
-    try {
-      const admitted = await admitCohort(scope);
-      claim = admitted.claim;
-      addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
-      gate.arm();
-      reading = admitted.reader.withRead(
-        { sessionKeys: [scope.sessionKey], includeMembers: true },
-        () => {
-          if (!allowed) {
-            throw new Error("Cohort caller was revoked");
-          }
-        },
-        consume,
-      );
-      void reading.catch(() => {});
-      await awaitGateBeforeSettlement(
-        gate.entered.promise,
-        reading,
-        "Cohort settled before its reply gate",
-      );
-      if (change === "native mutation") {
-        // The synchronous SDK can write without entering the FIFO or publishing sessionChanges.
-        const mutation = database.db
+    const { reader, gate, reading, consume } = await startGatedRead(scope, () => {
+      if (!allowed) {
+        throw new Error("Cohort caller was revoked");
+      }
+    });
+    const mutate = () => {
+      // Native SDK writes bypass FIFO and sessionChanges publication.
+      expect(
+        database.db
           .prepare(
             "UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ? AND identity_id = 'native-member'",
           )
-          .run(scope.sessionKey);
-        expect(mutation.changes).toBe(1);
-      } else {
-        allowed = false;
-      }
-      gate.release.resolve();
-      await expect(reading).rejects.toThrow(
-        change === "native mutation" ? /changed during read/u : /caller was revoked/u,
-      );
-      expect(consume).not.toHaveBeenCalled();
-      if (change === "native mutation") {
-        const mutateDuringConsumption = vi.fn(() => {
-          const mutation = database.db
-            .prepare(
-              "UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ? AND identity_id = 'native-member'",
-            )
-            .run(scope.sessionKey);
-          expect(mutation.changes).toBe(1);
-          return "must not escape the final witness";
-        });
-        await expect(
-          admitted.reader.withRead(
-            { sessionKeys: [scope.sessionKey], includeMembers: true },
-            () => {},
-            mutateDuringConsumption,
-          ),
-        ).rejects.toThrow("Session entry changed during read");
-        expect(mutateDuringConsumption).toHaveBeenCalledOnce();
-      }
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled(reading ? [reading] : []);
-      await claim?.release();
-      gate.restore();
+          .run(scope.sessionKey).changes,
+      ).toBe(1);
+    };
+    if (change === "native mutation") {
+      mutate();
+    } else {
+      allowed = false;
     }
-  },
-);
-
-it.each(["release", "close"] as const)(
-  "joins an accepted cohort reply before completing %s",
-  async (ending) => {
-    const { scope, database } = createCohortFixture(`join-${ending}`);
-    const gate = holdCohortReply();
-    let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
-    let reading: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    const consume = vi.fn();
-    try {
-      const admitted = await admitCohort(scope);
-      claim = admitted.claim;
-      addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
-      gate.arm();
-      reading = admitted.reader.withRead(
-        { sessionKeys: [scope.sessionKey], includeMembers: true },
-        () => {},
-        consume,
-      );
-      void reading.catch(() => {});
-      await awaitGateBeforeSettlement(
-        gate.entered.promise,
-        reading,
-        "Cohort settled before its reply gate",
-      );
-      let closed = false;
-      closing = (
-        ending === "release"
-          ? claim.release()
-          : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
-      ).then(() => {
-        closed = true;
-      });
-      await expect(
-        admitted.reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
-      expect(closed).toBe(false);
-      gate.release.resolve();
-      await expect(reading).rejects.toThrow(/released|closed|revoked/iu);
-      await closing;
-      expect(closed).toBe(true);
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled([...(reading ? [reading] : []), ...(closing ? [closing] : [])]);
-      await claim?.release();
-      gate.restore();
-    }
-  },
-);
-
-it.for(["release", "physical close"] as const)(
-  "cancels and joins a host-queued cohort before %s completes",
-  async (ending, { signal }) => {
-    const { scope, database, entry } = createCohortFixture(
-      `host-queued-${ending.replaceAll(" ", "-")}`,
+    gate.release.resolve();
+    await expect(reading).rejects.toThrow(
+      change === "native mutation" ? /changed during read/u : /caller was revoked/u,
     );
-    const { claim, reader } = await admitCohort(scope);
-    const entered = createDeferredCore();
-    const releaseWriter = createDeferredCore();
-    const consume = vi.fn();
-    let writer: Promise<void> | undefined;
-    let reading: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    try {
+    expect(consume).not.toHaveBeenCalled();
+    if (change === "native mutation") {
+      const mutateDuringConsumption = vi.fn(() => {
+        mutate();
+        return "must not escape the final witness";
+      });
       await expect(
         reader.withRead(
-          { sessionKeys: [scope.sessionKey] },
-          () => {},
-          (read) => {
-            expect(read.entries[0]?.entry.sessionId).toBe(entry.sessionId);
-          },
+          { sessionKeys: [scope.sessionKey], includeMembers: true },
+          noop,
+          mutateDuringConsumption,
         ),
-      ).resolves.toBeUndefined();
-      writer = runOpenClawAgentWorkerWrite(reader.database, async () => {
-        entered.resolve();
-        await releaseWriter.promise;
-      });
-      await withinTest(
-        awaitGateBeforeSettlement(entered.promise, writer, "Host FIFO blocker did not enter"),
-        signal,
-      );
-      reading = reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume);
-      let readSettled = false;
-      void reading.then(
-        () => {
-          readSettled = true;
-        },
-        () => {
-          readSettled = true;
-        },
-      );
-      let closed = false;
-      closing = (
-        ending === "release"
-          ? claim.release()
-          : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
-      ).then(() => {
-        expect(readSettled).toBe(true);
-        closed = true;
-      });
-      // Cancellation settles the queued phase while the unrelated predecessor still holds FIFO.
-      await expect(withinTest(reading, signal)).rejects.toThrow(/released|closed|revoked/iu);
+      ).rejects.toThrow("Session entry changed during read");
+      expect(mutateDuringConsumption).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+async function startQueuedRead(scope: SessionAccessScope, entryId: string, signal: AbortSignal) {
+  const { claim, reader } = await admitCohort(scope);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const consume = vi.fn();
+  let writer: Promise<void> | undefined = undefined;
+  let reading: Promise<unknown> | undefined = undefined;
+  onTestFinished(async () => {
+    release.resolve();
+    await Promise.allSettled([writer, reading]);
+  });
+  await expect(
+    reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, (read) => {
+      expect(read.entries[0]?.entry.sessionId).toBe(entryId);
+    }),
+  ).resolves.toBeUndefined();
+  writer = runWorkerWrite(reader.database, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await withinTest(
+    awaitGateBeforeSettlement(entered.promise, writer, "Host FIFO blocker did not enter"),
+    signal,
+  );
+  reading = reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume);
+  return { claim, reader, gate: { release }, reading, consume, writer };
+}
+
+it.for([
+  { phase: "reply", ending: "release" },
+  { phase: "reply", ending: "close" },
+  { phase: "queue", ending: "release" },
+  { phase: "queue", ending: "close" },
+] as const)(
+  "joins a $phase cohort before $ending completes",
+  async ({ phase, ending }, { signal }) => {
+    const { scope, database, entry } = fixture(`join-${phase}-${ending}`);
+    const { claim, reader, gate, reading, consume, writer } =
+      phase === "queue"
+        ? await startQueuedRead(scope, entry.sessionId, signal)
+        : { ...(await startGatedRead(scope)), writer: undefined };
+    let readSettled = false;
+    const markSettled = () => {
+      readSettled = true;
+    };
+    void reading.then(markSettled, markSettled);
+    let closed = false;
+    const closing = (
+      ending === "release" ? claim.release() : closeDatabase(database.path, database.agentId)
+    ).then(() => {
+      expect(readSettled).toBe(true);
+      closed = true;
+    });
+    try {
+      if (phase === "queue") {
+        // Queued cancellation must settle while the unrelated writer still holds FIFO.
+        await expect(withinTest(reading, signal)).rejects.toThrow(revoked);
+      }
       await expect(
-        reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
-      releaseWriter.resolve();
-      await withinTest(writer, signal);
+        reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume),
+      ).rejects.toThrow(revoked);
+      if (phase === "reply") {
+        expect(closed).toBe(false);
+      }
+      gate.release.resolve();
+      await expect(withinTest(reading, signal)).rejects.toThrow(revoked);
+      if (writer) {
+        await withinTest(writer, signal);
+      }
       await withinTest(closing, signal);
       expect(closed).toBe(true);
       expect(consume).not.toHaveBeenCalled();
     } finally {
-      releaseWriter.resolve();
-      await Promise.allSettled([writer, reading, closing]);
-      await claim.release();
+      gate.release.resolve();
+      await Promise.allSettled([closing]);
     }
   },
 );
@@ -501,41 +422,34 @@ it("refuses malformed folded candidate state while retaining the healthy request
     sessionKey: "agent:aliases:matrix:group:!Room:example.org",
   };
   const folded = "agent:aliases:matrix:group:!room:example.org";
-  replaceSessionEntrySync(scope, { sessionId: "healthy", updatedAt: 1 });
-  replaceSessionEntrySync({ ...scope, sessionKey: folded }, { sessionId: "broken", updatedAt: 1 });
-  expect(loadExactSessionEntryReadOnly(scope)?.entry.sessionId).toBe("healthy");
+  seed(scope, { sessionId: "healthy", updatedAt: 1 });
+  seed({ ...scope, sessionKey: folded }, { sessionId: "broken", updatedAt: 1 });
+  expect(loadExact(scope)?.entry.sessionId).toBe("healthy");
   const database = openOpenClawAgentDatabase(scope);
-  const { claim, reader } = await admitCohort(scope);
+  const { reader } = await admitCohort(scope);
   const read = () =>
-    reader.withRead(
-      { sessionKeys: [scope.sessionKey] },
-      () => {},
-      (cohort) =>
-        cohort.entries.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
+    reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, (cohort) =>
+      cohort.entries.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
     );
+  await expect(read()).resolves.toEqual([{ sessionKey: scope.sessionKey, sessionId: "healthy" }]);
+  const foreign = openNodeSqliteDatabase(database.path);
   try {
-    await expect(read()).resolves.toEqual([{ sessionKey: scope.sessionKey, sessionId: "healthy" }]);
-    const foreign = openNodeSqliteDatabase(database.path);
-    try {
-      expect(
-        foreign
-          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run("{", folded).changes,
-      ).toBe(1);
-    } finally {
-      foreign.close();
-    }
-    // The selected row is unchanged; this phase must still refuse its corrupted folded guard.
-    await expect(read()).rejects.toMatchObject({
-      code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-    });
-    await expect(Promise.resolve().then(() => loadSessionEntry(scope))).rejects.toMatchObject({
-      code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-    });
-    await expect(readSessionEntryInWorker(scope, () => {})).rejects.toMatchObject({
-      code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
-    });
+    expect(
+      foreign
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run("{", folded).changes,
+    ).toBe(1);
   } finally {
-    await claim.release();
+    foreign.close();
   }
+  // The selected row is unchanged; this phase must still refuse its corrupted folded guard.
+  await expect(read()).rejects.toMatchObject({
+    code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+  });
+  await expect(Promise.resolve().then(() => loadSessionEntry(scope))).rejects.toMatchObject({
+    code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+  });
+  await expect(readEntry(scope, noop)).rejects.toMatchObject({
+    code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+  });
 });

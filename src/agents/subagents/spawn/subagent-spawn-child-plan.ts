@@ -1,12 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  attributeDelegatedSessionCreator,
+  inheritSessionCreationPolicy,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveAgentDir } from "../../agent-scope-config.js";
 import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.js";
-import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
+import {
+  resolveRequesterOriginForChild,
+  resolveSpawnRequesterConversationTarget,
+} from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
@@ -27,6 +33,7 @@ import {
   normalizeDeliveryContext,
   resolveAgentConfig,
   resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
 } from "./subagent-spawn.runtime.js";
 
 export async function resolveSubagentChildPlan(params: {
@@ -42,6 +49,8 @@ export async function resolveSubagentChildPlan(params: {
   /** Active requester sandbox classification from the spawn tool, preferred over key-derived
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
+  /** Captured by the trusted caller before any spawn preparation awaits. */
+  creatorProfileId?: string;
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
@@ -66,13 +75,11 @@ export async function resolveSubagentChildPlan(params: {
     targetAgentId: params.targetAgentId,
     explicitWorkspaceDir: inheritedWorkspaceDir,
   });
+  const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
   const requesterOrigin = normalizeDeliveryContext({
     channel: params.ctx.agentChannel,
     accountId: params.ctx.agentAccountId,
-    to: params.ctx.agentTo,
-    ...(params.ctx.agentThreadId != null && params.ctx.agentThreadId !== ""
-      ? { threadId: params.ctx.agentThreadId }
-      : {}),
+    ...requesterConversation,
   });
   const childSessionOrigin = resolveRequesterOriginForChild({
     cfg: params.cfg,
@@ -80,8 +87,8 @@ export async function resolveSubagentChildPlan(params: {
     requesterAgentId: params.requesterAgentId,
     requesterChannel: params.ctx.agentChannel,
     requesterAccountId: params.ctx.agentAccountId,
-    requesterTo: params.ctx.agentTo,
-    requesterThreadId: params.ctx.agentThreadId,
+    requesterTo: requesterConversation.to,
+    requesterThreadId: requesterConversation.threadId,
     requesterGroupSpace: params.ctx.agentGroupSpace,
     requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
   });
@@ -93,7 +100,7 @@ export async function resolveSubagentChildPlan(params: {
   const childSessionKey = incognito
     ? mintedChildSessionKey.replace(":subagent:", ":subagent:incognito-")
     : mintedChildSessionKey;
-  const requesterRuntime = resolveSandboxRuntimeStatus({
+  const requesterRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
     agentId: params.requesterAgentId,
@@ -105,6 +112,11 @@ export async function resolveSubagentChildPlan(params: {
       createdActor: requesterRuntime.createdActor,
     },
     { type: "agent", id: params.requesterAgentId },
+  );
+  creationPolicy.actor = attributeDelegatedSessionCreator(
+    creationPolicy.actor,
+    params.creatorProfileId,
+    params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
   const childRuntimeSandboxed =
@@ -141,6 +153,10 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
+  const requesterThinkingExplicit =
+    // SAFETY: Host tool construction adds this optional bit without changing the public context.
+    (params.ctx as SpawnSubagentContext & { requesterThinkingExplicit?: boolean })
+      .requesterThinkingExplicit;
   const requesterPreferences =
     params.ctx.requesterThinkingLevel === undefined ||
     (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
@@ -151,6 +167,10 @@ export async function resolveSubagentChildPlan(params: {
   // a later turn and cannot represent one-shot overrides.
   const callerThinkingRaw =
     params.ctx.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel;
+  const callerThinkingExplicit =
+    params.ctx.requesterThinkingLevel !== undefined
+      ? requesterThinkingExplicit
+      : requesterPreferences?.thinkingExplicit;
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg: params.cfg,
     targetAgentId: params.targetAgentId,
@@ -159,6 +179,7 @@ export async function resolveSubagentChildPlan(params: {
     modelOverride: params.request.model,
     thinkingOverrideRaw: params.request.thinking,
     callerThinkingRaw,
+    callerThinkingExplicit,
     inheritedModel:
       params.targetAgentId === params.requesterAgentId
         ? (params.ctx.requesterModel ?? requesterPreferences?.model)
@@ -200,6 +221,15 @@ export async function resolveSubagentChildPlan(params: {
       spawnedWorkspaceDir,
       requesterOrigin,
       childSessionOrigin,
+      // Forks, delayed collectors, and thread setup retain ordinary admission.
+      firstAdmission:
+        params.request.context === "isolated" &&
+        !incognito &&
+        !params.request.collect &&
+        !params.request.thread &&
+        params.requesterAgentId === params.targetAgentId
+          ? { delivery: childSessionOrigin, group: toolSpawnMetadata }
+          : undefined,
       incognito,
       childSessionKey,
       childRuntimeSandboxed,

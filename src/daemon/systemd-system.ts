@@ -4,6 +4,7 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import {
   getServiceInspectionClock,
   withServiceInspectionBudget,
@@ -197,6 +198,9 @@ async function inspectLoadedSystemOwnership(
         }
         return { status: "absent", unitName };
       } catch (error) {
+        if (hasCommandProcessCleanupError(error)) {
+          throw error;
+        }
         return unverifiableSystemOwnership(
           unitName,
           formatServiceInspectionDetail(error),

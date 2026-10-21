@@ -68,6 +68,7 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
   const snapshot = context.webPush.snapshot;
   if (
     !snapshot.supported ||
+    !snapshot.canManage ||
     snapshot.permission !== "default" ||
     snapshot.subscription === "registered" ||
     snapshot.subscription === "vapid-mismatch" ||

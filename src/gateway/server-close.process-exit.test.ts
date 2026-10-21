@@ -1,26 +1,29 @@
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../state/openclaw-agent-db-lease.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
-import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
+import { createCloseTestDeps, createTestGate } from "./server-close.lifecycle.test-support.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
 it("settles accepted writes and all cleanup before Gateway close resolves", async ({ signal }) => {
+  const gate = createTestGate(signal);
   const state = await createOpenClawTestState({ scenario: "minimal" });
+  setRuntimeConfigSnapshot({});
   const scheduler = createTestGatewayScheduler();
-  const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner(scheduler);
+  const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner();
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const terminalDraining = createDeferredCore();
@@ -33,26 +36,15 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
   const preRestartHook = vi.fn();
   registerInternalHook("gateway:shutdown", shutdownHook);
   registerInternalHook("gateway:pre-restart", preRestartHook);
-  const createDeps = createGatewayCloseTestDepsFactory({
-    disposeAllBundleLspRuntimes: async () => {},
-    stopGmailWatcher: async () => {},
-    disposeAllCodeModeRuns: async () => {},
-    closeProviderTransportDispatcherPool: async () => {},
-    drainRetainedEmbeddingProviders: async () => {
-      runtimesDrained.resolve();
-    },
-  });
-  const params = createDeps({
+  const params = createCloseTestDeps({
+    drainRetainedOpenAiEmbeddingProviders: async () => runtimesDrained.resolve(),
     channelIds: ["telegram"],
     agentUnsub: async () => {
       terminalDraining.resolve();
       await terminalOwner.drain();
       terminalDrained.resolve();
     },
-    preparePluginRegistryClose: async () => {
-      await releaseMemory.promise;
-      return [];
-    },
+    preparePluginRegistryClose: async () => releaseMemory.promise.then(() => []),
     stopScheduler: vi.fn(async () => {
       schedulerStopping.resolve();
       await releaseScheduler.promise;
@@ -64,7 +56,6 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
   let boardWrite: ReturnType<SqliteBoardStore["putWidget"]> | undefined;
   let closing: Promise<unknown> | undefined;
   try {
-    const options = { agentId: "main", env: state.env };
     const sessionKey = "agent:main:natural-close";
     const event = {
       runId: "natural-close-run",
@@ -81,7 +72,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       startedAt: 1_000,
       updatedAt: 1_000,
     });
-    const agent = openOpenClawAgentDatabase(options);
+    const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     heldWriter = patchSessionEntryCore(
       target,
       async () => {
@@ -108,14 +99,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       restartExpectedMs: 1_500,
       drainTimeoutMs: 0,
     }).then((preparation) => completeGatewayClose(params, preparation));
-    await withinTest(
-      awaitGateBeforeSettlement(
-        terminalDraining.promise,
-        closing,
-        "Gateway skipped accepted terminal persistence before close",
-      ),
-      signal,
-    );
+    await gate(terminalDraining.promise, closing, "Close skipped terminal persistence");
     expect(shutdownHook).toHaveBeenCalledTimes(1);
     expect(preRestartHook).toHaveBeenCalledTimes(1);
     expect(params.stopChannel).toHaveBeenCalledWith("telegram");
@@ -130,31 +114,17 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
       resolvedWidgetName: "accepted",
       widgets: [{ name: "accepted" }],
     });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        runtimesDrained.promise,
-        closing,
-        "Gateway skipped runtime cleanup before retiring memory",
-      ),
-      signal,
-    );
+    await gate(runtimesDrained.promise, closing, "Close skipped runtime cleanup");
     expect(params.stopScheduler).not.toHaveBeenCalled();
     expect(agent.db.isOpen).toBe(true);
     releaseMemory.resolve();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        schedulerStopping.promise,
-        closing,
-        "Gateway skipped scheduler settlement before database close",
-      ),
-      signal,
-    );
+    await gate(schedulerStopping.promise, closing, "Close skipped scheduler settlement");
     expect(agent.db.isOpen).toBe(true);
     releaseScheduler.resolve();
     await withinTest(closing, signal);
     expect(params.stopScheduler).toHaveBeenCalledTimes(1);
     expect(agent.db.isOpen).toBe(false);
-    expect(readOpenClawAgentIntegrityVerification(agent.path, state.env)?.clean_close).toBe(1);
+    expect(readSqliteDatabaseCleanClose(agent.path)).toBe(true);
     expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
     expect(loadSessionEntry(target)).toMatchObject({
       label: "accepted before shutdown",

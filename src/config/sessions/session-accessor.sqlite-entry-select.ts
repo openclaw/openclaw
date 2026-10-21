@@ -1,4 +1,5 @@
 import { expressionBuilder } from "kysely";
+import { jsonArrayValue, jsonOrderedArray } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -32,6 +33,8 @@ export function readSelectedSessionEntryRows(
     includeBoardPresence?: boolean;
     includeMembership?: boolean;
     includeWindowFacts?: true;
+    includeRowTranscriptProjection?: true;
+    projectParticipants?: false;
   },
 ): ReadableSessionEntryRow[] {
   const key =
@@ -41,7 +44,8 @@ export function readSelectedSessionEntryRows(
     projection !== "delivery" &&
     !options?.includeBoardPresence &&
     !options?.includeMembership &&
-    !options?.includeWindowFacts
+    !options?.includeWindowFacts &&
+    !options?.includeRowTranscriptProjection
   ) {
     const queries = getExactSessionEntryQueries(database.db);
     const row =
@@ -89,10 +93,62 @@ export function readSelectedSessionEntryRows(
           .as("transcript_max_seq"),
       ]),
   );
+  const participantQuery = windowQuery.$if(
+    options?.includeWindowFacts === true &&
+      options.projectParticipants !== false &&
+      projection !== "delivery",
+    (builder) =>
+      builder.select((outer) =>
+        tableExists(database.db, "session_participants")
+          ? outer
+              .selectFrom("session_participants")
+              .select((inner) =>
+                jsonOrderedArray(
+                  database.db,
+                  jsonArrayValue(database.db, [
+                    inner.ref("identity_namespace"),
+                    inner.ref("actor_id"),
+                  ]),
+                  [
+                    inner.ref("first_prompted_at"),
+                    inner.ref("actor_id"),
+                    inner.ref("identity_namespace"),
+                  ],
+                  "native",
+                ).as("identities"),
+              )
+              .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
+              .$asScalar()
+              .as("participant_identities_json")
+          : outer.val("[]").as("participant_identities_json"),
+      ),
+  );
+  const transcriptQuery = participantQuery.$if(
+    options?.includeRowTranscriptProjection === true,
+    (builder) =>
+      builder
+        .leftJoin(
+          "session_windows as row_transcript_window",
+          "row_transcript_window.session_id",
+          "session_nodes.current_session_id",
+        )
+        .leftJoin(
+          "session_transcript_index_state as row_transcript_index",
+          "row_transcript_index.session_id",
+          "session_nodes.current_session_id",
+        )
+        .select([
+          "row_transcript_window.session_id as row_transcript_window_id",
+          "row_transcript_window.row_transcript_json",
+          "row_transcript_window.row_transcript_updated_at",
+          "row_transcript_window.transcript_updated_at as row_transcript_source_updated_at",
+          "row_transcript_index.indexed_seq as row_transcript_indexed_seq",
+        ]),
+  );
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
   const boardQuery = options?.includeBoardPresence
-    ? windowQuery.select(
+    ? transcriptQuery.select(
         (tableExists(database.db, "board_widgets")
           ? eb.exists(
               eb
@@ -103,17 +159,16 @@ export function readSelectedSessionEntryRows(
           : eb.lit(0)
         ).as("board_present"),
       )
-    : windowQuery;
+    : transcriptQuery;
   const query = options?.includeMembership
     ? boardQuery.select((outer) =>
         tableExists(database.db, "session_members")
           ? outer
               .selectFrom("session_members")
-              .select(({ fn }) =>
-                fn
-                  .agg<string>("json_group_array", ["identity_id"])
-                  .orderBy("identity_id")
-                  .as("ids"),
+              .select((builder) =>
+                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                  builder.ref("identity_id"),
+                ]).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

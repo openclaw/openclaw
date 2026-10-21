@@ -4,14 +4,12 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import { StringDecoder } from "node:string_decoder";
-import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { SSEClientTransportOptions, FetchLike, Transport } from "@modelcontextprotocol/client";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug } from "../logger.js";
-import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
+import { withMcpEnterpriseBearer } from "./mcp-enterprise-fetch.js";
 import {
   buildMcpHttpFetch,
   buildMcpOAuthHttpFetch,
@@ -34,66 +32,25 @@ type ResolvedMcpTransport = {
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
+  enterpriseAuth?: boolean;
   detachStderr?: () => void;
 };
 
-const MAX_MCP_STDERR_LINE_BYTES = 8 * 1024;
-
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr) {
-    return undefined;
-  }
-  const decoder = new StringDecoder("utf8");
-  let pending = "";
-  let truncated = false;
-  let progressTimer: ReturnType<typeof setTimeout> | undefined;
-  const emit = (text: string) => {
-    const tail = truncateUtf8Suffix(text, MAX_MCP_STDERR_LINE_BYTES);
-    const message = `${truncated || tail !== text ? "[stderr line truncated] " : ""}${tail}`.trim();
-    truncated = false;
-    if (message) {
-      logDebug(`bundle-mcp:${serverName}: ${message}`);
+  let reported = false;
+  const onData = () => {
+    if (!reported) {
+      reported = true;
+      // External server output can contain message text or tool arguments.
+      logDebug(`bundle-mcp:${serverName}: stderr output omitted`);
     }
   };
-  const flushProgress = () => {
-    progressTimer = undefined;
-    const text = pending;
-    pending = "";
-    emit(text);
-  };
-  const onData = (chunk: Buffer | string) => {
-    const decoded = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    const lines = (pending + decoded).split(/[\r\n]/);
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
-      emit(line);
-    }
-    const tail = truncateUtf8Suffix(pending, MAX_MCP_STDERR_LINE_BYTES);
-    truncated ||= tail !== pending;
-    pending = tail;
-    // No-newline progress must stay visible even under continuous writes. Flush
-    // complete characters within 250ms; only finalization ends the UTF-8 decoder.
-    if (pending && !progressTimer) {
-      progressTimer = setTimeout(flushProgress, 250);
-      progressTimer.unref();
-    } else if (!pending) {
-      clearTimeout(progressTimer);
-      progressTimer = undefined;
-    }
-  };
-  const finalize = () => {
-    stderr.off("data", onData);
-    stderr.off("end", finalize);
-    stderr.off("close", finalize);
-    clearTimeout(progressTimer);
-    pending += decoder.end();
-    flushProgress();
-  };
+  // Keep consuming after the notice so stderr cannot block the server's shutdown.
   stderr.on("data", onData);
-  stderr.on("end", finalize);
-  stderr.on("close", finalize);
-  return finalize;
+  return () => {
+    stderr.off("data", onData);
+  };
 }
 
 type SseEventSourceFetch = NonNullable<
@@ -131,6 +88,10 @@ export function resolveMcpTransport(
     agentDir?: string;
     prepareDataDir?: string;
     requesterScope?: SessionMcpRequesterScope;
+    /** Protocol-owned headers for a single stateless request, not credential overrides. */
+    requestHeaders?: Record<string, string>;
+    /** Recheck the owning operation after asynchronous auth and before HTTP effects. */
+    beforeRequest?: () => void;
   },
 ): ResolvedMcpTransport | null {
   const resolved = resolveMcpTransportConfig(serverName, rawServer);
@@ -143,6 +104,7 @@ export function resolveMcpTransport(
     connectionTimeoutMs: resolved.connectionTimeoutMs,
     requestTimeoutMs: resolved.requestTimeoutMs,
     supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    enterpriseAuth: resolved.kind === "http" && resolved.auth === "enterprise",
   };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
@@ -151,13 +113,15 @@ export function resolveMcpTransport(
       env: resolved.env,
       cwd: resolved.cwd,
       prepareDataDir: options?.prepareDataDir,
-      stderr: "pipe",
     });
     return {
       transport,
       ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
+  }
+  if (resolved.auth === "enterprise" && !resolved.enterprise) {
+    return null;
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);
   const requesterScope = options?.requesterScope;
@@ -177,9 +141,11 @@ export function resolveMcpTransport(
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    beforeRequest: options?.beforeRequest,
   });
   const headers =
-    resolved.auth === "oauth" || authProfileId
+    resolved.auth === "oauth" || resolved.auth === "enterprise" || authProfileId
       ? withoutMcpAuthorizationHeader(resolved.headers)
       : resolved.headers;
   const resourceFetch = withSameOriginMcpHttpHeaders({
@@ -210,16 +176,62 @@ export function resolveMcpTransport(
             clientKey: resolved.clientKey,
             resourceUrl: resolved.url,
             timeoutMs: resolved.requestTimeoutMs,
+            beforeRequest: options?.beforeRequest,
             headers,
           }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })
-      : baseFetch;
+      : resolved.auth === "enterprise" && resolved.enterprise
+        ? withMcpEnterpriseBearer({
+            resourceUrl: resolved.url,
+            config: resolved.enterprise,
+            fetchFn: resourceFetch,
+            createAuthenticatedFetches: (assertCurrent) => {
+              const beforeRequest = () => {
+                options?.beforeRequest?.();
+                assertCurrent();
+              };
+              const guardedResourceFetch = withSameOriginMcpHttpHeaders({
+                fetchFn: buildMcpHttpFetch({
+                  sslVerify: resolved.sslVerify,
+                  clientCert: resolved.clientCert,
+                  clientKey: resolved.clientKey,
+                  resourceUrl: resolved.url,
+                  requestTimeoutMs: resolved.requestTimeoutMs,
+                  beforeRequest,
+                }),
+                headers,
+                resourceUrl: resolved.url,
+              });
+              const authFetch = buildMcpOAuthHttpFetch({
+                sslVerify: resolved.sslVerify,
+                clientCert: resolved.clientCert,
+                clientKey: resolved.clientKey,
+                resourceUrl: resolved.url,
+                timeoutMs: resolved.requestTimeoutMs,
+                beforeRequest,
+                headers,
+              });
+              return { resourceFetch: guardedResourceFetch, authFetch };
+            },
+          })
+        : baseFetch;
   if (resolved.transportType === "streamable-http") {
+    let requestInit: RequestInit | undefined =
+      resolved.auth === "oauth" || resolved.auth === "enterprise" || !headers
+        ? undefined
+        : { headers };
+    if (options?.requestHeaders) {
+      const requestHeaders = new Headers(requestInit?.headers);
+      for (const [name, value] of Object.entries(options.requestHeaders)) {
+        requestHeaders.set(name, value);
+      }
+      requestInit = { headers: requestHeaders };
+    }
     return {
       transport: new OpenClawStreamableHTTPClientTransport(new URL(resolved.url), {
-        requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
+        requestInit,
         fetch: httpFetch,
       }),
       ...metadata,
@@ -229,10 +241,16 @@ export function resolveMcpTransport(
   const hasHeaders = Object.keys(sseHeaders).length > 0;
   return {
     transport: new OpenClawSSEClientTransport(new URL(resolved.url), {
-      requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
+      requestInit:
+        resolved.auth === "oauth" || resolved.auth === "enterprise" || !hasHeaders
+          ? undefined
+          : { headers: sseHeaders },
       fetch: httpFetch,
       eventSourceInit: {
-        fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
+        fetch: buildSseEventSourceFetch(
+          resolved.auth === "oauth" || resolved.auth === "enterprise" ? {} : sseHeaders,
+          httpFetch,
+        ),
       },
     }),
     ...metadata,

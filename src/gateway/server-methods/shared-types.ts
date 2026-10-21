@@ -1,3 +1,4 @@
+import type { GatewayClientCap } from "../../../packages/gateway-protocol/src/client-info.js";
 import type {
   SessionApprovalReplay,
   SystemAgentChatQuestion,
@@ -12,6 +13,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-authority.types.js";
+import type { DiffReadTiming } from "../../infra/diff-read-timing.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type {
   PluginApprovalRequest,
@@ -28,7 +30,6 @@ import type { SystemAgentOperation } from "../../system-agent/operation-types.js
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type {
   GatewayDeferredChannelReload,
   GatewayHotReloadStatus,
@@ -37,18 +38,14 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
-import type { MentionInbox } from "../mention-inbox.types.js";
+import type { LiveTextProjectionText } from "../live-text-continuity.js";
+import type { MentionInbox } from "../mention-inbox.contracts.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PlacementStandingGrantRuntime } from "../operator-approval-placement-grants.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
-import type {
-  GatewayBroadcastFn,
-  GatewayBroadcastOpts,
-  GatewayBroadcastToConnIdsFn,
-} from "../server-broadcast-types.js";
 import type {
   ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
@@ -71,8 +68,10 @@ import type {
   PreparedGatewayModelCatalog,
   PreparedGatewayModelCatalogReadResult,
 } from "../server-model-catalog.types.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { ConnectionSessionRows } from "../session-ancestor-references.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -83,7 +82,10 @@ import type {
   WorkerPlacementRuntimeInstallReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementRetirementService,
+  WorkerSessionPlacementStore,
+} from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
@@ -201,7 +203,7 @@ type GatewayKernelContext = {
     readonly hasPendingAgents: boolean;
     waitForAgentPreparation: (
       agentId: string,
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal; forWrite?: boolean },
     ) => Promise<void> | undefined;
   };
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
@@ -314,9 +316,6 @@ type GatewayKernelContext = {
   ) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  /** Cancel identities for turns waiting in the followup/collect queue. */
-  chatQueuedTurns: Map<string, import("../chat-queued-turns.js").QueuedChatTurnEntry>;
   chatRunState: ChatRunState;
   addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
@@ -388,6 +387,7 @@ type GatewayTransportContext = {
   unsubscribeSessionMessageEvents: SessionMessageSubscriberRegistry["unsubscribe"];
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
+  getSessionMessageSubscriberConnIds?: (sessionKey: string) => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
 };
 
@@ -413,7 +413,8 @@ type GatewayResidentBridgeContext = {
   gatewayComputerService?: import("../desktop/computer-service.js").GatewayComputerService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
-    Partial<WorkerSessionPlacementRetirementService>;
+    Partial<WorkerSessionPlacementRetirementService> &
+    Partial<Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion">>;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
@@ -437,6 +438,7 @@ type GatewayResidentBridgeContext = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
@@ -480,6 +482,8 @@ export type GatewayRequestContext = GatewayKernelContext &
 export type GatewayRequestOptions = {
   /** Transport can forward trusted worker JSON without materializing it. */
   acceptsSerializedJson?: boolean;
+  /** Transport can reuse worker-produced raw deflate with the default 15-bit window. */
+  acceptsDeflatedSegments?: boolean;
   req: RequestFrame;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
@@ -493,7 +497,7 @@ export type GatewayRequestOptions = {
   /**
    * In-process Gateway lifetime guard composed into durable session mutations.
    * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
-   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   * opaque approval commit callbacks are removed after an announced ordinary stable release window.
    */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */
@@ -504,6 +508,21 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Release the request's retained sharing facts after its final effect. */
+  release?: () => void;
+  /** Retain these facts until a detached effect settles, independently of the request. */
+  retain?: () => () => void;
+  /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
+  takeRelease?: () => () => void;
+  bindCreation?: (
+    target: { sessionKey?: string; key?: string; agentId?: string },
+    operation: import("../../config/sessions/session-accessor.sqlite-entry-cache.types.js").SessionEntryCreationOperation,
+  ) => void;
+  /** Follow only the selected creator execution's own registry receipts. */
+  followRegistration?: (
+    target: { sessionKey: string; agentId: string },
+    change: import("../../state/openclaw-agent-db-contract.js").AgentDatabaseRegistryChange,
+  ) => void;
   /** Consume fresh durable facts while their physical reader remains retained. */
   withCurrent?: <T>(consume: () => T) => Promise<T>;
   withPreparedCurrent?: <T>(
@@ -536,10 +555,13 @@ export type SessionMutationAuthorization = {
   }>;
   /** Original host/session authority for committed input custody, without the selection precondition. */
   assertAdmittedInputCurrent?: () => void;
+  /** Original host/operator authority; forwarded input owns its current session policy. */
+  assertAdmittedSourceCurrent?: () => void;
   /** Fresh sharing facts for runtime custody; synchronous methods retain the released SDK contract. */
   admittedInputAuthority?: import("../../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   /** Creation-owner notification after COMMIT; binds only this request's previously absent row. */
   recordCreatedSession?: (target: {
+    entry?: import("../../config/sessions/types.js").SessionEntry;
     agentId: string;
     sessionKey: string;
     storePath: string;
@@ -567,6 +589,7 @@ export type GatewayRequestHandlerOptions = Omit<
     target: { sessionKey: string; agentId?: string; sessionId: string },
     consume: (entry: import("../../config/sessions/types.js").InternalSessionEntry) => T,
   ) => Promise<T>;
+  diffTiming?: DiffReadTiming;
   markSessionSubscribePhase?: (
     phase: import("../slow-request-diagnostics.js").SessionSubscribePhase,
   ) => void;
@@ -582,3 +605,133 @@ export type GatewayRequestHandler = ((
 };
 
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;
+
+export type SessionEventProjection = {
+  payload: unknown;
+  /** Certifies a publication-owned envelope and stable row bytes; identical envelopes share encoding. */
+  serializeSession?: () => string;
+  /** Publication-owned UTF-8 message field, including its trailing comma. */
+  serializeMessage?: () => Buffer;
+  delivered?: () => void;
+};
+
+type SessionEventProjectionScope = {
+  sessionKeys: readonly string[];
+  agentId?: string;
+};
+
+/** Connection-owned receipts and run display facts, consumed within one publication. */
+type SessionEventProjectionContext = {
+  isCurrentProjection: (owner: object) => boolean;
+  resolveAgentScope: (
+    key: string,
+    agentId?: string,
+  ) => readonly [string | undefined, string | undefined, string | undefined] | null;
+  forgetAncestors: (key?: string) => void;
+  references: (client: GatewayClient) => ConnectionSessionRows;
+  forgetConnectionAncestors: (client: GatewayClient) => void;
+  createRunProjector: () => VisibleActiveSessionRunProjector;
+};
+
+export type PrepareSessionEventProjection = (
+  event: string,
+  payload: unknown,
+  scope: SessionEventProjectionScope,
+  context: SessionEventProjectionContext,
+) => ((client: GatewayClient) => SessionEventProjection | undefined) | undefined;
+
+type GatewayBroadcastStateVersion = {
+  presence?: number;
+  health?: number;
+};
+
+export type GatewayBroadcastOpts = {
+  /** Agent scope for agent-relative keys such as `global`. */
+  agentId?: string;
+  dropIfSlow?: boolean;
+  /** Omit a redundant projection for clients that advertise this capability. */
+  excludeClientCapability?: GatewayClientCap;
+  /** Canonical subscription keys for session-scoped delivery. */
+  sessionKeys?: readonly string[];
+  /** Producer-resolved exact subscription keys for traffic attribution; never changes recipients. */
+  sessionEventSubscriptionKeys?: readonly string[];
+  /** Prepared facts remain valid only during this synchronous publication. */
+  prepareSessionProjection?: PrepareSessionEventProjection;
+  /** Target recipients were selected from subscriptions at ingress. */
+  sessionSubscriptionVerified?: boolean;
+  /** Question owner authorizes ordinary own-run recipients without a broad question grant. */
+  questionRecipient?: (client: GatewayClient) => boolean;
+  stateVersion?: GatewayBroadcastStateVersion;
+  /** Private live-text ownership; omitting coalesce flushes this group's progress. */
+  liveText?: {
+    group: AbortSignal;
+    /** Source continuity changes without revoking already queued publications. */
+    sourceEpoch?: object;
+    /** Accepted terminal barrier; drain current queued text before retiring its group. */
+    settle?: true;
+    isCurrent?: () => boolean;
+    coalesce?: { key: string; merge: (previous: unknown, next: unknown) => unknown };
+    /** Full internal payloads become append-only only after this socket has a baseline. */
+    projection?: {
+      key: string;
+      delta: (payload: unknown) => unknown;
+      /** Upper bound for encoded full payload bytes, without encoding cumulative text. */
+      snapshotBytes?: (payload: unknown, deltaPayloadBytes: number) => number;
+      version?: unknown;
+      snapshot?: boolean;
+      /** Verify transformed snapshots against the prior publication before omitting them. */
+      text?: LiveTextProjectionText;
+    };
+  };
+};
+
+export type GatewayBroadcastFn = (
+  event: string,
+  payload: unknown,
+  opts?: GatewayBroadcastOpts,
+) => void;
+
+export type GatewayBroadcastToConnIdsFn = (
+  event: string,
+  payload: unknown,
+  connIds: ReadonlySet<string>,
+  opts?: GatewayBroadcastOpts,
+) => void;
+
+/** Current queued outbound bytes for one live gateway connection. */
+export type GatewayBufferedAmountFn = (connId: string) => number | undefined;
+
+export type GatewayPluginEventScope = "operator.read" | "operator.write" | "operator.admin";
+
+/** Broadcasts a namespaced plugin event under an explicit operator scope. */
+export type GatewayPluginEventBroadcastFn = (
+  event: string,
+  payload: unknown,
+  scope: GatewayPluginEventScope,
+) => void;
+
+export type SessionRuntimeScope = {
+  storePath: string;
+  physicalPaths?: (locator: string, agentId?: string) => readonly string[];
+  resolveGatewayContext?: GatewayContextResolver;
+};
+
+export type VisibleActiveSessionRunState = {
+  active: boolean;
+  /** Complete exact active set. Omitted when another active owner exposes only liveness. */
+  runIds?: string[];
+  status?: "queued";
+};
+
+export type VisibleActiveSessionRunSelection = Omit<SessionRuntimeScope, "storePath"> & {
+  storePath?: string;
+  requestedKey: string;
+  canonicalKey: string;
+  sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+};
+
+export type VisibleActiveSessionRunProjector = (
+  params: Omit<VisibleActiveSessionRunSelection, "physicalPaths">,
+) => VisibleActiveSessionRunState;

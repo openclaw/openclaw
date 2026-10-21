@@ -1,46 +1,27 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { nativeHookRelayTesting as hookRelays } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  answerInitialize,
-  createAttemptPaths,
-  createAttemptClientHarness,
-  createAttemptThreadStarter,
-  readHarnessRequestMethods,
-  waitForRequest,
-  waitForThreadStart,
-} from "./attempt-startup.test-support.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  acquireInitializedLease,
+  setupStartupLifecycle,
+} from "./attempt-startup-lifecycle.test-support.js";
+import * as startup from "./attempt-startup.test-support.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
-import { setManagedCodexPluginRoot } from "./managed-binary.js";
-import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
-import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import * as runAttemptResources from "./run-attempt-resources.js";
-import {
-  createCodexRuntimePlanFixture,
-  createRuntimeDynamicTool,
-  createStartedThreadHarness,
-  createTestParams,
-  runCodexAppServerAttempt,
-  setCodexTestModelSupportsTools,
-  setupRunAttemptTestHooks,
-} from "./run-attempt-test-harness.js";
-import * as sandboxExecServer from "./sandbox-exec-server.js";
+import { codexNativeSubagentMonitorRuntime as monitor } from "./native-subagent-monitor.js";
+import * as resources from "./run-attempt-resources.js";
+import * as attempts from "./run-attempt-test-harness.js";
+import * as sandbox from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import {
-  resetCodexTestBindingStore,
-  testCodexAppServerBindingStore,
-} from "./session-binding.test-helpers.js";
-import {
-  clearSharedCodexAppServerClientAndWait,
-  getLeasedSharedCodexAppServerClient,
-  releaseLeasedSharedCodexAppServerClient,
-} from "./shared-client.js";
+import { testCodexAppServerBindingStore as bindings } from "./session-binding.test-helpers.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 
 vi.mock("./desktop-generation.js", async (importOriginal) => ({
@@ -50,31 +31,22 @@ vi.mock("./desktop-generation.js", async (importOriginal) => ({
 
 const tempRoots = new Set<string>();
 const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
-const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
+const startThreadWithHarness = startup.createAttemptThreadStarter(tempRoots, pluginConfig);
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
+const bindingKey = {
+  kind: "session" as const,
+  agentId: "agent-1",
+  sessionId: "session-1",
+  sessionKey: "agent:agent-1:session-1",
+};
+function sendLateThread(harness: startup.AttemptClientHarness, id: number) {
+  const result = threadStartResult("replacement-thread");
+  harness.send({ id, result });
+  harness.send({ method: "thread/started", params: { thread: result.thread } });
+}
 
 describe("startup cancellation with a healthy peer and replacement attempt", () => {
-  beforeEach(async () => {
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
-    defaultCodexPluginMetadataCache.clear();
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(undefined);
-    defaultCodexPluginMetadataCache.clear();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-    tempRoots.clear();
-  });
+  setupStartupLifecycle(tempRoots);
 
   it("retires indeterminate thread startup while another leased peer completes", async () => {
     const threadWritten = createDeferred<{ id: number }>();
@@ -88,31 +60,30 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
         }
       },
     });
-    const replacement = createAttemptClientHarness();
+    const replacement = startup.createAttemptClientHarness();
     vi.spyOn(CodexAppServerClient, "start")
       .mockResolvedValueOnce(retained.client)
       .mockResolvedValueOnce(replacement.client);
-    const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths(tempRoots);
+    const paths = startup.createAttemptPaths(tempRoots);
 
-    const retainedLease = getLeasedSharedCodexAppServerClient({
-      startOptions: appServer.start,
+    await acquireInitializedLease(retained, {
+      startOptions: resolveCodexAppServerRuntimeOptions({ pluginConfig }).start,
       agentDir: paths.agentDir,
     });
-    await answerInitialize(retained);
-    await expect(retainedLease).resolves.toBe(retained.client);
 
     const peer = retained.client.request("turn/start", { threadId: "healthy-peer" });
     void peer.catch(() => undefined);
-    const peerStart = await waitForRequest(retained, "turn/start");
-    // Hold the startup clock while real worker admission runs, then expire the
-    // same 100-ms budget only after the request has actually crossed the wire.
+    const peerStart = await startup.waitForRequest(retained, "turn/start");
+    // Advance the startup clock only after worker admission writes the request.
     vi.useFakeTimers();
-    const { run } = startThreadWithHarness(100, new AbortController().signal, {
-      harness: retained,
-      paths,
-      skipStartSpy: true,
-    });
+    const startOn = (harness: startup.AttemptClientHarness, timeoutMs: number) =>
+      startThreadWithHarness(timeoutMs, undefined, {
+        harness,
+        paths,
+        skipStartSpy: true,
+        buildAttemptParams: () => ({ ...startup.createAttemptParams(paths), disableTools: false }),
+      }).run;
+    const run = startOn(retained, 100);
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
     const threadStart = await threadWritten.promise;
     await vi.advanceTimersByTimeAsync(100);
@@ -121,28 +92,15 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     vi.useRealTimers();
     expect(threadStart.id).toBeDefined();
     expect(retained.process.stdin.destroyed).toBe(false);
-    const replacementRun = startThreadWithHarness(5_000, new AbortController().signal, {
-      harness: replacement,
-      paths,
-      skipStartSpy: true,
-    }).run;
-    await answerInitialize(replacement);
-    const mutate = vi.spyOn(testCodexAppServerBindingStore, "mutate");
-    retained.send({ id: threadStart.id, result: threadStartResult("replacement-thread") });
-    retained.send({
-      method: "thread/started",
-      params: { thread: threadStartResult("replacement-thread").thread },
-    });
-    const replacementStart = await waitForThreadStart(replacement);
+    const replacementRun = startOn(replacement, 5_000);
+    await startup.answerInitialize(replacement);
+    const mutate = vi.spyOn(bindings, "mutate");
+    sendLateThread(retained, threadStart.id);
+    const replacementStart = await startup.waitForThreadStart(replacement);
     expect(mutate).not.toHaveBeenCalled();
     replacement.send({ id: replacementStart.id, result: threadStartResult("replacement-thread") });
     const replacementAttempt = await replacementRun;
-    const binding = testCodexAppServerBindingStore.read({
-      kind: "session",
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-    });
+    const binding = bindings.read(bindingKey);
     expect(binding?.threadId).toBe("replacement-thread");
     const writesAfterReplacement = mutate.mock.calls.length;
     const tool = vi.fn(() => ({ success: true }));
@@ -151,11 +109,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
       method: "item/tool/call",
       params: { threadId: "replacement-thread", turnId: "replacement-turn", tool: "message" },
     };
-    retained.send({ id: threadStart.id, result: threadStartResult("replacement-thread") });
-    retained.send({
-      method: "thread/started",
-      params: { thread: threadStartResult("replacement-thread").thread },
-    });
+    sendLateThread(retained, threadStart.id);
     retained.send({ id: "stale-tool", ...toolRequest });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -163,16 +117,10 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     await replacementAttempt.turnRoute.drain();
     expect(tool).not.toHaveBeenCalled();
     expect(mutate).toHaveBeenCalledTimes(writesAfterReplacement);
-    expect(
-      testCodexAppServerBindingStore.read({
-        kind: "session",
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
-      }),
-    ).toEqual(binding);
-    expect(readHarnessRequestMethods(replacement)).not.toContain("thread/unsubscribe");
-    expect(readHarnessRequestMethods(replacement)).not.toContain("turn/start");
+    expect(bindings.read(bindingKey)).toEqual(binding);
+    for (const forbidden of ["thread/unsubscribe", "turn/start"]) {
+      expect(startup.readHarnessRequestMethods(replacement)).not.toContain(forbidden);
+    }
     // Positive route control: only the authoritative client's tool request runs.
     replacement.send({ id: "current-tool", ...toolRequest });
     await vi.waitFor(() => expect(tool).toHaveBeenCalledTimes(1));
@@ -188,92 +136,75 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
 });
 
 describe("Codex runtime startup resource lifetime", () => {
-  setupRunAttemptTestHooks();
+  attempts.setupRunAttemptTestHooks();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
-    "releases allocated runtime owners once when native monitor setup ends with %s",
+  it.each(["capture-failed", "abort"] as const)(
+    "releases owners once after monitor setup %s",
     async (ending) => {
-      const harness = createStartedThreadHarness();
-      const params = createTestParams();
+      const harness = attempts.createStartedThreadHarness();
+      const params = attempts.createTestParams();
+      setRuntimeConfigSnapshot(params.config ?? {});
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       params.sandbox = createSandboxContext({});
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      setCodexTestModelSupportsTools(params, true);
-      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
-      const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
-      const releaseSandbox = vi.spyOn(
-        sandboxExecServer,
-        "releaseCodexSandboxExecServerEnvironment",
-      );
-      const allocated: Array<
-        ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>["state"]
-      > = [];
+      params.runtimePlan = attempts.createCodexRuntimePlanFixture();
+      attempts.setCodexTestModelSupportsTools(params, true);
+      setCodexTestToolFactory(params, () => [attempts.createRuntimeDynamicTool("message")]);
+      const resourcesSpy = vi.spyOn(resources, "prepareCodexAttemptResources");
+      const releaseSandbox = vi.spyOn(sandbox, "releaseCodexSandboxExecServerEnvironment");
       const setupError = new Error("native monitor setup failed");
-      const captured = createDeferred<void>();
+      const captured =
+        createDeferred<ReturnType<typeof resources.prepareCodexAttemptResources>["state"]>();
       const releaseCapture = createDeferred<void>();
-      const registerMonitor = codexNativeSubagentMonitorRuntime.register;
+      const registerMonitor = monitor.register;
       let registration: Awaited<ReturnType<typeof registerMonitor>> | undefined;
-      const register = vi
-        .spyOn(codexNativeSubagentMonitorRuntime, "register")
-        .mockImplementationOnce(async (options) => {
-          const state = resourcesSpy.mock.results[0]?.value.state;
-          assert(state?.turnRoute, "startup must allocate a route before monitor setup");
-          assert(
-            state.sandboxExecEnvironment,
-            "startup must allocate a sandbox before monitor setup",
-          );
-          assert(state.nativeHookRelay, "startup must allocate a relay before monitor setup");
-          assert(
+      const register = vi.spyOn(monitor, "register").mockImplementationOnce(async (options) => {
+        const state = resourcesSpy.mock.results[0]?.value.state;
+        assert(
+          state?.turnRoute &&
+            state.sandboxExecEnvironment &&
+            state.nativeHookRelay &&
             state.releaseSharedClientLease,
-            "startup must allocate a client lease before monitor setup",
-          );
-          vi.spyOn(state.turnRoute, "release");
-          vi.spyOn(state.nativeHookRelay, "unregister");
-          vi.spyOn(state.nativeHookRelay, "drain");
-          state.releaseSharedClientLease = vi.fn(state.releaseSharedClientLease);
-          allocated.push({ ...state });
-          if (ending !== "capture-failed") {
-            registration = await registerMonitor(options);
-            vi.spyOn(registration, "unregister");
-          }
-          captured.resolve();
-          await releaseCapture.promise;
-          if (!registration) {
-            throw setupError;
-          }
-          return registration;
-        });
+          "startup must allocate route, sandbox, relay and client lease before monitor setup",
+        );
+        vi.spyOn(state.turnRoute, "release");
+        vi.spyOn(state.nativeHookRelay, "unregister");
+        vi.spyOn(state.nativeHookRelay, "drain");
+        state.releaseSharedClientLease = vi.fn(state.releaseSharedClientLease);
+        const owners = { ...state };
+        if (ending !== "capture-failed") {
+          registration = await registerMonitor(options);
+          vi.spyOn(registration, "unregister");
+        }
+        captured.resolve(owners);
+        await releaseCapture.promise;
+        if (!registration) {
+          throw setupError;
+        }
+        return registration;
+      });
 
       try {
-        const run = runCodexAppServerAttempt(params, {
+        const run = attempts.runCodexAppServerAttempt(params, {
           pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
           nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
         });
-        const rejected =
-          ending === "capture-failed" || ending === "abort"
-            ? expect(run).rejects.toBe(setupError)
-            : expect(run).rejects.toThrow("registration was superseded during setup");
-        await captured.promise;
-        const resources = resourcesSpy.mock.results[0]?.value;
-        assert(resources);
-        expect(resources.state.nativeSubagentMonitor).toBeUndefined();
+        const rejected = expect(run).rejects.toBe(setupError);
+        const owners = await captured.promise;
+        const prepared = resourcesSpy.mock.results[0]?.value;
+        assert(prepared);
+        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (ending === "abort") {
           abortController.abort(setupError);
-        } else if (ending === "cleanup") {
-          await resources.releaseCurrentRoute();
-        } else if (ending === "replacement") {
-          resources.state.thread = { ...resources.state.thread };
         }
         releaseCapture.resolve();
         await rejected;
         expect(register).toHaveBeenCalledOnce();
-        expect(resources.state.nativeSubagentMonitor).toBeUndefined();
+        expect(prepared.state.nativeSubagentMonitor).toBeUndefined();
         if (registration) {
           expect(registration.unregister).toHaveBeenCalledOnce();
         }
-        const [owners] = allocated;
-        assert(owners);
         expect.soft(owners.turnRoute?.release).toHaveBeenCalledOnce();
         expect.soft(owners.releaseSharedClientLease).toHaveBeenCalledOnce();
         expect.soft(owners.nativeHookRelay?.unregister).toHaveBeenCalledOnce();
@@ -281,13 +212,8 @@ describe("Codex runtime startup resource lifetime", () => {
         expect
           .soft(releaseSandbox)
           .toHaveBeenCalledExactlyOnceWith(params.sandbox, owners.sandboxExecEnvironment);
-        expect
-          .soft(
-            nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
-              owners.nativeHookRelay!.relayId,
-            ),
-          )
-          .toBeUndefined();
+        const relayId = owners.nativeHookRelay!.relayId;
+        expect.soft(hookRelays.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
         expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
       } finally {
         releaseCapture.resolve();

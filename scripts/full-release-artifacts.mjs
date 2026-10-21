@@ -22,6 +22,7 @@ import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
   validatePreparedNpmBundleDescriptor,
+  sameJobExecution,
   verifyNpmBundleProducer,
 } from "./npm-prepared-bundle.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
@@ -667,7 +668,7 @@ async function resolveProducer(request, env) {
     );
   }
   const run = readArtifactRun(request, record.runId, record.runAttempt, {
-    allowNewerAttempts: request.stage === "npm",
+    allowNewerAttempts: request.stage === "npm" || request.stage === "docker",
   });
   output({
     run_id: record.runId,
@@ -730,6 +731,10 @@ function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
     );
     requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
     if (!matches.length) {
+      continue;
+    }
+    // A carried-forward copy of the successful job keeps its frozen bytes.
+    if (selected?.conclusion === "success" && sameJobExecution(selected, matches[0])) {
       continue;
     }
     requireValue(

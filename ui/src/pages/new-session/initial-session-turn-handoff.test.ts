@@ -17,6 +17,66 @@ afterEach(() => {
 });
 
 describe("first-turn publication", () => {
+  it("retires an accepted draft before a slow preview route is ready", async () => {
+    const { context } = createDraftFixture();
+    let ready!: () => void;
+    Object.defineProperty(context, "router", {
+      value: {
+        getState: () => ({ location: undefined }),
+        subscribe: () => () => {},
+        navigate: () =>
+          new Promise<void>((resolve) => {
+            ready = resolve;
+          }),
+      },
+    });
+    const key = "agent:main:accepted-before-preview";
+    const instant = new InstantThreadHandoff(
+      context,
+      key,
+      "main",
+      {
+        data: {
+          agentId: "main",
+          requestedAgentId: "main",
+          catalogId: "",
+          catalogLabel: "",
+          startTerminal: false,
+        },
+        page: document.createElement("div"),
+        release: vi.fn(),
+        synchronizeGateway: vi.fn(),
+      },
+      null,
+    );
+    const client = context.gateway.snapshot.client!;
+    const clearDraft = vi.fn(async () => {});
+    const navigation = new StartedSessionNavigation();
+    vi.spyOn(navigation, "navigate").mockResolvedValue();
+    const completion = completeInitialSessionTurn({
+      context,
+      client,
+      agentId: "main",
+      result: { key, initialRun: { status: "started", runId: "accepted-run" } },
+      turn: { text: "Accepted prompt", attachments: [], createdAt: 1 },
+      instant,
+      navigation,
+      isCurrent: () => true,
+      clearDraft,
+      completeInBackground: () => false,
+      finishNavigation: vi.fn(),
+    });
+    try {
+      // Acceptance, not lazy route readiness or storage completion, consumes input.
+      expect(clearDraft).toHaveBeenCalledOnce();
+      expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
+    } finally {
+      ready();
+      await completion;
+      instant.dispose();
+    }
+  });
+
   it.each([
     { status: "started", change: "scope" },
     { status: "rejected", change: "request" },
@@ -116,7 +176,7 @@ describe("first-turn publication", () => {
           expect(retainRejected).not.toHaveBeenCalled();
           expect(JSON.stringify(localStorage)).not.toContain("private incognito first turn");
           if (status === "started") {
-            expect(clearDraft).toHaveBeenCalledWith(true, false);
+            expect(clearDraft).toHaveBeenCalledWith(true, undefined);
           } else {
             expect(clearDraft).not.toHaveBeenCalled();
           }

@@ -12,6 +12,7 @@ import {
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createPackageRuntimeUrlBuildPlugin } from "./scripts/lib/package-runtime-url-build-plugin.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
@@ -21,13 +22,17 @@ import {
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./scripts/lib/public-session-locales.mts";
+import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
   standaloneRuntimeProcessBuildEntries,
 } from "./scripts/lib/runtime-process-core-build-entries.mts";
+import { createSqliteSchemaAssetsPlugin } from "./scripts/lib/sqlite-schema-assets.mts";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
@@ -41,6 +46,7 @@ import {
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-declarations.mts";
 import {
   createWorkerDeployBuildPlugin,
@@ -79,6 +85,9 @@ const workerDeployVersion = (
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
+const TSDOWN_PACKAGE_DECLARATIONS = TSDOWN_DECLARATIONS
+  ? { tsconfig: "tsconfig.packages.json" }
+  : false;
 export { createStateSchemaInlinePlugin, STATE_SCHEMA_INLINE_PLUGIN_NAME };
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
@@ -117,7 +126,7 @@ function matchesExternalOption(
 
 function buildInputOptions(
   options: InputOptionsArg,
-  build?: { bundleAllDependencies?: boolean },
+  build?: { bundleAllDependencies?: boolean; bundleFsSafe?: boolean },
 ): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -158,7 +167,12 @@ function buildInputOptions(
     ...options,
     external(id: string, parentId: string | undefined, isResolved: boolean) {
       return (
-        (!build?.bundleAllDependencies && shouldNeverBundleDependency(id)) ||
+        (!build?.bundleAllDependencies &&
+          !(
+            build?.bundleFsSafe &&
+            (id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/"))
+          ) &&
+          shouldNeverBundleDependency(id)) ||
         matchesExternalOption(previousExternal, id, parentId, isResolved)
       );
     },
@@ -218,6 +232,7 @@ function createBashParserAssetsPlugin(): TsdownPlugin {
 function nodeBuildConfig(
   config: UserConfig,
   declarations: UserConfig["dts"] = TSDOWN_DECLARATIONS,
+  build?: Parameters<typeof buildInputOptions>[1],
 ): UserConfig {
   return {
     ...config,
@@ -232,6 +247,12 @@ function nodeBuildConfig(
       typeof declarations === "object" && declarations.emitDtsOnly
         ? undefined
         : createPublicSessionCardAssetsPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createPublicSessionLocalesPlugin(),
+      typeof declarations === "object" && declarations.emitDtsOnly
+        ? undefined
+        : createSqliteSchemaAssetsPlugin(),
       config.plugins,
     ],
     env,
@@ -239,7 +260,7 @@ function nodeBuildConfig(
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options),
+    inputOptions: (options) => buildInputOptions(options, build),
   };
 }
 
@@ -279,7 +300,12 @@ function workerDeployBuildConfig(entry: Record<string, string>, split = false): 
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     },
-    plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
+    plugins: [
+      createStateSchemaInlinePlugin(),
+      createPublicSessionLocalesPlugin(),
+      createSqliteSchemaAssetsPlugin(undefined, undefined, { workerChunks: true }),
+      createWorkerDeployBuildPlugin(),
+    ],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: (options) => ({
@@ -317,7 +343,7 @@ function workerHelperBuildConfig(
 function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
   return {
     ...config,
-    dts: TSDOWN_DECLARATIONS,
+    dts: TSDOWN_PACKAGE_DECLARATIONS,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
@@ -397,7 +423,9 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "vitest",
     // Selected plugin distributions install platform optionals beside bundled JavaScript.
     ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
-      Object.keys(packageJson?.optionalDependencies ?? {}),
+      isRecord(packageJson) && isRecord(packageJson.optionalDependencies)
+        ? Object.keys(packageJson.optionalDependencies)
+        : [],
     ),
   ],
 });
@@ -639,9 +667,13 @@ const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries(
   bundledPluginBuildInventory,
 ).filter(({ isolated }) => !isolated);
 const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
+  const openclaw =
+    isRecord(plugin.packageJson) && isRecord(plugin.packageJson.openclaw)
+      ? plugin.packageJson.openclaw
+      : undefined;
   const sourceEntries = plugin.sourceEntries.filter(
     (source) =>
-      source === plugin.packageJson?.openclaw?.setupEntry ||
+      source === openclaw?.setupEntry ||
       plugin.catalogSourceEntries.includes(source) ||
       /^\.\/setup-api\.[cm]?[jt]s$/u.test(source),
   );
@@ -649,13 +681,15 @@ const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) =
     return [];
   }
   const entries = [{ id: plugin.id, sourceEntries }];
+  const extensions = openclaw?.extensions;
+  if (
+    extensions !== undefined &&
+    (!Array.isArray(extensions) || extensions.some((entry) => typeof entry !== "string"))
+  ) {
+    throw new Error(`Plugin ${plugin.id} extensions must be an array of strings`);
+  }
   const runtime = listBundledPluginEntrySources([
-    {
-      id: plugin.id,
-      sourceEntries: plugin.packageJson?.openclaw?.extensions?.length
-        ? plugin.packageJson.openclaw.extensions
-        : ["./index.ts"],
-    },
+    { id: plugin.id, sourceEntries: extensions?.length ? extensions : ["./index.ts"] },
   ]);
   const runtimeSources = new Set(Object.values(runtime).map((source) => fs.realpathSync(source)));
   for (const [name, source] of Object.entries(listBundledPluginEntrySources(entries))) {
@@ -792,14 +826,17 @@ const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions
 } = { stableTypeOrdering: true };
 
 const configs: UserConfig[] = [
-  nodeBuildConfig({
-    name: TSDOWN_PACKAGE_CONFIG_GROUP,
-    entry: buildAgentCoreDistEntries(),
-    outDir: tsdownPackageOutputRoot("agent-core"),
-    deps: {
-      neverBundle: shouldExternalizeAgentCoreDependency,
+  nodeBuildConfig(
+    {
+      name: TSDOWN_PACKAGE_CONFIG_GROUP,
+      entry: buildAgentCoreDistEntries(),
+      outDir: tsdownPackageOutputRoot("agent-core"),
+      deps: {
+        neverBundle: shouldExternalizeAgentCoreDependency,
+      },
     },
-  }),
+    TSDOWN_PACKAGE_DECLARATIONS,
+  ),
   nodeWorkspacePackageBuildConfig("gateway-protocol", {
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,
@@ -916,22 +953,41 @@ const configs: UserConfig[] = [
       false,
     );
   }),
-  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) =>
-    nodeBuildConfig(
+  ...Object.entries(standaloneRuntimeProcessBuildEntries).map(([name, source]) => {
+    const bundleFsSafe = [
+      "infra/sqlite-readonly-location.worker",
+      "state/openclaw-state-read.worker",
+    ].includes(name);
+    const isFsSafe = (id: string) =>
+      id === "@openclaw/fs-safe" || id.startsWith("@openclaw/fs-safe/");
+    return nodeBuildConfig(
       {
         name: TSDOWN_UNIFIED_CONFIG_GROUP,
         entry: { [name]: source },
         deps: {
           ...unifiedDeps,
+          neverBundle: bundleFsSafe
+            ? (id) => shouldNeverBundleDependency(id) && !isFsSafe(id)
+            : unifiedDeps.neverBundle,
           alwaysBundle: (id) =>
-            shouldAlwaysBundleDependency(id) || shouldBundleRuntimeSqliteDependency(id),
+            shouldAlwaysBundleDependency(id) ||
+            shouldBundleRuntimeSqliteDependency(id) ||
+            (bundleFsSafe &&
+              (isFsSafe(id) ||
+                ["semver", "tslog"].some(
+                  (packageName) => id === packageName || id.startsWith(`${packageName}/`),
+                ))),
         },
-        outputOptions: { codeSplitting: false },
-        plugins: [createStateSchemaInlinePlugin()],
+        outputOptions: getStandaloneRuntimeProcessOutputOptions(name),
+        plugins: [
+          createStateSchemaInlinePlugin(),
+          ...(bundleFsSafe ? [createPackageRuntimeUrlBuildPlugin("@openclaw/fs-safe")] : []),
+        ],
       },
       false,
-    ),
-  ),
+      { bundleFsSafe },
+    );
+  }),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -945,6 +1001,8 @@ const configs: UserConfig[] = [
     {
       "worker/worker": "src/worker/worker-deploy-entry.ts",
       "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+      "worker/worker-chunk-fs-safe-watch-io":
+        "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
     },
     true,
   ),
@@ -952,10 +1010,17 @@ const configs: UserConfig[] = [
     "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
   }),
   workerDeployBuildConfig({
+    "worker/client-credential.worker": "src/worker/worker-deploy-client-credentials.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({
     "worker/file-tool-read.worker": "src/worker/worker-deploy-file-tool-read.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/gateway-state-owner-heartbeat.worker":
+      "src/infra/gateway-state-owner-heartbeat.worker.ts",
   }),
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
@@ -966,9 +1031,10 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-source-revision.worker": "src/worker/worker-deploy-sqlite-source-revision.ts",
   }),
-  workerDeployBuildConfig({
-    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
-  }),
+  workerDeployBuildConfig(
+    { "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts" },
+    true,
+  ),
   workerDeployBuildConfig({
     "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
   }),
@@ -1018,4 +1084,4 @@ const configs: UserConfig[] = [
     : []),
 ];
 
-export default configs;
+export default cacheTsdownRuntimeConfigs(configs);

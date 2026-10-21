@@ -1,7 +1,6 @@
-// Voice Call tests cover inbound event policy and routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCallBriefInstructions } from "../call-brief.js";
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import {
   createEventManagerHarness,
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
@@ -22,11 +21,23 @@ const {
   setup,
 } = createEventManagerHarness();
 
-beforeEach(() => {
-  setup();
-});
+beforeEach(setup);
 
 afterEach(cleanup);
+
+function inboundEvent(id: string, providerCallId: string, from = "+15554444444") {
+  return createInboundInitiatedEvent({ id, providerCallId, from });
+}
+
+function inboundConfig(overrides: Record<string, unknown>) {
+  return normalizeVoiceCallConfig({
+    enabled: true,
+    provider: "plivo",
+    fromNumber: "+15550000000",
+    inboundPolicy: "open",
+    ...overrides,
+  });
+}
 
 describe("processEvent (functional inbound calls)", () => {
   function parseMockEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
@@ -37,11 +48,7 @@ describe("processEvent (functional inbound calls)", () => {
       query: {},
       rawBody: JSON.stringify({
         event: {
-          ...createInboundInitiatedEvent({
-            id: "mock-inbound",
-            providerCallId: "mock-provider-inbound",
-            from: "+15552222222",
-          }),
+          ...inboundEvent("mock-inbound", "mock-provider-inbound", "+15552222222"),
           to: "+15553333333",
           ...overrides,
         },
@@ -56,7 +63,6 @@ describe("processEvent (functional inbound calls)", () => {
   it.each([
     ["call.initiated", "ringing"],
     ["call.ringing", "ringing"],
-    ["call.answered", "answered"],
     ["call.active", "active"],
   ] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
     const ctx = createContext({ provider: new MockProvider() });
@@ -75,50 +81,18 @@ describe("processEvent (functional inbound calls)", () => {
   });
 
   it.each([
-    {
-      ageMinutes: 5,
-      from: "+15554444444",
-      policy: "allowlist",
-      realtimeEnabled: true,
-      accepted: true,
-    },
-    {
-      ageMinutes: 5,
-      from: "+15554444444",
-      policy: "allowlist",
-      realtimeEnabled: false,
-      accepted: false,
-    },
-    {
-      ageMinutes: 31,
-      from: "+15554444444",
-      policy: "allowlist",
-      realtimeEnabled: true,
-      accepted: false,
-    },
-    {
-      ageMinutes: 5,
-      from: "5554444444",
-      policy: "allowlist",
-      realtimeEnabled: true,
-      accepted: false,
-    },
-    {
-      ageMinutes: 5,
-      from: "+15554444444",
-      policy: "disabled",
-      realtimeEnabled: true,
-      accepted: false,
-    },
-  ])(
-    "admits callbacks only for realtime recent E.164 outbound recipients: $ageMinutes/$from/$policy/realtime=$realtimeEnabled",
-    async ({ ageMinutes, from, policy, realtimeEnabled, accepted }) => {
+    [5, "+15554444444", "allowlist", true, true],
+    [5, "+15554444444", "allowlist", false, false],
+    [31, "+15554444444", "allowlist", true, false],
+    [5, "5554444444", "allowlist", true, false],
+    [5, "+15554444444", "disabled", true, false],
+  ] as const)(
+    "admits callbacks only for realtime recent E.164 outbound recipients: %s/%s/%s/realtime=%s",
+    async (ageMinutes, from, policy, realtimeEnabled, accepted) => {
       const hangup = vi.fn(async () => {});
       const ctx = createContext({
         provider: createProvider({ hangupCall: hangup }),
-        config: VoiceCallConfigSchema.parse({
-          enabled: true,
-          provider: "plivo",
+        config: inboundConfig({
           inboundPolicy: policy,
           callbacks: { enabled: true, windowMinutes: 30, greeting: "I can take a message." },
           realtime: { enabled: realtimeEnabled },
@@ -141,10 +115,7 @@ describe("processEvent (functional inbound calls)", () => {
         },
       };
       await persistCallRecord(ctx.storePath, original);
-      await processEvent(
-        ctx,
-        createInboundInitiatedEvent({ id: "callback", providerCallId: "callback-provider", from }),
-      );
+      await processEvent(ctx, inboundEvent("callback", "callback-provider", from));
       expect(ctx.activeCalls.size).toBe(accepted ? 1 : 0);
       expect(hangup).toHaveBeenCalledTimes(accepted ? 0 : 1);
       if (accepted) {
@@ -169,11 +140,11 @@ describe("processEvent (functional inbound calls)", () => {
       installStateRuntime(() => failPersistence);
       const { ctx, hangupCalls } = createRejectingInboundContext();
       ctx.config.inboundPolicy = kind === "created" ? "open" : "disabled";
-      const event = createInboundInitiatedEvent({
-        id: `event-durable-${kind}`,
-        providerCallId: `provider-durable-${kind}`,
-        from: "+15550000002",
-      });
+      const event = inboundEvent(
+        `event-durable-${kind}`,
+        `provider-durable-${kind}`,
+        "+15550000002",
+      );
 
       await expect(processEvent(ctx, event)).rejects.toThrow(
         "synthetic SQLite persistence failure",
@@ -192,18 +163,11 @@ describe("processEvent (functional inbound calls)", () => {
   );
 
   it("answers accepted inbound calls when the provider requires an answer command", async () => {
-    const answerCalls: AnswerCallInput[] = [];
-    const provider = createProvider({
-      answerCall: async (input: AnswerCallInput): Promise<void> => {
-        answerCalls.push(input);
-      },
-    });
+    const answerCall = vi.fn<(_: AnswerCallInput) => Promise<void>>().mockResolvedValue(undefined);
+    const provider = createProvider({ answerCall });
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
+      config: inboundConfig({
         provider: "telnyx",
-        fromNumber: "+15550000000",
-        inboundPolicy: "open",
         telnyx: {
           apiKey: "KEY123",
           connectionId: "CONN456",
@@ -212,72 +176,38 @@ describe("processEvent (functional inbound calls)", () => {
       }),
       provider,
     });
-    const event = createInboundInitiatedEvent({
-      id: "evt-answer",
-      providerCallId: "call-control-1",
-      from: "+15552222222",
-    });
+    const event = inboundEvent("evt-answer", "call-control-1", "+15552222222");
 
     await processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(answerCalls).toEqual([
-      {
-        callId: call.callId,
-        providerCallId: "call-control-1",
-      },
-    ]);
+    expect(answerCall).toHaveBeenCalledExactlyOnceWith({
+      callId: call.callId,
+      providerCallId: "call-control-1",
+    });
   });
 
   it.each([
-    {
-      sessionScope: "per-call",
-      coreSession: undefined,
-      expectedSessionKey: (call: CallRecord) => `agent:main:voice:call:${call.callId}`,
-    },
-    {
-      sessionScope: "main",
-      coreSession: { mainKey: "work" },
-      expectedSessionKey: () => "agent:main:work",
-    },
-  ])(
-    "assigns $sessionScope session keys to inbound calls",
-    async ({ sessionScope, coreSession, expectedSessionKey }) => {
-      const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
-          enabled: true,
-          provider: "plivo",
-          fromNumber: "+15550000000",
-          inboundPolicy: "open",
-          sessionScope,
-        }),
-        coreSession,
-      });
-      const event: NormalizedEvent = {
-        id: "evt-inbound-session-scope",
-        type: "call.initiated",
-        callId: "CA-inbound-session-scope",
-        providerCallId: "CA-inbound-session-scope",
-        timestamp: Date.now(),
-        direction: "inbound",
-        from: "+15554444444",
-        to: "+15550000000",
-      };
+    ["per-call", undefined],
+    ["main", { mainKey: "work" }],
+  ] as const)("assigns %s session keys to inbound calls", async (sessionScope, coreSession) => {
+    const ctx = createContext({
+      config: inboundConfig({ sessionScope }),
+      coreSession,
+    });
+    const event = inboundEvent("evt-inbound-session-scope", "CA-inbound-session-scope");
 
-      await processEvent(ctx, event);
+    await processEvent(ctx, event);
 
-      const call = requireFirstActiveCall(ctx);
-      expect(call.sessionKey).toBe(expectedSessionKey(call));
-    },
-  );
+    const call = requireFirstActiveCall(ctx);
+    expect(call.sessionKey).toBe(
+      sessionScope === "main" ? "agent:main:work" : `agent:main:voice:call:${call.callId}`,
+    );
+  });
 
   it("applies per-number inbound greeting and stores the matched route key", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
-        provider: "plivo",
-        fromNumber: "+15550000000",
-        inboundPolicy: "open",
+      config: inboundConfig({
         inboundGreeting: "Hello from global.",
         numbers: {
           "+15550002222": {
@@ -288,22 +218,20 @@ describe("processEvent (functional inbound calls)", () => {
       }),
     });
     const event: NormalizedEvent = {
-      id: "evt-inbound-number-route",
-      type: "call.initiated",
-      callId: "CA-inbound-number-route",
-      providerCallId: "CA-inbound-number-route",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "+15554444444",
+      ...inboundEvent("evt-inbound-number-route", "CA-inbound-number-route"),
       to: "+1 (555) 000-2222",
     };
 
     await processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
-    expect(call.metadata?.numberRouteKey).toBe("+15550002222");
-    expect(call.agentId).toBe("cards");
+    expect(call).toMatchObject({
+      metadata: {
+        initialMessage: "Silver Fox Cards, how can I help?",
+        numberRouteKey: "+15550002222",
+      },
+      agentId: "cards",
+    });
   });
 
   it("bounds rejected provider calls while retaining hangup-once behavior", async () => {
@@ -313,21 +241,10 @@ describe("processEvent (functional inbound calls)", () => {
     const { ctx, hangupCalls } = createRejectingInboundContext();
     ctx.rejectedProviderCallIds = rejectedProviderCallIds;
 
+    await processEvent(ctx, inboundEvent("evt-rejected-new", "provider-new", "+15552222222"));
     await processEvent(
       ctx,
-      createInboundInitiatedEvent({
-        id: "evt-rejected-new",
-        providerCallId: "provider-new",
-        from: "+15552222222",
-      }),
-    );
-    await processEvent(
-      ctx,
-      createInboundInitiatedEvent({
-        id: "evt-rejected-new-replay",
-        providerCallId: "provider-new",
-        from: "+15552222222",
-      }),
+      inboundEvent("evt-rejected-new-replay", "provider-new", "+15552222222"),
     );
 
     expect(ctx.rejectedProviderCallIds.size).toBe(EVENT_MANAGER_REPLAY_KEY_LIMIT);

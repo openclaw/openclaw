@@ -9,6 +9,11 @@ import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import type { Api } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import { TLS_SECRET_FIELDS } from "../secrets/provider-request-secret-fields.js";
+import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
   type ProviderRequestTransport,
@@ -95,9 +100,10 @@ export function sanitizeConfiguredProviderRequest(
       auth = { mode: "provider-default" };
     } else if (rawAuth.mode === "authorization-bearer") {
       const token = sanitizeConfiguredRequestString(rawAuth.token, "request.auth.token");
-      if (token) {
-        auth = { mode: "authorization-bearer", token };
+      if (!token) {
+        throw new Error("request.auth.token must resolve to a non-empty value");
       }
+      auth = { mode: "authorization-bearer", token };
     } else if (rawAuth.mode === "header") {
       const headerName = sanitizeConfiguredRequestString(
         rawAuth.headerName,
@@ -105,14 +111,15 @@ export function sanitizeConfiguredProviderRequest(
       );
       const value = sanitizeConfiguredRequestString(rawAuth.value, "request.auth.value");
       const prefix = sanitizeConfiguredRequestString(rawAuth.prefix, "request.auth.prefix");
-      if (headerName && value) {
-        auth = {
-          mode: "header",
-          headerName,
-          value,
-          ...(prefix ? { prefix } : {}),
-        };
+      if (!headerName || !value) {
+        throw new Error("request.auth.headerName and request.auth.value must be non-empty");
       }
+      auth = {
+        mode: "header",
+        headerName,
+        value,
+        ...(prefix ? { prefix } : {}),
+      };
     }
   }
 
@@ -304,7 +311,6 @@ function resolveAuthOverride(params: {
         mode: "authorization-bearer",
         headerName: "Authorization",
         value,
-        injectAuthorizationHeader: true,
       } as const;
     }
   }
@@ -319,14 +325,12 @@ function resolveAuthOverride(params: {
         headerName,
         value,
         ...(prefix ? { prefix } : {}),
-        injectAuthorizationHeader: false,
       } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
-    injectAuthorizationHeader: params.authHeader === true,
   } as const;
 }
 
@@ -369,7 +373,7 @@ export function applyPreparedRuntimeAuthToModel<
     | undefined,
 ): T {
   if (!preparedAuth?.baseUrl && !preparedAuth?.request) {
-    return model;
+    return attachProviderAuthAuthority(model, getProviderAuthAuthority(preparedAuth));
   }
   const providerHeaders = preparedAuth.request?.auth
     ? Object.fromEntries(
@@ -378,12 +382,17 @@ export function applyPreparedRuntimeAuthToModel<
         ),
       )
     : model.headers;
+  const runtimeRequest = sanitizeRuntimeProviderRequestOverrides(preparedAuth.request);
+  const request = mergeModelProviderRequestOverrides(
+    getModelProviderRequestTransport(model),
+    runtimeRequest,
+  );
   const requestConfig = resolveProviderRequestConfig({
     provider: model.provider,
     api: model.api,
     baseUrl: preparedAuth.baseUrl ?? model.baseUrl,
     providerHeaders,
-    request: sanitizeRuntimeProviderRequestOverrides(preparedAuth.request),
+    request: runtimeRequest,
     capability: "llm",
     transport: "stream",
   });
@@ -392,7 +401,18 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  return inheritModelProviderRequestRouteFacts(model, next);
+  // Private transport readers must observe the same exchanged auth/headers as the model.
+  // Keep authored network policy while replacing credential-bearing request facts.
+  return attachProviderAuthAuthority(
+    inheritModelProviderRequestRouteFacts(
+      model,
+      attachModelProviderRequestTransport(
+        next,
+        request ? { ...request, headers: requestConfig.headers } : undefined,
+      ),
+    ),
+    getProviderAuthAuthority(preparedAuth),
+  );
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
@@ -451,7 +471,7 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+  for (const key of TLS_SECRET_FIELDS) {
     if (tls[key]) {
       next[key] = tls[key];
     }

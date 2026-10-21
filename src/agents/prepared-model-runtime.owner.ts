@@ -1,10 +1,19 @@
 import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  hashRuntimeConfigValue,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./auth-profiles/path-resolve.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
@@ -13,7 +22,6 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
-  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -173,10 +181,16 @@ export function preparedModelRuntimeConfigsMatch(
     return true;
   }
   try {
-    return hashRuntimeConfigValue(left) === hashRuntimeConfigValue(right);
+    return modelRuntimeConfigFingerprint(left) === modelRuntimeConfigFingerprint(right);
   } catch {
     return false;
   }
+}
+
+function modelRuntimeConfigFingerprint(config: OpenClawConfig): string {
+  // Canonical values change at publication; caller-owned projections still need a fresh hash.
+  const published = config === getRuntimeConfigSnapshot() && getRuntimeConfigSnapshotMetadata();
+  return published ? published.fingerprint : hashRuntimeConfigValue(config);
 }
 
 function stampPreparedModelRuntimeSnapshotConfig(
@@ -205,6 +219,13 @@ export function advancePreparedModelRuntimeOwnerConfig(
 
 export function normalizeOptionalDir(dirname: string | undefined): string | undefined {
   return dirname ? path.resolve(dirname) : undefined;
+}
+
+export async function prepareModelRuntimeInput(
+  input: PreparedModelRuntimeInput,
+): Promise<PreparedModelRuntimeInput> {
+  await prepareSharedAuthStoreOwnership(input.env);
+  return normalizePreparedModelRuntimeInput(input);
 }
 
 export function normalizePreparedModelRuntimeInput(
@@ -276,7 +297,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
     env: environmentFingerprint(input.env),
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     runtimePluginSelections: input.runtimePluginSelections,
-    config: input.readOnly ? hashRuntimeConfigValue(input.config) : undefined,
+    config: input.readOnly ? modelRuntimeConfigFingerprint(input.config) : undefined,
   });
 }
 
@@ -371,6 +392,9 @@ export function readPublishedModelRuntimeSnapshot(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
+  if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    return undefined;
+  }
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const owner = resolvePublishedOwner(owners, input, {
     allowConfiguredWorkspaceFallback:
@@ -417,7 +441,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     providerDiscoveryTimeoutMs?: number;
     isPublicationCurrent?: () => boolean;
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
-    isOwnerPublished?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isBuildCurrent?: () => boolean;
     onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
     registerEntriesAfterBuildStart?: boolean;
@@ -453,7 +476,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner.generation === generation &&
       (params.isOwnerRegistered?.(key, owner) ?? params.owners.get(key) === owner);
     const isCurrent = () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent();
-    const isPublished = params.isOwnerPublished;
     return {
       catalogMode: owner.catalogMode,
       input,
@@ -463,7 +485,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       prepareInboundPluginRegistry: owner.provenance === "configured",
       inspectRegistry:
         owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
-      isPublished: isPublished ? () => isPublished(key, owner) : undefined,
       isGenerationCurrent,
       retirementSignal: capturePreparedModelRuntimeGeneration(owner),
       isBuildCurrent: params.isBuildCurrent ?? isCurrent,
@@ -487,14 +508,19 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
+  const groups = groupRecords(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {
       return;
     }
     const result = results.get(candidate.owner);
-    if (!result || candidate.owner.snapshot === result.snapshot) {
+    if (!result) {
+      throw new Error(
+        `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
+      );
+    }
+    if (candidate.owner.snapshot === result.snapshot) {
       return;
     }
     if (captureRemoteModelCatalogStartupSnapshot() !== catalogGeneration) {
@@ -588,15 +614,6 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     for (const candidate of candidates) {
       if (!settleSingleOwner && candidate.owner.generation === candidate.generation) {
         candidate.owner.pendingPluginGeneration = undefined;
-      }
-      if (!candidate.isCurrent()) {
-        continue;
-      }
-      const result = results.get(candidate.owner);
-      if (!result) {
-        throw new Error(
-          `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
-        );
       }
       publishCandidate(candidate);
     }

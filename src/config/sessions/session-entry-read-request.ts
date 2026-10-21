@@ -5,17 +5,16 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
-import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  isIncognitoOpenClawAgentSqlitePath,
+  resolveExplicitIncognitoAgentSqliteTarget,
+} from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
+import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
 import type { SessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import type { SessionExactEntriesWorkerSelection } from "./session-entry-read.types.js";
-import {
-  captureIncognitoSessionBinding,
-  captureIncognitoSessionTopology,
-} from "./session-incognito-binding.js";
 
 /** Ordinary and ordered readers capture the same selection and ancillary facts. */
 export function captureSessionEntryWorkerRequest(input: SessionEntryWorkerRead) {
@@ -58,9 +57,14 @@ function hasSessionEntrySelection<Kind extends "session-id" | "children">(
 }
 
 export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
-  const binding = captureIncognitoSessionBinding(input);
+  const binding = getSessionActorStorageBinding({});
+  const explicit = resolveExplicitIncognitoAgentSqliteTarget(input.storePath, input);
+  const memoryPath = explicit?.path ?? binding?.path;
   const env = cloneEnvWithPlatformSemantics(
-    input.env ?? (binding && captureIncognitoSessionTopology()?.env) ?? process.env,
+    input.env ??
+      (memoryPath
+        ? { ...process.env, OPENCLAW_STATE_DIR: path.resolve(memoryPath, "../../../..") }
+        : process.env),
   );
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = {
@@ -82,10 +86,9 @@ export function isNativeSessionEntryRead(
   return Boolean(
     isIncognitoSessionKey(scope.sessionKey) ||
     (storePath &&
-      (isIncognitoOpenClawAgentSqlitePath(storePath, {
+      isIncognitoOpenClawAgentSqlitePath(storePath, {
         agentId: agentId ?? scope.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
         env: scope.env,
-      }) ||
-        listOpenIncognitoAgentDatabases().some((owner) => owner.storePath === storePath))),
+      })),
   );
 }

@@ -162,7 +162,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.1, "cacheWrite": 2.5 },
             "contextWindow": 1000000,
             "contextWindows": [
               { "id": "200k", "label": "200K", "contextWindow": 200000 },
@@ -291,6 +291,9 @@
         "liteLLM": {
           "provider": "anthropic"
         }
+      },
+      "claude-cli": {
+        "priceAs": "anthropic"
       }
     }
   },
@@ -393,7 +396,7 @@
       "id": "native-sessions",
       "title": "Native sessions",
       "order": 10,
-      "properties": ["sessionCatalog"]
+      "properties": ["sessionCatalog", "historyRecovery"]
     }
   ],
   "configSchema": {
@@ -406,6 +409,13 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "historyRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attestNativeLogin": { "type": "boolean", "default": false }
+        }
       }
     }
   },
@@ -417,6 +427,14 @@
     "sessionCatalog.enabled": {
       "label": "Discover Claude Code Sessions",
       "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "historyRecovery": {
+      "label": "Claude CLI History Recovery",
+      "help": "Controls whether a fresh Claude CLI session that runs on the native Claude login can receive the conversation's saved OpenClaw history."
+    },
+    "historyRecovery.attestNativeLogin": {
+      "label": "Attest Native Claude Login",
+      "help": "Off by default. When on, OpenClaw reads the access token of the native Claude login on this Gateway and sends it only to https://api.anthropic.com/api/oauth/profile to learn which account owns it, so saved history is replayed only to that same account. When off, history recovery never reads or sends that token, and fresh native-login sessions get no saved history."
     }
   }
 }

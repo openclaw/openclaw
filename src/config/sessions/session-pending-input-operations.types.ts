@@ -83,22 +83,11 @@ export type PendingInputCustodyGrant = {
   authority?: SessionPendingInputAuthorityFacts;
 };
 
-/** Only the paired kernel's receipt for this exact accepted input may settle its custody. */
+/** Decode the retained operation's paired native receipt. */
 export function readPendingInputMutationReceipt(
   facts: unknown,
-  input: PendingInputMutation,
 ): PendingInputMutationReceipt | undefined {
-  if (
-    !isRecord(facts) ||
-    facts.kind !== "pending-input-settlement" ||
-    facts.operation !== input.kind ||
-    facts.sessionKey !== input.sessionKey ||
-    facts.sessionId !== input.sessionId ||
-    facts.idempotencyKey !== input.idempotencyKey ||
-    facts.runId !== input.runId ||
-    facts.requestHash !== input.requestHash ||
-    facts.lifecycleGeneration !== input.lifecycleGeneration
-  ) {
+  if (!isRecord(facts) || facts.kind !== "pending-input-settlement") {
     return undefined;
   }
   // SAFETY: The exact paired kernel and admission own this tagged native receipt.

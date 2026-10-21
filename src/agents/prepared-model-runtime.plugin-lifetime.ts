@@ -198,7 +198,7 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries),
+    () => retainRuntimePluginWork(selectedRegistries, "prepared-generation-lease"),
   );
   try {
     for (const registry of selectedRegistries) {
@@ -269,9 +269,6 @@ export function publishPreparedPluginGeneration(
           const registry = instance.owner?.registry;
           return !instance.acceptingCalls && registry !== undefined && gatewayLenders.has(registry);
         });
-        log.debug(
-          `Prepared plugin publication retired: metadataCacheRetired=${cacheSignal.aborted}, provenance=${owner.provenance}, pending=${Boolean(owner.pending)}, gatewayLoan=${retiredGatewayLoan}`,
-        );
         releasePreparedPluginPublication(owner);
         // Independent prepared instances and metadata caches retain their terminal
         // retirement contract; only a lost Gateway loan needs process publication.

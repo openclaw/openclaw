@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "../src/agents/subagents/registry/subagent-control.test-support.js";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
-import { assert, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import {
   apiThrottler,
   getOrCreateAccountThrottler,
@@ -16,6 +16,7 @@ import {
 } from "../src/agents/subagents/registry/subagent-progress-draft.test-support.js";
 import { stopSessionResetSubagents } from "../src/auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../src/infra/agent-events.js";
 
@@ -24,10 +25,17 @@ import { emitAgentEvent } from "../src/infra/agent-events.js";
 const { createTelegramDispatchHttpFixture } = await loadTelegramDispatchHttpFixture();
 const http = createTelegramDispatchHttpFixture();
 const fixture = useSubagentControlFixture();
+beforeEach(() => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
+});
 const yieldCohort = useSubagentProgressCohort(fixture);
 
 const childTool = (name: string) =>
   emitAgentEvent({ runId: "a", stream: "item", data: { kind: "tool", name, status: "running" } });
+const gate = () => ({
+  arrived: Promise.withResolvers<void>(),
+  release: Promise.withResolvers<void>(),
+});
 
 // Each command commits through the registry; the Telegram fence is the same for either.
 it.each([
@@ -81,8 +89,7 @@ it.each([
     // under test waits in the account scheduler, not on the network.
     const held = {
       predicate: (call: { method: string }) => call.method === "sendMessage",
-      arrived: Promise.withResolvers<void>(),
-      release: Promise.withResolvers<void>(),
+      ...gate(),
     };
     http.holdNextCall = held;
     const startQueuedTurn = async () => {
@@ -97,14 +104,8 @@ it.each([
     if (retried) {
       // The second child update arrives while the first edit is in flight, so a
       // scheduled flush retries it after its first attempt fails.
-      const first = {
-        arrived: Promise.withResolvers<void>(),
-        release: Promise.withResolvers<void>(),
-      };
-      const second = {
-        arrived: Promise.withResolvers<void>(),
-        release: Promise.withResolvers<void>(),
-      };
+      const first = gate();
+      const second = gate();
       let secondFailed = false;
       http.respondToCall = async (call) => {
         if (isEditWith("Probe First")(call)) {

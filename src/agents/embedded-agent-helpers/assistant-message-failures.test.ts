@@ -1,20 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "./assistant-message-failures.js";
 
 describe("classifyAssistantFailoverReason", () => {
-  const opencodeGoStalledStreamError = {
-    role: "assistant" as const,
-    api: "openai-completions" as const,
+  it("uses the recorded provider floor even when the display message was clipped", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "429: rate limited; Retry-After: 7 seconds",
+      errorCode: "rate_limit_exceeded",
+      retryAfterMs: 62_500,
+    });
+    expect(buildAssistantFailoverSignal(message).retryAfterMs).toBe(62_500);
+    expect(buildAssistantFailoverSignal({ ...message, retryAfterMs: null }).retryAfterMs).toBe(
+      Infinity,
+    );
+    const billing = {
+      ...message,
+      errorMessage: "402: account balance exhausted",
+      errorCode: "insufficient_quota",
+    };
+    expect(classifyAssistantFailoverReason(billing, { providerOwner: null })).toBe("billing");
+  });
+  const opencodeGoStalledStreamError = makeAssistantMessageFixture({
+    api: "openai-completions",
     provider: "opencode-go",
     model: "deepseek-v4-flash",
-    usage: createZeroUsageFixture(),
-    stopReason: "error" as const,
     errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
     content: [],
-    timestamp: 0,
-  };
+  });
 
   it("classifies opencode-go provider-owned stalled streams as timeout", () => {
     expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
@@ -29,14 +44,13 @@ describe("classifyAssistantFailoverReason", () => {
     "UND_ERR_HEADERS_TIMEOUT",
     "UND_ERR_BODY_TIMEOUT",
   ])("classifies structured %s assistant errors as timeouts", (errorCode) => {
-    expect(
-      classifyAssistantFailoverReason({
-        ...opencodeGoStalledStreamError,
-        provider: "demo-provider",
-        errorCode,
-        errorMessage: "provider connection closed",
-      }),
-    ).toBe("timeout");
+    const message = {
+      ...opencodeGoStalledStreamError,
+      provider: "demo-provider",
+      errorCode,
+      errorMessage: "provider connection closed",
+    };
+    expect(classifyAssistantFailoverReason(message)).toBe("timeout");
   });
 
   it.each([400, 401, 402, 403, 404])(
@@ -59,30 +73,20 @@ describe("classifyAssistantFailoverReason", () => {
   );
 
   it("does not classify caller-aborted assistant messages as provider failover", () => {
-    expect(
-      classifyAssistantFailoverReason({
-        ...opencodeGoStalledStreamError,
-        stopReason: "aborted",
-      }),
-    ).toBeNull();
+    const message = { ...opencodeGoStalledStreamError, stopReason: "aborted" as const };
+    expect(classifyAssistantFailoverReason(message)).toBeNull();
   });
 
   it("uses structured assistant error bodies for model-not-found 400s", () => {
-    expect(
-      classifyAssistantFailoverReason({
-        role: "assistant",
-        api: "openai-completions",
-        provider: "openai",
-        model: "some-model-id",
-        usage: createZeroUsageFixture(),
-        stopReason: "error",
-        errorMessage: "400 Param Incorrect",
-        errorCode: "400",
-        errorBody:
-          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
-        content: [],
-        timestamp: 0,
-      }),
-    ).toBe("model_not_found");
+    const message = makeAssistantMessageFixture({
+      api: "openai-completions",
+      model: "some-model-id",
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody:
+        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+      content: [],
+    });
+    expect(classifyAssistantFailoverReason(message)).toBe("model_not_found");
   });
 });

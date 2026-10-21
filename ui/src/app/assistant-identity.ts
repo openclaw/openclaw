@@ -61,7 +61,6 @@ export async function fetchAssistantIdentity(
     ? {
         ...identity,
         avatar: localAvatar,
-        avatarSource: localAvatar,
         avatarStatus: "data",
         avatarReason: null,
       }

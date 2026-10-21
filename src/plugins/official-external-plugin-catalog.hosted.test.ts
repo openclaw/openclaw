@@ -7,7 +7,7 @@ import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./
 import {
   getOfficialExternalPluginCatalogManifest,
   resolveOfficialExternalPluginInstall,
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries as loadHostedCatalog,
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries as loadHostedCatalogImpl,
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 import {
@@ -34,10 +34,20 @@ function sqliteSnapshotStore() {
 
 const FEED_URL = "https://packages.acme.example/openclaw/feed";
 const HOSTED_CATALOG_PAYLOAD_TYPE = "openclaw.official-external-plugin-catalog-feed.v1";
+const originalFetch = globalThis.fetch;
 
-type HostedCatalogLoadParams = NonNullable<Parameters<typeof loadHostedCatalog>[0]>;
+type HostedCatalogLoadParams = NonNullable<Parameters<typeof loadHostedCatalogImpl>[0]> & {
+  fetchImpl?: typeof globalThis.fetch;
+};
 type HostedCatalogConfig = NonNullable<HostedCatalogLoadParams["catalogConfig"]>;
 type HostedCatalogLoadResult = Awaited<ReturnType<typeof loadHostedCatalog>>;
+
+afterEach(() => vi.unstubAllGlobals());
+
+function loadHostedCatalog({ fetchImpl, ...params }: HostedCatalogLoadParams = {}) {
+  vi.stubGlobal("fetch", fetchImpl ?? originalFetch);
+  return loadHostedCatalogImpl(params);
+}
 
 function expectSource<Source extends HostedCatalogLoadResult["source"]>(
   result: HostedCatalogLoadResult,
@@ -270,6 +280,32 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("replaces unsigned snapshots without losing a neighboring feed", async () => {
+    const snapshotStore = sqliteSnapshotStore();
+    const snapshotFor = (pluginName: string, url = FEED_URL) => {
+      const body = JSON.stringify(hostedCatalogFeed({ sequence: 1, pluginName }));
+      return {
+        body,
+        metadata: {
+          url,
+          status: 200,
+          checksum: `sha256:${crypto.createHash("sha256").update(body).digest("hex")}`,
+        },
+        savedAt: "2026-06-22T00:00:10.000Z",
+      };
+    };
+    const first = snapshotFor("@fixture/first");
+    const neighbor = snapshotFor("@fixture/neighbor", `${FEED_URL}/neighbor`);
+    const replacement = snapshotFor("@fixture/replacement");
+
+    await snapshotStore.write(first);
+    await snapshotStore.write(neighbor);
+    await snapshotStore.write(replacement);
+
+    await expect(snapshotStore.read(FEED_URL)).resolves.toEqual(replacement);
+    await expect(snapshotStore.read(neighbor.metadata.url)).resolves.toEqual(neighbor);
+  });
+
   it("keeps signed SQLite snapshot writes monotonic when writes compete", async () => {
     const newer = signedFeed(10, "@openclaw/signed-v10");
     const older = signedFeed(9, "@openclaw/signed-v9", { privateKeyPem: newer.privateKeyPem });
@@ -340,7 +376,6 @@ describe("official external plugin catalog", () => {
     const catalogConfig = signedCatalogConfig(resigned.publicKeyPem, "acme-rotated");
 
     const initial = await loadSigned(accepted, {
-      ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
       fetchImpl: vi.fn(async (_url, init) => {
         const headers = new Headers(init?.headers);
         expect(headers.get("accept")).toBe("application/vnd.dsse+json");
@@ -622,7 +657,6 @@ describe("official external plugin catalog", () => {
 
     for (const scenario of [
       {
-        ifNoneMatch: '"expiring"',
         fetchImpl: vi.fn(
           async () => new Response(null, { status: 304, headers: { etag: '"expiring"' } }),
         ),
@@ -652,13 +686,24 @@ describe("official external plugin catalog", () => {
     }
   });
 
-  it.each([
+  it.each<[string, string, string?]>([
     ["2026-06-21T23:59:59.000Z", "expiresAt must be later than generatedAt"],
     ["2026-02-30T00:00:00.000Z", "requires a valid expiresAt value"],
-  ])("rejects invalid signed feed expiry %s", async (expiresAt, error) => {
-    const signed = signedHostedCatalogFeed({
-      feed: hostedCatalogFeed({ sequence: 8, pluginName: "@openclaw/invalid-expiry", expiresAt }),
+    [
+      "2026-06-22T00:01:00.000Z",
+      "expiresAt must be later than generatedAt",
+      " 2026-06-22T00:02:00.000Z ",
+    ],
+  ])("rejects invalid signed feed expiry %s", async (expiresAt, error, generatedAt) => {
+    const feed = hostedCatalogFeed({
+      sequence: 8,
+      pluginName: "@openclaw/invalid-expiry",
+      expiresAt,
     });
+    if (generatedAt !== undefined) {
+      feed.generatedAt = generatedAt;
+    }
+    const signed = signedHostedCatalogFeed({ feed });
     const result = await loadSigned(signed, { now: () => new Date("2026-06-22T00:00:30.000Z") });
     expectSource(result, "bundled-fallback");
     expect(result.entries).toEqual([]);
@@ -824,12 +869,11 @@ describe("official external plugin catalog", () => {
     expect(mismatch.metadata?.checksum).toMatch(/^sha256:[0-9a-f]{64}$/u);
 
     const oversized = await loadHostedCatalog({
-      maxBytes: 4,
-      fetchImpl: vi.fn(async () => new Response("12345", { status: 200 })),
+      fetchImpl: vi.fn(async () => new Response("x".repeat(1024 * 1024 + 1), { status: 200 })),
       snapshotStore: null,
     });
     expectSource(oversized, "bundled-fallback");
-    expect(oversized.error).toContain("exceeds 4 bytes");
+    expect(oversized.error).toContain("exceeds 1048576 bytes");
 
     const response = new Response("x".repeat(8192), {
       status: 200,
@@ -839,7 +883,6 @@ describe("official external plugin catalog", () => {
     const arrayBuffer = vi.fn(response.arrayBuffer.bind(response));
     Object.defineProperty(response, "arrayBuffer", { value: arrayBuffer });
     const nonStreaming = await loadHostedCatalog({
-      maxBytes: 4096,
       fetchImpl: vi.fn(async () => response),
       snapshotStore: null,
     });

@@ -19,7 +19,7 @@ import { clearPluginHostRuntimeState } from "../host-hook-runtime.js";
 import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
 
@@ -85,7 +85,15 @@ async function withProjectionSessionStore(
     async () =>
       await withTempConfig({
         cfg: tempConfig,
-        run: async () => await run({ storePath, tempConfig }),
+        run: async () => {
+          try {
+            await run({ storePath, tempConfig });
+          } finally {
+            // Retired hooks must finish before their state directory and config change.
+            setActivePluginRegistry(createEmptyPluginRegistry());
+            await clearActivePluginRegistry();
+          }
+        },
       }),
   );
 }
@@ -278,6 +286,7 @@ describe("plugin session extension SessionEntry projection", () => {
     const reservedSlots = {
       workflow: "updatedAt",
       "main-recovery": "mainRestartRecovery",
+      "requester-source": "restartRecoveryRequesterSource",
       recovery: "subagentRecovery",
       "run-error": "lastRunError",
       "transcript-path": "transcriptPath",

@@ -1,10 +1,11 @@
-import { For, Show } from "solid-js";
+import { For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import { ChatModelSearchContext, handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewProps) {
+  const search = useContext(ChatModelSearchContext);
   return (
     <section
       class="chat-controls__provider-model-group"
@@ -17,6 +18,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         data-chat-account-group-toggle
         data-chat-model-group-toggle
         aria-expanded={props.open ? "true" : "false"}
+        aria-controls={search?.listId("accounts")}
         disabled={props.disabled}
         onClick={() => props.onToggle()}
       >
@@ -32,6 +34,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         </span>
       </button>
       <div
+        id={search?.listId("accounts")}
         class="chat-controls__provider-model-list"
         data-chat-model-list="true"
         role="listbox"
@@ -40,17 +43,25 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => (
             <button
+              ref={search?.rowRef(() => `account:${option().value}`)}
+              id={search?.optionId(`account:${option().value}`)}
               class="chat-controls__inline-select-option chat-controls__model-option"
               type="button"
               role="option"
               aria-selected={option().value === props.currentValue ? "true" : "false"}
               data-chat-account-option={option().value}
               data-chat-model-option={`account:${option().value}`}
+              data-chat-model-key={`account:${option().value}`}
+              data-chat-model-rank={search?.row(`account:${option().value}`)?.rank}
+              data-chat-model-highlighted={
+                search?.highlighted() === `account:${option().value}` ? "" : undefined
+              }
+              style={{ "--chat-model-rank": search?.row(`account:${option().value}`)?.rank }}
               data-chat-model-index={props.startIndex + index()}
               data-chat-model-name={option().label.toLocaleLowerCase()}
               data-chat-model-keywords={option().description?.toLocaleLowerCase() ?? ""}
               data-chat-model-provider-label="account"
-              hidden={!props.open}
+              hidden={search?.row(`account:${option().value}`)?.hidden ?? !props.open}
               aria-disabled={option().disabled ? "true" : undefined}
               disabled={props.disabled || Boolean(option().disabled && option().value !== "more")}
               onMouseEnter={handleModelOptionMouseEnter}

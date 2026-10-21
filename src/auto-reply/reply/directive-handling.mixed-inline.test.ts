@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
-import { buildModelAliasIndex, type ModelAliasIndex } from "../../agents/model-selection.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -19,25 +20,17 @@ import {
   applyMixedDirectives,
   createSessionEntry,
 } from "./directive-handling.mixed-inline.test-helpers.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { resolveReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-function routeDirectives(body: string, cfg: OpenClawConfig, modelAliases: string[] = []) {
-  return resolveReplyDirectiveRouting({
-    commandText: body,
-    agentText: body,
-    modelAliases,
-    canInterpretTextDirectives: true,
-    isAuthorizedSender: true,
-    isGroup: false,
-    wasMentioned: false,
-    ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
-    cfg,
-    agentId: "main",
-    resetTriggered: false,
-  }).directives;
+async function routeDirectives(body: string, cfg: OpenClawConfig) {
+  const result = await routeReplyDirectivesForTest(
+    buildTestCtx({ Body: body, CommandBody: body, CommandAuthorized: true }),
+    { cfg },
+  );
+  return result.directives;
 }
 
 type PersistenceResult =
@@ -60,6 +53,11 @@ vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
 
+vi.mock("../../skills/discovery/chat-commands.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/discovery/chat-commands.runtime.js")>()),
+  prepareSkillCommandsForWorkspace: vi.fn(async () => []),
+}));
+
 const persistenceMocks = vi.hoisted(() => ({
   persist: vi.fn<(params: { entry: SessionEntry }) => Promise<PersistenceResult>>(),
 }));
@@ -74,8 +72,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
 
-vi.mock("../../agents/sandbox.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
+// mock-isolation: Exercise directive persistence independently of sandbox backends and storage.
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatusAsync: vi.fn(async () => ({ sandboxed: false })),
 }));
 
 vi.mock("../../agents/sticky-model-selection.js", async (importOriginal) => ({
@@ -108,7 +107,7 @@ describe("mixed inline directives", () => {
     unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
     vi.clearAllMocks();
     vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
-    vi.mocked(persistStickyModelSelectionBestEffort).mockReturnValue("requested");
+    vi.mocked(persistStickyModelSelectionBestEffort).mockReset().mockReturnValue("requested");
     persistenceMocks.persist.mockImplementation(async ({ entry }) => ({
       status: "current",
       entry: { ...entry },
@@ -313,6 +312,7 @@ describe("mixed inline directives", () => {
   });
 
   it("forwards automatic provenance for a source-less auth pin", async () => {
+    await prepareSharedAuthStoreOwnership();
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
       modelOverride: "gpt-5.6-sol",
@@ -339,20 +339,12 @@ describe("mixed inline directives", () => {
 
   it("preserves a mixed alias named list as a model selection", async () => {
     const body = "please reply /list -s";
-    const cfg = { commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig;
-    const aliasIndex: ModelAliasIndex = {
-      byAlias: new Map([
-        [
-          "list",
-          {
-            alias: "list",
-            ref: { provider: "openai", model: "gpt-5.6-luna" },
-          },
-        ],
-      ]),
-      byKey: new Map([["openai/gpt-5.6-luna", ["list"]]]),
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      agents: { defaults: { models: { "openai/gpt-5.6-luna": { alias: "list" } } } },
     };
-    const directives = routeDirectives(body, cfg, ["list"]);
+    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: "openai" });
+    const directives = await routeDirectives(body, cfg);
     const { result, sessionEntry } = await applyMixedDirectives({
       body,
       cfg,
@@ -406,6 +398,7 @@ describe("mixed inline directives", () => {
   ])(
     "resets to $provider/$model with compatible auth only",
     async ({ prefix, provider, model, keepProfile }) => {
+      await prepareSharedAuthStoreOwnership();
       const authPin = {
         authProfileOverride: "openai:work",
         authProfileOverrideSource: "user" as const,
@@ -476,7 +469,7 @@ describe("mixed inline directives", () => {
       ["please reply /exec host=gateway node=other security=deny ask=always", "deny", "always"],
       ["please reply again", undefined, undefined],
     ] as const) {
-      const directives = routeDirectives(body, cfg);
+      const directives = await routeDirectives(body, cfg);
       const { result } = await applyMixedDirectives({ body, cfg, directives, sessionEntry });
       if (result.kind !== "continue") {
         throw new Error("Expected the message to continue to the agent");

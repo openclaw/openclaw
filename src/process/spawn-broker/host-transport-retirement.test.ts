@@ -1,7 +1,7 @@
-import { ChildProcess, type MessageOptions, type SendHandle } from "node:child_process";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createStubChild } from "../supervisor/adapters/child.test-support.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import type { BrokerNativeResourceLease } from "./resource-host.js";
 import { SPAWN_BROKER_STARTUP_TIMEOUT_MS } from "./resource-protocol.js";
@@ -57,56 +57,40 @@ afterEach(async () => {
 
 type SendFailure = { type: string; mode: "callback" | "throw" };
 function brokerFixture(bootstrapFailure?: SendFailure) {
-  const worker = new ChildProcess();
+  const stub = createStubChild(41001);
+  const worker = stub.child;
   const output = new PassThrough();
   const deliveries = new Map<string, ReturnType<typeof createDeferredCore<unknown>>>();
   const sent = (type: string) => {
-    let delivery = deliveries.get(type);
-    if (!delivery) {
-      delivery = createDeferredCore<unknown>();
-      deliveries.set(type, delivery);
-    }
+    const delivery = deliveries.get(type) ?? createDeferredCore<unknown>();
+    deliveries.set(type, delivery);
     return delivery;
   };
   let sendFailure = bootstrapFailure;
-  let connected = true;
   let exited = false;
-  let closed = false;
-  const disconnect = vi.fn(() => {
-    connected = false;
-    worker.emit("disconnect");
-  });
-  // Like the real worker, SIGTERM does not retire a connected broker.
-  const kill = vi.fn(() => true);
   Object.defineProperties(worker, {
-    pid: { value: 41001 },
-    stdio: { value: [null, output, null] },
-    connected: { get: () => connected },
-    exitCode: { get: () => (exited ? 0 : null) },
-    disconnect: { value: disconnect },
-    kill: { value: kill },
-    send: {
-      value: (
-        message: unknown,
-        ...args: Array<SendHandle | MessageOptions | ((error: Error | null) => void) | undefined>
-      ) => {
-        if (!message || typeof message !== "object" || !("type" in message)) {
-          throw new Error("Expected an unframed fixture request");
-        }
-        sent(String(message.type)).resolve(message);
-        const callback = args.find((arg) => typeof arg === "function");
-        if (sendFailure && sendFailure.type === message.type) {
-          const error = new Error("synthetic IPC write failed");
-          if (sendFailure.mode === "throw") {
-            throw error;
-          }
-          callback?.(error);
-          return false;
-        }
-        callback?.(null);
-        return true;
-      },
-    },
+    stdio: { value: [null, null, output] },
+    stderr: { value: output },
+  });
+  Object.assign(worker, { ref() {}, unref() {} });
+  stub.sendMock.mockImplementation((message: unknown, ...args: unknown[]) => {
+    if (!message || typeof message !== "object" || !("type" in message)) {
+      throw new Error("Expected an unframed fixture request");
+    }
+    sent(String(message.type)).resolve(message);
+    const callback = args.find(
+      (arg): arg is (error: Error | null) => void => typeof arg === "function",
+    );
+    if (sendFailure && sendFailure.type === message.type) {
+      const error = new Error("synthetic IPC write failed");
+      if (sendFailure.mode === "throw") {
+        throw error;
+      }
+      callback?.(error);
+      return false;
+    }
+    callback?.(null);
+    return true;
   });
   native.spawn.mockReturnValueOnce(worker);
   const host = createSpawnBrokerHost({ nativeResources: true });
@@ -114,29 +98,97 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   const fixture = {
     host,
     worker,
-    disconnect,
-    kill,
+    disconnect: stub.disconnectMock,
+    kill: stub.killMock,
     leases,
     sent: (type: string) => sent(type).promise,
     failSend: (failure: SendFailure) => {
       sendFailure = failure;
     },
-    exit: () => {
+    stderr: (text: string) => output.write(text),
+    exit: (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
       if (!exited) {
         exited = true;
-        worker.emit("exit", 0, null);
+        stub.emitExit(code, signal);
       }
     },
-    close: () => {
-      if (!closed) {
-        closed = true;
-        output.destroy();
-      }
-    },
+    close: () => output.destroy(),
   };
   fixtures.push(fixture);
   return fixture;
 }
+
+it.each(["before", "after disconnect", "during"] as const)(
+  "classifies a nonzero broker exit %s close while waiting for late stderr",
+  async (exitTiming) => {
+    const fixture = brokerFixture();
+    fixture.worker.emit("message", { type: "ready", pid: fixture.worker.pid });
+    await fixture.host.ready();
+    if (exitTiming === "before") {
+      fixture.exit(null, "SIGKILL");
+    } else if (exitTiming === "after disconnect") {
+      fixture.disconnect();
+    }
+    const closing = fixture.host.close();
+    const settled = vi.fn();
+    void closing.then(settled, settled);
+    if (exitTiming === "during") {
+      fixture.exit(1);
+    } else if (exitTiming === "after disconnect") {
+      fixture.exit(null, "SIGKILL");
+    }
+    await fixture.host.waitForCleanup();
+    expect(settled).not.toHaveBeenCalled();
+    fixture.stderr("late broker diagnostic\n");
+    fixture.close();
+    if (exitTiming !== "during") {
+      await expect(closing).resolves.toBeUndefined();
+    } else {
+      await expect(closing).rejects.toMatchObject({
+        message: "Spawn broker cleanup did not complete",
+        errors: [
+          {
+            message: "Spawn broker shutdown failed",
+            cause: {
+              message: expect.stringContaining("late broker diagnostic"),
+            },
+          },
+        ],
+      });
+    }
+    fixtures.splice(fixtures.indexOf(fixture), 1);
+  },
+);
+
+it("releases undispatched native claims only after refused startup and broker close", async () => {
+  const fixture = brokerFixture();
+  const closed = createDeferredCore();
+  const lease = fixture.host.captureNativeResource(
+    { moduleUrl: "file:///synthetic/resource.mjs", ownerPort: true },
+    {
+      message: (message) => {
+        if (message.type === "resource-closed") {
+          closed.resolve();
+        }
+      },
+      failed() {},
+    },
+  );
+  fixture.leases.push(lease);
+  fixture.worker.emit("message", {
+    type: "startup-failed",
+    error: { message: "listen EPERM: synthetic socket", code: "EPERM", syscall: "listen" },
+  });
+  await expect(fixture.host.ready()).rejects.toThrow("listen EPERM: synthetic socket");
+  expect(() => lease.release()).toThrow("Native resource must close before release");
+  fixture.exit();
+  expect(() => lease.release()).toThrow("Native resource must close before release");
+  fixture.close();
+  await closed.promise;
+  await expect(lease.close()).resolves.toBeUndefined();
+  lease.release();
+  await fixture.host.close();
+});
 
 it.each(["callback", "throw", "deadline"] as const)(
   "retires a connected native broker after bootstrap %s failure without killing its isolate",
@@ -164,6 +216,7 @@ it.each([
   "readiness",
   "native readiness",
   "native callback",
+  "startup receipt",
   "child error",
   "pipe setup",
   "pipe receipt callback",
@@ -187,16 +240,14 @@ it.each([
     const id = lease.attachment.id;
     lease.receive({ type: "resource-ready", id, pid: worker.pid!, generation: 0 });
     lease.receive({ type: "resource-created", id });
-    const write = lease.ownerMessage({ operation: "accepted native write" });
+    lease.ownerMessage({ operation: "accepted native write" });
     await fixture.sent("resource-owner");
 
     let launchSettlement: Promise<unknown> | undefined;
-    let launchSettled = false;
+    const launchSettled = vi.fn();
     const child = host.spawn("synthetic-command", [], { stdio: "ignore" }, (launch, settlement) => {
       launchSettlement = settlement;
-      void settlement?.then(() => {
-        launchSettled = true;
-      });
+      void settlement?.then(launchSettled);
       return launch();
     });
     await fixture.sent("prepare-spawn");
@@ -215,6 +266,11 @@ it.each([
         throw new Error("synthetic receiver failed");
       });
       worker.emit("message", { type: "resource-target", id, value: "synthetic response" });
+    } else if (failure === "startup receipt") {
+      worker.emit("message", {
+        type: "startup-failed",
+        error: { message: "unexpected startup failure after readiness" },
+      });
     } else if (failure === "child error") {
       worker.emit("error", new Error("synthetic child IPC error"));
     } else if (failure === "pipe setup") {
@@ -236,14 +292,13 @@ it.each([
     }
 
     // Proxy rejection and failed write delivery are not native settlement receipts.
-    const error = await failed.promise;
-    await expect(write.result).rejects.toBe(error);
+    await failed.promise;
     await child.waitForClose();
     expect(fixture.disconnect).toHaveBeenCalledOnce();
     expect(fixture.kill).not.toHaveBeenCalled();
     expect(native.groupCleanup).not.toHaveBeenCalled();
     expect(native.childCleanup).not.toHaveBeenCalled();
-    expect(launchSettled).toBe(false);
+    expect(launchSettled).not.toHaveBeenCalled();
     expect(() => lease.release()).toThrow("Native resource must close before release");
     await expect(host.close()).rejects.toThrow(
       "Native resource claims must close before broker shutdown",
@@ -252,18 +307,16 @@ it.each([
     // Only an independently observed native close, not proxy failure, releases the claim.
     lease.receive({ type: "resource-closed", id, requestId: 0 });
     lease.release();
-    let hostClosed = false;
-    const closing = host.close().then(() => {
-      hostClosed = true;
-    });
+    const hostClosed = vi.fn();
+    const closing = host.close().then(hostClosed);
     fixture.exit();
     await host.waitForCleanup();
     expect(native.groupCleanup).toHaveBeenCalledTimes(process.platform === "win32" ? 0 : 1);
-    expect(launchSettled).toBe(false);
-    expect(hostClosed).toBe(false);
+    expect(launchSettled).not.toHaveBeenCalled();
+    expect(hostClosed).not.toHaveBeenCalled();
     fixture.close();
     await closing;
     await launchSettlement;
-    expect(launchSettled).toBe(true);
+    expect(launchSettled).toHaveBeenCalled();
   },
 );

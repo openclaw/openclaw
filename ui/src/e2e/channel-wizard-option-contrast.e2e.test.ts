@@ -1,9 +1,9 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI channel wizard option contrast",
@@ -12,23 +12,10 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is required for channel wizard contrast proof at ${executablePath}`,
 });
 
-const proofVariant = process.env.OPENCLAW_PICKER_PROOF_VARIANT;
-let proofDirectory: string;
-beforeEach(() => {
-  if (proofVariant) {
-    proofDirectory = createControlUiE2eArtifactDir("channel-wizard-option-contrast");
-  }
-});
-
 suite.define(() => {
   it("keeps option subtext legible and keyboard focus visible in forced colors", async () => {
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { colorScheme: "dark", ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           featureMethods: ["channels.status", "channels.pairing.list", "wizard.start"],
@@ -94,43 +81,26 @@ suite.define(() => {
           .poll(() => activeOption.evaluate((option) => option.hasAttribute("data-active")))
           .toBe(true);
         const colors = await activeOption.evaluate((option) => {
-          const label = option.querySelector<HTMLElement>(".picker-select__label");
-          const description = option.querySelector<HTMLElement>(".picker-select__description");
-          if (!label || !description) {
-            throw new Error("Expected the active picker option label and description");
-          }
+          const color = (selector: string) =>
+            getComputedStyle(option.querySelector(selector)!).color;
           return {
-            background: getComputedStyle(option).backgroundColor,
-            description: getComputedStyle(description).color,
-            label: getComputedStyle(label).color,
+            description: color(".picker-select__description"),
+            label: color(".picker-select__label"),
           };
         });
-
-        if (proofVariant) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(proofDirectory, `${proofVariant}.png`),
-          });
-          await writeFile(
-            path.join(proofDirectory, `${proofVariant}.json`),
-            `${JSON.stringify(colors, null, 2)}\n`,
-          );
-        }
 
         expect(colors.description).toBe(colors.label);
 
         await page.emulateMedia({ forcedColors: "active" });
         await page.keyboard.press("ArrowDown");
         const nextOption = picker.getByRole("option", { name: "Add another iMessage account" });
+        const listbox = picker.getByRole("listbox");
         await expect
           .poll(async () => {
-            const activeId = await picker
-              .getByRole("listbox")
-              .getAttribute("aria-activedescendant");
+            const activeId = await listbox.getAttribute("aria-activedescendant");
             return (
               activeId === (await nextOption.getAttribute("id")) &&
-              (await picker.getByRole("listbox").evaluate((list) => list.matches(":focus-visible")))
+              (await listbox.evaluate((list) => list.matches(":focus-visible")))
             );
           })
           .toBe(true);

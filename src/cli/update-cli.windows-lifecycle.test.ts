@@ -109,6 +109,20 @@ beforeAll(async () => {
 });
 afterAll(() => resetNativeLoader?.());
 
+// Queries still use schtasks; enabled-state mutations use the native COM adapter.
+function scheduledTaskAction(argv: readonly string[]): string | undefined {
+  if (argv[0] === "schtasks") {
+    return argv.at(-1);
+  }
+  const encodedIndex = argv.indexOf("-EncodedCommand");
+  if (path.win32.basename(argv[0] ?? "").toLowerCase() !== "powershell.exe" || encodedIndex < 0) {
+    return undefined;
+  }
+  const script = Buffer.from(argv[encodedIndex + 1] ?? "", "base64").toString("utf16le");
+  const enabled = /^\$task\.Enabled=\$(true|false)$/mu.exec(script)?.[1];
+  return enabled === undefined ? undefined : enabled === "true" ? "/ENABLE" : "/DISABLE";
+}
+
 describe("update-cli", () => {
   const nodeExecutable = resolveTestNodeExecPath();
   const fixture = createUpdateCliFixture();
@@ -126,7 +140,6 @@ describe("update-cli", () => {
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDir = fixture.tempDirs.make("openclaw-update-isolated-service-");
     const { nodeModules } = await fixture.setupInstalledPackageRoot(tempDir);
     fixture.mockRunningManagedGateway();
@@ -135,6 +148,7 @@ describe("update-cli", () => {
 
     await withEnvAsync({ OPENCLAW_HOME: path.join(tempDir, "relocated-home") }, async () => {
       fixture.initializeExistingUpdateProfile();
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       await updateCommand({ yes: true });
     });
 
@@ -247,7 +261,6 @@ describe("update-cli", () => {
     async ({ command, fault }) => {
       const stopFailure = fault === "stop-enable-committed";
       runtimeRecovery.stubNodeRuntime();
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fixture.setTty(true);
       fixture.setStdoutTty(true);
       const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-native-preparation");
@@ -271,6 +284,7 @@ describe("update-cli", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: target.stateDir,
       });
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fixture.tempDirsToCleanup.add(target.stateDir);
       await fs.mkdir(target.stateDir, { recursive: true });
       await writeJsonFixture(target.configPath, fixture.baseSnapshot.config);
@@ -295,23 +309,24 @@ describe("update-cli", () => {
         if (argv[0] === "git" && argv[argv.indexOf("-C") + 2] === "rev-parse") {
           return commandResult({ stdout: `${root}\n` });
         }
-        if (argv[0] !== "schtasks") {
+        const action = scheduledTaskAction(argv);
+        if (action === undefined) {
           return await configuredRunCommand(argv, options);
         }
         nativeCommands.push([...argv]);
-        if (argv[1] === "/Query") {
+        if (action === "/XML") {
           return commandResult({
             stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
           });
         }
-        if (argv.at(-1) === "/DISABLE") {
+        if (action === "/DISABLE") {
           taskEnabled = false;
           return !stopFailure
             ? commandResult({ code: 1, stderr: "disable timed out after commit" })
             : commandResult();
         }
         if (fault === "suspension-spawn") {
-          throw new Error("spawn schtasks EACCES: enable denied");
+          throw new Error("spawn PowerShell EACCES: enable denied");
         }
         if (fault === "stop-enable-committed") {
           taskEnabled = true;
@@ -345,7 +360,7 @@ describe("update-cli", () => {
       ).catch((error: unknown) => error);
 
       expect(
-        nativeCommands.map((argv) => argv.at(-1)),
+        nativeCommands.map(scheduledTaskAction),
         `${String(reportedError)}\n${getErrorOutput()}`,
       ).toEqual([
         "/XML",
@@ -359,7 +374,7 @@ describe("update-cli", () => {
         const nativeOrder = (action: string) => {
           const index = vi
             .mocked(runCommandWithTimeout)
-            .mock.calls.findIndex(([argv]) => argv[0] === "schtasks" && argv.at(-1) === action);
+            .mock.calls.findIndex(([argv]) => scheduledTaskAction(argv) === action);
           return requireValue(
             vi.mocked(runCommandWithTimeout).mock.invocationCallOrder[index],
             `${action} order`,
@@ -458,19 +473,19 @@ describe("update-cli", () => {
         activateTask();
       });
       vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
-        if (argv[0] !== "schtasks") {
+        const action = scheduledTaskAction(argv);
+        if (action === undefined) {
           if (argv[2] === "gateway" && ["install", "start", "restart"].includes(argv[3] ?? "")) {
             activateTask();
           }
           return configuredRunCommand(argv, options);
         }
-        const action = argv.at(-1);
-        if (argv[1] === "/Query") {
+        if (action === "/XML") {
           return commandResult({
             stdout: `<Task><Settings><Enabled>${taskEnabled}</Enabled></Settings></Task>`,
           });
         }
-        nativeActions.push(action ?? "");
+        nativeActions.push(action);
         if (action === "/DISABLE") {
           disables += 1;
           taskEnabled = false;
@@ -552,7 +567,7 @@ describe("update-cli", () => {
     expect(process.exitCode).toBe(130);
     expect(processExitSpy).not.toHaveBeenCalled();
     expect(resumeScheduledTaskAutoStartAfterUpdate.mock.calls.length).toBe(0);
-    await expect(fs.access(path.join(root, "dist", "index.js"))).resolves.toBeUndefined();
+    await fs.access(path.join(root, "dist", "index.js"));
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
       version: "1.0.0",
     });
@@ -638,7 +653,7 @@ describe("update-cli", () => {
     expect(
       vi
         .mocked(runCommandWithTimeout)
-        .mock.calls.some(([argv]) => argv[0] === "schtasks" && argv.includes("/ENABLE")),
+        .mock.calls.some(([argv]) => scheduledTaskAction(argv) === "/ENABLE"),
     ).toBe(false);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
@@ -897,11 +912,7 @@ describe("update-cli", () => {
 
       await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      if (failureKind === "post-core exception") {
-        expect(triageAfterFailure.mock.calls.map(([, context]) => context)).toContainEqual(
-          expect.objectContaining({ kind: "update", error: failure.message }),
-        );
-      }
+      expect(triageAfterFailure).not.toHaveBeenCalled();
       expect(suspendScheduledTaskAutoStartForUpdate).toHaveBeenCalledOnce();
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(suspendScheduledTaskAutoStartForUpdate.mock.invocationCallOrder[0]).toBeLessThan(

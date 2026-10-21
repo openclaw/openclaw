@@ -1,43 +1,25 @@
-import type { Runtime } from "node:inspector";
 import { performance } from "node:perf_hooks";
 import { versions } from "node:process";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { hasProfilerConflict, sanitizeDiagnosticProfileFrame } from "./diagnostic-profile.js";
+import {
+  hasProfilerConflict,
+  parseNativeCpuProfile,
+  sanitizeDiagnosticProfileFrame,
+} from "./diagnostic-profile.js";
 
-const ENABLED = true;
 const WINDOW_MS = 5_000;
 const SAMPLE_MS = 10;
 const MAX_SAMPLES = 1_024;
 const MAX_PROFILE_BYTES = 1_048_576;
 
-type NativeCpuProfile = {
-  startTime: number;
-  endTime: number;
-  nodes: {
-    id: number;
-    children?: number[];
-    callFrame: Omit<Runtime.CallFrame, "scriptId"> & { scriptId: number };
-  }[];
-  samples: number[];
-  timeDeltas: number[];
-};
-
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
-export function createStallFlightRecorder(
-  warn: (message: string) => void,
-  now: () => number = () => performance.now(),
-) {
+export function createStallFlightRecorder(warn: (message: string) => void) {
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
-  let disabled =
-    !ENABLED ||
-    !isMainThread ||
-    typeof v8.startCpuProfile !== "function" ||
-    Boolean(versions.bun) ||
-    Number(versions.node.split(".")[0]) < 26;
+  let disabled = !isMainThread || Boolean(versions.bun) || Number(versions.node.split(".")[0]) < 26;
   let packageRoot: string | null = null;
   const stop = () => {
     disabled = true;
@@ -61,7 +43,7 @@ export function createStallFlightRecorder(
     if (!disabled) {
       packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
-      startedAt = now();
+      startedAt = performance.now();
     }
   } catch {
     disabled = true;
@@ -69,15 +51,15 @@ export function createStallFlightRecorder(
   }
   return {
     sample(stallMs = 0): string | undefined {
-      if (disabled || !active || (stallMs === 0 && now() - startedAt < WINDOW_MS)) {
+      if (disabled || !active || (stallMs === 0 && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
       try {
         const old = active;
         // Keep the native code map and sampler alive; restarting the last profile scans the heap.
         active = start();
-        startedAt = now();
-        const current = { json: old.stop(), endedAt: now() };
+        startedAt = performance.now();
+        const current = { json: old.stop(), endedAt: performance.now() };
         const windows = previous ? [previous, current] : [current];
         previous = current.json.length <= MAX_PROFILE_BYTES ? current : undefined;
         if (!stallMs) {
@@ -91,8 +73,7 @@ export function createStallFlightRecorder(
             truncated = true;
             continue;
           }
-          // SAFETY: Only the native V8 CPU profiler supplies this JSON and its numeric script IDs.
-          const profile = JSON.parse(window.json) as NativeCpuProfile;
+          const profile = parseNativeCpuProfile(window.json);
           const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
           const parents = new Map<number, number>();
           for (const node of profile.nodes) {
@@ -101,7 +82,8 @@ export function createStallFlightRecorder(
             }
           }
           let at = profile.startTime;
-          const cutoff = profile.endTime - (stallMs + 100 - (now() - window.endedAt)) * 1_000;
+          const cutoff =
+            profile.endTime - (stallMs + 100 - (performance.now() - window.endedAt)) * 1_000;
           truncated ||= (profile.samples?.length ?? 0) >= MAX_SAMPLES;
           for (const [index, id] of (profile.samples ?? []).entries()) {
             at += profile.timeDeltas?.[index] ?? 0;
@@ -117,8 +99,7 @@ export function createStallFlightRecorder(
                 break;
               }
               const { callFrame: frame } = sanitizeDiagnosticProfileFrame(
-                // Native V8 JSON uses numeric IDs; the shared inspector policy uses strings.
-                { ...node.callFrame, scriptId: String(node.callFrame.scriptId) },
+                node.callFrame,
                 packageRoot,
               );
               if (

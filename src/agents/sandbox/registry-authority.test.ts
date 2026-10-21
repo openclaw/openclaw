@@ -1,8 +1,10 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveLocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-projection.js";
 import * as nativeSqlite from "../../infra/node-sqlite.js";
@@ -47,20 +49,19 @@ it("retains local-workspace authority through browser transaction and commit gra
   };
   await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  replaceSessionEntrySync(
-    { agentId: "main", sessionKey, storePath },
-    {
-      sessionId: "browser-session",
-      updatedAt: 1,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-    },
-  );
+  const sessionTarget = { agentId: "main", sessionKey, storePath };
+  const session = {
+    sessionId: "browser-session",
+    updatedAt: 1,
+    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+  };
+  replaceSessionEntrySync(sessionTarget, session);
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
   let stage: SqliteWorkerAdmissionRequest["stage"] | undefined;
   let revokeAt: SqliteWorkerAdmissionRequest["stage"] | undefined;
-  const owner = await resolveLocalWorkspaceOwner({
+  const ownerParams = {
     cfg: { session: { store: storePath } },
     agentId: "main",
     sessionKey,
@@ -70,27 +71,26 @@ it("retains local-workspace authority through browser transaction and commit gra
         throw refusal;
       }
     },
-  });
+  };
+  const sql = observeHostDataSql();
+  using sqlObserver = { [Symbol.dispose]: () => sql.restore() };
+  void sqlObserver;
+  using owner = await resolveLocalWorkspaceOwner(ownerParams);
   expect(owner).toBeDefined();
   const grants: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const coldOpens: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const openNative = nativeSqlite.openNodeSqliteDatabase;
-  vi.spyOn(nativeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    if (stage !== undefined) {
-      coldOpens.push(stage);
-    }
-    return openNative(...args);
-  });
+  const openNative = vi.spyOn(nativeSqlite, "openNodeSqliteDatabase");
   const createAdmission = workerStore.createSqliteWorkerWriteAdmission;
   vi.spyOn(workerStore, "createSqliteWorkerWriteAdmission").mockImplementation(
     (assertCurrent, nativeLocations) =>
       createAdmission((request) => {
         stage = request.stage;
+        const opens = openNative.mock.calls.length;
         try {
           assertCurrent(request);
           grants.push(stage);
         } finally {
           stage = undefined;
+          expect(openNative.mock.calls).toHaveLength(opens);
         }
       }, nativeLocations),
   );
@@ -104,10 +104,9 @@ it("retains local-workspace authority through browser transaction and commit gra
     cdpPort: 9222,
   };
 
-  // Native owner reads are warm; this first upsert must open the worker independently.
+  // Session authority is worker-prepared; this upsert uses the registry's worker owner.
   await updateBrowserRegistry(entry, owner!.assertCurrent);
   expect(grants).toEqual(["transaction", "commit"]);
-  expect(coldOpens).toEqual([]);
   expect((await readBrowserRegistry()).entries).toEqual([entry]);
 
   for (const revokedStage of ["transaction", "commit"] as const) {
@@ -117,5 +116,19 @@ it("retains local-workspace authority through browser transaction and commit gra
     ).rejects.toBe(refusal);
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
-  expect(coldOpens).toEqual([]);
+  revokeAt = undefined;
+  await replaceSessionEntry(sessionTarget, {
+    ...session,
+    lifecycleRevision: "replacement",
+    updatedAt: 2,
+  });
+  expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  using released = await resolveLocalWorkspaceOwner(ownerParams);
+  released![Symbol.dispose]();
+  expect(() => released!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+  using closed = await resolveLocalWorkspaceOwner(ownerParams);
+  expect(sql.queries).toEqual([]);
+  // Explicit teardown seals the database and releases its lease on the host.
+  await closeOpenClawAgentDatabasesAsync();
+  expect(() => closed!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
 });

@@ -10,7 +10,7 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
@@ -21,6 +21,7 @@ import {
 import * as userProfileList from "../state/user-profile-list.js";
 import { setAvatar } from "../state/user-profile-writes.worker.js";
 import * as userProfiles from "../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 import * as managedOutgoingMedia from "./managed-image-attachments.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
@@ -35,6 +36,7 @@ import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { installGatewayTestHooks, testState, writeSessionStore } from "./test-helpers.js";
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = createTempDirTracker();
+const prepareProfileCatalog = useUserProfileCatalogForTest();
 
 type ChatMethod = "chat.history" | "chat.startup";
 type History = { deltaCursor: string; messages: unknown[] };
@@ -200,7 +202,7 @@ describe("chat.history cursor catch-up", () => {
     });
     const cleanup = vi
       .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+      .mockResolvedValue(undefined);
     onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
@@ -215,7 +217,6 @@ describe("chat.history cursor catch-up", () => {
     const handler = createTranscriptUpdateBroadcastHandler({
       getSessionRowProjection: () => getSessionRowProjection(context),
       broadcastToConnIds: broadcast,
-      chatAbortControllers: context.chatAbortControllers,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
       sessionMessageSubscribers: { get: () => new Set(["subscriber"]) },
     });
@@ -353,6 +354,7 @@ describe("chat.history cursor catch-up", () => {
   });
 
   test("refreshes sender display across transferred history pages and cursor deltas", async () => {
+    await prepareProfileCatalog();
     const { context, storePath } = await createCursorSession();
     const profile = userProfiles.ensureProfileForEmail("cursor-profile@example.test");
     const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
@@ -372,12 +374,12 @@ describe("chat.history cursor catch-up", () => {
       });
       parentId = eventId;
     }
-    const lookup = vi.spyOn(userProfileList, "getUserProfileDisplay");
+    const lookup = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
     try {
       const avatarUrls: string[] = [];
       for (const byte of [1, 2]) {
         expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
-        const { avatarRevision } = userProfiles.getUserProfileDisplay(profile.id);
+        const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
         const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
         avatarUrls.push(avatarUrl);
         lookup.mockClear();
@@ -475,7 +477,7 @@ describe("chat.history cursor catch-up", () => {
         content: [
           {
             type: "text",
-            text: "ANNOUNCE_SKIP REPLY_SKIP",
+            text: "NO_REPLY",
             textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
           },
           ...sibling,

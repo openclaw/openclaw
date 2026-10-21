@@ -8,6 +8,7 @@ import {
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
 import { PluginStateOperationInvalidatedError } from "./plugin-state-operation-error.js";
+import { beginPluginStatePublication } from "./plugin-state-publication.js";
 import { capturePluginStateNativeBindingStore } from "./plugin-state-store.native-binding.js";
 import type {
   PluginStateKeyedStore,
@@ -145,6 +146,9 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
       );
       let validUntil: number | undefined;
       let committed = writes.length === 0;
+      const publication = writes.length
+        ? beginPluginStatePublication(() => context.admission.identity.key)
+        : undefined;
       try {
         if (prior) {
           await prior;
@@ -180,7 +184,6 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
               if (facts.receiptId !== receiptId) {
                 throw new Error("Plugin state operation received another operation's receipt");
               }
-              validUntil = facts.validUntil;
               committed = true;
             },
           },
@@ -204,7 +207,11 @@ export function createPluginStateOperation<Operations extends PluginStateOperati
         });
         return receipt;
       } finally {
-        mutation?.finish();
+        try {
+          publication?.finish("completed");
+        } finally {
+          mutation?.finish();
+        }
       }
     },
   };

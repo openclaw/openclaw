@@ -16,7 +16,7 @@ per reader job. Open the page that matches your task.
 
 | Page                                                           | Read it when                                                                       |
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [Run tests locally](/reference/test/local)                     | The routine local order, the core command table, and the local PR gate.            |
+| [Run tests locally](/reference/test/local)                     | Focused local proof, the core command table, and optional full local runs.         |
 | [Control UI, TUI, and E2E lanes](/reference/test/lanes)        | Control UI, TUI, extension, Gateway, and live lane commands and fixture rules.     |
 | [Docker test suites](/reference/test/docker)                   | The weighted Docker scheduler, its knobs, and the notable Docker lanes.            |
 | [Test performance and benchmarks](/reference/test/performance) | Import profiling, CPU and heap profiles, shard timings, and the benchmark scripts. |

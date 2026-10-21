@@ -1,24 +1,22 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import {
+  seedChatSettings,
+  sessionResponseCase,
+  splitColumns,
+} from "./chat-layout-fixtures.test-support.ts";
+import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Swarm history freshness" });
 
 suite.define(() => {
   it("keeps a completed Swarm outcome when compaction finishes in an unfocused pane", async () => {
-    const proofDir = createControlUiE2eArtifactDir("swarm-history-freshness");
     await suite.withPage({ viewport: { width: 1800, height: 1000 } }, async ({ page }) => {
       const parentKey = "agent:main:research";
       const otherKey = "agent:main:notes";
-      const groupId = `swarm:${parentKey}:research-run`;
       const child = {
         key: "agent:main:subagent:research-worker",
         sessionId: "research-worker-session",
@@ -26,7 +24,7 @@ suite.define(() => {
         label: "Research worker",
         spawnedBy: parentKey,
         parentSessionKey: parentKey,
-        swarmGroupId: groupId,
+        swarmGroupId: `swarm:${parentKey}:research-run`,
         status: "done",
         updatedAt: 3,
       };
@@ -38,44 +36,12 @@ suite.define(() => {
         status: "done",
         hasActiveRun: false,
         updatedAt: 3,
-        swarm: {
-          groups: [
-            {
-              groupId,
-              createdAt: 1,
-              queued: 0,
-              running: 0,
-              done: 1,
-              failed: 0,
-              children: [{ sessionKey: child.key, status: "done" }],
-            },
-          ],
-          otherActiveGroups: 0,
-        },
+        swarm: swarmSnapshot(child.swarmGroupId, 1, [child]),
       };
       const other = { key: otherKey, kind: "direct", label: "Notes", updatedAt: 3 };
-      await page.addInitScript(
-        ({ storageKey, keys }) => {
-          localStorage.setItem(
-            storageKey,
-            JSON.stringify({
-              chatSplitLayout: {
-                activePaneId: "p1",
-                columnWeights: [0.5, 0.5],
-                columns: keys.map((sessionKey, index) => ({
-                  id: `c${index + 1}`,
-                  paneWeights: [1],
-                  panes: [{ id: `p${index + 1}`, sessionKey }],
-                })),
-              },
-            }),
-          );
-        },
-        {
-          storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          keys: [parentKey, otherKey],
-        },
-      );
+      await seedChatSettings(page, suite.server.baseUrl, {
+        chatSplitLayout: splitColumns([parent, other], 0),
+      });
       const gateway = await installMockGateway(page, {
         sessionKey: parentKey,
         sessions: [parent, other, child],
@@ -109,34 +75,30 @@ suite.define(() => {
           { match: {}, response: chatSessionListResponse([other]) },
         ],
       });
-      await page.evaluate(async (key) => {
-        const app = document.querySelector<
-          HTMLElement & { runtime?: { context?: ApplicationContext } }
-        >("openclaw-app");
-        const sessions = app?.runtime?.context?.sessions;
-        if (!sessions) {
-          throw new Error("Session capability is missing");
-        }
-        await sessions.refresh({ agentId: "main", force: true });
-        if (sessions.state.result?.sessions.some((row) => row.key === key)) {
-          throw new Error("Research parent must be outside the primary roster");
-        }
-      }, parentKey);
-      await gateway.setMethodResponse("chat.history", {
-        cases: [
+      await evaluateControlUiContext(
+        page,
+        async (context, key) => {
+          const sessions = context.sessions;
+          await sessions.refresh({ agentId: "main", force: true });
+          if (sessions.state.result?.sessions.some((row) => row.key === key)) {
+            throw new Error("Research parent must be outside the primary roster");
+          }
+        },
+        parentKey,
+      );
+      await gateway.setMethodResponse(
+        "chat.history",
+        sessionResponseCase(
+          { sessionKey: parentKey },
           {
-            match: { sessionKey: parentKey },
-            response: {
-              sessionId: parent.sessionId,
-              messages: [{ role: "assistant", content: "Refreshed research results." }],
-              sessionInfo: { ...parent, updatedAt: 2, status: "running", hasActiveRun: true },
-            },
+            sessionId: parent.sessionId,
+            messages: [{ role: "assistant", content: "Refreshed research results." }],
+            sessionInfo: { ...parent, updatedAt: 2, status: "running", hasActiveRun: true },
           },
-        ],
-      });
+        ),
+      );
       await gateway.resolveDeferred("sessions.compact", { ok: true, compacted: true });
       await research.getByText("Refreshed research results.", { exact: true }).waitFor();
-      await page.screenshot({ path: path.join(proofDir, "refreshed.png"), animations: "disabled" });
       await expect.poll(() => outcome.isVisible()).toBe(true);
     });
   });

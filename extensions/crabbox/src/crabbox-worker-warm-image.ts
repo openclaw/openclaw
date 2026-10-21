@@ -1,19 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import {
-  buildCrabboxAllocationArgs,
   resolveCrabboxWarmImageProfileKey,
   type parseCrabboxProfile,
-  type resolveCrabboxProvisionProfile,
 } from "./crabbox-worker-profile.js";
-import { runProvisionWarmup } from "./crabbox-worker-provision-commands.js";
 import { WARM_IMAGE_COMMAND_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+import {
+  createCrabboxWarmImageAllocation,
+  createCrabboxWarmImageStartContext,
+  type AllocationContext,
+} from "./crabbox-worker-warm-image-allocation.js";
 import { createCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-capture.js";
 import {
-  createCheckpointCommands,
+  checkpointCommand,
+  deleteCheckpoint,
   parseCheckpointAvailability,
-  parseForkedCheckpoint,
   type CheckpointContext,
   type MaintenanceContext,
 } from "./crabbox-worker-warm-image-checkpoint.js";
@@ -24,6 +25,8 @@ import {
 import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
   assertCrabboxWarmImageMigrationReady,
+  assertCrabboxWarmImagePreparation,
+  assertCrabboxWarmImageReplay,
   crabboxWarmImageCaptureStatus,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -34,12 +37,11 @@ import {
   projectCrabboxWarmImage,
   sameCrabboxWarmImageGeneration as sameImage,
   withCrabboxWarmImageDisplayFacts,
-  withCrabboxWarmImageGeneration,
   withoutCrabboxWarmImageOperation,
   type CrabboxState,
   type WarmImageRecord,
   type WarmProfileRecord,
-  type WarmAllocationRecord,
+  type WarmColdReason,
 } from "./crabbox-worker-warm-image-store.js";
 
 type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
@@ -48,27 +50,13 @@ type LeaseContext = CheckpointContext & {
   id: string;
   provider: string;
 };
-type AllocationContext = LeaseContext & {
-  profile: ReturnType<typeof resolveCrabboxProvisionProfile>["profile"];
-  slug: string;
-  projectKey?: string;
-  profileId?: string;
-  projectLabel?: string;
-  projectRoot?: string;
-  nodeRuntimeIdentity?: WarmAllocationRecord["runtimeIdentity"];
-  preparation?: {
-    key: string;
-    cacheKey: string;
-    purpose: "session" | "reserve";
-    demandAtMs: number;
-  };
-  timeoutMs: () => number;
-};
 
 export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
-  runCommand: CrabboxCommandRunner;
   warn: (message: string) => void;
+  prepareCapture: (
+    context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
+  ) => Promise<void>;
   policy?: CrabboxWarmImagePolicy;
 }) {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
@@ -91,7 +79,6 @@ export function createCrabboxWarmImageManager(dependencies: {
       dependencies.warn(message);
     }
   };
-  const { checkpointCommand, deleteCheckpoint } = createCheckpointCommands(dependencies.runCommand);
   const imageExpired = (image: WarmImageRecord) =>
     !image.pinned &&
     (image.lastDemandAtMs === null || Date.now() - image.lastDemandAtMs >= policy.retainUnusedMs);
@@ -108,7 +95,11 @@ export function createCrabboxWarmImageManager(dependencies: {
       key,
       (record) =>
         hasNoProviderObligations(record) &&
-        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs),
+        !isCrabboxCaptureRefusalRetained(record, policy.refreshAfterMs) &&
+        !(
+          record.recipePreparationAtMs !== undefined &&
+          Date.now() < record.recipePreparationAtMs + policy.refreshAfterMs
+        ),
     );
 
   const lookupLease = (id: string) => openStore().lookupLease(id);
@@ -177,11 +168,18 @@ export function createCrabboxWarmImageManager(dependencies: {
     record: WarmProfileRecord,
     remainingMs: () => number = () => WARM_IMAGE_COMMAND_TIMEOUT_MS,
     checkpointId = record.image?.checkpointId,
+    retireHeld = false,
   ) => {
     const image = [record.image, record.previous].find(
       (candidate) => candidate?.checkpointId === checkpointId,
     );
-    if (!image || !checkpointId || image.pinned || record.operation || held(record, checkpointId)) {
+    if (
+      !image ||
+      !checkpointId ||
+      image.pinned ||
+      record.operation ||
+      (held(record, checkpointId) && !retireHeld)
+    ) {
       return;
     }
     assertCurrent(context);
@@ -205,7 +203,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     phase: "allocation" | "teardown" | "maintenance",
     entries: { key: string; value: WarmProfileRecord }[],
   ) => {
-    const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+    const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     assertCurrent(context);
     const paused = entries
       .flatMap(({ value }) => {
@@ -240,15 +238,11 @@ export function createCrabboxWarmImageManager(dependencies: {
       if (value.operation && phase === "allocation") {
         continue;
       }
-      const remaining = () => deadline - Date.now();
+      const remaining = () => deadline - performance.now();
       if (remaining() <= 0) {
         break;
       }
-      if (
-        value.captureUnsupported &&
-        hasNoProviderObligations(value) &&
-        !isCrabboxCaptureRefusalRetained(value, policy.refreshAfterMs)
-      ) {
+      if (hasNoProviderObligations(value)) {
         await deleteEmptyProfile(key);
         continue;
       }
@@ -287,7 +281,7 @@ export function createCrabboxWarmImageManager(dependencies: {
   };
 
   const makeRoom = async (context: LeaseContext) => {
-    const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+    const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     const entries = await openStore().entries();
     if (entries.length < WARM_IMAGE_MAX_ENTRIES) {
       return;
@@ -304,7 +298,7 @@ export function createCrabboxWarmImageManager(dependencies: {
         if ((await openStore().count()) < WARM_IMAGE_MAX_ENTRIES) {
           return;
         }
-        const remaining = () => deadline - Date.now();
+        const remaining = () => deadline - performance.now();
         if (remaining() <= 0) {
           break;
         }
@@ -314,7 +308,7 @@ export function createCrabboxWarmImageManager(dependencies: {
           await deleteImage(context, key, current, remaining, image.checkpointId);
         }
         if (generation === "image") {
-          // A retained refusal marker is display-only and never holds a capacity slot.
+          // Retained diagnostics are display-only and never hold a capacity slot.
           await openStore().deleteIf(key, hasNoProviderObligations);
         }
       }
@@ -326,9 +320,42 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
   };
 
-  const verifyImage = async (context: LeaseContext, checkpointId: string) => {
+  const verifyImage = async (
+    context: LeaseContext,
+    checkpointId: string,
+    timeoutMs = WARM_IMAGE_COMMAND_TIMEOUT_MS,
+  ) => {
     const args = ["checkpoint", "inspect", checkpointId, "--verify", "--json"];
-    return parseCheckpointAvailability(await checkpointCommand(context, "inspect", args));
+    return parseCheckpointAvailability(
+      await checkpointCommand(
+        context,
+        "inspect",
+        args,
+        Math.min(timeoutMs, WARM_IMAGE_COMMAND_TIMEOUT_MS),
+      ),
+    );
+  };
+
+  // A missing checkpoint starts retiring so new leases provision cold. After a failed fork,
+  // retireHeld lets that failed lease's own hold through; deletion waits for its release.
+  const verifyCheckpoint = async (
+    context: LeaseContext,
+    key: string,
+    checkpointId: string,
+    retireHeld = false,
+  ) => {
+    try {
+      const state = await verifyImage(context, checkpointId);
+      const record = await openStore().lookup(key);
+      if (state === "missing" && record) {
+        await deleteImage(context, key, record, undefined, checkpointId, retireHeld);
+      }
+      return state;
+    } catch (error) {
+      assertCurrent(context);
+      warnOnce("verification", error);
+      return undefined;
+    }
   };
 
   const selectAllocation = async (
@@ -341,18 +368,10 @@ export function createCrabboxWarmImageManager(dependencies: {
     const preparationKey = context.preparation?.key ?? null;
     const cacheKey = context.preparation?.cacheKey ?? null;
     const purpose = context.preparation?.purpose ?? null;
-    if (
-      context.preparation &&
-      (!context.projectKey ||
-        profile.target !== "linux" ||
-        !/^[a-f0-9]{64}$/u.test(context.preparation.key) ||
-        !/^[a-f0-9]{64}$/u.test(context.preparation.cacheKey) ||
-        (purpose !== "session" && purpose !== "reserve") ||
-        !Number.isSafeInteger(context.preparation.demandAtMs) ||
-        context.preparation.demandAtMs < 0)
-    ) {
-      throw new Error("Crabbox project preparation identity is invalid.");
-    }
+    assertCrabboxWarmImagePreparation(context.preparation, {
+      projectKey: context.projectKey,
+      target: profile.target,
+    });
     const key = resolveCrabboxWarmImageProfileKey(profile, context.projectKey);
     const displayFacts = {
       profileId: context.profileId,
@@ -364,24 +383,16 @@ export function createCrabboxWarmImageManager(dependencies: {
     };
     const replay = await lookupLease(context.id);
     if (replay) {
-      if (
-        replay.key !== key ||
-        replay.machineClass !== profile.class ||
-        (replay.os ?? "linux") !== profile.target ||
-        replay.preparationKey !== preparationKey ||
-        replay.cacheKey !== cacheKey ||
-        replay.purpose !== purpose ||
-        (context.preparation && replay.demandAtMs !== context.preparation.demandAtMs)
-      ) {
-        throw new Error(
-          "Crabbox provision retry changed its recorded profile or project identity.",
-        );
-      }
-      if (!isDeepStrictEqual(replay.runtimeIdentity, context.nodeRuntimeIdentity)) {
-        throw new Error(
-          "Crabbox provision retry changed or lacks its recorded node runtime identity; stop the worker before reprovisioning",
-        );
-      }
+      assertCrabboxWarmImageReplay(replay, {
+        key,
+        machineClass: profile.class,
+        os: profile.target,
+        preparationKey,
+        cacheKey,
+        purpose,
+        demandAtMs: context.preparation?.demandAtMs,
+        runtimeIdentity: context.nodeRuntimeIdentity,
+      });
       assertCurrent(context);
       const updated = await openStore().update(key, (record) => {
         assertCurrent(context);
@@ -401,6 +412,26 @@ export function createCrabboxWarmImageManager(dependencies: {
     }
     await collectProfileImages(context, key, "allocation");
     const observed = await openStore().lookup(key);
+    let coldReason: WarmColdReason = "no-snapshot-yet";
+    if (observed?.image) {
+      if (retiringCurrent(observed)) {
+        coldReason = "snapshot-retiring";
+      } else if (
+        cacheKey !== null
+          ? observed.image.cacheKey !== cacheKey
+          : observed.image.preparationKey !== null || observed.image.cacheKey !== null
+      ) {
+        coldReason = "setup-changed";
+      } else {
+        coldReason = "snapshot-unavailable";
+      }
+    } else if (observed) {
+      if (isCrabboxCaptureRefusalRetained(observed, policy.refreshAfterMs)) {
+        coldReason = "backend-cannot-snapshot";
+      } else if (observed.operation?.type === "capture") {
+        coldReason = "capture-paused";
+      }
+    }
     let available = Boolean(
       observed?.image &&
       observed.image.lastDemandAtMs !== null &&
@@ -410,16 +441,10 @@ export function createCrabboxWarmImageManager(dependencies: {
       !retiringCurrent(observed),
     );
     if (available && observed?.image?.state === "pending") {
-      try {
-        const state = await verifyImage(context, observed.image.checkpointId);
-        available = state === "available";
-        if (state === "missing") {
-          await deleteImage(context, key, observed);
-        }
-      } catch (error) {
-        assertCurrent(context);
-        available = false;
-        warnOnce("verification", error);
+      const state = await verifyCheckpoint(context, key, observed.image.checkpointId);
+      available = state === "available";
+      if (!available) {
+        coldReason = "snapshot-unavailable";
       }
     }
     if (!(await openStore().lookup(key))) {
@@ -435,11 +460,12 @@ export function createCrabboxWarmImageManager(dependencies: {
       displayFacts,
       assertCurrent: () => assertCurrent(context),
       availableImage: available ? observed?.image : undefined,
+      coldReason: available ? undefined : coldReason,
       allocation: {
         machineClass: profile.class,
         os: profile.target,
         phase: "pending",
-        runtimeIdentity: structuredClone(context.nodeRuntimeIdentity),
+        runtimeIdentity: context.nodeRuntimeIdentity,
         preparationKey,
         cacheKey,
         purpose,
@@ -610,8 +636,12 @@ export function createCrabboxWarmImageManager(dependencies: {
       }
       return undefined;
     },
-    markPrepared: (id: string, baseCommit: string, assertOwnerCurrent?: () => void) =>
-      openStore().markPrepared(id, baseCommit, assertOwnerCurrent),
+    markPrepared: (
+      ...args: Parameters<ReturnType<typeof openCrabboxWarmImageStore>["markPrepared"]>
+    ) => openStore().markPrepared(...args),
+    noteRecipePreparation: (
+      ...args: Parameters<ReturnType<typeof openCrabboxWarmImageStore>["noteRecipePreparation"]>
+    ) => openStore().noteRecipePreparation(...args),
     markEnrolled: (id: string, assertOwnerCurrent?: () => void) =>
       openStore().markEnrolled(id, assertOwnerCurrent),
 
@@ -633,8 +663,8 @@ export function createCrabboxWarmImageManager(dependencies: {
         delete allocations[context.id];
         return { ...record, allocations };
       });
-      const deadline = Date.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
-      const remaining = () => deadline - Date.now();
+      const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
+      const remaining = () => deadline - performance.now();
       const current = await openStore().lookup(owner.key);
       if (current) {
         await retireImage(context, owner.key, current, remaining);
@@ -658,63 +688,18 @@ export function createCrabboxWarmImageManager(dependencies: {
       held,
       deleteImage,
       retireImage,
-      checkpointCommand,
+      prepareCapture: dependencies.prepareCapture,
     }),
 
-    async allocate(context: AllocationContext): Promise<WarmAllocationRecord["choice"]> {
-      assertCurrent(context);
-      if (!context.profile.warmImage) {
-        const replay = await lookupLease(context.id);
-        if (
-          replay &&
-          ((replay.os ?? "linux") !== context.profile.target ||
-            replay.machineClass !== context.profile.class)
-        ) {
-          throw new Error(
-            "Crabbox provision retry changed its recorded operating system or machine class.",
-          );
-        }
-      }
-      if (context.profile.warmImage) {
-        await assertCrabboxWarmImageMigrationReady(dependencies.state);
-        const owner = await selectAllocation(context, context.profile);
-        if (owner.choice.kind === "checkpoint") {
-          const checkpointId = owner.choice.checkpointId;
-          parseForkedCheckpoint(
-            await checkpointCommand(
-              context,
-              "fork",
-              [
-                "checkpoint",
-                "fork",
-                checkpointId,
-                ...buildCrabboxAllocationArgs(context.profile, context.id, context.slug),
-                "--json",
-              ],
-              context.timeoutMs(),
-            ),
-            { checkpointId, leaseId: context.id, provider: context.provider, slug: context.slug },
-          );
-          await openStore().update(owner.key, (current) => {
-            assertCurrent(context);
-            return withCrabboxWarmImageGeneration(current, owner.imageGeneration, (image) => ({
-              ...image,
-              state: "available",
-              lastDemandAtMs:
-                owner.purpose === "session" || owner.demandAtMs === null
-                  ? image.lastDemandAtMs
-                  : Math.max(image.lastDemandAtMs ?? 0, owner.demandAtMs),
-            }));
-          });
-          return owner.choice;
-        }
-      }
-      assertCurrent(context);
-      await runProvisionWarmup({
-        ...context,
-        runCommand: dependencies.runCommand,
-      });
-      return { kind: "cold" };
-    },
+    startContext: createCrabboxWarmImageStartContext,
+    allocate: createCrabboxWarmImageAllocation({
+      state: dependencies.state,
+      lookupLease,
+      selectAllocation,
+      openStore,
+      verifyCheckpoint,
+      policy,
+      assertCurrent,
+    }),
   };
 }

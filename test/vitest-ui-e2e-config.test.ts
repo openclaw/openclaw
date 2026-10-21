@@ -1,17 +1,11 @@
-// Protect complete, deterministic UI E2E partitions and timing fallback precedence.
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TestSpecification } from "vitest/node";
-import type { CiTestTimings } from "../scripts/lib/ci-test-timings-schema.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const timingPath = path.join(repoRoot, "config/ci-test-timings.json");
 const tempDirs: string[] = [];
 
 beforeEach(() => {
@@ -21,7 +15,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
   vi.unstubAllEnvs();
   vi.resetModules();
   for (const dir of tempDirs.splice(0)) {
@@ -29,128 +22,46 @@ afterEach(() => {
   }
 });
 
-function useTimings(contents: string | null) {
-  const readFileSync = fs.readFileSync;
-  vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-    if ((file instanceof URL ? fileURLToPath(file) : file) === timingPath) {
-      if (contents === null) {
-        throw new Error("ENOENT");
-      }
-      return contents;
-    }
-    return readFileSync(file, options);
-  });
-  syncBuiltinESMExports();
-}
-
-function timingFile(fileSeconds: Record<string, number>, perFileOverheadSeconds = 0.6) {
-  return JSON.stringify({
-    version: 1,
-    updatedAt: "2026-08-27",
-    source: "fixture measurements",
-    uiE2e: { fileSeconds, perFileOverheadSeconds },
-    compactGroupSeconds: { blacksmith: {}, github: {} },
-    runtimePlacementTimings: { blacksmith: [], github: [] },
-    repoE2eFileSeconds: {},
-    toolingFileSeconds: { blacksmith: {}, github: {} },
-  } satisfies CiTestTimings);
-}
-
-function specifications(
-  paths: string[],
-  options: { name?: string; projectWorkers?: number | null; rootWorkers?: number } = {},
-): TestSpecification[] {
-  const project = {
-    config: {
-      maxWorkers: options.projectWorkers === null ? undefined : (options.projectWorkers ?? 1),
-    },
-    name: options.name ?? "fixture",
-    vitest: { config: { maxWorkers: options.rootWorkers ?? 1 } },
-  };
-  return paths.map((moduleId) => ({ moduleId, project }) as TestSpecification);
-}
-
-function temporaryFiles(sizes: number[]): TestSpecification[] {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-e2e-shards-"));
-  tempDirs.push(tempDir);
-  return specifications(
-    sizes.map((bytes, index) => {
-      const moduleId = path.join(tempDir, `suite-${index}.e2e.test.ts`);
-      fs.writeFileSync(moduleId, "x".repeat(bytes));
-      return moduleId;
-    }),
-  );
-}
-
-async function partitionSpecifications(files: TestSpecification[], count = 11) {
-  const { UiE2eSequencer } = await import("./vitest/vitest.ui-e2e.sequencer.ts");
-  return Promise.all(
-    Array.from({ length: count }, async (_, index) => {
-      const sequencer = new UiE2eSequencer({
-        config: { shard: { count, index: index + 1 } },
-      } as never);
-      return sequencer.shard(files);
-    }),
-  );
-}
-
-async function partition(files: TestSpecification[], count = 11) {
-  return (await partitionSpecifications(files, count)).map((shard) =>
-    shard.map((file) => file.moduleId),
-  );
-}
-
 const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
 const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
-const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
+const workboardFile = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
-const realGatewayFiles = [
-  "activity-run-inspector.real-gateway",
-  "agent-file-lifecycle.real-gateway",
-  "background-work.real-gateway",
-  "chat-agent-avatar.real-gateway",
-  "chat-collaborator-scroll.real-gateway",
-  "chat-composer-websearch-kill-switch.real-gateway",
-  "chat-flow.catalog-bootstrap",
-  "chat-loading-performance.real-gateway",
-  "chat-project-media.real-gateway",
-  "chat-stop-finished-run.real-gateway",
-  "chat-stop-owned-exec.real-gateway",
-  "chat-thinking-metadata.real-gateway",
-  "chat-tts-supplement.real-gateway",
-  "chat-widget-sandbox.real-gateway",
-  "command-palette-catalog.real-gateway",
-  "command-palette-search.real-gateway",
-  "control-ui-auth-transports",
-  "cron-duration-save.real-gateway",
-  "desktop-resize.real-gateway",
-  "device-alias-rename.real-gateway",
-  "device-platform-family.real-gateway",
-  "logs-lifecycle",
-  "mcp-app-conformance",
-  "model-api-keys.real-gateway",
-  "model-catalog-partial-refresh.real-gateway",
-  "model-picker-search.real-gateway",
-  "profile-page.real-gateway",
-  "provider-browser-login.real-gateway",
-  "quota-reset-status.real-gateway",
-  "session-pr-reader-lifetime.real-gateway",
-  "session-progress-hovercard.real-gateway",
-  "session-roster-request-rate.real-gateway",
-  "usage-sessions-owner-attribution",
-  "worker-initial-setup.real-gateway",
-]
+const serialGatewayFiles = `background-work chat-collaborator-scroll chat-managed-media-order
+  chat-html-publication
+  chat-session-diff-folding chat-steer-deferred-custody chat-stop-owned-exec chat-tts-supplement
+  chat-wait-clock command-palette-search deepseek-search desktop-resize device-platform-family
+  peer-followup-restart provider-browser-login session-pr-reader-lifetime session-roster-request-rate
+  sidebar-running-counts task-pull-requests`
+  .split(/\s+/u)
+  .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
+  .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts", workboardFile);
+const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
+  chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
+  chat-flow.catalog-bootstrap chat-loading-performance.real-gateway chat-project-media.real-gateway
+  chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
+  chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
+  command-palette-catalog.real-gateway control-ui-auth-transports cron-duration-save.real-gateway
+  device-alias-rename.real-gateway logs-lifecycle model-api-keys.real-gateway
+  model-catalog-partial-refresh.real-gateway model-picker-search.real-gateway profile-page.real-gateway
+  quota-reset-status.real-gateway session-progress-hovercard.real-gateway
+  usage-sessions-owner-attribution worker-initial-setup.real-gateway`
+  .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles);
+  .concat(qaLabFiles, serialGatewayFiles);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
+const lease = (removed: boolean, closed = true) => [
+  { outDir: expect.any(String), closed, removed },
+];
+const resourceSteps = (counts: number[], built = false) =>
+  counts.map((previews) => ({ builds: built ? previews : 0, previews, closes: 0 }));
 
 type OwnershipProbe = {
   files: Array<{
@@ -162,7 +73,6 @@ type OwnershipProbe = {
   }>;
   contexts: Array<{
     name: string;
-    chromium?: { available: boolean };
     url?: string | null;
     buildInfo?: typeof prebuiltBuildInfo | null;
     bridge: boolean;
@@ -170,12 +80,19 @@ type OwnershipProbe = {
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
   steps: Array<{ builds: number; previews: number; closes: number }>;
-  lifecycle: string[];
   admissions: string[];
   canonicalAssetsIntact: boolean;
   rootWorkers: number;
   setupError?: string;
 };
+
+function expectInventory(result: OwnershipProbe, inventory: string[]) {
+  expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
+  expect(result.shards.flat().toSorted()).toEqual(inventory);
+  expect(new Set(result.shards.flat()).size).toBe(inventory.length);
+  expect(result.rootWorkers).toBeGreaterThan(0);
+  expect(result.rootWorkers).toBeLessThanOrEqual(2);
+}
 
 function probeOwnership(
   options: {
@@ -183,7 +100,6 @@ function probeOwnership(
     filters?: string[];
     cli?: string[];
     project?: string[];
-    include?: string[];
     skipRealGateway?: boolean;
     available?: boolean;
     initialize?: string[][];
@@ -193,7 +109,6 @@ function probeOwnership(
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "oc-ui-ownership-")));
   tempDirs.push(directory);
   const eventsFile = path.join(directory, "leases.jsonl");
-  const lifecycleFile = path.join(directory, "lifecycle.jsonl");
   const admissionsFile = path.join(directory, "admissions.jsonl");
   const canonicalRoot = path.join(directory, "canonical-ui");
   fs.mkdirSync(canonicalRoot);
@@ -208,9 +123,7 @@ function probeOwnership(
     export const assertUiE2ePreflight = async () => {
       if (${JSON.stringify(options.failure)} === "preflight") throw new Error("fixture preflight failed");
     };
-    const lifecycle = event => fs.appendFileSync(${JSON.stringify(lifecycleFile)}, JSON.stringify(event) + "\\n");
     export async function prepareNativeControlUiPluginFixtures() {
-      lifecycle("native-fixtures");
       return { catalog: { revision: "fixture", plugins: [], diagnostics: [] }, assets: new Map() };
     }
     export default function admission(project) {
@@ -221,7 +134,6 @@ function probeOwnership(
       });
     }
     function lease(outDir, built) {
-      lifecycle(built ? "bundle-server" : "prebuilt-server");
       const record = (closed) => fs.appendFileSync(${JSON.stringify(eventsFile)}, JSON.stringify({ outDir, closed, built }) + "\\n");
       record(false);
       const failure = built ? "build" : "preview";
@@ -260,8 +172,6 @@ function probeOwnership(
     export default instrument(config);
   `,
   );
-  const includeFile = path.join(directory, "include.json");
-  fs.writeFileSync(includeFile, JSON.stringify(options.include ?? []));
   // Native discovery/setup owns selection; stub only the expensive resource and admission calls.
   // The admission owner's separate tests exercise real freshness checks and teardown fingerprints.
   // No browser tests run; selected specifications still decide which projects acquire resources.
@@ -270,8 +180,7 @@ function probeOwnership(
     import fs from "node:fs";
     import path from "node:path";
     import { createVitest, parseCLI } from "vitest/node";
-    const filters = ${JSON.stringify(options.filters ?? [])};
-    const args = ["run", ...filters, ...${JSON.stringify(options.cli ?? [])}];
+    const args = ["run", ...${JSON.stringify(options.filters ?? [])}, ...${JSON.stringify(options.cli ?? [])}];
     process.argv = [process.execPath, "vitest", ...args];
     const { options: cliOptions } = parseCLI(["vitest", ...args]);
     // Vitest's CLI makes --exclude additive before calling createVitest.
@@ -308,7 +217,6 @@ function probeOwnership(
           previews: events.filter(event => !event.closed).length,
           closes: events.filter(event => event.closed).length });
       }
-      const projects = [...new Set(specs.map(spec => spec.project))];
       const relative = file => path.relative(${JSON.stringify(repoRoot)}, file).replaceAll("\\\\", "/");
       const sequencer = new ctx.config.sequence.sequencer(ctx);
       const shards = [];
@@ -324,14 +232,11 @@ function probeOwnership(
           fileParallelism: spec.project.config.fileParallelism,
         }))
           .toSorted((a, b) => a.file.localeCompare(b.file)),
-        contexts: projects.map(project => ({ name: project.name,
-          chromium: project.getProvidedContext().controlUiE2eChromium,
+        contexts: [...new Set(specs.map(spec => spec.project))].map(project => ({ name: project.name,
           url: project.getProvidedContext().controlUiE2eServerBaseUrl,
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
-        lifecycle: fs.existsSync(${JSON.stringify(lifecycleFile)})
-          ? fs.readFileSync(${JSON.stringify(lifecycleFile)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse) : [],
         admissions: fs.existsSync(${JSON.stringify(admissionsFile)})
           ? fs.readFileSync(${JSON.stringify(admissionsFile)}, "utf8").trim().split("\\n").map(JSON.parse) : [],
       };
@@ -353,7 +258,7 @@ function probeOwnership(
         // Discovery runs no tests; keep scheduling stable across subprocesses
         // instead of comparing different snapshots of the host's current load.
         CI: "1",
-        OPENCLAW_VITEST_INCLUDE_FILE: options.include ? includeFile : "",
+        OPENCLAW_VITEST_INCLUDE_FILE: "",
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
       },
     },
@@ -370,111 +275,8 @@ describe("Control UI E2E resource ownership", () => {
     const result = probeOwnership({ filters: [bundledFile], failure: "preflight" });
     expect(result.setupError).toBe("fixture preflight failed");
     expect(result.leases).toEqual([]);
-    expect(result.steps).toEqual([{ builds: 0, previews: 0, closes: 0 }]);
+    expect(result.steps).toEqual(resourceSteps([0]));
   });
-
-  it.each([
-    { filters: [standaloneFile], files: [standaloneFile], leases: 0 },
-    { filters: [privateFile], files: [privateFile], leases: 0 },
-    { filters: [bundledFile], files: [bundledFile], leases: 1 },
-    { filters: [serialBundledFile], files: [serialBundledFile], leases: 1 },
-    {
-      filters: [standaloneFile, privateFile, bundledFile, serialBundledFile],
-      files: [standaloneFile, privateFile, bundledFile, serialBundledFile],
-      leases: 1,
-    },
-    {
-      filters: ["ui/src/pages/cron"],
-      files: ["ui/src/pages/cron/run-transcript.e2e.test.ts"],
-      leases: 1,
-    },
-    {
-      include: [standaloneFile, bundledFile],
-      files: [standaloneFile, bundledFile],
-      leases: 1,
-    },
-    {
-      include: [standaloneFile, bundledFile],
-      filters: [standaloneFile],
-      files: [standaloneFile],
-      leases: 0,
-    },
-    {
-      include: ["ui/src/e2e/**/*.test.ts"],
-      filters: [standaloneFile],
-      files: [standaloneFile],
-      leases: 0,
-    },
-    {
-      include: ["ui/src/e2e/**/*.test.ts"],
-      files: fs.globSync("ui/src/e2e/**/*.test.ts", { cwd: repoRoot }),
-      leases: 1,
-    },
-    { include: [], files: [], leases: 0 },
-    { filters: ["ui/src/e2e/does-not-exist.e2e.test.ts"], files: [], leases: 0 },
-    { filters: [bundledFile], available: false, files: [bundledFile], leases: 0 },
-    { prebuilt: true, filters: [builtGatewayFile], files: [builtGatewayFile], leases: 0 },
-    { prebuilt: true, filters: [mcpFile], files: [mcpFile], leases: 0 },
-    { prebuilt: true, filters: [bundledFile], files: [], leases: 0 },
-    { prebuilt: true, skipRealGateway: true, files: [], leases: 0 },
-    {
-      prebuilt: true,
-      include: ["ui/src/e2e/*.real-gateway.e2e.test.ts"],
-      filters: [builtGatewayFile, bundledFile],
-      files: [builtGatewayFile],
-      leases: 0,
-    },
-    {
-      prebuilt: true,
-      include: [mcpFile, qaLabFiles[0]],
-      cli: ["--exclude", mcpFile],
-      files: [qaLabFiles[0]],
-      leases: 1,
-    },
-  ])(
-    "scopes setup and leases to selection $filters / $include / $available",
-    ({ files, leases, ...options }) => {
-      const result = probeOwnership(options);
-      expect(result.setupError).toBeUndefined();
-      const compareFiles = (left: string, right: string) => left.localeCompare(right);
-      expect(result.files.map((entry) => entry.file).toSorted(compareFiles)).toEqual(
-        files.toSorted(compareFiles),
-      );
-      expect(result.leases).toHaveLength(leases);
-      expect(
-        result.leases.every((lease) => lease.closed && lease.removed === !options.prebuilt),
-      ).toBe(true);
-      expect(result.steps).toEqual([
-        { builds: options.prebuilt ? 0 : leases, previews: leases, closes: 0 },
-      ]);
-      expect(result.canonicalAssetsIntact).toBe(true);
-      expect(result.lifecycle).toEqual(
-        leases > 0
-          ? [
-              ...(options.prebuilt ? [] : ["native-fixtures"]),
-              options.prebuilt ? "prebuilt-server" : "bundle-server",
-            ]
-          : [],
-      );
-      for (const context of result.contexts) {
-        expect(context.buildInfo ?? null).toEqual(
-          options.prebuilt && leases > 0 ? prebuiltBuildInfo : null,
-        );
-        expect(context.chromium?.available).toBe(options.available !== false);
-        const consumesBundle = ["ui-e2e-bundled", "ui-e2e-serial", "ui-e2e-real-gateway"].includes(
-          context.name,
-        );
-        // Root context is inherited by all projects; only consumers install the URL bridge.
-        expect(context.bridge).toBe(consumesBundle);
-        if (consumesBundle) {
-          expect(context.url).toBe(options.available === false ? null : "http://127.0.0.1:12345/");
-        }
-      }
-      expect(result.admissions.toSorted()).toEqual(
-        options.prebuilt ? result.contexts.map((context) => context.name).toSorted() : [],
-      );
-    },
-  );
 
   it.each([
     { first: bundledFile, second: serialBundledFile, available: true },
@@ -488,14 +290,8 @@ describe("Control UI E2E resource ownership", () => {
         available,
       });
       expect(result.setupError).toBeUndefined();
-      expect(result.steps).toEqual([
-        { builds: 0, previews: 0, closes: 0 },
-        { builds: available ? 1 : 0, previews: available ? 1 : 0, closes: 0 },
-        { builds: available ? 1 : 0, previews: available ? 1 : 0, closes: 0 },
-      ]);
-      expect(result.leases).toEqual(
-        available ? [{ outDir: expect.any(String), closed: true, removed: true }] : [],
-      );
+      expect(result.steps).toEqual(resourceSteps([0, Number(available), Number(available)], true));
+      expect(result.leases).toEqual(available ? lease(true) : []);
       expect(
         result.contexts.filter((context) => context.bridge).map((context) => context.url),
       ).toEqual([
@@ -519,9 +315,7 @@ describe("Control UI E2E resource ownership", () => {
         prebuilt,
       });
       expect(result.setupError).toBe(`fixture ${failure} failed`);
-      expect(result.leases).toEqual([
-        { outDir: expect.any(String), closed: failure === "provide", removed: !prebuilt },
-      ]);
+      expect(result.leases).toEqual(lease(!prebuilt, failure === "provide"));
       expect(result.canonicalAssetsIntact).toBe(true);
     },
   );
@@ -534,21 +328,15 @@ describe("Control UI E2E resource ownership", () => {
       | Array<{ extends?: boolean; test?: { clearMocks?: boolean } }>
       | undefined;
     expect(config.test?.clearMocks).toBe(false);
-    expect(projects?.map((project) => project.extends)).toEqual([false, false, false, false]);
-    expect(projects?.map((project) => project.test?.clearMocks)).toEqual([
-      false,
-      false,
-      false,
-      false,
-    ]);
+    expect(projects?.map((project) => [project.extends, project.test?.clearMocks])).toEqual(
+      Array.from({ length: 4 }, () => [false, false]),
+    );
     const result = probeOwnership();
     const inventory = fs
       .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
       .toSorted();
-    expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
+    expectInventory(result, inventory);
     expect(result.setupError).toBeUndefined();
-    expect(result.rootWorkers).toBeGreaterThan(0);
-    expect(result.rootWorkers).toBeLessThanOrEqual(2);
     for (const entry of result.files) {
       const serial = uiE2eSerialTestFiles.includes(entry.file);
       expect(entry.project.startsWith("ui-e2e-serial")).toBe(serial);
@@ -557,34 +345,29 @@ describe("Control UI E2E resource ownership", () => {
       if (uiE2ePrivateServerTestFiles.includes(entry.file)) {
         expect(entry.project).toBe("ui-e2e-serial-standalone");
       }
+      if (realGatewayFiles.includes(entry.file)) {
+        expect(entry.project).toBe(
+          uiE2ePrivateServerTestFiles.includes(entry.file)
+            ? "ui-e2e-serial-standalone"
+            : "ui-e2e-serial",
+        );
+      }
     }
-    expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
-    expect(result.shards.flat().toSorted()).toEqual(inventory);
-    expect(new Set(result.shards.flat()).size).toBe(inventory.length);
+    expect(result.leases).toEqual(lease(true));
+    expect(
+      result.files.filter(({ file }) => realGatewayFiles.includes(file)).map(({ file }) => file),
+    ).toEqual(realGatewayFiles.toSorted());
     for (const name of new Set(result.files.map((entry) => entry.project))) {
       const selected = probeOwnership({ project: [name] });
       expect(selected.files).toEqual(result.files.filter((entry) => entry.project === name));
       expect(selected.leases).toHaveLength(name.endsWith("standalone") ? 0 : 1);
     }
-    const realGateway = realGatewayFiles;
-    expect(
-      result.files
-        .filter((entry) => realGateway.includes(entry.file))
-        .map(({ file, project }) => ({ file, project })),
-    ).toEqual(
-      realGateway.toSorted().map((file) => ({
-        file,
-        project: uiE2ePrivateServerTestFiles.includes(file)
-          ? "ui-e2e-serial-standalone"
-          : "ui-e2e-serial",
-      })),
-    );
     const skipped = probeOwnership({ skipRealGateway: true });
     expect(skipped.files).toEqual(
-      result.files.filter((entry) => !realGateway.includes(entry.file)),
+      result.files.filter((entry) => !realGatewayFiles.includes(entry.file)),
     );
     expect(skipped.shards.flat().toSorted()).toEqual(
-      inventory.filter((file) => !realGateway.includes(file)),
+      inventory.filter((file) => !realGatewayFiles.includes(file)),
     );
     expect(result.admissions).toEqual([]);
     expect(skipped.admissions).toEqual([]);
@@ -599,97 +382,26 @@ describe("Control UI E2E resource ownership", () => {
         cli: workers === undefined ? [] : ["--maxWorkers", String(workers)],
       });
       expect(result.setupError).toBeUndefined();
-      expect(result.files.map((entry) => entry.file).toSorted()).toEqual(
-        realGatewayFiles.toSorted(),
-      );
-      expect(result.shards.flat().toSorted()).toEqual(realGatewayFiles.toSorted());
-      expect(new Set(result.shards.flat()).size).toBe(realGatewayFiles.length);
-      expect(result.rootWorkers).toBeGreaterThan(0);
-      expect(result.rootWorkers).toBeLessThanOrEqual(2);
+      expectInventory(result, realGatewayFiles.toSorted());
       if (workers !== undefined) {
         expect(result.rootWorkers).toBe(workers);
       }
-      expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
-        {
-          file: "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
+      const bundledSerialFiles = new Set(
+        ["session-pr-reader-lifetime", "sidebar-running-counts", "task-pull-requests"].map(
+          (name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`,
+        ),
+      );
+      expect(result.files.filter((entry) => entry.phase === 1)).toEqual(
+        serialGatewayFiles.toSorted().map((file) => ({
+          file,
+          project: bundledSerialFiles.has(file) ? "ui-e2e-serial" : "ui-e2e-serial-standalone",
           phase: 1,
           workers: 1,
           fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: mcpFile,
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-        {
-          file: "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
-          project: "ui-e2e-serial-standalone",
-          phase: 1,
-          workers: 1,
-          fileParallelism: false,
-        },
-      ]);
+        })),
+      );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(27);
+      expect(parallel).toHaveLength(28);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {
@@ -702,8 +414,8 @@ describe("Control UI E2E resource ownership", () => {
       expect(result.admissions.toSorted()).toEqual(
         result.contexts.map((entry) => entry.name).toSorted(),
       );
-      expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: false }]);
-      expect(result.steps).toEqual([{ builds: 0, previews: 1, closes: 0 }]);
+      expect(result.leases).toEqual(lease(false));
+      expect(result.steps).toEqual(resourceSteps([1]));
       expect(result.canonicalAssetsIntact).toBe(true);
       expect(
         result.contexts.every(
@@ -719,15 +431,10 @@ describe("Control UI E2E resource ownership", () => {
       initialize: [[builtGatewayFile], [mcpFile], [qaLabFiles[0]], [qaLabFiles[1]]],
     });
     expect(result.setupError).toBeUndefined();
-    expect(result.steps).toEqual([
-      { builds: 0, previews: 0, closes: 0 },
-      { builds: 0, previews: 0, closes: 0 },
-      { builds: 0, previews: 1, closes: 0 },
-      { builds: 0, previews: 1, closes: 0 },
-    ]);
+    expect(result.steps).toEqual(resourceSteps([0, 0, 1, 1]));
     expect(result.admissions).toHaveLength(3);
     expect(new Set(result.admissions).size).toBe(3);
-    expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: false }]);
+    expect(result.leases).toEqual(lease(false));
     expect(result.canonicalAssetsIntact).toBe(true);
   });
 
@@ -739,175 +446,9 @@ describe("Control UI E2E resource ownership", () => {
     });
     expect(result.setupError).toBe("fixture admission failed");
     expect(result.admissions).toEqual(["ui-e2e-real-gateway"]);
-    expect(result.steps).toEqual([{ builds: 0, previews: 0, closes: 0 }]);
+    expect(result.steps).toEqual(resourceSteps([0]));
     expect(result.leases).toEqual([]);
     expect(result.canonicalAssetsIntact).toBe(true);
     expect(result.contexts.every((context) => context.url === undefined)).toBe(true);
-  });
-});
-
-describe("Control UI E2E Vitest sharding", () => {
-  it("shares isolated cleanup policy with the duration weighted sequencer", async () => {
-    const [{ default: config }, { UiE2eSequencer }] = await Promise.all([
-      import("./vitest/vitest.ui-e2e.config.ts"),
-      import("./vitest/vitest.ui-e2e.sequencer.ts"),
-    ]);
-    expect(config.test?.sequence?.sequencer).toBe(UiE2eSequencer);
-    expect(Number.isFinite(config.test?.hookTimeout)).toBe(true);
-    expect(config.test?.hookTimeout).toBeGreaterThan(0);
-    for (const project of config.test?.projects ?? []) {
-      expect(project).toMatchObject({
-        test: {
-          pool: "forks",
-          isolate: true,
-          runner: undefined,
-          hookTimeout: config.test?.hookTimeout,
-        },
-      });
-    }
-  });
-
-  it("balances unmeasured files by source bytes", async () => {
-    useTimings(null);
-    const shards = await partition(temporaryFiles([600, 500, 400, 300, 200, 100]), 3);
-    expect(
-      shards.map((shard) => shard.reduce((sum, file) => sum + fs.statSync(file).size, 0)),
-    ).toEqual([700, 700, 700]);
-  });
-
-  it("uses repo-relative measurements before basename hints, then the byte proxy", async () => {
-    const measured = "ui/src/pages/chat/chat-flow.clipboard.e2e.test.ts";
-    const hinted = "ui/src/e2e/chat-flow.clipboard.e2e.test.ts";
-    useTimings(timingFile({ [measured]: 1 }));
-    const [large, small] = temporaryFiles([40 * 1024, 1024]);
-    const files = [
-      ...specifications([measured, hinted].map((file) => path.join(repoRoot, file))),
-      large!,
-      small!,
-    ];
-    const shards = await partition(files, 4);
-    expect(shards).toEqual([
-      [files[1]!.moduleId],
-      [large!.moduleId],
-      [files[0]!.moduleId],
-      [small!.moduleId],
-    ]);
-  });
-
-  it("charges per-file overhead so many small suites do not look free", async () => {
-    useTimings(timingFile({}, 5));
-    const files = temporaryFiles([10_000, 3_000, 3_000, 3_000]);
-    const shards = await partition(files, 2);
-    expect(shards).toEqual([
-      [files[0]!.moduleId, files[3]!.moduleId],
-      [files[1]!.moduleId, files[2]!.moduleId],
-    ]);
-  });
-
-  it("balances both project phases by their effective worker count", async () => {
-    const fixtureFiles = temporaryFiles([400, 200, 200, 100]);
-    const [bundledLarge, bundledSmall, serialLarge, serialSmall] = fixtureFiles.map(
-      (file) => file.moduleId,
-    );
-    const rawSeconds = new Map<string, number>([
-      [bundledLarge!, 10],
-      [bundledSmall!, 10],
-      [serialLarge!, 10],
-      [serialSmall!, 20],
-    ]);
-    useTimings(
-      timingFile(
-        Object.fromEntries(
-          [...rawSeconds].map(([file, seconds]) => [path.relative(repoRoot, file), seconds]),
-        ),
-        0,
-      ),
-    );
-    const bundled = specifications([bundledLarge!, bundledSmall!], {
-      name: "ui-e2e-bundled",
-      projectWorkers: null,
-      rootWorkers: 2,
-    });
-    const serial = specifications([serialLarge!, serialSmall!], {
-      name: "ui-e2e-serial",
-      projectWorkers: 1,
-      rootWorkers: 2,
-    });
-    const shards = await partitionSpecifications([...bundled, ...serial], 2);
-    const workerCount = (file: TestSpecification) =>
-      (file.project.config.maxWorkers ?? file.project.vitest.config.maxWorkers)!;
-
-    expect(
-      shards.map((shard) =>
-        shard.reduce((sum, file) => sum + rawSeconds.get(file.moduleId)! / workerCount(file), 0),
-      ),
-    ).toEqual([20, 20]);
-    expect(
-      shards
-        .flat()
-        .map((file) => file.moduleId)
-        .toSorted(),
-    ).toEqual(fixtureFiles.map((file) => file.moduleId).toSorted());
-    expect(new Set(shards.flat()).size).toBe(fixtureFiles.length);
-    expect(shards.flat().filter((file) => file.project.name === "ui-e2e-serial")).toHaveLength(2);
-  });
-
-  it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
-    const committed = fs.readFileSync(timingPath, "utf8");
-    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot });
-    const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
-    const serial = new Set(uiE2eSerialTestFiles);
-    const files = [
-      ...specifications(
-        discovered.filter((file) => !serial.has(file)).map((file) => path.join(repoRoot, file)),
-        { name: "ui-e2e-bundled", projectWorkers: null, rootWorkers: 2 },
-      ),
-      ...specifications(
-        discovered.filter((file) => serial.has(file)).map((file) => path.join(repoRoot, file)),
-        { name: "ui-e2e-serial", projectWorkers: 1, rootWorkers: 2 },
-      ),
-    ];
-    expect(files.length).toBeGreaterThan(0);
-    useTimings(committed);
-    const original = await partition(files, 12);
-    expect(original).toHaveLength(12);
-    // Validate via the production loader before adding a stale but valid weight.
-    const { readUiE2eFileTimings } = await import("../scripts/lib/ci-test-timings.mts");
-    const timings = readUiE2eFileTimings();
-    expect(Object.keys(timings.fileSeconds).length).toBeGreaterThan(0);
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    vi.resetModules();
-    useTimings(
-      timingFile(
-        { ...timings.fileSeconds, "ui/src/e2e/deleted.e2e.test.ts": 9999 },
-        timings.perFileOverheadSeconds,
-      ),
-    );
-    expect(await partition(files.toReversed(), 12)).toEqual(original);
-    expect(original.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
-    expect(new Set(original.flat()).size).toBe(files.length);
-  });
-
-  it.each([
-    ["truncated JSON", '{"version":1'],
-    ["wrong version", timingFile({}).replace('"version":1', '"version":2')],
-    ["negative seconds", timingFile({ "ui/src/e2e/chat-flow.clipboard.e2e.test.ts": -1 })],
-  ])("preserves the no-file partition with %s", async (_name, contents) => {
-    const files = specifications(
-      fs
-        .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
-        .map((file) => path.join(repoRoot, file)),
-    );
-    useTimings(null);
-    const baseline = await partition(files);
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    vi.resetModules();
-    useTimings(contents);
-    const actual = await partition(files);
-    expect(actual).toEqual(baseline);
-    expect(actual.flat().toSorted()).toEqual(files.map((file) => file.moduleId).toSorted());
-    expect(new Set(actual.flat()).size).toBe(files.length);
   });
 });

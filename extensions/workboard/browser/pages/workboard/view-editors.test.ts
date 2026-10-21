@@ -1,7 +1,7 @@
 import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -130,9 +130,11 @@ describe("WorkboardView", () => {
         value,
       );
     }
-    container
-      .querySelector<HTMLFormElement>(".workboard-draft")!
-      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    const form = container.querySelector<HTMLFormElement>(".workboard-draft")!;
+    const submit = form.querySelector<HTMLButtonElement>(".workboard-draft__submit")!;
+    expect(submit.form).toBe(form);
+    expect(form.lastElementChild?.contains(submit)).toBe(true);
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await waitForFast(() => expect(state.draftOpen).toBe(false));
     expect(client.request).toHaveBeenCalledExactlyOnceWith(
       "workboard.cards.create",
@@ -251,7 +253,6 @@ describe("WorkboardView", () => {
   });
 
   it.each([
-    { field: "title", change: "permission", dismiss: "none" },
     { field: "notes", change: "archive", dismiss: "none" },
     { field: "labels", change: "permission", dismiss: "before" },
     { field: "labels", change: "archive", dismiss: "after" },

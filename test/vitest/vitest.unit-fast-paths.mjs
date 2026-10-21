@@ -101,6 +101,7 @@ export const forcedUnitFastTestFiles = [
   "src/mcp/openclaw-tools-serve.test.ts",
   "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
+  "src/node-host/invoke-system-run-plan.cwd.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/pairing/setup-code.test.ts",
   "src/plugin-activation-boundary.test.ts",
@@ -130,7 +131,6 @@ export const forcedUnitFastTestFiles = [
   "packages/terminal-core/src/restore.test.ts",
   "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
-  "src/test-utils/openclaw-test-state.test.ts",
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
@@ -144,6 +144,10 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // Real heartbeat admission needs the infra runner's agent-database host owner.
+  "src/infra/heartbeat-runner.exact-session-busy.test.ts",
+  // This family proof belongs to the PostgreSQL conformance owner.
+  "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Planner inventory proofs retain their tooling timing and worker policy
@@ -280,7 +284,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|\.test-mocks|\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -362,35 +366,38 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
-function collectRepoTestFiles(cwd) {
-  const normalizedCwd = normalizeRepoPath(cwd);
-  const cached = walkedTestFilesByCwd.get(normalizedCwd);
+function collectRepoTestFiles(cwd, selected) {
+  const key = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached = walkedTestFilesByCwd.get(key);
   if (cached) {
     return cached;
   }
-  const inventory = getRepositoryFileInventory(cwd);
+  const inventory = getRepositoryFileInventory(cwd, selected);
   const files = inventory
     ? [...inventory]
         .map(normalizeRepoPath)
         .filter((file) => /^(?:src|packages|test)\//u.test(file) && file.endsWith(".test.ts"))
-    : ["src", "packages", "test"]
+    : (selected ??
+      ["src", "packages", "test"]
         .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-        .map((file) => normalizeRepoPath(path.relative(cwd, file)));
-  walkedTestFilesByCwd.set(normalizedCwd, files);
+        .map((file) => normalizeRepoPath(path.relative(cwd, file))));
+  walkedTestFilesByCwd.set(key, files);
   return files;
 }
 
 const unitFastCandidateInventoryByCwd = new Map();
 
-function collectUnitFastCandidateInventory(cwd) {
-  const cacheKey = normalizeRepoPath(cwd);
-  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+function collectUnitFastCandidateInventory(cwd, selected) {
+  const cacheKey = JSON.stringify([normalizeRepoPath(cwd), selected]);
+  const cached =
+    unitFastCandidateInventoryByCwd.get(JSON.stringify([normalizeRepoPath(cwd), undefined])) ??
+    unitFastCandidateInventoryByCwd.get(cacheKey);
   if (cached) {
     return cached;
   }
   const inventory = [
     ...new Set([
-      ...collectRepoTestFiles(cwd),
+      ...collectRepoTestFiles(cwd, selected),
       ...unitFastCandidateExactFiles,
       ...forcedUnitFastTestFiles,
     ]),
@@ -442,7 +449,7 @@ function matchesCompiledInclude(file, compiledPatterns) {
   );
 }
 
-export function classifyUnitFastTestFileContent(source) {
+function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
     if (pattern.test(source)) {
@@ -582,8 +589,13 @@ export function getUnitFastTestFilesForIncludePatterns(includePatterns, options 
     return [];
   }
   const compiledPatterns = prepareGlobPatterns(patterns);
+  const candidates = patterns.every(
+    (pattern) => pattern.endsWith(".test.ts") && literalGlobPrefix(pattern) === pattern,
+  )
+    ? collectUnitFastCandidateInventory(cwd, patterns)
+    : collectUnitFastCandidateInventory(cwd);
 
-  const files = collectUnitFastCandidateInventory(cwd)
+  const files = candidates
     .filter((file) => {
       return (
         isFileWithinScope(file, dir) &&
@@ -659,7 +671,7 @@ function getUnitFastTestFileAnalysis(file) {
   // Exact routing must not analyze every source before admitting one test.
   // Retain inventory membership, including ignored-file and forced-owner rules.
   return isUnitFastCandidateFile(normalized) &&
-    collectUnitFastCandidateInventory(cwd).includes(normalized)
+    collectUnitFastCandidateInventory(cwd, [normalized]).includes(normalized)
     ? analyzeUnitFastTestFile(cwd, normalized)
     : undefined;
 }

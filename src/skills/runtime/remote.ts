@@ -338,17 +338,10 @@ export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams):
       // before starting another probe so they stay coalesced.
       continue;
     }
-    const inflight: RemoteBinProbeInflight = {
-      ...owner,
-      promise: Promise.resolve(),
-    };
     const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
-      if (remoteBinProbeInflight.get(params.nodeId) === inflight) {
-        remoteBinProbeInflight.delete(params.nodeId);
-      }
+      remoteBinProbeInflight.delete(params.nodeId);
     });
-    inflight.promise = run;
-    remoteBinProbeInflight.set(params.nodeId, inflight);
+    remoteBinProbeInflight.set(params.nodeId, { ...owner, promise: run });
     await run;
     return;
   }
@@ -372,7 +365,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (!remoteRegistry) {
     return;
   }
-  const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+  const { prepareWorkspaceSkillEntries } = await import("../loading/workspace-skill-loader.js");
   // Pairing can replace the command surface while the connect-time readiness
   // delay or loader import is pending. Probe the live session after both settle.
   const liveSession = remoteRegistry?.get(params.nodeId);
@@ -399,11 +392,14 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   for (const agentId of listAgentIds(params.cfg)) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     // Probe prerequisites before host eligibility can hide remote-only skills.
-    const entries = loadWorkspaceSkills(workspaceDir, {
+    const { entries } = await prepareWorkspaceSkillEntries(workspaceDir, {
       config: params.cfg,
       agentId,
       agentSkillFilter: "ignore",
     });
+    if (params.readinessSignal?.aborted || !isCurrentRemoteNodeOwner(params.nodeId, probeOwner)) {
+      return;
+    }
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }

@@ -1,12 +1,10 @@
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { withRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import type {
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
   SessionPlacementSandboxParams,
 } from "../../agents/session-placement-admission.js";
-import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -14,15 +12,15 @@ import {
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { isCurrentPlacementTurnClaim, sameWorkerSessionTurnClaim } from "./placement-record.js";
-import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-store.js";
-import { isWorkerEnvironmentAttachedTo, matchesWorkerPlacementTarget } from "./placement-target.js";
+import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
-import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
@@ -32,6 +30,7 @@ import {
 } from "./tunnel-contract.js";
 import {
   assertWorkerPlacementCompactionAllowed,
+  admitWorkerTurn,
   claimWorkerTurn,
   createRequiredWorkerTurnAdmission,
   executeLocalTurn,
@@ -46,19 +45,18 @@ import {
 } from "./worker-turn-admission.js";
 import {
   failHandedOffTurn,
+  prepareWorkerTurnFailure,
   WorkerTurnExecutionError,
   WorkerWorkspaceReconciliationError,
   type ActiveWorkerPlacement,
 } from "./worker-turn-failure.js";
 import type { WorkerTurnLauncherOptions } from "./worker-turn-launcher.types.js";
 import * as workerTurnOwner from "./worker-turn-run-owner.js";
+import { prepareWorkerTurnSandbox } from "./worker-turn-sandbox.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
-const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-sandbox.js"));
-
-class WorkerRuntimeRefreshInFlightError extends Error {}
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
@@ -74,7 +72,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       assertWorkerPlacementCompactionAllowed(options.placements.get(currentTarget.sessionId)),
     async recoverTerminalTurn(session, assertCurrent) {
       const active = activeWorkerTurns.get(session.sessionId);
-      return active && (!session.sessionKey || active.sessionKey === session.sessionKey)
+      return active &&
+        (!session.sessionKey || active.sessionKey === session.sessionKey) &&
+        (!session.operation || active.operation === session.operation)
         ? await active.recoverTerminal?.(() => {
             assertCurrent?.();
             if (activeWorkerTurns.get(session.sessionId) !== active) {
@@ -83,55 +83,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           })
         : undefined;
     },
-    async prepareSandbox(params) {
-      using cleanup = new DisposableStack();
-      const prepared = await options.placements.prepareRuntimeRefresh(params.sessionId);
-      cleanup.defer(prepared.release);
-      const retain = (
-        sandbox: SandboxContext | null,
-        assertCurrent = prepared.assertCurrent,
-      ): PreparedSessionPlacementSandbox => {
-        const lifetime = cleanup.move();
-        return { sandbox, assertCurrent, [Symbol.dispose]: () => lifetime.dispose() };
-      };
-      const placement = prepared.placement;
-      if (
-        placement?.state !== "active" ||
-        placement.executionMode !== "remote-exec" ||
-        placement.agentId !== params.agentId ||
-        placement.sessionKey !== params.sessionKey
-      ) {
-        return retain(null);
-      }
-      const workspace = await options.resolveWorkspace({
-        sessionId: placement.sessionId,
-        agentId: placement.agentId,
-        sessionKey: placement.sessionKey,
-      });
-      prepared.assertCurrent();
-      const { createRemoteExecPlacementSandbox } = await loadPlacementSandbox();
-      prepared.assertCurrent();
-      const sandbox = await createRemoteExecPlacementSandbox({
-        config: params.config,
-        environments: options.environments,
-        workspaceDir: workspace.kind === "local" ? workspace.path : placement.remoteWorkspaceDir,
-        placement,
-      });
-      const assertCurrent = () => {
-        prepared.assertCurrent();
-        const currentEnvironment = options.environments.get(placement.environmentId);
-        if (
-          !isWorkerEnvironmentAttachedTo(currentEnvironment, placement) ||
-          currentEnvironment.environmentId !== placement.environmentId ||
-          (sandbox.backendId === "node" &&
-            currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
-        ) {
-          throw new Error("Remote-exec environment changed while preparing its sandbox");
-        }
-      };
-      assertCurrent();
-      return retain(sandbox, assertCurrent);
-    },
+    prepareSandbox: (params) => prepareWorkerTurnSandbox(options, params),
     executeLocalTurn: (claim, runLocal, assertCurrent) => {
       requiredAdmission.assertLocalAllowed();
       return executeLocalTurn({
@@ -142,8 +94,24 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       });
     },
     async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
+      const sessionlessModelRun = inputTurn.modelRun === true && !claim.sessionKey?.trim();
+      if (!inputTurn.replyOperation && !sessionlessModelRun) {
+        return await admitWorkerTurn(
+          {
+            placements: options.placements,
+            claim,
+            turn: inputTurn,
+            runLocal,
+            onAdmitted,
+            assertCurrent: assertRunCurrent,
+          },
+          provider.executeTurn,
+        );
+      }
       const previous = activeWorkerTurns.get(claim.sessionId);
       const reply = await workerTurnOwner.prepareWorkerTurnReplyDelivery(previous, inputTurn);
+      // The reply can arrive before workspace and context-engine settlement finish.
+      const releaseExecution = inputTurn.replyOperation?.retainExecution();
       const execution = withRequiredSessionPlacement(
         claim,
         {
@@ -196,11 +164,11 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               sessionKey: identity.sessionKey,
               agentId: identity.agentId,
             });
-          let routablePlacement: WorkerSessionPlacementRecord = current;
-          let assertInitialSetupCurrent: (() => void) | undefined;
+          let initialSetup: Awaited<ReturnType<typeof waitForInitialWorkerPlacement>> | undefined;
+          await using _ = { [Symbol.asyncDispose]: async () => initialSetup?.release() };
           // Every admission wait retains the caller's authority, not only initial setup.
           const initialSetupSource = createDynamicSessionSourceAssertion(
-            () => assertInitialSetupCurrent,
+            () => initialSetup?.assertCurrent,
             () => {
               throw new Error("Worker setup authority changed during turn admission");
             },
@@ -210,7 +178,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             (assertSources) => {
               inputTurn.abortSignal?.throwIfAborted();
               assertSources();
-              requiredAdmission.assertCurrent(claim);
             },
           );
           // An admission wait ends without authority; retry from the durable placement.
@@ -232,6 +199,11 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           let preparedResultPending: boolean | undefined = Boolean(
             prepared.pendingResult &&
             (prepared.pendingResult.runId !== claim.runId || !current.turnClaim),
+          );
+          let routablePlacement = await requiredAdmission.recoverInterruptedTurn(
+            current,
+            inputTurn,
+            assertAdmissionCurrent,
           );
           for (;;) {
             if (routablePlacement.state === "local") {
@@ -258,7 +230,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 assertRunCurrent,
               });
               routablePlacement = ready.placement;
-              assertInitialSetupCurrent = ready.assertCurrent;
+              const previousSetup = initialSetup;
+              initialSetup = ready;
+              await previousSetup?.release();
             }
             if (
               routablePlacement.state === "reclaimed" ||
@@ -300,13 +274,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 refresh,
                 ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
                 timeoutMs: turn.timeoutMs,
-                onProgress: () =>
+                onProgress: () => {
+                  turn.replyOperation?.watchdog.progress("transport", "worker:runtime_refresh");
                   markDiagnosticRunProgress({
                     sessionId: identity.sessionId,
                     sessionKey: identity.sessionKey,
                     runId: claim.runId,
                     reason: "worker:runtime_refresh",
-                  }),
+                  });
+                },
               });
               routablePlacement = await readRoutablePlacement(
                 "Cloud worker placement disappeared while waiting for runtime refresh",
@@ -316,7 +292,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             const assertClaimCurrent = () => {
               assertAdmissionCurrent();
               if (options.environments.readRuntimeRefresh?.(environmentId)) {
-                throw new WorkerRuntimeRefreshInFlightError(
+                throw new WorkerRuntimeRefreshPendingError(
                   "Worker runtime refresh started during turn admission",
                 );
               }
@@ -340,7 +316,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
               });
             } catch (error) {
-              const refreshing = error instanceof WorkerRuntimeRefreshInFlightError;
+              const refreshing = error instanceof WorkerRuntimeRefreshPendingError;
               if (!refreshing) {
                 if (
                   !remoteExec ||
@@ -411,6 +387,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 turn.abortSignal?.throwIfAborted();
                 assertAdmission();
                 const preparedPlacement = placementRead.current();
+                requiredAdmission.assertCurrent(preparedPlacement);
                 if (
                   preparedPlacement?.state !== "active" ||
                   preparedPlacement.executionMode !== placement.executionMode ||
@@ -458,12 +435,13 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               const executionOptions = {
                 environments: options.environments,
                 onHandoff: (custody?: { requiresTerminalReceipt: true }) => {
+                  handedOff = true;
+                  terminalReceiptRequired = custody?.requiresTerminalReceipt === true;
+                  activeWorkerTurn?.beginExecution();
                   if (!admissionReported) {
                     onAdmitted?.();
                     admissionReported = true;
                   }
-                  handedOff = true;
-                  terminalReceiptRequired = custody?.requiresTerminalReceipt === true;
                 },
                 onTerminal: () => {
                   terminalAtMs = Date.now();
@@ -534,7 +512,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   assertAdmissionCurrent();
                   turn.abortSignal?.throwIfAborted();
                   // Reconciliation may supersede the placement captured by initial setup.
-                  assertInitialSetupCurrent = undefined;
+                  await initialSetup?.release();
+                  initialSetup = undefined;
                   if (!recoveredAdmission) {
                     const waitTimeoutMs = Math.min(WORKER_ADMISSION_DEADLINE_MS, turn.timeoutMs);
                     if (waitTimeoutMs <= 0) {
@@ -632,26 +611,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   requireActivePlacement(reconciled);
                 }
               }
-              const pendingWorkspaceResult = await findPendingWorkerWorkspaceResult(
-                options.placements,
-                turnClaim,
+              await prepareWorkerTurnFailure(
+                options,
+                placement,
+                { ...identity, ...turnClaim },
+                error,
+                assertCurrent,
+                turn.abortSignal,
+                handedOff && !remoteExec ? options.persistAbandonedPartial : undefined,
               );
-              if (pendingWorkspaceResult) {
-                if (turnClaim.owner.kind === "local") {
-                  // The Gateway-owned run is already terminal. Atomically record the
-                  // reconciliation failure before teardown so reclaim cannot see live work.
-                  await options.placements.failWorkspaceResultAndReleaseTurn(
-                    pendingWorkspaceResult,
-                    error,
-                  );
-                } else {
-                  // A recovery sweep owns the still-live worker claim. Teardown here
-                  // could discard the terminal event's durably fenced file results.
-                  await options.placements.handoffWorkspaceResultRecovery(turnClaim);
-                }
-                await options.reconcileActivePlacement(placement.environmentId);
-                throw error;
-              }
               if (
                 error instanceof WorkerRunnerCapacityError ||
                 (error instanceof WorkerRunnerUnavailableError && !handedOff) ||
@@ -689,16 +657,15 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                   placement,
                   turnClaim,
                   error,
-                  ...(terminalOwner && terminalAtMs !== undefined
-                    ? {
-                        terminal: {
+                  terminal:
+                    terminalOwner && terminalAtMs !== undefined
+                      ? {
                           observedAtMs: terminalAtMs,
                           registerRecovery: (recover) => {
                             terminalOwner.recoverTerminal = recover;
                           },
-                        },
-                      }
-                    : {}),
+                        }
+                      : undefined,
                 });
               } else {
                 await releaseClaimIfOwned(options.placements, turnClaim);
@@ -715,7 +682,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
           }
         },
-      );
+      ).finally(() => releaseExecution?.());
       return await reply.wait(execution);
     },
   };

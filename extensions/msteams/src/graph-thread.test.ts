@@ -1,4 +1,3 @@
-// Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildThreadContext,
@@ -6,39 +5,45 @@ import {
   fetchChatMessageText,
   fetchThreadReplies,
   stripHtmlFromTeamsMessage,
+  type GraphThreadMessage,
 } from "./graph-thread.js";
+import type * as Graph from "./graph.js";
 import { fetchGraphJson } from "./graph.js";
 
-vi.mock("./graph.js", () => ({
+const fetchAllGraphPagesMock = vi.hoisted(() => vi.fn());
+const message = (
+  id: string,
+  content: string,
+  from: GraphThreadMessage["from"],
+  contentType = "text",
+): GraphThreadMessage => ({ id, from, body: { content, contentType } });
+
+vi.mock("./graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof Graph>()),
   fetchGraphJson: vi.fn(),
+  fetchAllGraphPages: fetchAllGraphPagesMock,
 }));
 
-describe("stripHtmlFromTeamsMessage", () => {
-  it("handles <at> tags with attributes", () => {
-    expect(stripHtmlFromTeamsMessage('<at id="123">Bob</at> please review')).toBe(
-      "@Bob please review",
-    );
-  });
+beforeEach(() => {
+  vi.mocked(fetchGraphJson).mockReset();
+  fetchAllGraphPagesMock.mockReset();
 });
 
-describe("fetchChannelMessage", () => {
-  beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
-  });
+it("handles <at> tags with attributes", () => {
+  expect(stripHtmlFromTeamsMessage('<at id="123">Bob</at> please review')).toBe(
+    "@Bob please review",
+  );
+});
 
-  it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden"));
-
-    const result = await fetchChannelMessage("tok", "group-1", "channel-1", "msg-1");
-    expect(result).toBeUndefined();
-  });
+it.each([
+  ["channel", () => fetchChannelMessage("tok", "group-1", "channel-1", "msg-1")],
+  ["chat", () => fetchChatMessageText("tok", "19:chat", "m-1")],
+] as const)("%s returns undefined on fetch error", async (_kind, fetchMessage) => {
+  vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("forbidden"));
+  await expect(fetchMessage()).resolves.toBeUndefined();
 });
 
 describe("fetchChatMessageText", () => {
-  beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
-  });
-
   it("fetches the chat message and strips HTML body to plain text", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({
       id: "1783379480258",
@@ -55,13 +60,6 @@ describe("fetchChatMessageText", () => {
       token: "tok",
       path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
     });
-  });
-
-  it("returns undefined on fetch error", async () => {
-    vi.mocked(fetchGraphJson).mockRejectedValueOnce(new Error("not found"));
-
-    const result = await fetchChatMessageText("tok", "19:chat", "m-1");
-    expect(result).toBeUndefined();
   });
 
   it("forwards a shared deadline to the Graph request", async () => {
@@ -83,94 +81,64 @@ describe("fetchChatMessageText", () => {
 });
 
 describe("fetchThreadReplies", () => {
-  beforeEach(() => {
-    vi.mocked(fetchGraphJson).mockReset();
+  it("rejects a page-capped result instead of returning an old prefix", async () => {
+    fetchAllGraphPagesMock.mockResolvedValueOnce({
+      items: [{ id: "old-reply" }],
+      truncated: true,
+    });
+
+    await expect(fetchThreadReplies("tok", "g", "c", "m")).rejects.toThrow(
+      "MS Teams thread replies pagination did not reach the newest replies",
+    );
   });
 
-  it("returns empty array when value is missing", async () => {
-    vi.mocked(fetchGraphJson).mockResolvedValueOnce({});
-
-    const result = await fetchThreadReplies("tok", "g", "c", "m");
-    expect(result).toStrictEqual([]);
-    expect(fetchGraphJson).toHaveBeenCalledWith({
-      token: "tok",
-      path: "/teams/g/channels/c/messages/m/replies?$top=50",
+  it("rejects an incomplete timestamp set when selecting a newest window", async () => {
+    fetchAllGraphPagesMock.mockResolvedValueOnce({
+      items: Array.from({ length: 51 }, (_, index) => ({ id: `reply-${index}` })),
+      truncated: false,
     });
+
+    await expect(fetchThreadReplies("tok", "g", "c", "m")).rejects.toThrow(
+      "MS Teams thread replies have incomplete timestamps",
+    );
   });
 });
 
 describe("buildThreadContext", () => {
-  it("skips the current message by id", () => {
-    const messages = [
-      {
-        id: "m1",
-        from: { user: { displayName: "Alice" } },
-        body: { content: "Hello!", contentType: "text" },
-      },
-      {
-        id: "m2",
-        from: { user: { displayName: "Bob" } },
-        body: { content: "Current", contentType: "text" },
-      },
-    ];
-    expect(buildThreadContext(messages, "m2")).toEqual([
+  it.each<[string, GraphThreadMessage[], ReturnType<typeof buildThreadContext>[number], string?]>([
+    [
+      "skips the current message by id",
+      [
+        message("m1", "Hello!", { user: { displayName: "Alice" } }),
+        message("m2", "Current", { user: { displayName: "Bob" } }),
+      ],
       { message_id: "m1", sender: "Alice", body: "Hello!" },
-    ]);
-  });
-
-  it("strips HTML from html contentType messages", () => {
-    const messages = [
-      {
-        id: "m1",
-        from: { user: { displayName: "Carol" } },
-        body: { content: "<p>Hello <b>world</b></p>", contentType: "html" },
-      },
-    ];
-    expect(buildThreadContext(messages)).toEqual([
+      "m2",
+    ],
+    [
+      "strips HTML",
+      [message("m1", "<p>Hello <b>world</b></p>", { user: { displayName: "Carol" } }, "html")],
       { message_id: "m1", sender: "Carol", body: "Hello world" },
-    ]);
-  });
-
-  it("uses application displayName when user is absent", () => {
-    const messages = [
-      {
-        id: "m1",
-        from: { application: { displayName: "BotApp" } },
-        body: { content: "automated msg", contentType: "text" },
-      },
-    ];
-    expect(buildThreadContext(messages)).toEqual([
+    ],
+    [
+      "uses application displayName when user is absent",
+      [message("m1", "automated msg", { application: { displayName: "BotApp" } })],
       { message_id: "m1", sender: "BotApp", body: "automated msg" },
-    ]);
-  });
-
-  it("skips messages with empty content", () => {
-    const messages = [
-      {
-        id: "m1",
-        from: { user: { displayName: "Alice" } },
-        body: { content: "", contentType: "text" },
-      },
-      {
-        id: "m2",
-        from: { user: { displayName: "Bob" } },
-        body: { content: "actual content", contentType: "text" },
-      },
-    ];
-    expect(buildThreadContext(messages)).toEqual([
+    ],
+    [
+      "skips messages with empty content",
+      [
+        message("m1", "", { user: { displayName: "Alice" } }),
+        message("m2", "actual content", { user: { displayName: "Bob" } }),
+      ],
       { message_id: "m2", sender: "Bob", body: "actual content" },
-    ]);
-  });
-
-  it("falls back to 'unknown' sender when from is missing", () => {
-    const messages = [
-      {
-        id: "m1",
-        body: { content: "orphan msg", contentType: "text" },
-      },
-    ];
-    expect(buildThreadContext(messages)).toEqual([
+    ],
+    [
+      "falls back to unknown sender when from is missing",
+      [message("m1", "orphan msg", undefined)],
       { message_id: "m1", sender: "unknown", body: "orphan msg" },
-    ]);
+    ],
+  ])("%s", (_name, messages, expected, currentId) => {
+    expect(buildThreadContext(messages, currentId)).toEqual([expected]);
   });
 });

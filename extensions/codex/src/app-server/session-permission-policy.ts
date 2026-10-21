@@ -1,6 +1,7 @@
 import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
@@ -248,6 +249,6 @@ export function resolveCodexSessionPermissionCwd(params: {
     return params.requestedCwd ?? params.fallbackCwd;
   }
   const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
-  const requestedCwd = params.requestedCwd?.trim();
+  const requestedCwd = readNonBlankString(params.requestedCwd);
   return requestedCwd && isPathInside(sessionRoot, requestedCwd) ? requestedCwd : sessionRoot;
 }

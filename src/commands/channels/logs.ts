@@ -1,4 +1,3 @@
-// Implements channel-scoped tailing of the OpenClaw log file.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -7,9 +6,8 @@ import {
 } from "../../channels/registry.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { readConfiguredParsedLogTail } from "../../logging/log-tail.js";
-import type { ParsedLogLine } from "../../logging/parse-log-line.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 
 type ChannelsLogsOptions = {
   channel?: string;
@@ -20,97 +18,72 @@ type ChannelsLogsOptions = {
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
 
-type ChannelLogFilter = { channel: string; pluginIds: ReadonlySet<string> };
-type ManifestChannel = { id: string; pluginId: string };
-
-function listManifestChannels(): ManifestChannel[] {
-  return loadPluginManifestRegistryForPluginRegistry({
-    includeDisabled: true,
-    env: process.env,
-  }).plugins.flatMap((plugin) =>
-    plugin.channels.flatMap((rawChannel) => {
-      const id = normalizeLowercaseStringOrEmpty(rawChannel);
-      return id ? [{ id, pluginId: plugin.id }] : [];
-    }),
-  );
-}
-
-function parseChannelFilter(raw?: string): ChannelLogFilter {
-  const trimmed = raw === undefined ? "all" : normalizeLowercaseStringOrEmpty(raw);
-  if (trimmed === "all") {
-    return { channel: "all", pluginIds: new Set() };
-  }
-  const manifestChannels = listManifestChannels();
-  const bundled = normalizeBundledChannelId(trimmed);
-  const channel = bundled ?? trimmed;
-  const pluginIds = new Set(
-    manifestChannels.filter((entry) => entry.id === channel).map((entry) => entry.pluginId),
-  );
-  if (bundled || pluginIds.size > 0) {
-    return { channel, pluginIds };
-  }
-  const manifestIds = [...new Set(manifestChannels.map((entry) => entry.id))].toSorted();
-  const validChannels = ["all", ...new Set([...CHAT_CHANNEL_ORDER, ...manifestIds])];
-  throw new Error(
-    `Unknown channel ${JSON.stringify(raw)}. Valid channels: ${validChannels.join(", ")}`,
-  );
-}
-
 function matchesChannelContext(value: string | undefined, channel: string) {
   return [channel, `channels/${channel}`, `gateway/channels/${channel}`].some(
     (root) => value === root || value?.startsWith(`${root}/`) === true,
   );
 }
 
-function matchesChannel(
-  line: Pick<ParsedLogLine, "subsystem" | "module" | "plugin">,
-  filter: ChannelLogFilter,
-) {
-  const { channel } = filter;
-  if (channel === "all") {
-    return true;
-  }
-  return (
-    [line.subsystem, line.module].some((value) => matchesChannelContext(value, channel)) ||
-    (line.plugin !== undefined && filter.pluginIds.has(line.plugin))
-  );
-}
-
 /** Print or serialize recent log lines matching one channel subsystem/module. */
-export async function channelsLogsCommand(
-  opts: ChannelsLogsOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  const filter = parseChannelFilter(opts.channel);
-  const { channel } = filter;
-  const limit = parseLogsPositiveInt(opts.lines ?? undefined, DEFAULT_LIMIT, "--lines");
+export async function channelsLogsCommand(opts: ChannelsLogsOptions) {
+  let channel = opts.channel === undefined ? "all" : normalizeLowercaseStringOrEmpty(opts.channel);
+  const pluginIds = new Set<string>();
+  if (channel !== "all") {
+    const manifestChannels = loadPluginManifestRegistryForPluginRegistry({
+      includeDisabled: true,
+      env: process.env,
+    }).plugins.flatMap((plugin) =>
+      plugin.channels.flatMap((rawChannel) => {
+        const id = normalizeLowercaseStringOrEmpty(rawChannel);
+        return id ? [{ id, pluginId: plugin.id }] : [];
+      }),
+    );
+    const bundled = normalizeBundledChannelId(channel);
+    channel = bundled ?? channel;
+    for (const entry of manifestChannels) {
+      if (entry.id === channel) {
+        pluginIds.add(entry.pluginId);
+      }
+    }
+    if (!bundled && pluginIds.size === 0) {
+      const manifestIds = [...new Set(manifestChannels.map((entry) => entry.id))].toSorted();
+      const validChannels = ["all", ...new Set([...CHAT_CHANNEL_ORDER, ...manifestIds])];
+      throw new Error(
+        `Unknown channel ${JSON.stringify(opts.channel)}. Valid channels: ${validChannels.join(", ")}`,
+      );
+    }
+  }
+  const limit = parseLogsPositiveInt(opts.lines, DEFAULT_LIMIT, "--lines");
 
   const tail = await readConfiguredParsedLogTail({
     limit,
     maxBytes: MAX_BYTES,
-    filter: (line) => matchesChannel(line, filter),
+    filter: (line) =>
+      channel === "all" ||
+      [line.subsystem, line.module].some((value) => matchesChannelContext(value, channel)) ||
+      (line.plugin !== undefined && pluginIds.has(line.plugin)),
   });
   const { lines, truncated } = tail;
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { file: tail.file, channel, truncated, lines });
+    defaultRuntime.writeJson({ file: tail.file, channel, truncated, lines });
     return;
   }
 
-  runtime.log(theme.info(`Log file: ${tail.file}`));
+  defaultRuntime.log(theme.info(`Log file: ${tail.file}`));
   if (channel !== "all") {
-    runtime.log(theme.info(`Channel: ${channel}`));
+    defaultRuntime.log(theme.info(`Channel: ${channel}`));
   }
   if (truncated) {
-    runtime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
+    defaultRuntime.log(theme.warn("Log tail truncated; earlier entries were omitted."));
   }
   if (lines.length === 0) {
-    runtime.log(theme.muted("No matching log lines."));
+    defaultRuntime.log(theme.muted("No matching log lines."));
     return;
   }
   for (const line of lines) {
     const ts = line.time ? `${line.time} ` : "";
     const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
-    runtime.log(`${ts}${level}${line.message}`.trim());
+    defaultRuntime.log(`${ts}${level}${line.message}`.trim());
   }
 }

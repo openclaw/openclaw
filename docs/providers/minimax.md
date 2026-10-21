@@ -81,6 +81,8 @@ MiniMax M3 and M3.1 Flash Preview are preferred [Code Mode](/tools/code-mode) mo
     OAuth setups use the `minimax-portal` provider id. Model refs follow the form `minimax-portal/MiniMax-M3`.
     </Note>
 
+    OpenClaw refreshes expired OAuth access tokens at the regional MiniMax account endpoint that issued them. It refuses the refresh, and asks you to run `openclaw models auth login --provider minimax-portal` again, when the saved sign-in predates refresh support (it does not record its region) or when `models.providers.minimax-portal.baseUrl` now points to the other region.
+
   </Tab>
 
   <Tab title="API key">
@@ -255,6 +257,8 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `
 ### Music generation
 
 The bundled MiniMax plugin registers music generation through the shared `music_generate` tool for both `minimax` and `minimax-portal`.
+
+Music and video generation use the origin of the selected provider's `baseUrl`, dropping chat path suffixes such as `/anthropic`. An omitted or blank URL uses `https://api.minimax.io`; an invalid nonempty URL fails before a request is sent instead of silently switching hosts.
 
 - Default music model: `minimax/music-2.6` (OAuth: `minimax-portal/music-2.6`)
 - Also supports `music-2.6-free`, `music-cover`, and `music-cover-free`

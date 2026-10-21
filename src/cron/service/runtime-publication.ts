@@ -22,7 +22,7 @@ export function applyCronRuntimeRowsToState(
   );
   state.store.jobs = [...residentJobs, ...importedJobs];
   if (opts?.publish !== false) {
-    publishCronRuntimeRows(state);
+    publishDurableNextRunChanges({ state, storeJobs: state.store.jobs });
   }
 }
 
@@ -55,12 +55,4 @@ export function publishDurableNextRunChanges(params: {
       nextRunAtMs: job.state.nextRunAtMs,
     });
   }
-}
-
-/** Publishes scheduled-row changes after a targeted runtime transaction commits. */
-export function publishCronRuntimeRows(state: CronServiceState): void {
-  if (!state.store) {
-    return;
-  }
-  publishDurableNextRunChanges({ state, storeJobs: state.store.jobs });
 }

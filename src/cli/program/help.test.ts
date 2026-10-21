@@ -1,36 +1,23 @@
-// Help tests cover command help generation and inherited help options.
+import { stripVTControlCharacters } from "node:util";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExitError } from "../../runtime.js";
-import { captureEnv } from "../../test-utils/env.js";
-import { configureProgramHelp } from "./help.js";
+import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
 import { OpenClawCommand } from "./openclaw-command.js";
+import { captureStdout } from "./program.test-helpers.js";
 
-const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
 const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
-const formatDocsLinkMock = vi.hoisted(() =>
-  vi.fn((_path: string, full: string) => `https://${full}`),
-);
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
+// mock-isolation: Make help link formatting deterministic across terminal capabilities.
 vi.mock("../../../packages/terminal-core/src/links.js", () => ({
-  formatDocsLink: formatDocsLinkMock,
+  formatDocsLink: (_path: string, full: string) => `https://${full}`,
 }));
 
-vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
-  isRich: () => false,
-  theme: {
-    heading: (s: string) => s,
-    muted: (s: string) => s,
-    option: (s: string) => s,
-    command: (s: string) => s,
-    error: (s: string) => s,
-  },
-}));
-
+// mock-isolation: Suppress banner side effects while checking command help output.
 vi.mock("../banner.js", () => ({
   formatCliBannerLine: formatCliBannerLineMock,
-  hasEmittedCliBanner: hasEmittedCliBannerMock,
+  hasEmittedCliBanner: () => false,
 }));
 
 vi.mock("../../infra/git-commit.js", () => ({
@@ -41,61 +28,19 @@ const testProgramContext = { programVersion: "9.9.9-test" };
 
 describe("configureProgramHelp", () => {
   let originalArgv: string[];
-  let originalEnv: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
     vi.clearAllMocks();
     originalArgv = [...process.argv];
-    originalEnv = captureEnv(["OPENCLAW_SUPPRESS_HELP_BANNER"]);
-    hasEmittedCliBannerMock.mockReturnValue(false);
     resolveCommitHashMock.mockReturnValue("abc1234");
-    delete process.env.OPENCLAW_SUPPRESS_HELP_BANNER;
+    vi.stubEnv("OPENCLAW_SUPPRESS_HELP_BANNER", undefined);
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     process.argv = originalArgv;
-    originalEnv.restore();
+    vi.unstubAllEnvs();
   });
-
-  function makeProgramWithCommands() {
-    const program = new Command();
-    program.command("models").description("models");
-    program.command("status").description("status");
-    return program;
-  }
-
-  function captureHelpOutput(program: Command): string {
-    let output = "";
-    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((
-      chunk: string | Uint8Array,
-    ) => {
-      output += String(chunk);
-      return true;
-    }) as typeof process.stdout.write);
-    try {
-      program.outputHelp();
-      return output;
-    } finally {
-      writeSpy.mockRestore();
-    }
-  }
-
-  function expectVersionExit(params: { expectedVersion: string }) {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    try {
-      const program = makeProgramWithCommands();
-      expect(() => configureProgramHelp(program, testProgramContext)).toThrow(new ExitError(0));
-      expect(logSpy).toHaveBeenCalledWith(params.expectedVersion);
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
-  }
 
   async function parseHelp(argv: string[]) {
     process.argv = ["node", "openclaw", ...argv];
@@ -105,12 +50,15 @@ describe("configureProgramHelp", () => {
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeOut: (value) => {
-        stdout += value;
+        stdout += stripVTControlCharacters(formatProgramHelpOutput(value));
       },
       writeErr: (value) => {
-        stderr += value;
+        stderr += stripVTControlCharacters(value);
       },
     });
+    program.command("models").description("models");
+    program.command("claws").description("claws");
+    program.command("status").description("status");
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
       .command("list")
@@ -122,35 +70,6 @@ describe("configureProgramHelp", () => {
     return { error: error as CommanderError, stderr, stdout };
   }
 
-  it("adds root help hint and marks commands with subcommands", () => {
-    process.argv = ["node", "openclaw", "--help"];
-    const program = makeProgramWithCommands();
-    configureProgramHelp(program, testProgramContext);
-
-    const help = captureHelpOutput(program);
-    expect(help).toContain("Hint: commands suffixed with * have subcommands");
-    expect(help).toContain("models *");
-    expect(help).toContain("status");
-    expect(help).not.toContain("status *");
-  });
-
-  it("includes banner and docs/examples in root help output", () => {
-    process.argv = ["node", "openclaw", "--help"];
-    const program = makeProgramWithCommands();
-    configureProgramHelp(program, testProgramContext);
-
-    const help = captureHelpOutput(program);
-    expect(help).toContain("BANNER-LINE");
-    const [version, options] = (formatCliBannerLineMock.mock.calls[0] as unknown as
-      | [string, { mode?: string }]
-      | undefined) ?? [undefined, undefined];
-    expect(version).toBe(testProgramContext.programVersion);
-    expect(options?.mode).toBe("default");
-    expect(help).toContain("Examples:");
-    expect(help).toContain("openclaw setup --baseline");
-    expect(help).toContain("https://docs.openclaw.ai/cli");
-  });
-
   it("keeps valid root, group, subcommand, short, and help-command output successful", async () => {
     const rootHelp = await parseHelp(["--help"]);
     const shortHelp = await parseHelp(["-h"]);
@@ -159,10 +78,18 @@ describe("configureProgramHelp", () => {
     const helpCommand = await parseHelp(["help", "plugins"]);
 
     for (const result of [rootHelp, shortHelp, groupHelp, subcommandHelp, helpCommand]) {
-      expect(result.error.exitCode).toBe(0);
-      expect(result.stderr).toBe("");
+      expect(result).toMatchObject({ error: { exitCode: 0 }, stderr: "" });
     }
     expect(rootHelp.error.code).toBe("commander.helpDisplayed");
+    expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
+    expect(rootHelp.stdout).toContain("models *");
+    expect(rootHelp.stdout).toContain("claws *");
+    expect(rootHelp.stdout).toContain("status");
+    expect(rootHelp.stdout).not.toContain("status *");
+    expect(rootHelp.stdout).toContain("BANNER-LINE");
+    expect(rootHelp.stdout).toContain("Examples:");
+    expect(rootHelp.stdout).toContain("openclaw setup --baseline");
+    expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
     expect(shortHelp.stdout).toBe(rootHelp.stdout);
     expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
     expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
@@ -171,12 +98,11 @@ describe("configureProgramHelp", () => {
 
   it("formats parse errors from the exact Commander command path", async () => {
     let stderr = "";
-    process.argv = ["node", "openclaw", "plugins", "--source", "list", "list", "--wat"];
     const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
     configureProgramHelp(program, testProgramContext);
     program.configureOutput({
       writeErr: (value) => {
-        stderr += value;
+        stderr += stripVTControlCharacters(value);
       },
     });
     program
@@ -185,57 +111,69 @@ describe("configureProgramHelp", () => {
       .command("list")
       .action(() => {});
 
-    const firstError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(firstError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
-    const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(secondError).toBeInstanceOf(CommanderError);
-    process.argv = ["node", "openclaw", "plugins", "lis"];
-    const thirdError = await program.parseAsync(process.argv).catch((error: unknown) => error);
-    expect(thirdError).toBeInstanceOf(CommanderError);
+    for (const args of [
+      ["plugins", "--source", "list", "list", "--wat"],
+      ["plugins", "list", "--still-wat"],
+      ["plugins", "lis"],
+    ]) {
+      process.argv = ["node", "openclaw", ...args];
+      expect(
+        await program.parseAsync(process.argv).catch((error: unknown) => error),
+      ).toBeInstanceOf(CommanderError);
+    }
 
     expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
     expect(stderr).not.toContain("openclaw plugins list list --help");
     expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
-  it("suppresses banner formatting when parent default help requests it", () => {
+  it.each([
+    ["debug", "debug"],
+    [" trace ", "trace"],
+  ])("accepts allowed --log-level %p through Commander", async (input, expected) => {
+    process.argv = ["node", "openclaw", "--log-level", input];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.action(() => {});
+    await program.parseAsync(process.argv);
+    expect(program.opts().logLevel).toBe(expected);
+  });
+
+  it("rejects invalid --log-level through Commander", async () => {
+    process.argv = ["node", "openclaw", "--log-level", "loud"];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({ writeErr: () => {} });
+    await expect(program.parseAsync(process.argv)).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+      message: expect.stringContaining("Invalid --log-level"),
+    });
+  });
+
+  it("suppresses banner formatting when parent default help requests it", async () => {
     process.argv = ["node", "openclaw", "channels"];
     process.env.OPENCLAW_SUPPRESS_HELP_BANNER = "1";
-    const program = makeProgramWithCommands();
+    const program = new Command();
     configureProgramHelp(program, testProgramContext);
 
-    const help = captureHelpOutput(program);
+    const help = await captureStdout(() => program.outputHelp());
     expect(help).not.toContain("BANNER-LINE");
     expect(formatCliBannerLineMock).not.toHaveBeenCalled();
   });
 
-  it("prints version and exits immediately when version flags are present", () => {
+  it.each([
+    ["abc1234", "OpenClaw 9.9.9-test (abc1234)"],
+    [null, "OpenClaw 9.9.9-test"],
+  ])("prints version with commit %s and exits immediately", (commit, expectedVersion) => {
     process.argv = ["node", "openclaw", "--version"];
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test (abc1234)" });
-  });
-
-  it("prints version and exits immediately without commit metadata", () => {
-    process.argv = ["node", "openclaw", "--version"];
-    resolveCommitHashMock.mockReturnValue(null);
-    expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
-  });
-
-  it("does not treat subcommand --version options as root version requests", () => {
-    process.argv = ["node", "openclaw", "skills", "verify", "discrawl", "--version", "1.0.0"];
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
-      throw new Error(`exit:${code ?? ""}`);
-    }) as typeof process.exit);
-
-    try {
-      const program = makeProgramWithCommands();
-      expect(() => configureProgramHelp(program, testProgramContext)).not.toThrow();
-      expect(logSpy).not.toHaveBeenCalled();
-      expect(exitSpy).not.toHaveBeenCalled();
-    } finally {
-      logSpy.mockRestore();
-      exitSpy.mockRestore();
-    }
+    resolveCommitHashMock.mockReturnValue(commit);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("unexpected exit");
+    });
+    expect(() => configureProgramHelp(new Command(), testProgramContext)).toThrow(new ExitError(0));
+    expect(log).toHaveBeenCalledWith(expectedVersion);
+    expect(exit).not.toHaveBeenCalled();
   });
 });

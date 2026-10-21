@@ -60,18 +60,35 @@ function resolveAccount(cfg: unknown): ReefAccount {
   };
 }
 
-function listTrustedPeersCurrent(config: ReefAccount["config"]): string[] {
-  if (!config.handle) {
-    return [];
-  }
-  // Read-only setup, doctor, and audit discovery can load the channel shape
-  // without initializing the live plugin runtime.
+async function listTrustedPeers(config: ReefAccount["config"]): Promise<string[]> {
   const runtime = getOptionalReefRuntime();
-  return runtime
-    ? openReefTrustStore(runtime, config)
-        .listCurrent()
-        .map((entry) => entry.peer)
+  return runtime && config.handle
+    ? (await openReefTrustStore(runtime, config).list()).map((entry) => entry.peer)
     : [];
+}
+
+function describeReefAccount(account: ReefAccount, friendCount: number) {
+  return {
+    accountId: "default",
+    enabled: account.enabled,
+    configured: account.configured,
+    extra: {
+      handle: account.config.handle,
+      relayUrl: account.config.relayUrl,
+      friendCount,
+    },
+  };
+}
+
+function resolveReefDmPolicy(allowFrom: string[]) {
+  return {
+    policy: "pairing" as const,
+    allowFrom,
+    policyPath: "Reef local peer trust",
+    allowFromPath: "Reef local peer trust",
+    approveHint: "openclaw pairing approve reef <code>",
+    normalizeEntry: (entry: string) => normalizeReefTarget(entry) ?? entry,
+  };
 }
 
 async function listTrustedPeerDirectoryEntries(params: {
@@ -80,12 +97,9 @@ async function listTrustedPeerDirectoryEntries(params: {
   limit: number | null | undefined;
 }) {
   const query = normalizeReefTarget(params.query ?? "") ?? params.query?.trim().toLowerCase();
-  const runtime = getOptionalReefRuntime();
-  const entries =
-    runtime && params.config.handle ? await openReefTrustStore(runtime, params.config).list() : [];
-  const peers = entries
-    .map((entry) => entry.peer)
-    .filter((peer) => !query || peer === query || peer.includes(query));
+  const peers = (await listTrustedPeers(params.config)).filter(
+    (peer) => !query || peer === query || peer.includes(query),
+  );
   const limit = params.limit == null ? peers.length : Math.max(0, params.limit);
   return peers.slice(0, limit).map((peer) => ({
     kind: "user" as const,
@@ -131,25 +145,11 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     resolveAccount,
     isEnabled: (account) => account.enabled,
     isConfigured: (account) => account.configured,
-    resolveAllowFrom: ({ cfg }) => {
-      const config = resolveReefConfig(cfg as ReefCoreConfig);
-      return listTrustedPeersCurrent(config);
-    },
+    resolveAllowFromAsync: ({ cfg }) => listTrustedPeers(resolveAccount(cfg).config),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map(String).map((entry) => normalizeReefTarget(entry) ?? entry),
-    describeAccount: (account) => {
-      const friendCount = listTrustedPeersCurrent(account.config).length;
-      return {
-        accountId: "default",
-        enabled: account.enabled,
-        configured: account.configured,
-        extra: {
-          handle: account.config.handle,
-          relayUrl: account.config.relayUrl,
-          friendCount,
-        },
-      };
-    },
+    describeAccountAsync: async (account) =>
+      describeReefAccount(account, (await listTrustedPeers(account.config)).length),
   },
   messaging: {
     targetPrefixes: ["reef"],
@@ -220,14 +220,8 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
     },
   },
   security: {
-    resolveDmPolicy: ({ account }) => ({
-      policy: "pairing",
-      allowFrom: listTrustedPeersCurrent(account.config),
-      policyPath: "Reef local peer trust",
-      allowFromPath: "Reef local peer trust",
-      approveHint: "openclaw pairing approve reef <code>",
-      normalizeEntry: (entry) => normalizeReefTarget(entry) ?? entry,
-    }),
+    resolveDmPolicyAsync: async ({ account }) =>
+      resolveReefDmPolicy(await listTrustedPeers(account.config)),
   },
   status: {
     defaultRuntime: { accountId: "default", enabled: true, configured: false },
@@ -302,7 +296,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
           });
           return;
         }
-        // Released hosts may ignore the forwarded authority hook.
+        // Refuse revoked peer trust before handing message content to the host.
         assertCurrent();
         await dispatchInboundDirectDm({
           channelIngress: "unsupported",
@@ -367,7 +361,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             authority.signal.throwIfAborted();
             notice.recovery.assertCurrent();
           };
-          // Reserve may yield; older dispatchers do not recheck this hook.
+          // Reservation may yield; check trust before handing the notice to the host.
           assertCurrent();
           await dispatchInboundDirectDm({
             channelIngress: "unsupported",
@@ -418,7 +412,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
               replyTo: notice.messageId,
               expectedRecipient: notice.recipient,
               resendDisabled: true,
-              prepareDelivery: notice.recovery.prepareOutboundDelivery.bind(notice.recovery),
               recovery: notice.recovery,
             });
           }
@@ -448,6 +441,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount, unknown, unknown, 2> = {
             sendPairingReply: async () => {},
           });
         }, signal);
+        await receiptNotifier.notifyRejections(await trust.pendingOutboundRejections());
       };
       // Attempt the peer-key refresh before recovery can dispatch an agent
       // turn. The lifecycle activates only after that attempt is classified.

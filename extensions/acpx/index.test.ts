@@ -45,32 +45,62 @@ vi.mock("acpx/runtime", async (importActual) => {
   return { inspectAgentModels: vi.fn(inspect) };
 });
 
-vi.mock("./register.runtime.js", () => ({
+// mock-isolation: native catalog inspection must not start the lazy runtime service.
+vi.mock("./src/service.js", () => ({
   createAcpxRuntimeService: createAcpxRuntimeServiceMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
+vi.mock("openclaw/plugin-sdk/acp-runtime-backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime-backend")>()),
   tryDispatchAcpReplyHook: tryDispatchAcpReplyHookMock,
 }));
 
 import plugin from "./index.js";
 
-type AcpxAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
-
-function registerAcpxAutoEnableProbe(): AcpxAutoEnableProbe {
-  const probes: AcpxAutoEnableProbe[] = [];
-  setupPlugin.register(
-    createTestPluginApi({
-      registerAutoEnableProbe(probe) {
-        probes.push(probe);
+function createHarnessApi(options: Parameters<typeof createTestPluginApi>[0]) {
+  const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
+  return {
+    api: createTestPluginApi({
+      id: "acpx",
+      ...options,
+      registerAgentHarness: (harness) => {
+        harnesses.set(harness.id, harness);
       },
     }),
-  );
-  const probe = probes[0];
-  if (!probe) {
-    throw new Error("expected ACPX setup plugin to register an auto-enable probe");
-  }
-  return probe;
+    getHarness(this: void, id: string) {
+      const harness = harnesses.get(`acp-${id}`);
+      if (!harness?.loadModelCatalog) {
+        throw new Error("Native catalog operation missing");
+      }
+      return { ...harness, loadModelCatalog: harness.loadModelCatalog.bind(harness) };
+    },
+  };
+}
+
+function catalogInput(
+  config: OpenClawPluginApi["config"],
+  agentDir = "/test/agent",
+  workspaceDir = "/test/work",
+) {
+  return { config, agentId: "main", agentDir, workspaceDir };
+}
+
+function expectedAgents(enabled: boolean) {
+  return {
+    agents: [
+      ["opencode", "OpenCode", "installed"],
+      ["qwen", "Qwen Code", enabled ? "installed" : "unverified"],
+      ["pi", "Pi", enabled ? "missing" : "installed"],
+      ["kilocode", "Kilo Code", "missing"],
+      ["copilot", "GitHub Copilot", "installed"],
+    ].map(([id, name, installation]) => ({
+      id,
+      name,
+      runtimeId: `acp-${id}`,
+      installation,
+      enabled,
+    })),
+  };
 }
 
 describe("acpx plugin", () => {
@@ -78,69 +108,51 @@ describe("acpx plugin", () => {
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
   });
-  afterAll(async () => {
-    await receipts.close();
-  });
+  afterAll(() => receipts.close());
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
     nativePrograms.clear();
-    createAcpxRuntimeServiceMock.mockReturnValue({
-      id: "acpx-service",
-      getRuntime: () => {
-        throw new Error("Catalog inspection must not start the runtime");
-      },
+    createAcpxRuntimeServiceMock.mockImplementation(() => {
+      throw new Error("Catalog inspection must not start the runtime");
     });
   });
 
   it("registers the runtime service and reply_dispatch hook", () => {
-    const service = { id: "acpx-service", start: vi.fn() };
-    createAcpxRuntimeServiceMock.mockReturnValue(service);
-    const openKeyedStore = vi.fn();
-
     const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStore } } as never,
+      runtime: createPluginRuntimeMock(),
       registerService: vi.fn(),
       on: vi.fn(),
     });
 
     plugin.register(api);
 
-    expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
-      pluginConfig: api.pluginConfig,
-      getAllowedAgents: expect.any(Function),
-      openKeyedStore: expect.any(Function),
-    });
-    const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {
-      openKeyedStore: typeof openKeyedStore;
-    };
-    params.openKeyedStore({ namespace: "test", maxEntries: 1 });
-    expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
-    expect(api.registerService).toHaveBeenCalledWith(service);
+    expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
+    expect(api.registerService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acpx-runtime",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock, {
       eligibleDispatchKinds: ["acp"],
     });
   });
 
-  it("does not touch runtime state while registering metadata-only plugin APIs", () => {
-    const service = { id: "acpx-service", start: vi.fn() };
-    createAcpxRuntimeServiceMock.mockReturnValue(service);
-
-    const api = createTestPluginApi({
-      pluginConfig: {},
-      runtime: {} as never,
-      registerService: vi.fn(),
-      on: vi.fn(),
-    });
-
-    expect(() => plugin.register(api)).not.toThrow();
-    expect(api.registerService).toHaveBeenCalledWith(service);
-  });
-
   it("declares setup auto-enable reasons for ACPX-owned ACP config", () => {
-    const probe = registerAcpxAutoEnableProbe();
-
+    let probe: Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0] | undefined;
+    setupPlugin.register(
+      createTestPluginApi({
+        registerAutoEnableProbe(registered) {
+          probe = registered;
+        },
+      }),
+    );
+    if (!probe) {
+      throw new Error("expected ACPX setup plugin to register an auto-enable probe");
+    }
     expect(probe({ config: { acp: { enabled: true } }, env: {} })).toBe("ACP runtime configured");
     expect(probe({ config: { acp: { backend: "acpx" } }, env: {} })).toBe("ACP runtime configured");
     expect(probe({ config: { acp: { enabled: true, backend: "custom-runtime" } }, env: {} })).toBe(
@@ -152,23 +164,14 @@ describe("acpx plugin", () => {
     for (const command of ["npx", "opencode", "qwen", "pi-acp", "copilot"]) {
       nativePrograms.add(command);
     }
-    const getRuntime = vi.fn(() => {
-      throw new Error("Inspection must not start the runtime");
-    });
-    createAcpxRuntimeServiceMock.mockReturnValue({ id: "acpx", getRuntime });
     let config: OpenClawPluginApi["config"] = { acp: { allowedAgents: ["codex"] } };
     const methods = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
     const reload = vi.fn<OpenClawPluginApi["registerReload"]>();
-    const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
-    const api = createTestPluginApi({
-      id: "acpx",
+    const { api, getHarness } = createHarnessApi({
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerGatewayMethod: methods,
       registerReload: reload,
-      registerAgentHarness: (harness) => {
-        harnesses.set(harness.id, harness);
-      },
     });
     plugin.register(api);
     const registration = methods.mock.calls.find(([method]) => method === "acpx.agents.list");
@@ -176,8 +179,7 @@ describe("acpx plugin", () => {
       throw new Error("Native agent inspection method missing");
     }
     let handler = registration[1];
-    const scope = registration[2];
-    expect(scope).toEqual({ scope: "operator.read", profileAccess: "independent" });
+    expect(registration[2]).toEqual({ scope: "operator.read", profileAccess: "independent" });
     expect(reload).toHaveBeenCalledWith({
       noopPrefixes: ["plugins.entries.acpx.config.nativeAgents"],
     });
@@ -196,124 +198,29 @@ describe("acpx plugin", () => {
       expect(respond.mock.calls[0]?.[0]).toBe(true);
       return respond.mock.calls[0]?.[1];
     };
-    expect(await read()).toEqual({
-      agents: [
-        {
-          id: "opencode",
-          name: "OpenCode",
-          runtimeId: "acp-opencode",
-          installation: "installed",
-          enabled: true,
-        },
-        {
-          id: "qwen",
-          name: "Qwen Code",
-          runtimeId: "acp-qwen",
-          installation: "installed",
-          enabled: true,
-        },
-        { id: "pi", name: "Pi", runtimeId: "acp-pi", installation: "missing", enabled: true },
-        {
-          id: "kilocode",
-          name: "Kilo Code",
-          runtimeId: "acp-kilocode",
-          installation: "missing",
-          enabled: true,
-        },
-        {
-          id: "copilot",
-          name: "GitHub Copilot",
-          runtimeId: "acp-copilot",
-          installation: "installed",
-          enabled: true,
-        },
-      ],
-    });
-    const opencode = harnesses.get("acp-opencode");
-    if (!opencode?.loadModelCatalog) {
-      throw new Error("Native catalog operation missing");
-    }
+    expect(await read()).toEqual(expectedAgents(true));
+    const opencode = getHarness("opencode");
     const selection = {
       provider: "acp-opencode",
       requestedRuntime: "acp-opencode",
       modelProvider: { endpointOverrides: "none" },
     } as const;
     expect(opencode.supports(selection).supported).toBe(true);
-    const missing = harnesses.get("acp-kilocode");
-    if (!missing?.loadModelCatalog) {
-      throw new Error("Missing native catalog operation");
-    }
-    await expect(
-      missing.loadModelCatalog({
-        config,
-        agentId: "main",
-        agentDir: "/test/agent",
-        workspaceDir: "/test/work",
-      }),
-    ).resolves.toEqual({ entries: [] });
+    const missing = getHarness("kilocode");
+    await expect(missing.loadModelCatalog(catalogInput(config))).resolves.toEqual({ entries: [] });
     expect(inspectAgentModels).not.toHaveBeenCalled();
     nativePrograms.add("pi");
+    const pluginConfig = {
+      nativeAgents: { opencode: false, qwen: false, pi: false, kilocode: false, copilot: false },
+      agents: { qwen: { command: "npx qwen" } },
+    };
     config = {
       ...config,
-      plugins: {
-        entries: {
-          acpx: {
-            config: {
-              nativeAgents: {
-                opencode: false,
-                qwen: false,
-                pi: false,
-                kilocode: false,
-                copilot: false,
-              },
-              agents: { qwen: { command: "npx qwen" } },
-            },
-          },
-        },
-      },
+      plugins: { entries: { acpx: { config: pluginConfig } } },
     };
     expect(opencode.supports(selection).supported).toBe(false);
-    await expect(
-      opencode.loadModelCatalog({
-        config,
-        agentId: "main",
-        agentDir: "/test/agent",
-        workspaceDir: "/test/work",
-      }),
-    ).resolves.toEqual({ entries: [] });
-    const disabled = {
-      agents: [
-        {
-          id: "opencode",
-          name: "OpenCode",
-          runtimeId: "acp-opencode",
-          installation: "installed",
-          enabled: false,
-        },
-        {
-          id: "qwen",
-          name: "Qwen Code",
-          runtimeId: "acp-qwen",
-          installation: "unverified",
-          enabled: false,
-        },
-        { id: "pi", name: "Pi", runtimeId: "acp-pi", installation: "installed", enabled: false },
-        {
-          id: "kilocode",
-          name: "Kilo Code",
-          runtimeId: "acp-kilocode",
-          installation: "missing",
-          enabled: false,
-        },
-        {
-          id: "copilot",
-          name: "GitHub Copilot",
-          runtimeId: "acp-copilot",
-          installation: "installed",
-          enabled: false,
-        },
-      ],
-    };
+    await expect(opencode.loadModelCatalog(catalogInput(config))).resolves.toEqual({ entries: [] });
+    const disabled = expectedAgents(false);
     expect(await read()).toEqual(disabled);
     plugin.register(api);
     const replacement = methods.mock.calls.findLast(([method]) => method === "acpx.agents.list");
@@ -323,7 +230,7 @@ describe("acpx plugin", () => {
     handler = replacement[1];
     expect(await read()).toEqual(disabled);
     expect(config.acp?.allowedAgents).toEqual(["codex"]);
-    expect(getRuntime).not.toHaveBeenCalled();
+    expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
   });
 
   it.for(["enabled", "disposed"] as const)(
@@ -339,65 +246,43 @@ describe("acpx plugin", () => {
 export { sendReceipt };`,
       );
       const runtimeDirectory = path.join(directory, "runtime");
-      const getRuntime = vi.fn(() => {
-        throw new Error("Catalog inspection must not acquire the runtime");
-      });
-      createAcpxRuntimeServiceMock.mockReturnValue({ id: "acpx", getRuntime });
       const config: OpenClawPluginApi["config"] = {};
-      const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
-      plugin.register(
-        createTestPluginApi({
-          id: "acpx",
-          config,
-          pluginConfig: {
-            stateDir: runtimeDirectory,
-            timeoutSeconds: 10,
-            agents: {
-              opencode: {
-                command: process.execPath,
-                args: [
-                  fileURLToPath(
-                    new URL("../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-                  ),
-                  peerDirectory,
-                  "--model-controls",
-                  "--hold-new-session",
-                  `--receipt-module=${receiptModule}`,
-                ],
-              },
+      const { api, getHarness } = createHarnessApi({
+        config,
+        pluginConfig: {
+          stateDir: runtimeDirectory,
+          timeoutSeconds: 10,
+          agents: {
+            opencode: {
+              command: process.execPath,
+              args: [
+                fileURLToPath(new URL("../../test/fixtures/acp/owner-agent.mjs", import.meta.url)),
+                peerDirectory,
+                "--model-controls",
+                "--hold-new-session",
+                `--receipt-module=${receiptModule}`,
+              ],
             },
           },
-          runtime: createPluginRuntimeMock({
-            config: { current: () => config },
-            state: {
-              resolveStateDir: () => {
-                throw new Error("Catalog inspection must not resolve runtime state");
-              },
-              openKeyedStore: () => {
-                throw new Error("Catalog inspection must not open runtime state");
-              },
+        },
+        runtime: createPluginRuntimeMock({
+          config: { current: () => config },
+          state: {
+            resolveStateDir: () => {
+              throw new Error("Catalog inspection must not resolve runtime state");
             },
-          }),
-          registerAgentHarness: (harness) => {
-            harnesses.set(harness.id, harness);
+            openKeyedStoreV2: () => {
+              throw new Error("Catalog inspection must not open runtime state");
+            },
           },
         }),
+      });
+      plugin.register(api);
+      const harness = getHarness("opencode");
+      const catalog = harness.loadModelCatalog(catalogInput(config, directory, directory)).then(
+        (models) => ({ models, error: undefined }),
+        (error: unknown) => ({ models: undefined, error }),
       );
-      const harness = harnesses.get("acp-opencode");
-      if (!harness?.loadModelCatalog) {
-        throw new Error("Native catalog operation missing");
-      }
-      const catalog = harness
-        .loadModelCatalog({
-          config,
-          agentId: "main",
-          agentDir: directory,
-          workspaceDir: directory,
-        })
-        .then(
-          (models) => ({ models, error: undefined }),
-          (error: unknown) => ({ models: undefined, error }),
-        );
       try {
         const entered = path.join(peerDirectory, "session-new-entered");
         // The peer records entry before replying; its receipt uses a separate pipe.
@@ -423,32 +308,23 @@ export { sendReceipt };`,
           expect(result.error).toBeUndefined();
           expect(result.models).toEqual({
             entries: [
-              {
-                provider: "acp-opencode",
-                id: "initial",
-                name: "Initial",
-                nativeRuntime: "acp-opencode",
-              },
-              {
-                provider: "acp-opencode",
-                id: "selected",
-                name: "Selected",
-                nativeRuntime: "acp-opencode",
-              },
-            ],
+              ["initial", "Initial"],
+              ["selected", "Selected"],
+            ].map(([id, name]) => ({
+              provider: "acp-opencode",
+              id,
+              name,
+              nativeRuntime: "acp-opencode",
+            })),
             outcomes: [{ provider: "acp-opencode", status: "ready" }],
           });
         }
-        const sessionId = await fs.readFile(
-          path.join(peerDirectory, "session-new-entered"),
-          "utf8",
-        );
+        const sessionId = await fs.readFile(entered, "utf8");
         const nativeSession = JSON.parse(
           await fs.readFile(path.join(peerDirectory, `${sessionId}.json`), "utf8"),
         ) as { history: string[]; mcpServers: unknown[] };
-        expect(nativeSession.history).toEqual([]);
-        expect(nativeSession.mcpServers).toEqual([]);
-        expect(getRuntime).not.toHaveBeenCalled();
+        expect([nativeSession.history, nativeSession.mcpServers]).toEqual([[], []]);
+        expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
         await expect(fs.access(runtimeDirectory)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await harness.dispose?.();
@@ -459,62 +335,25 @@ export { sendReceipt };`,
   );
 
   it.each([
-    {
-      name: "RequestError",
-      code: -32000,
-      message: "Authentication required",
-      status: "auth-rejected",
-    },
-    {
-      name: "RequestError",
-      code: -32000,
-      message: "Authentication required: fixture sign-in",
-      status: "auth-rejected",
-    },
-    {
-      name: "RequestError",
-      code: -32000,
-      message: "Generic fixture server error",
-      status: "unavailable",
-    },
-    {
-      name: "RequestError",
-      code: -32603,
-      message: "Authentication required",
-      status: "unavailable",
-    },
-    { name: "Error", code: -32000, message: "Authentication required", status: "unavailable" },
+    ["Authentication required: fixture sign-in", "auth-rejected"],
+    ["Generic fixture server error", "unavailable"],
   ])(
-    "attributes native discovery $name/$code/$message without forwarding error data",
-    async ({ name, code, message, status }) => {
+    "attributes native discovery RequestError/-32000/%s without forwarding error data",
+    async (message, status) => {
       nativePrograms.add("copilot");
       const error = Object.assign(new Error(message), {
-        name,
-        code,
+        name: "RequestError",
+        code: -32000,
         data: { privateFixture: "not-for-catalog" },
       });
       vi.mocked(inspectAgentModels).mockRejectedValueOnce(error);
-      const harnesses = new Map<string, Parameters<OpenClawPluginApi["registerAgentHarness"]>[0]>();
-      plugin.register(
-        createTestPluginApi({
-          id: "acpx",
-          runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
-          registerAgentHarness: (harness) => {
-            harnesses.set(harness.id, harness);
-          },
-        }),
-      );
-      const harness = harnesses.get("acp-copilot");
-      if (!harness?.loadModelCatalog) {
-        throw new Error("Native catalog operation missing");
-      }
+      const { api, getHarness } = createHarnessApi({
+        runtime: createPluginRuntimeMock({ config: { current: () => ({}) } }),
+      });
+      plugin.register(api);
+      const harness = getHarness("copilot");
       await expect(
-        harness.loadModelCatalog({
-          config: {},
-          agentId: "main",
-          agentDir: "/fixture/agent",
-          workspaceDir: "/fixture/work",
-        }),
+        harness.loadModelCatalog(catalogInput({}, "/fixture/agent", "/fixture/work")),
       ).resolves.toEqual({
         entries: [],
         outcomes: [{ provider: "acp-copilot", status, rejectionScope: "catalog" }],

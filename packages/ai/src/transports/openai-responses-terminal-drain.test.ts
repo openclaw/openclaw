@@ -52,10 +52,16 @@ describe("Responses terminal body disposal", () => {
         apiKey: "fixture-key",
         fetch: async () => new Response(body, { headers: { "content-type": "text/event-stream" } }),
       });
+      const request = {
+        model: "fixture",
+        stream: true,
+        input: [{ role: "user", content: "fixture" }],
+      } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
       const { stream } = await createResponsesStreamWithRecovery({
         client,
         model,
-        request: { model: "fixture", stream: true, input: [{ role: "user", content: "fixture" }] },
+        request,
+        buildFullHistoryRequest: () => request,
         requestOptions: { signal: caller.signal },
       });
       const output = createOpenAIResponsesAssistantOutput(model);

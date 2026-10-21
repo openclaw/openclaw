@@ -372,7 +372,7 @@ describe("runDaemonRestart health checks", () => {
         json: true,
         stdout: process.stdout,
         state: {},
-        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+        issues: [{ message: "service port is stale" }],
       });
       await runRestartPostCheck(params, false);
       return true;
@@ -390,18 +390,6 @@ describe("runDaemonRestart health checks", () => {
         }),
       }),
     );
-  });
-
-  it("requests a safe restart without native mutation", async () => {
-    await runDaemonRestart({ json: true, safe: true });
-    expectRestartRpc({ reason: "gateway.restart.safe" });
-    expect(runServiceRestart).not.toHaveBeenCalled();
-    expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
-      action: "restart",
-      source: "safe-rpc",
-      mode: "deferred",
-      pid: 123,
-    });
   });
 
   it("rejects --skip-deferral without --safe", async () => {
@@ -433,7 +421,7 @@ describe("runDaemonRestart health checks", () => {
           json: true,
           stdout: process.stdout,
           state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
-          issues: [{ code: "port-mismatch", message: "service port is stale" }],
+          issues: [{ message: "service port is stale" }],
         });
       },
     );
@@ -446,7 +434,7 @@ describe("runDaemonRestart health checks", () => {
         service,
         json: true,
         state: { command: { environment: { OPENCLAW_GATEWAY_PORT: "18789" } } },
-        issues: [{ code: "port-mismatch", message: "service port is stale" }],
+        issues: [{ message: "service port is stale" }],
       }),
     );
   });

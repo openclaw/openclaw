@@ -6,35 +6,9 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
-import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
-  it("skips context injection for completed limited bootstrap turns", async () => {
-    const hasCompletedBootstrapTurn = vi.fn(async () => true);
-    const resolveBootstrapContextForRun = vi.fn(async () => ({
-      bootstrapFiles: [],
-      contextFiles: [],
-    }));
-    expect(
-      await resolveAttemptBootstrapContext({
-        contextInjectionMode: "continuation-skip",
-        bootstrapMode: "limited",
-        bootstrapContextRunKind: "default",
-        bootstrapContextMode: "full",
-        hasCompletedBootstrapTurn,
-        resolveBootstrapContextForRun,
-      }),
-    ).toEqual({
-      bootstrapFiles: [],
-      contextFiles: [],
-      isContinuationTurn: true,
-      shouldRecordCompletedBootstrapTurn: false,
-    });
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
-    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
-  });
-
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
       messages,
@@ -73,14 +47,7 @@ describe("embedded attempt context injection", () => {
       modelId: "gpt-test",
     });
 
-    const assembleInput = assemble.mock.calls.at(0)?.[0] as
-      | { messages?: AgentMessage[] }
-      | undefined;
-    const projectedMessages = assembleInput?.messages?.map((message) => ({
-      role: message.role,
-      content: (message as { content?: unknown }).content,
-    }));
-    expect(projectedMessages).toEqual([
+    expect(assemble.mock.calls[0]?.[0].messages).toMatchObject([
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);

@@ -5,7 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import {
+  captureRuntimeConfigAsyncReader,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../../../config/config.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
@@ -48,7 +52,7 @@ import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publi
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
@@ -64,6 +68,7 @@ vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 
 function externalCliClient(): GatewayRequestOptions["client"] {
@@ -100,8 +105,8 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   beforeEach(async () => {
+    schedulerWork = observeSwarmSchedulerWork();
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
     await resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -126,11 +131,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       })}\n`,
     );
     clearConfigCache();
+    await captureRuntimeConfigAsyncReader()();
   });
 
   afterEach(async () => {
+    await schedulerWork.close();
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     persistRegistryRows.mockReset();
@@ -159,6 +165,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     let launchCount = 0;
     gatewayContext.recoveryRuntime = {
       prepareRestartRecovery: () => undefined,
+      resumeChatInput: async () => {
+        throw new Error("Unexpected fixture chat input recovery");
+      },
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -495,6 +504,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           throw new Error("worker execution authority is no longer active");
         }
       },
+      requesterOrigin: {
+        sessionKey: "agent:main:telegram:direct:worker-alice",
+        messageProvider: "telegram",
+        accountId: "default",
+        senderId: "worker-alice",
+      },
       sessionKey: "agent:main:main",
       sessionTarget: captureSessionTranscriptTargetBinding({
         agentId: "main",
@@ -514,6 +529,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
     };
     let childIdentity: AgentRuntimeIdentity | undefined;
+    let childRequester: WorkerTurnExecutionIdentity["requesterOrigin"];
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
         _method: string,
@@ -521,6 +537,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
       ) => {
         childIdentity = readInProcessAgentRuntimeIdentity(options);
+        childRequester = options?.agentToolCaller?.requesterOrigin;
+        expect(params).not.toHaveProperty("requesterOrigin");
         return { runId: params.idempotencyKey, status: "accepted" } as T;
       },
     });
@@ -541,6 +559,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
                 operationalRunInstance: current.operationalRunInstance,
                 executionIdentityToken: current.executionIdentityToken,
                 receiptAuthority: current.receiptAuthority,
+                requesterOrigin: current.requesterOrigin,
                 workerTurnClaim: current.turnClaim,
                 workerTurnExecutionIdentityCapability: capability,
               },
@@ -558,6 +577,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
       expect(result.status).toBe("accepted");
       expect(validations).toBe(2);
+      expect(childRequester).toEqual(identity.requesterOrigin);
       expect(childIdentity?.delegatedAuthority).toMatchObject({
         kind: "worker",
         turnClaim,

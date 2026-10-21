@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { renderTerminalBufferText } from "../../gateway/terminal/buffer-text.js";
@@ -63,7 +66,7 @@ const TerminalToolOutputSchema = Type.Union([
 ]);
 
 const TERMINAL_RECOVERY_GUIDANCE =
-  "Use action=list to find a shared terminal or ask the operator to open one in this chat.";
+  "Use action=list to find a terminal the operator opened in this chat. This tool cannot open one; run your own commands with exec when available, otherwise ask the operator to open a terminal.";
 const TERMINAL_UNAVAILABLE_MESSAGE = `Terminal session unavailable. ${TERMINAL_RECOVERY_GUIDANCE}`;
 
 type TerminalToolGatewayContext = Pick<GatewayRequestContext, "terminalSessions">;
@@ -178,11 +181,17 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       let assertSessionCurrent = () => {};
       let actorPolicy = false;
       if (!execSession) {
-        const source = captureIncognitoSessionSource({ agentId, sessionKey: agentSessionKey });
+        const source = captureSessionActorStorageOwner(
+          { agentId, sessionKey: agentSessionKey },
+          {
+            assertCurrent() {
+              signal?.throwIfAborted();
+            },
+            authorize() {},
+          },
+        );
         const entry = source
-          ? "kind" in source
-            ? undefined
-            : source.actor.sessions.readPolicy(agentSessionKey)
+          ? readCapturedSessionActorEntry(source, agentSessionKey)
           : (
               await (
                 await import("../../gateway/session-utils-store-worker.js")
@@ -195,14 +204,10 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         if (!entry || entry.sessionId?.trim() !== agentSessionId) {
           throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
         }
-        if (source && !("kind" in source)) {
+        if (source) {
           actorPolicy = true;
-          const claim = source.actor.sessions.captureCurrent(agentSessionKey);
           assertSessionCurrent = () => {
-            source.admissionSignal?.throwIfAborted();
-            source.actor.assertReadable();
-            claim.assertCurrent();
-            const current = source.actor.sessions.readPolicy(agentSessionKey);
+            const current = readCapturedSessionActorEntry(source, agentSessionKey);
             if (
               current?.sessionId !== entry.sessionId ||
               current?.permissionMode !== entry.permissionMode ||
@@ -227,6 +232,8 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         execOverrides: opts.execOverrides,
         agentId,
         sessionKey: agentSessionKey,
+        // Required isolation cannot be supplied by an existing unconfined terminal.
+        sandboxAvailable: execSession.sandbox === "required" ? false : undefined,
       };
       const policy = actorPolicy
         ? await resolvePreparedExecDefaultsAsync(prepareExecDefaults(policyInput), async () => {
@@ -276,6 +283,7 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
         });
         const decision = await resolveRegisteredExecApprovalDecision({
           approvalId: registration.id,
+          expiresAtMs: registration.expiresAtMs,
           preResolvedDecision: registration.finalDecision,
         });
         if (decision !== "allow-once") {

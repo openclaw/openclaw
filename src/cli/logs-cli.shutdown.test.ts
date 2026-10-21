@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { defaultRuntime } from "../runtime.js";
 import { registerLogsCli } from "./logs-cli.js";
@@ -53,11 +53,17 @@ vi.mock("./gateway-rpc.js", async (importOriginal) => ({
 }));
 
 let delayStarted = createDeferred<{ ms: number; signal?: AbortSignal }>();
-let stdout: string[];
-let stderr: string[];
-let stopCommands: Array<() => void>;
-let finishIo: Array<() => void>;
-let commands: Array<Promise<unknown>>;
+const stdout: string[] = [];
+const stderr: string[] = [];
+const stopCommands: Array<() => void> = [];
+const finishIo: Array<() => void> = [];
+const commands: Array<Promise<unknown>> = [];
+
+async function expectCancelled(code: number) {
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(await waitForCliSignalExit()).toBe(code);
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -65,19 +71,18 @@ beforeEach(() => {
   mocks.readConfig.mockReturnValue({});
   mocks.readService.mockResolvedValue({ status: "stopped" });
   delayStarted = createDeferred();
-  stdout = [];
-  stderr = [];
-  stopCommands = [];
-  finishIo = [];
-  commands = [];
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    stdout.push(String(chunk));
-    return true;
-  });
-  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-    stderr.push(String(chunk));
-    return true;
-  });
+  for (const list of [stdout, stderr, stopCommands, finishIo, commands]) {
+    list.length = 0;
+  }
+  for (const [stream, output] of [
+    [process.stdout, stdout],
+    [process.stderr, stderr],
+  ] as const) {
+    vi.spyOn(stream, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+  }
   vi.spyOn(defaultRuntime, "exit");
   // The fake clock controls the node:timers/promises seam, including cancellation.
   mocks.delay.mockImplementation(
@@ -147,23 +152,30 @@ function startLogs(args: string[] = [], dispose = vi.fn(async () => {})) {
     resources.beginClose();
   });
   commands.push(command);
-  return { command, dispose };
+  return {
+    command,
+    dispose,
+    admitted: <T>(gate: PromiseLike<T>, message: string) =>
+      awaitGateBeforeSettlement(gate, command, message),
+  };
 }
 
 const disconnected = () => new Error("gateway closed (1006 abnormal closure): disconnected");
 const journalPage = (line: string) => ({
   stdout: `${line}\n-- cursor: s=abc`,
-  stderr: "",
   code: 0,
   truncated: false,
 });
 
-describe("logs command shutdown", () => {
-  it.each([
-    { signal: "SIGINT" as const, code: 130 },
-    { signal: "SIGTERM" as const, code: 143 },
-  ])("cancels the active RPC and preserves $signal status", async ({ signal, code }) => {
-    const started = createDeferred<AbortSignal | undefined>();
+it.each([
+  { mode: "rpc", signal: "SIGINT", code: 130 },
+  { mode: "rpc", signal: "SIGTERM", code: 143 },
+  { mode: "poll", signal: "SIGINT", code: 130 },
+  { mode: "retry", signal: "SIGINT", code: 130 },
+  { mode: "local-file", signal: "SIGINT", code: 130 },
+] as const)("cancels $mode work and preserves $signal status", async ({ mode, signal, code }) => {
+  const started = createDeferred<AbortSignal | undefined>();
+  if (mode === "rpc") {
     mocks.callGateway.mockImplementationOnce(
       (_method, _opts, _params, extra) =>
         new Promise((_resolve, reject) => {
@@ -172,140 +184,114 @@ describe("logs command shutdown", () => {
           started.resolve(extra?.signal);
         }),
     );
-    const { command, dispose } = startLogs();
-    const rpcSignal = await awaitGateBeforeSettlement(started.promise, command, "RPC not admitted");
-    expect(rpcSignal).toBeDefined();
-    await waitForSignalExitBarriers(signal);
-    await command;
-    expect(rpcSignal?.aborted).toBe(true);
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(mocks.callGateway).toHaveBeenCalledOnce();
-    expect(mocks.readService).not.toHaveBeenCalled();
-    expect(mocks.readTail).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(stdout).toEqual([]);
-    expect(stderr).toEqual([]);
-    expect(await waitForCliSignalExit()).toBe(code);
-  });
-
-  it.each(["poll", "retry", "local-file"] as const)(
-    "cancels the %s delay without another poll or failure output",
-    async (mode) => {
-      if (mode === "retry") {
-        mocks.callGateway.mockRejectedValueOnce(disconnected());
-      } else if (mode === "local-file") {
-        mocks.readConfig.mockImplementation(() => {
-          throw new Error("invalid config");
-        });
-        mocks.readTail.mockResolvedValueOnce({
-          file: "/logs/gateway.log",
-          cursor: 8,
-          size: 8,
-          lines: ["local line"],
-          truncated: false,
-          reset: false,
-        });
-      } else {
-        mocks.callGateway.mockResolvedValueOnce({
-          file: "/logs/gateway.log",
-          cursor: 8,
-          lines: ["rpc line"],
-        });
-      }
-      const { command } = startLogs(mode === "retry" ? ["--url", "ws://localhost:18789"] : []);
-      const waiting = await awaitGateBeforeSettlement(
-        delayStarted.promise,
-        command,
-        "Delay not admitted",
-      );
-      expect(waiting.signal).toBeDefined();
-      expect(waiting.ms).toBeGreaterThan(0);
-      const outputBeforeStop = { stdout: [...stdout], stderr: [...stderr] };
-      await waitForSignalExitBarriers("SIGINT");
-      await command;
-      expect(waiting.signal?.aborted).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(mocks.callGateway).toHaveBeenCalledTimes(mode === "local-file" ? 0 : 1);
-      expect(mocks.readTail).toHaveBeenCalledTimes(mode === "local-file" ? 1 : 0);
-      expect({ stdout, stderr }).toEqual(outputBeforeStop);
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-      expect(await waitForCliSignalExit()).toBe(130);
-    },
-  );
-
-  it("preserves terminal RPC failure output and the runtime exit outcome", async () => {
-    mocks.callGateway.mockRejectedValueOnce(new Error("logs request denied"));
-    const { command, dispose } = startLogs();
-    await expect(command).rejects.toMatchObject({ name: "ExitError", code: 1 });
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
-    expect(stderr.join(" ")).toContain(
-      '"type":"error","message":"logs request denied","error":"logs request denied"',
-    );
-    expect(stdout).toEqual([]);
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(mocks.delay).not.toHaveBeenCalled();
-    expect(mocks.readService).not.toHaveBeenCalled();
-    expect(await waitForCliSignalExit()).toBeUndefined();
-  });
-
-  it("joins cancelled journal recovery before releasing command resources", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const probeStarted = createDeferred<AbortSignal | undefined>();
-    const finishProbe = createDeferred();
-    const journalStarted = createDeferred();
-    const finishJournal = createDeferred<ReturnType<typeof journalPage>>();
-    const order: string[] = [];
-    mocks.callGateway
-      .mockRejectedValueOnce(disconnected())
-      .mockImplementationOnce(async (_method, _opts, _params, extra) => {
-        finishIo.push(() => finishProbe.reject(new Error("fixture stopped")));
-        probeStarted.resolve(extra?.signal);
-        await finishProbe.promise;
-        order.push("probe settled");
-        return { cursor: 10, lines: ["late recovery line"] };
-      });
-    mocks.readService.mockResolvedValue({ status: "running", pid: 2557 });
-    mocks.readJournal
-      .mockResolvedValueOnce(journalPage("journal bridge line"))
-      .mockImplementationOnce(() => {
-        finishIo.push(() => finishJournal.reject(new Error("fixture stopped")));
-        journalStarted.resolve();
-        return finishJournal.promise;
-      });
-    const dispose = vi.fn(async () => {
-      order.push("resources released");
+  } else if (mode === "retry") {
+    mocks.callGateway.mockRejectedValueOnce(disconnected());
+  } else if (mode === "local-file") {
+    mocks.readConfig.mockImplementation(() => {
+      throw new Error("invalid config");
     });
-    const { command } = startLogs([], dispose);
-    const probeSignal = await awaitGateBeforeSettlement(
-      probeStarted.promise,
-      command,
-      "No recovery probe",
-    );
-    const waiting = await awaitGateBeforeSettlement(
-      delayStarted.promise,
-      command,
-      "No journal interval",
-    );
-    await vi.advanceTimersByTimeAsync(waiting.ms);
-    await awaitGateBeforeSettlement(journalStarted.promise, command, "No next journal page");
-    const stopping = waitForSignalExitBarriers("SIGTERM");
-    expect(probeSignal?.aborted).toBe(true);
-    // Cancellation may race successful I/O; never print it or admit another probe.
-    finishJournal.resolve(journalPage("late journal line"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(dispose).not.toHaveBeenCalled();
-    finishProbe.resolve();
-    await stopping;
-    await command;
-    expect(order).toEqual(["probe settled", "resources released"]);
-    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
-    expect(mocks.readJournal).toHaveBeenCalledTimes(2);
-    expect(mocks.readTail).not.toHaveBeenCalled();
-    expect(stdout.join("")).toContain("journal bridge line");
-    expect(stdout.join("")).not.toContain("late");
-    expect(stderr).toEqual([]);
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-    expect(await waitForCliSignalExit()).toBe(143);
+    mocks.readTail.mockResolvedValueOnce({
+      file: "/logs/gateway.log",
+      cursor: 8,
+      size: 8,
+      lines: ["local line"],
+      truncated: false,
+      reset: false,
+    });
+  } else {
+    mocks.callGateway.mockResolvedValueOnce({
+      file: "/logs/gateway.log",
+      cursor: 8,
+      lines: ["rpc line"],
+    });
+  }
+  const { command, dispose, admitted } = startLogs(
+    mode === "retry" ? ["--url", "ws://localhost:18789"] : [],
+  );
+  const activeSignal =
+    mode === "rpc"
+      ? await admitted(started.promise, "RPC not admitted")
+      : (await admitted(delayStarted.promise, "Delay not admitted")).signal;
+  expect(activeSignal).toBeDefined();
+  if (mode !== "rpc") {
+    expect((await delayStarted.promise).ms).toBeGreaterThan(0);
+  } else {
+    expect({ stdout, stderr }).toEqual({ stdout: [], stderr: [] });
+    expect(mocks.readService).not.toHaveBeenCalled();
+  }
+  const outputBeforeStop = { stdout: [...stdout], stderr: [...stderr] };
+  await waitForSignalExitBarriers(signal);
+  await command;
+  expect(activeSignal?.aborted).toBe(true);
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(mocks.callGateway).toHaveBeenCalledTimes(mode === "local-file" ? 0 : 1);
+  expect(mocks.readTail).toHaveBeenCalledTimes(mode === "local-file" ? 1 : 0);
+  expect({ stdout, stderr }).toEqual(outputBeforeStop);
+  await expectCancelled(code);
+});
+
+it("preserves terminal RPC failure output and the runtime exit outcome", async () => {
+  mocks.callGateway.mockRejectedValueOnce(new Error("logs request denied"));
+  const { command, dispose } = startLogs();
+  await expect(command).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+  expect(stderr.join(" ")).toContain(
+    '"type":"error","message":"logs request denied","error":"logs request denied"',
+  );
+  expect(stdout).toEqual([]);
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(mocks.delay).not.toHaveBeenCalled();
+  expect(mocks.readService).not.toHaveBeenCalled();
+  expect(await waitForCliSignalExit()).toBeUndefined();
+});
+
+it("joins cancelled journal recovery before releasing command resources", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const probeStarted = createDeferred<AbortSignal | undefined>();
+  const finishProbe = createDeferred();
+  const journalStarted = createDeferred();
+  const finishJournal = createDeferred<ReturnType<typeof journalPage>>();
+  const order: string[] = [];
+  mocks.callGateway
+    .mockRejectedValueOnce(disconnected())
+    .mockImplementationOnce(async (_method, _opts, _params, extra) => {
+      finishIo.push(() => finishProbe.reject(new Error("fixture stopped")));
+      probeStarted.resolve(extra?.signal);
+      await finishProbe.promise;
+      order.push("probe settled");
+      return { cursor: 10, lines: ["late recovery line"] };
+    });
+  mocks.readService.mockResolvedValue({ status: "running", pid: 2557 });
+  mocks.readJournal
+    .mockResolvedValueOnce(journalPage("journal bridge line"))
+    .mockImplementationOnce(() => {
+      finishIo.push(() => finishJournal.reject(new Error("fixture stopped")));
+      journalStarted.resolve();
+      return finishJournal.promise;
+    });
+  const dispose = vi.fn(async () => {
+    order.push("resources released");
   });
+  const { command, admitted } = startLogs([], dispose);
+  const probeSignal = await admitted(probeStarted.promise, "No recovery probe");
+  const waiting = await admitted(delayStarted.promise, "No journal interval");
+  await vi.advanceTimersByTimeAsync(waiting.ms);
+  await admitted(journalStarted.promise, "No next journal page");
+  const stopping = waitForSignalExitBarriers("SIGTERM");
+  expect(probeSignal?.aborted).toBe(true);
+  // Cancellation may race successful I/O; never print it or admit another probe.
+  finishJournal.resolve(journalPage("late journal line"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(dispose).not.toHaveBeenCalled();
+  finishProbe.resolve();
+  await stopping;
+  await command;
+  expect(order).toEqual(["probe settled", "resources released"]);
+  expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+  expect(mocks.readJournal).toHaveBeenCalledTimes(2);
+  expect(mocks.readTail).not.toHaveBeenCalled();
+  expect(stdout.join("")).toContain("journal bridge line");
+  expect(stdout.join("")).not.toContain("late");
+  expect(stderr).toEqual([]);
+  await expectCancelled(143);
 });

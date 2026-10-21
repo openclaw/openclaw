@@ -1,3 +1,4 @@
+import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   isUnavailableEnvironment,
@@ -40,6 +41,18 @@ export function createWorkerPlacementMoveAbandonment(
     onCleanupError?: (error: unknown) => void,
   ) =>
     await options.workspaceOperations.run(environmentId, async () => {
+      const ownedPlacements = await placements.listForReconcileAsync();
+      if (
+        ownedPlacements.some(
+          (placement) =>
+            placement.environmentId === environmentId &&
+            placement.workspaceBaseManifestRef === DEVICE_FOLDER_MANIFEST_REF,
+        )
+      ) {
+        throw new Error(
+          "Device folders cannot be abandoned onto the Gateway; reconnect the device and stop its session instead.",
+        );
+      }
       // Capture the selected owner before journal cleanup can yield to a replacement.
       const environment = environments.get(environmentId);
       const sessionId = environment?.attachedSessionIds[0];

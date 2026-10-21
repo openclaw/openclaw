@@ -1,5 +1,5 @@
 import "../../test/host.setup.ts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../test/wait-for.ts";
@@ -9,12 +9,26 @@ import {
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
 } from "./live-refresh.ts";
-import { loadWorkboard, loadWorkboardCatalog } from "./loading.ts";
+import { loadWorkboard } from "./loading.ts";
 import { stopWorkboardLiveRefresh, getWorkboardState } from "./runtime.ts";
-import { createWorkboardCard } from "./test/index-helpers.ts";
+import { createWorkboardCard, createWorkboardTestClient } from "./test/index-helpers.ts";
 
-function createClient(run: (method: string) => unknown) {
-  return { request: vi.fn(async (method: string) => run(method)) };
+function cardsResponse(title?: string) {
+  return {
+    cards: title ? [createWorkboardCard({ title })] : [],
+    statuses: ["todo", "done"],
+  };
+}
+
+function setup(read: () => unknown = cardsResponse, requestUpdate?: () => void) {
+  const host = {};
+  const client = createWorkboardTestClient((method) =>
+    method === "workboard.cards.list" ? read() : { tasks: [] },
+  );
+  configureWorkboardLiveRefresh({ host, client, requestUpdate });
+  const listCalls = () =>
+    client.request.mock.calls.filter(([method]) => method === "workboard.cards.list").length;
+  return { host, client, state: getWorkboardState(host), listCalls };
 }
 
 afterEach(() => {
@@ -37,36 +51,14 @@ describe("Workboard live refresh", () => {
   });
 
   it("rereads canonical cards and ignores stale revisions", async () => {
-    const host = {};
-    const client = createClient((method) =>
-      method === "workboard.cards.list"
-        ? {
-            cards: [
-              {
-                id: "card-1",
-                title: "Updated elsewhere",
-                status: "todo",
-                priority: "normal",
-                labels: [],
-                position: 1,
-                createdAt: 1,
-                updatedAt: 2,
-              },
-            ],
-            statuses: ["todo", "done"],
-          }
-        : { tasks: [] },
-    );
-    configureWorkboardLiveRefresh({ host, client: client as never });
+    const { host, client, listCalls } = setup(() => cardsResponse("Updated elsewhere"));
 
     expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 })).toBe(true);
     await waitForFast(() =>
       expect(getWorkboardState(host).cards[0]?.title).toBe("Updated elsewhere"),
     );
     expect(handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 })).toBe(false);
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-    ).toHaveLength(1);
+    expect(listCalls()).toBe(1);
     expect(client.request).not.toHaveBeenCalledWith(
       "workboard.cards.diagnostics.refresh",
       expect.anything(),
@@ -74,39 +66,26 @@ describe("Workboard live refresh", () => {
   });
 
   it("coalesces revisions that arrive during a canonical read", async () => {
-    const host = {};
     const firstList = createDeferred<unknown>();
-    let listCalls = 0;
-    const client = createClient((method) => {
-      if (method === "workboard.cards.list") {
-        listCalls += 1;
-        return listCalls === 1 ? firstList.promise : { cards: [], statuses: ["todo", "done"] };
-      }
-      return { tasks: [] };
-    });
-    configureWorkboardLiveRefresh({ host, client: client as never });
+    let reads = 0;
+    const { host, listCalls } = setup(() => (++reads === 1 ? firstList.promise : cardsResponse()));
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
-    await waitForFast(() => expect(listCalls).toBe(1));
+    await waitForFast(() => expect(listCalls()).toBe(1));
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 2 });
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 3 });
-    firstList.resolve({ cards: [], statuses: ["todo", "done"] });
+    firstList.resolve(cardsResponse());
 
-    await waitForFast(() => expect(listCalls).toBe(2));
+    await waitForFast(() => expect(listCalls()).toBe(2));
     await Promise.resolve();
-    expect(listCalls).toBe(2);
+    expect(listCalls()).toBe(2);
   });
 
   it("defers during edits and resumes after the local draft closes", async () => {
-    const host = {};
     const requestUpdate = vi.fn();
-    const client = createClient((method) =>
-      method === "workboard.cards.list" ? { cards: [], statuses: ["todo", "done"] } : { tasks: [] },
-    );
-    const state = getWorkboardState(host);
+    const { host, client, state } = setup(cardsResponse, requestUpdate);
     state.draftOpen = true;
     state.editingCardId = "card-1";
-    configureWorkboardLiveRefresh({ host, client: client as never, requestUpdate });
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
     await Promise.resolve();
@@ -123,72 +102,41 @@ describe("Workboard live refresh", () => {
 
   it("retries transient failures and treats a new epoch as authoritative", async () => {
     vi.useFakeTimers();
-    const host = {};
     let fail = true;
-    const client = createClient((method) => {
-      if (method !== "workboard.cards.list") {
-        return { tasks: [] };
-      }
+    const { host, client, listCalls } = setup(() => {
       if (fail) {
         throw new Error("temporarily unavailable");
       }
-      return { cards: [], statuses: ["todo", "done"] };
+      return cardsResponse();
     });
-    configureWorkboardLiveRefresh({ host, client: client as never });
 
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 9 });
     await waitForFast(() =>
       expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
     );
     resumeWorkboardLiveRefresh(host);
-    configureWorkboardLiveRefresh({ host, client: client as never });
+    configureWorkboardLiveRefresh({ host, client });
     await Promise.resolve();
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-    ).toHaveLength(1);
+    expect(listCalls()).toBe(1);
     fail = false;
     await vi.advanceTimersByTimeAsync(1000);
-    expect(
-      client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-    ).toHaveLength(2);
+    expect(listCalls()).toBe(2);
 
     expect(handleWorkboardChanged(host, { epoch: "epoch-b", revision: 1 })).toBe(true);
-    await waitForFast(() =>
-      expect(
-        client.request.mock.calls.filter(([method]) => method === "workboard.cards.list"),
-      ).toHaveLength(3),
-    );
+    await waitForFast(() => expect(listCalls()).toBe(3));
     stopWorkboardLiveRefresh(host);
   });
 
   it("discards a live read that completes after teardown", async () => {
-    const host = {};
     const list = createDeferred<unknown>();
-    const client = createClient((method) =>
-      method === "workboard.cards.list" ? list.promise : { tasks: [] },
-    );
-    configureWorkboardLiveRefresh({ host, client: client as never });
+    const { host, client } = setup(() => list.promise);
     handleWorkboardChanged(host, { epoch: "epoch-a", revision: 1 });
     await waitForFast(() =>
       expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
     );
 
     stopWorkboardLiveRefresh(host);
-    list.resolve({
-      cards: [
-        {
-          id: "stale-card",
-          title: "Must not apply",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1,
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      ],
-      statuses: ["todo", "done"],
-    });
+    list.resolve(cardsResponse("Must not apply"));
     await list.promise;
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -198,33 +146,15 @@ describe("Workboard live refresh", () => {
   });
 
   it("discards a direct canonical read that completes after teardown", async () => {
-    const host = {};
     const list = createDeferred<unknown>();
-    const client = createClient((method) =>
-      method === "workboard.cards.list" ? list.promise : { tasks: [] },
-    );
-    configureWorkboardLiveRefresh({ host, client: client as never });
-    const loading = loadWorkboard({ host, client: client as never, force: true });
+    const { host, client } = setup(() => list.promise);
+    const loading = loadWorkboard({ host, client, force: true });
     await waitForFast(() =>
       expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {}),
     );
 
     stopWorkboardLiveRefresh(host);
-    list.resolve({
-      cards: [
-        {
-          id: "stale-card",
-          title: "Must not apply",
-          status: "todo",
-          priority: "normal",
-          labels: [],
-          position: 1,
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      ],
-      statuses: ["todo", "done"],
-    });
+    list.resolve(cardsResponse("Must not apply"));
 
     await expect(loading).resolves.toBe(false);
     expect(getWorkboardState(host).cards).toEqual([]);
@@ -241,9 +171,9 @@ it("retains cards on unchanged responses and still refreshes caller-scoped Sessi
     .mockResolvedValueOnce({ cards: [card], boards: [], revision })
     .mockResolvedValue({ unchanged: true, revision });
   const client = { request } as never;
-  await loadWorkboardCatalog({ host, client });
-  expect(getWorkboardState(host).loaded).toBe(false);
   await loadWorkboard({ host, client });
+  expect(getWorkboardState(host).loaded).toBe(true);
+  await loadWorkboard({ host, client, force: true });
   expect(getWorkboardState(host).loaded).toBe(true);
   expect(getWorkboardState(host).cards).toEqual([card]);
   expect(request).toHaveBeenLastCalledWith("workboard.cards.list", { sinceRevision: revision });

@@ -6,13 +6,12 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { getChildLogger } from "../../logging/logger.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
-  resolveSqliteScope,
   formatLegacySqliteSessionMarkerForScope,
   resolveSqliteSessionKey,
   toDatabaseOptions,
@@ -22,8 +21,6 @@ import type { ForkSessionFromParentTranscriptParams } from "./session-accessor.t
 import { restoreSessionColdTranscript } from "./session-cold-storage.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { executeSessionForkOperation } from "./session-fork-domain.js";
-import type { IncognitoSessionActor } from "./session-incognito-actor.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   ParentForkCandidate,
   ParentForkCommit,
@@ -36,14 +33,6 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type ForkStoreScope = { agentId?: string; sessionKey: string; storePath: string };
-export type IncognitoParentForkBinding = {
-  source: {
-    actor: IncognitoSessionActor;
-    authority: IncognitoSessionAuthority;
-    sessionKey: string;
-  };
-  destination?: { actor: IncognitoSessionActor; authority: IncognitoSessionAuthority };
-};
 type ForkOwner = Pick<
   ReturnType<typeof captureForkWorker>,
   "scope" | "database" | "assertCurrent" | "prepareEntry" | "readSource" | "restore" | "commit"
@@ -54,12 +43,8 @@ function withForkWorkers<T>(
   scopes: { source: ForkStoreScope; target?: ForkStoreScope },
   guard: (() => void) | undefined,
   run: (source: ForkOwner, target?: ForkOwner) => Promise<T>,
-  incognito?: IncognitoParentForkBinding,
 ): Promise<T> {
   guard?.();
-  if (incognito) {
-    return withIncognitoForkWorkers(scopes, guard, run, incognito);
-  }
   const env = captureSessionTranscriptStorageEnvironment(process.env);
   const captureRequest = (scope: ForkStoreScope) => ({
     ...scope,
@@ -178,16 +163,7 @@ function captureForkWorker(
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const execution = captureOpenClawAgentDatabaseExecution(
     database,
-    identity.key.startsWith("file:")
-      ? {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: identity.key.slice("file:".length),
-            nativeLocation: identity.canonicalPath,
-            birthtime: identity.birthtime,
-          },
-        }
-      : { expectedCreationIdentity: identity },
+    toAgentExecutionConstraints(identity),
   );
   const assertCurrent = () => {
     execution.assertCurrent();
@@ -281,7 +257,6 @@ function captureForkWorker(
 export async function forkParentEntryInWorker(
   params: ParentForkEntryParams & { commitGuard?: () => void },
   patch?: ParentForkEntryPatch,
-  incognito?: IncognitoParentForkBinding,
 ) {
   const { commitGuard: _guard, ...serializable } = params;
   const planned = structuredClone(serializable);
@@ -290,7 +265,7 @@ export async function forkParentEntryInWorker(
     {
       source: {
         agentId: params.agentId,
-        sessionKey: incognito ? params.parentTarget.canonicalKey : "",
+        sessionKey: "",
         storePath: params.storePath,
       },
     },
@@ -326,21 +301,17 @@ export async function forkParentEntryInWorker(
       }
       return result;
     },
-    incognito,
   );
 }
 
-export async function forkParentTranscriptInWorker(
-  params: ForkSessionFromParentTranscriptParams,
-  incognito?: IncognitoParentForkBinding,
-) {
+export async function forkParentTranscriptInWorker(params: ForkSessionFromParentTranscriptParams) {
   const { commitGuard: _guard, ...serializable } = params;
   const planned = structuredClone(serializable);
   return withForkWorkers(
     {
       source: {
         agentId: params.agentId,
-        sessionKey: incognito ? params.parentSessionKey : params.sessionKey,
+        sessionKey: params.sessionKey,
         storePath: params.storePath,
       },
       target: params.targetStorePath
@@ -386,117 +357,6 @@ export async function forkParentTranscriptInWorker(
       }
       return result;
     },
-    incognito,
-  );
-}
-
-export function readIncognitoParentForkSource(
-  params: {
-    storePath: string;
-    sessionId: string;
-    forkFrom?: "last-completed";
-    commitGuard?: () => void;
-  },
-  binding: IncognitoParentForkBinding,
-) {
-  const input = { sessionId: params.sessionId, forkFrom: params.forkFrom };
-  return withForkWorkers(
-    { source: { sessionKey: binding.source.sessionKey, storePath: params.storePath } },
-    params.commitGuard,
-    async (source) => {
-      const result = await source.readSource(input);
-      source.assertCurrent();
-      return result ?? null;
-    },
-    { source: binding.source },
-  );
-}
-
-function withIncognitoForkWorkers<T>(
-  scopes: { source: ForkStoreScope; target?: ForkStoreScope },
-  guard: (() => void) | undefined,
-  run: (source: ForkOwner, target?: ForkOwner) => Promise<T>,
-  binding: IncognitoParentForkBinding,
-): Promise<T> {
-  const source = { ...binding.source };
-  const destination = binding.destination ? { ...binding.destination } : source;
-  const crossActor =
-    source.actor.identity.handle !== destination.actor.identity.handle ||
-    source.actor.identity.incarnation !== destination.actor.identity.incarnation;
-  if (scopes.source.sessionKey !== source.sessionKey) {
-    throw new Error("Incognito parent fork binding does not match its captured session");
-  }
-  const sourceClaim = source.actor.sessions.captureCurrent(source.sessionKey);
-  const assertAuthority = () => {
-    guard?.();
-    source.actor.assertCurrent();
-    destination.actor.assertCurrent();
-    source.authority.assertCurrent();
-    destination.authority.assertCurrent();
-  };
-  const assertCurrent = () => {
-    assertAuthority();
-    sourceClaim.assertCurrent();
-  };
-  assertCurrent();
-  if (crossActor && !scopes.target) {
-    throw new Error("Cross-agent incognito fork requires an explicit destination store");
-  }
-  const capture = (
-    scope: ForkStoreScope,
-    owner: Pick<IncognitoParentForkBinding["source"], "actor" | "authority">,
-  ): ForkOwner => {
-    if (
-      (path.resolve(scope.storePath) !== owner.actor.path &&
-        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope))) !==
-          owner.actor.path) ||
-      (scope.agentId && scope.agentId !== owner.actor.agentId)
-    ) {
-      throw new Error("Incognito parent fork binding does not match its captured store");
-    }
-    const authority: IncognitoSessionAuthority = {
-      assertCurrent: assertAuthority,
-      authorize(stage, facts) {
-        if (crossActor && owner === destination) {
-          sourceClaim.authorize(source.authority, stage);
-        }
-        if (crossActor) {
-          return owner.authority.authorize?.(stage, facts);
-        }
-        return facts.sessionKey === scopes.source.sessionKey
-          ? source.authority.authorize?.(stage, facts)
-          : destination.authority.authorize?.(stage, facts);
-      },
-    };
-    return {
-      scope: { agentId: owner.actor.agentId, path: owner.actor.path, sessionKey: scope.sessionKey },
-      database: { agentId: owner.actor.agentId, path: owner.actor.path },
-      assertCurrent,
-      prepareEntry: (input) =>
-        owner.actor.sessions.lifecycle(authority, {
-          type: "session.lifecycle.parentFork.prepare",
-          input,
-        }),
-      readSource: (input) =>
-        owner.actor.sessions.lifecycle(authority, {
-          type: "session.lifecycle.parentFork.source",
-          input: { ...input, sessionKey: scope.sessionKey },
-        }),
-      restore: async () => {
-        assertCurrent();
-      },
-      commit: (input) =>
-        owner.actor.sessions.lifecycle(authority, {
-          type: "session.lifecycle.parentFork.commit",
-          input,
-        }),
-    };
-  };
-  const sourceOwner = capture(scopes.source, source);
-  const destinationOwner = scopes.target ? capture(scopes.target, destination) : undefined;
-  // Lifetimes surround the composition, while each read/write acquires its own FIFO turn.
-  return source.actor.sessions.withSharedState(() =>
-    destination.actor.sessions.withSharedState(() => run(sourceOwner, destinationOwner)),
   );
 }
 

@@ -11,15 +11,15 @@ import {
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { getSandboxBackendWorkdirResolver } from "../agents/sandbox/backend.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { buildSandboxFsMounts } from "../agents/sandbox/fs-paths.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionStorePathCore,
@@ -112,7 +112,7 @@ export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
 
   const requestedSession = opts.session?.trim();
   const requestedAgent = opts.agent?.trim();

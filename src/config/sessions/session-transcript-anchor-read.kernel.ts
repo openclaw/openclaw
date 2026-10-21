@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -131,6 +131,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
   readMessage?: AnchorMessageReader,
   projection?: CurrentTranscriptProjection,
   preparedEntry?: SessionTranscriptAnchorEntry,
+  messagePresence?: true,
 ): SessionTranscriptAnchorFacts {
   if (
     projection &&
@@ -162,6 +163,7 @@ export function readSessionTranscriptAnchorFactsInDatabase(
       ? {
           entry: contextEntry && {
             sessionId: contextEntry.sessionId,
+            updatedAt: contextEntry.updatedAt,
             lifecycleRevision: contextEntry.lifecycleRevision,
             activeWriterRunId: contextEntry.activeWriterRunId,
             cliHistoryBoundary: contextEntry.cliHistoryBoundary,
@@ -223,7 +225,12 @@ export function readSessionTranscriptAnchorFactsInDatabase(
         ? { metadata: readSessionTranscriptMetadataInDatabase(database, resolved.sessionId) }
         : {}),
       ...(selection.includeMessagePresence
-        ? { messagePresence: hasSessionTranscriptMessageInDatabase(database, resolved.sessionId) }
+        ? {
+            // A selected message proves presence; a bounded window cannot prove absence.
+            messagePresence:
+              messagePresence ??
+              hasSessionTranscriptMessageInDatabase(database, resolved.sessionId),
+          }
         : {}),
       ...(contextAuthority ? { contextAuthority } : {}),
       ...(context ? { contextValidated: true as const } : {}),
@@ -344,9 +351,16 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     }
     return readAnchors();
   };
-  return database.db.isTransaction
+  const singleStatement =
+    selection.entryIds.length === 0 &&
+    ((selection.contextValidation?.through !== undefined &&
+      selection.contextValidation.admission === undefined &&
+      Object.keys(selection).every((key) => key === "entryIds" || key === "contextValidation")) ||
+      (selection.includeWatermark === true &&
+        Object.keys(selection).every((key) => key === "entryIds" || key === "includeWatermark")));
+  return database.db.isTransaction || singleStatement
     ? read()
-    : runSqliteDeferredTransactionSync(database.db, read, {
+    : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,
         operationLabel: "session transcript anchors read",
       });

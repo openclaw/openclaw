@@ -1,5 +1,3 @@
-/** SQLite-backed Codex app-server thread bindings. */
-
 import {
   AgentHarnessSessionSupersededError,
   embeddedAgentLog,
@@ -8,19 +6,15 @@ import {
 import {
   createNativeSessionBindingLifecycleV2,
   reclaimNativeSessionGenerationWithAuthority,
-  resolveNativeSessionBindingWithAuthorityV2,
-  type NativeSessionBindingAuthority,
+  resolvePreparedNativeSessionBinding,
+  type PreparedNativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
-  type NativeSessionBindingStateStoreV2,
   type NativeSessionGenerationAdoptionResult,
-  type NativeSessionGenerationOperationsV2,
+  type PreparedNativeSessionGenerationOperations,
+  type RetainedNativeSessionGenerationAuthority,
   type NativeSessionGenerationReclaimPlan,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
@@ -47,11 +41,13 @@ import {
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
+  prepareCurrentCodexAppServerBindingRead,
   readCurrentCodexAppServerBindingAsync,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
   readStoredCodexAppServerBinding,
   validateBindingForWrite,
+  type CodexBindingStateStore,
   type CodexAppServerBindingIdentity,
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
@@ -65,6 +61,7 @@ export {
   readStoredCodexAppServerBinding,
   sessionBindingIdentity,
   validateBindingForWrite,
+  type CodexBindingStateStore,
   type CodexAppServerBindingIdentity,
   type CodexAppServerContextEngineBinding,
   type CodexAppServerContextEngineProjectionBinding,
@@ -73,14 +70,14 @@ export {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 
-export { combineNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+export { combinePreparedNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 export {
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
   normalizeStoredCodexAppServerBindingFingerprints,
 } from "./session-binding-codec.js";
-export type CodexBindingAuthority = NativeSessionBindingAuthority;
-export type CodexBindingWithCurrent = NativeSessionBindingAuthority["withCurrent"];
+export type CodexBindingAuthority = PreparedNativeSessionBindingAuthority;
+export type CodexBindingWithCurrent = PreparedNativeSessionBindingAuthority["withCurrent"];
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -147,17 +144,6 @@ export async function clearCodexBindingForClient(
   );
 }
 
-export type CodexBindingStateStore = Omit<
-  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
-  "lookup" | "assertLeaseCurrent"
-> &
-  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
-    asyncReads: Pick<
-      PluginStateKeyedStore<StoredCodexAppServerBinding>,
-      "lookup" | "lookupMany" | "entries"
-    >;
-  };
-
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
 }
@@ -170,6 +156,10 @@ export type CodexAppServerBindingStore = {
   readAsync(
     identity: CodexAppServerBindingIdentity,
   ): Promise<CodexAppServerThreadBinding | undefined>;
+  /** Retain current committed binding facts for a synchronous effect guard. */
+  prepareRead(
+    identity: CodexAppServerBindingIdentity,
+  ): ReturnType<typeof prepareCurrentCodexAppServerBindingRead>;
   /** Fresh worker-backed acquisition with row-ordered binding validation. */
   readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
@@ -264,12 +254,14 @@ export async function resolveCodexSessionBinding(params: {
   assertCurrent?: () => void;
   assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
   authority?: CodexBindingAuthority;
+  generationAuthority?: RetainedNativeSessionGenerationAuthority;
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
   authority: CodexBindingAuthority;
+  release: () => void;
 }> {
   const identity = params.identity;
-  return await resolveNativeSessionBindingWithAuthorityV2({
+  return await resolvePreparedNativeSessionBinding({
     ...params,
     ...(identity.kind === "session"
       ? {
@@ -292,6 +284,7 @@ export function createCodexAppServerBindingStore(
   const lifecycle = createNativeSessionBindingLifecycleV2<StoredCodexAppServerBinding>(
     {
       lookup: (key) => state.asyncReads.lookup(key),
+      // Only custom legacy adapters use this; canonical worker stores publish pinned lease facts.
       assertLeaseCurrent: (key, token) => {
         const raw = state.lookup(key);
         const current = readStoredCodexAppServerBinding(raw);
@@ -419,6 +412,7 @@ export function createCodexAppServerBindingStore(
   return {
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
     readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
+    prepareRead: (identity) => prepareCurrentCodexAppServerBindingRead(state, identity),
     readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state.asyncReads, identity, owner),
@@ -719,7 +713,7 @@ export function createCodexAppServerBindingStore(
 function codexSessionGenerationOperations(
   store: CodexAppServerBindingStore,
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
-): NativeSessionGenerationOperationsV2 {
+): PreparedNativeSessionGenerationOperations {
   return {
     prepareReclaim: () => store.prepareSessionGenerationReclaim(identity),
     adopt: (expectedPreviousSessionId, authority) =>

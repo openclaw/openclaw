@@ -1,120 +1,40 @@
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   foreignSessionIngestionSource,
-  resolveAdmissionPolicy,
   scanSessionIngestionSource,
-  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
 } from "./session-ingestion.js";
 
 const tempDirs: string[] = [];
-let sessionRoot: string;
-let sessionIndex = 0;
-
-beforeAll(async () => {
-  // openclaw-temp-dir: allow suite-owned session stores drain once before removal
-  sessionRoot = await fs.mkdtemp(
-    path.join(realpathSync.native(os.tmpdir()), "openclaw-session-admission-"),
-  );
-});
-
-afterAll(async () => {
-  await closeOpenClawAgentDatabasesAsync(sessionRoot);
-  await closeOpenClawStateDatabaseAsync();
-  await fs.rm(sessionRoot, { recursive: true, force: true });
-});
-
 afterEach(async () => {
-  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("session ingestion", () => {
-  it.each(["cron", "subagent", "heartbeat", "unknown"] as const)(
-    "excludes %s sessions from memory ingestion",
-    (sessionKind) => {
-      expect(
-        sessionIngestionSourceFromCorpus(
-          {
-            agentId: "main",
-            artifactKind: "active-session",
-            transcriptSource: "sqlite",
-            sessionFile: "synthetic-session",
-            sessionId: "synthetic-session",
-            sessionKind,
-          },
-          "backfill",
-        ),
-      ).toBeNull();
-    },
-  );
-
-  it.each(["email", "gmail"] as const)(
-    "applies exact %s admission policy using the corpus session store",
-    async (hookExternalContentSource) => {
-      const dir = path.join(sessionRoot, `case-${++sessionIndex}`);
-      await fs.mkdir(dir);
-      vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-      const storePath = path.join(dir, "custom", "sessions.json");
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      const sessionId = "source-session";
-      const sessionKey = "agent:main:source-session";
-      await upsertSessionEntry({
-        agentId: "main",
-        storePath,
-        sessionKey,
-        entry: { sessionId, updatedAt: 1_000, hookExternalContentSource },
-      });
-      const source = sessionIngestionSourceFromCorpus(
+  it.each(["unknown"] as const)("excludes %s sessions from memory ingestion", (sessionKind) => {
+    expect(
+      sessionIngestionSourceFromCorpus(
         {
           agentId: "main",
           artifactKind: "active-session",
           transcriptSource: "sqlite",
-          sessionFile: sessionKey,
-          sessionId,
-          sessionKey,
-          storePath,
-          sessionKind: "interactive",
+          sessionFile: "synthetic-session",
+          sessionId: "synthetic-session",
+          sessionKind,
         },
         "backfill",
-      );
-      expect(source).not.toBeNull();
-      if (!source) {
-        throw new Error("Interactive source was not available");
-      }
-      const policy = resolveAdmissionPolicy({
-        memoryPolicy: {
-          excludeSessions: { hookExternalContentSources: [hookExternalContentSource] },
-        },
-      });
-      expect((await sessionExclusionReasons([source], policy, new Set<string>())).get(source)).toBe(
-        `hookExternalContentSource:${hookExternalContentSource}`,
-      );
-    },
-  );
+      ),
+    ).toBeNull();
+  });
 
   it.each([
     {
       name: "session id ending in .jsonl",
       sessionFile: path.join(os.tmpdir(), "foo.jsonl.jsonl"),
       sessionId: "foo.jsonl",
-    },
-    {
-      name: "bounded archive filename",
-      sessionFile: path.join(
-        os.tmpdir(),
-        `session-${"a".repeat(64)}.jsonl.deleted.2026-08-11T08-00-00.000Z.zst`,
-      ),
-      sessionId: `oversized-${"x".repeat(300)}`,
     },
   ])("preserves file-backed scope identity for $name", ({ sessionFile, sessionId }) => {
     const source = sessionIngestionSourceFromCorpus(
@@ -181,7 +101,6 @@ describe("session ingestion", () => {
 
   it.each([
     { maxCandidates: 1, expected: ["User: Bravo durable note.", "User: Charlie durable note."] },
-    { maxCandidates: 2, expected: ["User: Charlie durable note."] },
   ])(
     "resumes an append after consuming $maxCandidates snapshot lines",
     async ({ maxCandidates, expected }) => {

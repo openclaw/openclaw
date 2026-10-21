@@ -12,6 +12,13 @@ import {
 } from "./markdown.ts";
 
 const interactive = { codeBlockInteraction: "interactive" } as const;
+const find = (selector: string) => document.body.querySelector<HTMLElement>(selector);
+const texts = (selector: string) =>
+  [...document.body.querySelectorAll(selector)].map((node) => node.textContent);
+function expectSource(source: string, suffix = "") {
+  expect(find("pre code")?.textContent).toBe(source + suffix);
+  expect(readMarkdownCodeBlockCopyText(find(".code-block-copy")!)).toBe(source);
+}
 beforeEach(() => document.body.addEventListener("click", handleMarkdownCodeBlockClick));
 afterEach(() => {
   document.body.removeEventListener("click", handleMarkdownCodeBlockClick);
@@ -45,23 +52,12 @@ describe("source-preserving JSON tree", () => {
     "preserves source lexemes and indentation in Tree, Raw and Copy: $source",
     ({ source, keys, literals }) => {
       for (const fenced of [false, true]) {
-        const body = renderJson(source, fenced);
-        expect(
-          [...body.querySelectorAll(".code-block-json-key")].map((node) => node.textContent),
-        ).toEqual(keys);
-        expect(
-          [...body.querySelectorAll(".code-block-json-value--literal")].map(
-            (node) => node.textContent,
-          ),
-        ).toEqual(literals);
-        body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!.click();
-        expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-          true,
-        );
-        expect(body.querySelector("pre code")?.textContent).toBe(source + (fenced ? "\n" : ""));
-        expect(
-          readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-        ).toBe(source);
+        renderJson(source, fenced);
+        expect(texts(".code-block-json-key")).toEqual(keys);
+        expect(texts(".code-block-json-value--literal")).toEqual(literals);
+        find('[data-json-mode="raw"]')!.click();
+        expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+        expectSource(source, fenced ? "\n" : "");
       }
     },
   );
@@ -71,41 +67,36 @@ describe("source-preserving JSON tree", () => {
       ' \r\n{ "\\u0061": "\\u0061", "html": "</code><img src=x onerror=alert(1)>", "text": "**literal**' +
       "\u2028\u2029" +
       '" }\r\n ';
-    const body = renderJson(source);
-    expect(body.querySelector("pre code")?.textContent).toBe(source);
-    expect(body.querySelector(".code-block-json-key")?.textContent).toBe('"\\u0061"');
-    expect(body.querySelector(".code-block-json-value--string")?.textContent).toBe('"\\u0061"');
-    expect(body.querySelector("img, script, strong")).toBeNull();
-    expect(
-      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-    ).toBe(source);
+    renderJson(source);
+    expectSource(source);
+    expect(find(".code-block-json-key")?.textContent).toBe('"\\u0061"');
+    expect(find(".code-block-json-value--string")?.textContent).toBe('"\\u0061"');
+    expect(find("img, script, strong")).toBeNull();
   });
 
   it("switches views through the existing owner without replacing source or node state", () => {
-    const body = renderJson('{"nested":{"value":true}}');
-    const node = body.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
+    renderJson('{"nested":{"value":true}}');
+    const node = document.querySelectorAll<HTMLDetailsElement>(".code-block-json-node")[1]!;
     node.querySelector<HTMLElement>("summary")!.click();
     expect(node.open).toBe(false);
-    const raw = body.querySelector<HTMLButtonElement>('[data-json-mode="raw"]')!;
-    const tree = body.querySelector<HTMLButtonElement>('[data-json-mode="tree"]')!;
+    const raw = find('[data-json-mode="raw"]')!;
+    const tree = find('[data-json-mode="tree"]')!;
     raw.click();
     expect(raw.getAttribute("aria-pressed")).toBe("true");
     expect(tree.getAttribute("aria-pressed")).toBe("false");
-    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
+    expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(true);
     tree.click();
     expect(node.open).toBe(false);
-    expect(body.querySelectorAll(".code-block-json-node")[1]).toBe(node);
-    expect(body.querySelector(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(
-      false,
-    );
+    expect(document.querySelectorAll(".code-block-json-node")[1]).toBe(node);
+    expect(find(".code-block-wrapper")?.classList.contains("is-json-raw")).toBe(false);
   });
 
   it.each(["{}", '{"empty":[],"nothing":null}'])(
     "renders empty containers and null: %s",
     (source) => {
-      const body = renderJson(source);
-      expect(body.querySelector(".code-block-json-tree")).not.toBeNull();
-      expect(body.querySelector("pre code")?.textContent).toBe(source);
+      renderJson(source);
+      expect(find(".code-block-json-tree")).not.toBeNull();
+      expect(find("pre code")?.textContent).toBe(source);
     },
   );
 
@@ -117,8 +108,8 @@ describe("source-preserving JSON tree", () => {
         "```json\n" + source + "\n```",
         interactive,
       );
-      expect(document.querySelector(".code-block-json-tree")).toBeNull();
-      expect(document.querySelector("pre code")?.textContent).toBe(source + "\n");
+      expect(find(".code-block-json-tree")).toBeNull();
+      expect(find("pre code")?.textContent).toBe(source + "\n");
     },
   );
 
@@ -128,19 +119,16 @@ describe("source-preserving JSON tree", () => {
     " ".repeat(20_000) + "{}",
     '{"text":"**literal** ' + "x".repeat(20_000) + '"}',
   ])("keeps over-budget trees literal and complete", (source) => {
-    const body = renderJson(source);
-    expect(body.querySelector(".code-block-json-tree, strong")).toBeNull();
-    expect(body.querySelector("pre code")?.textContent).toBe(source);
-    expect(
-      readMarkdownCodeBlockCopyText(body.querySelector<HTMLElement>(".code-block-copy")!),
-    ).toBe(source);
+    renderJson(source);
+    expect(find(".code-block-json-tree, strong")).toBeNull();
+    expectSource(source);
   });
 
   it("leaves inputs above the shared parsing limit to the existing literal-text renderer", () => {
     const source = '{"text":"**literal** ' + "x".repeat(40_000) + '"}';
     expect(parseMarkdownJson(source)).toBeNull();
     document.body.innerHTML = toSanitizedMarkdownHtml(source, interactive);
-    expect(document.body.querySelector("strong")).toBeNull();
+    expect(find("strong")).toBeNull();
     expect(document.body.textContent).toBe(source);
   });
 
@@ -148,16 +136,16 @@ describe("source-preserving JSON tree", () => {
     const json = parseMarkdownJson('{"a":1}')!;
     for (const options of [{}, { codeBlockChrome: "none" as const }]) {
       document.body.innerHTML = toSanitizedJsonHtml(json, options);
-      expect(document.querySelector(".code-block-json-mode")).toBeNull();
-      expect(document.querySelector("pre code")?.textContent).toBe(json.text);
+      expect(find(".code-block-json-mode")).toBeNull();
+      expect(find("pre code")?.textContent).toBe(json.text);
     }
   });
 
   it("waits for a closing fence before offering the tree", () => {
     const source = '```json\n{"a":1}';
     document.body.innerHTML = toStreamingMarkdownParts(source, interactive).join("");
-    expect(document.querySelector(".code-block-json-tree")).toBeNull();
+    expect(find(".code-block-json-tree")).toBeNull();
     document.body.innerHTML = toStreamingMarkdownParts(source + "\n```", interactive).join("");
-    expect(document.querySelector(".code-block-json-tree")).not.toBeNull();
+    expect(find(".code-block-json-tree")).not.toBeNull();
   });
 });

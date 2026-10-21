@@ -2,21 +2,30 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
+import { emitChildProcessSpawnSample, withChildProcessOperation } from "./spawn-diagnostics.js";
 
 const mocks = vi.hoisted(() => ({
   signalPtySessionTree: vi.fn(),
   signalProcessTree: vi.fn(),
   spawn: vi.fn(),
+  spawnBunTerminalPty: vi.fn(),
+  spawnNodeTerminalPty: vi.fn(),
 }));
 
 vi.mock("./kill-tree.js", () => ({
@@ -24,13 +33,22 @@ vi.mock("./kill-tree.js", () => ({
   signalPtySessionTree: mocks.signalPtySessionTree,
 }));
 vi.mock("@lydell/node-pty", () => ({ spawn: mocks.spawn }));
+vi.mock("./terminal-pty-bun.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./terminal-pty-bun.js")>()),
+  spawnBunTerminalPty: mocks.spawnBunTerminalPty,
+}));
+// mock-isolation: Avoid importing the Node PTY backend under synthetic Bun and platform globals.
+vi.mock("./terminal-pty-node.js", () => ({
+  spawnNodeTerminalPty: mocks.spawnNodeTerminalPty,
+}));
 
-const { spawnTerminalPty } = await import("./terminal-pty.js");
+const { prepareTerminalPty, spawnTerminalPty } = await import("./terminal-pty.js");
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { force: true, recursive: true });
   }
@@ -94,6 +112,182 @@ async function spawnFakePty(pid = 4321) {
   });
   return { handle, pty };
 }
+
+describe("terminal PTY spawn diagnostics", () => {
+  let now = 0;
+  let events: DiagnosticEventPayload[];
+  let stop: () => void;
+
+  beforeEach(() => {
+    mocks.spawn.mockReset();
+    mocks.spawnBunTerminalPty.mockReset();
+    mocks.spawnNodeTerminalPty.mockReset();
+    now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    resetDiagnosticEventsForTest();
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    setDiagnosticsEnabledForProcess(true);
+    events = [];
+    stop = onDiagnosticEvent((event) => {
+      if (event.type === "diagnostic.child_process.spawn") {
+        events.push(event);
+      }
+    });
+  });
+
+  afterEach(() => {
+    stop();
+    setDiagnosticsEnabledForProcess(false);
+    emitChildProcessSpawnSample();
+    resetDiagnosticEventsForTest();
+  });
+
+  it.each(["node-pty", "bun-native", "node-helper"] as const)(
+    "counts an admitted %s PTY once with the agent owner",
+    async (backend) => {
+      const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      const bunGlobalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Bun");
+      const bunRuntime =
+        (globalThis as typeof globalThis & { Bun?: { Terminal?: unknown } }).Bun ?? {};
+      const terminalDescriptor = Object.getOwnPropertyDescriptor(bunRuntime, "Terminal");
+      Object.defineProperty(process.versions, "bun", {
+        configurable: true,
+        value: backend === "node-pty" ? undefined : "synthetic-bun",
+      });
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const pty = fakePty();
+      mocks.spawn.mockReturnValueOnce(pty);
+      mocks.spawnBunTerminalPty.mockReturnValueOnce(pty);
+      mocks.spawnNodeTerminalPty.mockResolvedValueOnce(pty);
+      // The real Bun global is immutable; its Terminal capability is writable.
+      Object.defineProperty(bunRuntime, "Terminal", {
+        ...(terminalDescriptor ?? { configurable: true, writable: true }),
+        value: backend === "bun-native" ? { prototype: { pause() {} } } : undefined,
+      });
+      if (!bunGlobalDescriptor) {
+        vi.stubGlobal("Bun", bunRuntime);
+      }
+      try {
+        const aborted = AbortSignal.abort();
+        await expect(
+          spawnTerminalPty(
+            { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 },
+            { abortSignal: aborted },
+          ),
+        ).rejects.toThrow("PTY construction aborted");
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
+        await withChildProcessOperation("agent.exec", () =>
+          spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
+        );
+      } finally {
+        platform.mockRestore();
+        if (terminalDescriptor) {
+          Object.defineProperty(bunRuntime, "Terminal", terminalDescriptor);
+        } else {
+          Reflect.deleteProperty(bunRuntime, "Terminal");
+        }
+        if (!bunGlobalDescriptor) {
+          vi.unstubAllGlobals();
+        }
+        if (bunDescriptor) {
+          Object.defineProperty(process.versions, "bun", bunDescriptor);
+        } else {
+          Reflect.deleteProperty(process.versions, "bun");
+        }
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+      ]);
+    },
+  );
+
+  it("retains preparation ownership and excludes failed or denied native launches", async () => {
+    const params = { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 };
+    const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    if (bunDescriptor) {
+      Object.defineProperty(process.versions, "bun", { ...bunDescriptor, value: undefined });
+    }
+    try {
+      const launch = await withChildProcessOperation("agent.exec", () =>
+        prepareTerminalPty(params),
+      );
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([]);
+      mocks.spawn.mockReturnValueOnce(fakePty());
+      launch();
+      mocks.spawn.mockImplementationOnce(() => {
+        throw new Error("native PTY unavailable");
+      });
+      await expect(spawnTerminalPty(params)).rejects.toThrow("native PTY unavailable");
+      await expect(
+        spawnTerminalPty(params, {
+          assertCurrent: () => {
+            throw new Error("PTY launch denied");
+          },
+        }),
+      ).rejects.toThrow("PTY launch denied");
+      now = 120_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+      ]);
+    } finally {
+      if (bunDescriptor) {
+        Object.defineProperty(process.versions, "bun", bunDescriptor);
+      }
+    }
+  });
+
+  it.each(["data", "silent-exit", "failed-exit"] as const)(
+    "settles deferred Windows PTY attribution once on %s",
+    async (outcome) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const pty = fakePty(0);
+      const dataSubscription = { dispose: vi.fn() };
+      const exitSubscription = { dispose: vi.fn() };
+      let onData: (data: string) => void = () => {};
+      let onExit: () => void = () => {};
+      pty.onData.mockImplementation((listener: typeof onData) => {
+        onData = listener;
+        return dataSubscription;
+      });
+      pty.onExit.mockImplementation((listener: typeof onExit) => {
+        onExit = listener;
+        return exitSubscription;
+      });
+      mocks.spawn.mockReturnValueOnce(pty);
+      await withChildProcessOperation("agent.exec", () =>
+        spawnTerminalPty({ file: "powershell.exe", args: [], cols: 80, rows: 24 }),
+      );
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([]);
+      if (outcome !== "failed-exit") {
+        pty.pid = 4321;
+      }
+      if (outcome === "data") {
+        onData("synthetic output");
+      }
+      onExit();
+      onData("late synthetic output");
+      now = 120_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual(
+        outcome === "failed-exit"
+          ? []
+          : [expect.objectContaining({ family: "powershell", operation: "agent.exec", count: 1 })],
+      );
+      expect(dataSubscription.dispose).toHaveBeenCalledOnce();
+      expect(exitSubscription.dispose).toHaveBeenCalledOnce();
+    },
+  );
+});
 
 describe("terminal PTY teardown", () => {
   beforeEach(() => {
@@ -308,20 +502,6 @@ describe("terminal PTY invocation", () => {
   );
 });
 
-// The PTY exit callback owns the shell, but kill() only signals foreign session members.
-async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
-    }
-    throw error;
-  }
-}
-
 describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
   it("kills a background job in a distinct process group within the PTY session", async ({
     signal,
@@ -329,6 +509,8 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
     vi.resetModules();
     vi.doUnmock("@lydell/node-pty");
     vi.doUnmock("./kill-tree.js");
+    vi.doUnmock("./terminal-pty-bun.js");
+    vi.doUnmock("./terminal-pty-node.js");
     const { spawnTerminalPty: spawnRealTerminalPty } = await import("./terminal-pty.js");
     const handle = await spawnRealTerminalPty({
       file: "/bin/bash",
@@ -393,7 +575,8 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       handle.kill();
       await withinTest(exited.promise, signal);
       expect(isPidAlive(shellPid)).toBe(false);
-      await waitForPidToExit(childPid, signal);
+      // The PTY exit callback owns the shell, but kill() only signals foreign session members.
+      await waitForDead(childPid, signal);
       expect(isPidAlive(childPid)).toBe(false);
     } finally {
       try {

@@ -272,13 +272,13 @@ export const placementLifecycleOperations = {
     "workerPlacements.retire",
     (runtime, input: WorkerSessionPlacementRetirement) => {
       const db = runtime.read();
-      const retired = retireWorkerSessionPlacement(db, input, { onlyIfCurrent: true });
+      const retired = retireWorkerSessionPlacement(db, input);
       // Orphan reconciliation may retire the row while this command is queued.
       if (!retired && find(db, input.sessionId)) {
         throw new Error(`Worker session placement ${input.sessionId} changed before retirement`);
       }
       return retired
-        ? { sessionId: input.sessionId, retired: input.expectedState }
+        ? { sessionId: input.sessionId, retired: input.expectedState, retiredIdentity: retired }
         : { sessionId: input.sessionId, changed: false };
     },
   ),

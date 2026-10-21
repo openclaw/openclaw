@@ -1,18 +1,29 @@
-import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, getOwner, onCleanup, runWithOwner, Show } from "solid-js";
+import { dynamic, insert, type JSX } from "@solidjs/web";
+import {
+  children,
+  createMemo,
+  createSignal,
+  createRoot,
+  getOwner,
+  runWithOwner,
+  Show,
+  useContext,
+} from "solid-js";
 import {
   createMarkdownRef,
   type MarkdownContentValue,
 } from "../../../components/markdown-dom-ref.ts";
 import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedJsonHtml } from "../../../components/markdown.ts";
+import { partitionMarkdownHtml, toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { MarkdownDomMedia } from "../../../lib/markdown-dom-reconciler.ts";
+import type { MarkdownDomMedia, MarkdownMediaRoot } from "../../../lib/markdown-dom-reconciler.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { mountLitContent } from "../../../lit/solid-content.tsx";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import type { MarkdownMedia } from "./chat-message-media-markdown.ts";
 import { messageOverflowRef, shouldCollapseUserMessage } from "./chat-message-overflow.ts";
 import {
@@ -31,15 +42,25 @@ export function MessageJson(props: {
   options: MessageTextOptions;
   markdownOptions: MarkdownRenderOptions;
 }) {
-  const content = createMemo(() => toSanitizedJsonHtml(props.json, props.markdownOptions));
+  const content = createMemo(() => ({
+    messageKey: props.messageKey,
+    source: props.json.text,
+    parts: partitionMarkdownHtml(toSanitizedJsonHtml(props.json, props.markdownOptions)),
+  }));
   return (
     <TextDisclosure
       source={props.json.text}
       messageKey={props.messageKey}
       options={props.options}
-      parts={[content()]}
+      parts={content().parts}
     >
-      <MarkdownText content={content()} />
+      {(elementRef) => (
+        <MarkdownText
+          content={content()}
+          elementRef={elementRef}
+          fetchLinkFavicon={props.options.fetchLinkFavicon}
+        />
+      )}
     </TextDisclosure>
   );
 }
@@ -71,11 +92,15 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
         options={props.options}
         parts={presentation().parts}
       >
-        <MarkdownText
-          content={presentation()}
-          media={props.media}
-          direction={detectTextDirection(props.media?.text ?? presentation().source)}
-        />
+        {(elementRef) => (
+          <MarkdownText
+            content={presentation()}
+            media={props.media}
+            direction={detectTextDirection(props.media?.text ?? presentation().source)}
+            elementRef={elementRef}
+            fetchLinkFavicon={props.options.fetchLinkFavicon}
+          />
+        )}
       </TextDisclosure>
       <Show
         when={
@@ -102,9 +127,17 @@ function TextDisclosure(props: {
   source: string;
   messageKey: string;
   options: MessageTextOptions;
-  parts: readonly string[];
-  children: JSX.Element;
+  parts: readonly [string, string];
+  children: (elementRef: (element: HTMLDivElement) => void) => JSX.Element;
 }) {
+  let text: HTMLDivElement | undefined;
+  let toggle: HTMLButtonElement | undefined;
+  const content = children(() =>
+    props.children((element) => {
+      text = element;
+    }),
+  );
+  const getNodes = () => ({ text, toggle });
   const collapsed = () =>
     Boolean(
       props.options.onToggleUserMessageExpanded &&
@@ -116,7 +149,7 @@ function TextDisclosure(props: {
     `${props.options.isForwarded ? "forwarded" : "user"}-message:${props.messageKey}`;
   const expanded = () => props.options.isUserMessageExpanded?.(disclosureId()) ?? false;
   return (
-    <Show when={collapsed()} fallback={props.children}>
+    <Show when={collapsed()} fallback={content()}>
       <div
         class={[
           "chat-message-disclosure",
@@ -130,11 +163,15 @@ function TextDisclosure(props: {
           parts={props.parts}
           expanded={expanded()}
           forwarded={Boolean(props.options.isForwarded)}
+          getNodes={getNodes}
         >
-          {props.children}
+          {content()}
         </DisclosureContent>
         <button
           class="chat-message-disclosure__toggle"
+          ref={(element) => {
+            toggle = element;
+          }}
           type="button"
           aria-expanded={expanded() ? "true" : "false"}
           onClick={() => props.options.onToggleUserMessageExpanded?.(disclosureId())}
@@ -148,36 +185,32 @@ function TextDisclosure(props: {
 }
 
 function DisclosureContent(props: {
-  parts: readonly string[];
+  parts: readonly [string, string];
   expanded: boolean;
   forwarded: boolean;
+  getNodes: () => { text?: HTMLElement; toggle?: HTMLButtonElement };
   children: JSX.Element;
 }) {
-  let element!: HTMLDivElement;
-  let previous: ((element?: Element) => void) | undefined;
-  const dependencies = createMemo(
-    () => ({ parts: props.parts, expanded: props.expanded, forwarded: props.forwarded }),
+  const presented = useContext(ContentPresentation);
+  const measurementOptions = createMemo(
+    () => ({
+      parts: props.parts,
+      expanded: props.expanded,
+      forwarded: props.forwarded,
+      connected: presented(),
+    }),
     {
       equals: (before, next) =>
+        before.parts[0] === next.parts[0] &&
+        before.parts[1] === next.parts[1] &&
         before.expanded === next.expanded &&
         before.forwarded === next.forwarded &&
-        before.parts.length === next.parts.length &&
-        before.parts.every((value, index) => value === next.parts[index]),
+        before.connected === next.connected,
     },
   );
-  createEffect(dependencies, ({ expanded, forwarded }) => {
-    previous?.(undefined);
-    previous = messageOverflowRef(expanded, forwarded);
-    previous(element);
-  });
-  onCleanup(() => previous?.(undefined));
+  const overflow = messageOverflowRef(measurementOptions, () => props.getNodes());
   return (
-    <div
-      class="chat-message-disclosure__content"
-      ref={(node) => {
-        element = node;
-      }}
-    >
+    <div class="chat-message-disclosure__content" ref={overflow}>
       {props.children}
     </div>
   );
@@ -187,39 +220,96 @@ type MarkdownContentProps = {
   content: MarkdownContentValue;
   media?: MarkdownMedia;
   incremental?: boolean;
+  onUpdate?: () => void;
 };
 
-/** Both transcript text and legacy slots share the same incremental DOM owner. */
+/** Transcript text and inline media share the same incremental DOM owner. */
 export function MarkdownContent(props: MarkdownContentProps) {
+  // The markdown reconciler owns media containers outside Solid's DOM tree.
+  // Its callbacks mount media with this context; the reconciler retires each root.
   const solidOwner = getOwner();
+  const presented = useContext(ContentPresentation);
   const fragment = document.createDocumentFragment();
+  const roots = new Map<
+    HTMLElement,
+    MarkdownMediaRoot & { update: (media: MarkdownMedia) => void }
+  >();
   const markdown = createMarkdownRef(() => {
+    const connected = presented();
     const media = props.media;
     const renderer: MarkdownDomMedia | undefined = media && {
       prefix: media.prefix,
       render(index, container) {
         const item = media.items[index];
-        return item
-          ? runWithOwner(solidOwner, () => mountLitContent(media.render(item, index), container))
-          : undefined;
+        if (!item) {
+          return undefined;
+        }
+        const existing = roots.get(container);
+        if (existing) {
+          existing.update(media);
+          return existing;
+        }
+        const root = runWithOwner(solidOwner, () =>
+          createRoot((dispose) => {
+            const [current, update] = createSignal(media, { equals: false, ownedWrite: true });
+            const [active, setConnected] = createSignal(connected, { ownedWrite: true });
+            const Content = dynamic(() => current().render);
+            insert(
+              container,
+              <ContentPresentation value={active}>
+                <Content item={current().items[index]!} index={index} />
+              </ContentPresentation>,
+            );
+            return {
+              update,
+              setConnected,
+              dispose() {
+                roots.delete(container);
+                dispose();
+                container.replaceChildren();
+              },
+            };
+          }),
+        );
+        roots.set(container, root);
+        return root;
       },
     };
-    return { content: props.content, media: renderer, incremental: props.incremental };
+    return {
+      content: props.content,
+      media: renderer,
+      incremental: props.incremental,
+      connected,
+      onUpdate: props.onUpdate,
+    };
   });
   markdown(fragment);
   return Array.from(fragment.childNodes);
 }
 
 export function MarkdownText(
-  props: MarkdownContentProps & { direction?: "ltr" | "rtl" | "auto"; class?: string },
+  props: MarkdownContentProps & {
+    direction?: "ltr" | "rtl" | "auto";
+    class?: string;
+    elementRef?: (element: HTMLDivElement) => void;
+    fetchLinkFavicon?: LinkFaviconFetcher;
+  },
 ) {
+  let element!: HTMLDivElement;
+  const hydrate = createMemo(() => {
+    const fetcher = props.fetchLinkFavicon;
+    return fetcher ? () => hydrateLinkFavicons(element, fetcher) : undefined;
+  });
   return (
-    <div class={props.class ?? "chat-text"} dir={props.direction}>
-      <MarkdownContent
-        content={props.content}
-        media={props.media}
-        incremental={props.incremental}
-      />
+    <div
+      class={props.class ?? "chat-text"}
+      dir={props.direction}
+      ref={(node) => {
+        element = node;
+        props.elementRef?.(node);
+      }}
+    >
+      <MarkdownContent {...props} onUpdate={hydrate()} />
     </div>
   );
 }

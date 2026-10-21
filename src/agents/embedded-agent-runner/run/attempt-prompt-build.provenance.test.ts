@@ -1,22 +1,30 @@
+import assert from "node:assert/strict";
 // #143821: prompt-build hook context must carry the turn's typed input provenance so
 // plugins can distinguish inter-session deliveries from human messages.
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import * as decisionDiagnostics from "../../../decisions/diagnostics.js";
 import type { PluginHookBeforePromptBuildResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { PluginHookAgentContext } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  createSubagentRunRecord,
-  markPendingFinalDelivery,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../../subagents/registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../../subagents/registry/subagent-lifecycle-events.js";
 import {
   createLifecycleControllerFixture,
@@ -25,9 +33,11 @@ import {
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
@@ -52,6 +62,7 @@ vi.mock("../../subagents/registry/subagent-registry-terminal-effects.js", () => 
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   vi.restoreAllMocks();
   steeringMocks.lease.mockReset().mockResolvedValue(undefined);
 });
@@ -59,6 +70,7 @@ beforeEach(() => {
 afterEach(() => {
   announceTesting.setDepsForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 
 async function assembleWithCapturedHookCtx(
@@ -66,40 +78,33 @@ async function assembleWithCapturedHookCtx(
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
   promptPolicy: {
     hookResult?: PluginHookBeforePromptBuildResult;
-    applyPromptBuildToolsAllow?: Parameters<
-      typeof prepareEmbeddedAttemptPromptAssembly
-    >[0]["applyPromptBuildToolsAllow"];
-    prepareSystemPrompt?: Parameters<
-      typeof prepareEmbeddedAttemptPromptAssembly
-    >[0]["prepareSystemPrompt"];
+    applyPromptBuildToolsAllow?: PromptAssemblyInput["applyPromptBuildToolsAllow"];
+    prepareSystemPrompt?: PromptAssemblyInput["prepareSystemPrompt"];
     requiresToolAuthority?: true;
   } = {},
 ) {
-  const { session, sessionManager, modelRegistry } = await createTestSession();
-  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "provenance-hook-test");
+  const config = attemptOverrides?.config ?? {};
+  setRuntimeConfigSnapshot(config);
+  const { session, sessionManager } = await createTestSession({
+    customTools: [createStubTool("read")],
+  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "provenance-hook-test");
   onTestFinished(() => {
     admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
   });
-  const attempt: EmbeddedRunAttemptParams = {
+  const attempt: PromptAssemblyInput["attempt"] = {
     admittedRunContext: await admission.admit("embedded"),
-    authStorage: modelRegistry.authStorage,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry,
-    config: {},
+    config,
     model: testModel,
-    modelId: testModel.id,
     provider: testModel.provider,
-    thinkLevel: "off",
     prompt: "Handoff payload",
     transcriptPrompt: "Handoff payload",
     runId,
     sessionId: runId,
     sessionKey: `agent:main:${runId}`,
-    sessionFile: "",
     sessionPersistence: "detached",
     trigger: "user",
-    timeoutMs: 10_000,
     workspaceDir: "/tmp/provenance-hook-test",
     ...attemptOverrides,
   };
@@ -120,8 +125,7 @@ async function assembleWithCapturedHookCtx(
       },
     ],
   });
-  const setLeasedSteering =
-    vi.fn<Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["setLeasedSteering"]>();
+  const setLeasedSteering = vi.fn<PromptAssemblyInput["setLeasedSteering"]>();
   const setSystemPrompt = vi.fn<(prompt: string) => void>();
   const priorMessages = structuredClone(session.messages);
   const prompt = await prepareEmbeddedAttemptPromptAssembly({
@@ -136,6 +140,7 @@ async function assembleWithCapturedHookCtx(
     runtimeModel: testModel.id,
     systemPromptText: "Base system prompt",
     runAbortSignal: new AbortController().signal,
+    hasBaselineTools: () => session.getActiveToolNames().length > 0,
     applyPromptBuildToolsAllow: promptPolicy.applyPromptBuildToolsAllow ?? (() => []),
     prepareSystemPrompt: promptPolicy.prepareSystemPrompt,
     setActiveSessionSystemPrompt: setSystemPrompt,
@@ -146,7 +151,20 @@ async function assembleWithCapturedHookCtx(
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
+    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "bounded-plugin-system-context",
+      { contextTokenBudget: 32_000 },
+      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
+    );
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(finalPrompt).toContain("Base system prompt");
+    expect(finalPrompt.length).toBeLessThan(33_000);
+  });
+
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
+    const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
     const applyPolicy = vi.fn((names: string[] | undefined) => {
       order.push("policy");
@@ -172,6 +190,7 @@ describe("prompt-build hook context input provenance", () => {
       },
     );
     expect(order).toEqual(["policy", "prompt"]);
+    expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
@@ -183,22 +202,22 @@ describe("prompt-build hook context input provenance", () => {
     expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
   });
 
-  it.each([
-    { requiresToolAuthority: undefined, reason: "ineligible" },
-    { requiresToolAuthority: true, reason: "pending-action-context" },
-  ] as const)(
+  it.each([{ requiresToolAuthority: undefined }, { requiresToolAuthority: true }] as const)(
     "gates semantic prefilter admission for authority=$requiresToolAuthority",
-    async ({ requiresToolAuthority, reason }) => {
-      const { prompt } = await assembleWithCapturedHookCtx(
+    async ({ requiresToolAuthority }) => {
+      const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
+      const applyPolicy = vi.fn(() => []);
+      await assembleWithCapturedHookCtx(
         "hook-prefilter-admission",
         { supportsTurnScopedToolRestrictions: true },
-        { requiresToolAuthority, hookResult: { appendContext: "Answer warmly without tools." } },
+        {
+          requiresToolAuthority,
+          hookResult: { appendContext: "Answer warmly without tools." },
+          applyPromptBuildToolsAllow: applyPolicy,
+        },
       );
-      expect(prompt.decisionPrefilter).toMatchObject({
-        shouldPruneTools: false,
-        status: "skipped",
-        reason,
-      });
+      expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
+      expect(applyPolicy).toHaveBeenCalledExactlyOnceWith(undefined, false);
     },
   );
 
@@ -213,22 +232,21 @@ describe("prompt-build hook context input provenance", () => {
     const { captured } = await assembleWithCapturedHookCtx("provenance-hook-turn", {
       inputProvenance,
     });
-    expect(captured).toHaveLength(1);
-    expect(captured[0]).toMatchObject({ trigger: "user", inputProvenance });
+    expect(captured).toMatchObject([{ trigger: "user", inputProvenance }]);
   });
 });
 
 it("injects complete lifecycle results into requester prompts and acknowledges one whole item", async () => {
+  setRuntimeConfigSnapshot({});
   const requesterSessionKey = "agent:main:steering-requester";
   const answers = [`${"<result>".repeat(2_100)}required first tail`, "later child result"];
   const children: SubagentRunRecord[] = answers.map((_answer, index) =>
     createSubagentRunRecord({
       runId: `child-run-${index}`,
       childSessionKey: `agent:main:subagent:steering-${index}`,
+      childSessionIdentity: { sessionId: `child-session-${index}` },
       requesterSessionKey,
-      requesterDisplayKey: "main",
       task: "Return the complete findings",
-      cleanup: "keep",
       createdAt: 1_000 + index,
       expectsCompletionMessage: true,
       execution: {
@@ -254,9 +272,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     { runs },
   );
   const initial = children[0];
-  if (!initial) {
-    throw new Error("expected registered children");
-  }
+  assert.ok(initial, "expected registered children");
   const controller = createLifecycleControllerFixture(
     {
       entry: initial,
@@ -285,26 +301,25 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   });
   for (const [index, child] of children.entries()) {
     const answer = answers[index];
-    if (answer === undefined) {
-      throw new Error("expected a transcript answer for each child");
-    }
+    assert.ok(answer !== undefined, "expected a transcript answer for each child");
     await controller.completeSubagentRun({
       runId: child.runId,
       endedAt: 3_000 + index,
       outcome: { status: "ok" },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       triggerCleanup: false,
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: answer }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: answer }).terminalReply,
     });
     await mutateSubagentRuns(
       [child.runId],
       (rows) => {
         const current = rows.get(child.runId);
-        if (!current) {
-          throw new Error("expected completed child");
-        }
+        assert.ok(current, "expected completed child");
         const draft = structuredClone(current);
-        markPendingFinalDelivery({ entry: draft });
+        Object.assign(ensureDeliveryState(draft), {
+          status: "pending",
+          payload: loadPendingFinalDeliveryPayload(draft),
+        });
         return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
       },
       { runs },
@@ -316,10 +331,10 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     ]);
   }
   const [first, second] = children;
-  if (!first || !second) {
-    throw new Error("expected two completed children for requester queue delivery");
-  }
-  expect(runs.get(first.runId)?.completion?.resultText).toHaveLength(4_096);
+  assert.ok(first && second, "expected two completed children for requester queue delivery");
+  const boundedReply = runs.get(first.runId)?.completion?.terminalReply;
+  assert.ok(boundedReply?.disposition === "visible", "expected visible terminal evidence");
+  expect(boundedReply.text).toHaveLength(4_096);
   const storedCompletion = structuredClone(runs.get(first.runId)?.completion);
   announceTesting.setDepsForTest({
     findTranscriptEvent: async ({ sessionId }, match) => {
@@ -338,51 +353,36 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   });
   steeringMocks.lease.mockImplementation(api.leasePendingAgentSteeringItems);
 
-  const firstTurn = await assembleWithCapturedHookCtx("steering-first-turn", {
-    sessionKey: requesterSessionKey,
-  });
-
-  const escapedAnswer = `${"&lt;result&gt;".repeat(2_100)}required first tail`;
-  for (const prompt of [
-    firstTurn.prompt.effectivePrompt,
-    firstTurn.prompt.effectiveTranscriptPrompt,
-  ]) {
-    expect(prompt).toContain(escapedAnswer);
-    expect(prompt).not.toContain(answers[1]);
-    expect(prompt).not.toContain("stale result");
-    expect(prompt).not.toContain("unrelated later result");
-    expect(prompt).toContain("Handoff payload");
+  for (const [index, child] of children.entries()) {
+    const runId = index === 0 ? "steering-first-turn" : "steering-second-turn";
+    const turn = await assembleWithCapturedHookCtx(runId, { sessionKey: requesterSessionKey });
+    for (const prompt of [turn.prompt.effectivePrompt, turn.prompt.effectiveTranscriptPrompt]) {
+      if (index === 0) {
+        expect(prompt).toContain(`${"&lt;result&gt;".repeat(2_100)}required first tail`);
+        expect(prompt).toContain("Handoff payload");
+        expect(prompt).not.toContain(answers[1]);
+        expect(prompt).not.toContain("stale result");
+        expect(prompt).not.toContain("unrelated later result");
+      } else {
+        expect(prompt).toContain(answers[1]);
+        expect(prompt).not.toContain("required first tail");
+      }
+    }
+    expect(runs.get(first.runId)?.completion).toEqual(storedCompletion);
+    if (index === 0) {
+      expect(runs.get(second.runId)?.delivery?.status).toBe("pending");
+    }
+    const lease = turn.setLeasedSteering.mock.calls[0]?.[0];
+    expect(lease).toMatchObject({
+      runIds: [child.runId],
+      ...(index === 0 ? { leaseId: "steering-first-turn:agent-steering" } : {}),
+    });
+    assert.ok(lease, "expected requester steering lease");
+    expect(await api.ackPendingAgentSteeringItems(lease)).toBe(1);
+    expect(runs.get(child.runId)?.delivery?.status).toBe("delivered");
+    if (index === 0) {
+      expect(runs.get(second.runId)?.delivery?.status).toBe("pending");
+    }
+    expect(runs.get(first.runId)?.completion).toEqual(storedCompletion);
   }
-  expect(runs.get(first.runId)?.completion).toEqual(storedCompletion);
-  expect(runs.get(second.runId)?.delivery?.status).toBe("pending");
-  const firstLease = firstTurn.setLeasedSteering.mock.calls[0]?.[0];
-  expect(firstLease).toMatchObject({
-    runIds: [first.runId],
-    leaseId: "steering-first-turn:agent-steering",
-  });
-  if (!firstLease) {
-    throw new Error("expected first requester steering lease");
-  }
-  expect(await api.ackPendingAgentSteeringItems(firstLease)).toBe(1);
-  expect(runs.get(first.runId)?.delivery?.status).toBe("delivered");
-  expect(runs.get(second.runId)?.delivery?.status).toBe("pending");
-
-  const secondTurn = await assembleWithCapturedHookCtx("steering-second-turn", {
-    sessionKey: requesterSessionKey,
-  });
-  for (const prompt of [
-    secondTurn.prompt.effectivePrompt,
-    secondTurn.prompt.effectiveTranscriptPrompt,
-  ]) {
-    expect(prompt).toContain(answers[1]);
-    expect(prompt).not.toContain("required first tail");
-  }
-  const secondLease = secondTurn.setLeasedSteering.mock.calls[0]?.[0];
-  expect(secondLease).toMatchObject({ runIds: [second.runId] });
-  if (!secondLease) {
-    throw new Error("expected second requester steering lease");
-  }
-  expect(await api.ackPendingAgentSteeringItems(secondLease)).toBe(1);
-  expect(runs.get(second.runId)?.delivery?.status).toBe("delivered");
-  expect(runs.get(first.runId)?.completion).toEqual(storedCompletion);
 });

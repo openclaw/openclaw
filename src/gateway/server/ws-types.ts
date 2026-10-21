@@ -1,6 +1,7 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { PairedDeviceTokenIdentity } from "../../infra/device-pairing-core.types.js";
+import type { SystemPresence } from "../../infra/system-presence.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayAuthPolicy } from "../auth-policy.types.js";
@@ -9,7 +10,12 @@ import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.t
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
-import type { GatewayWsBrowserOrigin } from "./client-identity-types.js";
+import type {
+  GatewayAuthenticatedUserProfile,
+  GatewayWsBrowserOrigin,
+  RemoteControlUiIngressContext,
+  RemoteIngressPrincipalSnapshot,
+} from "./client-identity-types.js";
 import type { GatewayConnectionTransport } from "./connection-transport.js";
 
 export type { GatewayWsBrowserOrigin } from "./client-identity-types.js";
@@ -26,6 +32,11 @@ export type GatewayIngressWebSocket = WebSocket & {
   __openclawPreauthBudgetKey?: string;
 };
 
+export type PresenceDeliverySnapshot = {
+  version: number;
+  rows: Map<string, SystemPresence>;
+};
+
 export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: GatewayConnectionTransport;
   /** Physical WS liveness capability; absent on transports without ping/pong. */
@@ -34,6 +45,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   connId: string;
   /** Host-owned transport retirement notification; never accepted from wire params. */
   connectionSignal?: AbortSignal;
+  /** Service grant lifetime, independent of individual socket retirement. */
+  remoteControlUiIngress?: RemoteControlUiIngressContext;
   connectionKind?: GatewayWsConnectionKind;
   worker?: WorkerConnectionIdentity;
   isDeviceTokenAuth?: boolean;
@@ -43,24 +56,24 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   authPolicy?: GatewayAuthPolicy;
   presenceKey?: string;
+  /** Last projected roster handed to this transport; absent after a drop or reset request. */
+  presenceSnapshot?: PresenceDeliverySnapshot;
+  /** Connection-local override for clients that opt out of roster message bodies. */
+  includeSessionMessageBodies?: boolean;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
   /** Accepted interaction on this exact connection, never copied from another client. */
   connectionLastActivityAt?: number;
   authenticatedUserId?: string;
+  /** Configured Enterprise account verified by trusted-proxy handshake admission. */
+  authenticatedFactoryGitHubAccountId?: number;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
   authenticatedGitHubIdentitySync?: AuthenticatedGitHubIdentitySync;
   /** Lifecycle-prepared canonical recipient; never a scope or authorization grant. */
   preparedRecipientProfileId?: string;
   preparedSessionProfile?: UserProfileIdentity;
-  authenticatedUserProfile?: {
-    profileId: string;
-    displayName: string | null;
-    avatarRevision: string;
-    hasAvatar: boolean;
-    updatedAt: number;
-  };
+  authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
   clientIp?: string;
   /** Server-attested inputs for rechecking browser-origin policy after config publication. */
   browserOrigin?: GatewayWsBrowserOrigin;
@@ -79,6 +92,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     /** Server-attested role-policy actor; never accepted from WebSocket wire params. */
     operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Host-bound delegation, never accepted from a client or caller-supplied profile. */
+    remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
     /** Additional access captured at authenticated admission; independent of socket lifetime. */
     operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   };

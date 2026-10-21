@@ -1,4 +1,5 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
+import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
@@ -17,7 +18,6 @@ type FormatCliFailureOptions = {
   error: unknown;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  includeDoctorHint?: boolean;
 };
 
 type CliFailureDebugOptions = Pick<FormatCliFailureOptions, "argv" | "env">;
@@ -236,6 +236,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const commandPath = getRootOptionAwareCommandPath(argv, 2);
   const isUpdateCommand = commandPath[0] === "update";
   const isPluginUpdateCommand = commandPath[0] === "plugins" && commandPath[1] === "update";
+  const isNodeRunCommand = commandPath[0] === "node" && commandPath[1] === "run";
   // Update subprocesses use both marker values and retain captured reasons for recovery.
   const showUpdateDiagnostics = ["0", "1"].includes(env.OPENCLAW_UPDATE_IN_PROGRESS ?? "");
   if (
@@ -262,10 +263,19 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     return output.humanOutputWritten ? [] : output.humanOutput.trimEnd().split("\n");
   }
 
-  // Default output stays terse; causes and stack traces require explicit debug intent.
-  const stateBusy = collectNestedErrorCandidates(options.error).some(
+  const errors = collectNestedErrorCandidates(options.error);
+  const stateBusy = errors.some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
+  // Names survive worker transport without loading the state owner's runtime here.
+  const stateRefusal = errors.find(
+    (error): error is Error =>
+      error instanceof Error &&
+      (error.name === "StateDatabaseAccessError" ||
+        error.name === "StateDatabaseMaintenanceScopeError"),
+  );
+  const reason = (error: unknown) =>
+    `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
@@ -274,37 +284,27 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
           options.error.name === "OpenClawDatabaseSchemaPreflightError"))
     ) {
       // Doctor cannot repair these refusals; their producers own the required recovery steps.
-      const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
-      lines.push(
-        `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-      );
-      return lines;
+      return ["[openclaw] OpenClaw needs a manual recovery step.", reason(options.error)];
+    }
+    if (stateRefusal) {
+      return [`[openclaw] ${options.title}`, reason(stateRefusal)];
     }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand;
+      : isUpdateCommand ||
+        isPluginUpdateCommand ||
+        isNodeRunCommand ||
+        isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,
-      ...(showReason
-        ? [
-            `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-          ]
-        : []),
+      ...(showReason ? [reason(options.error)] : []),
       stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
-        : options.includeDoctorHint === false
-          ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
-          : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
+        : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
     ];
   }
-  const lines = [
-    `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatCliOperatorError(options.error, {
-      argv: options.argv,
-      env,
-    })}`,
-  ];
+  const lines = [`[openclaw] ${options.title}`, reason(options.error)];
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");
@@ -312,7 +312,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   }
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.
-  if (options.includeDoctorHint !== false && !stateBusy) {
+  if (!stateBusy) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);

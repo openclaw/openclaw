@@ -1,16 +1,20 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
+import { createScrollPosition } from "../lib/reactive/scroll-state.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { CopyButton } from "./solid/copy-button.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { PanelLoadingSkeleton } from "./solid/panel-loading-skeleton.tsx";
+import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 import styles from "./file-preview-modal.styles.css?inline";
+import kbdStyles from "./kbd.css?inline";
 import "./modal-dialog.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
@@ -41,35 +45,25 @@ type FilePreviewModalProps = {
 };
 type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
 
-function MarkdownContent(props: { contents: string; onClick: (event: MouseEvent) => void }) {
-  let article!: HTMLElement;
-  createEffect(
-    () =>
-      toSanitizedMarkdownHtml(stripFrontmatterBlock(props.contents), {
-        mode: "document",
-        remoteImages: false,
-        codeBlockChrome: "none",
-        fileLinks: false,
-      }),
-    (html) => {
-      // Only the Markdown owner's sanitized output enters this inert template.
-      const template = document.createElement("template");
-      template.innerHTML = html;
-      article.replaceChildren(template.content);
-    },
-  );
-  return (
-    <article
-      class="markdown"
-      ref={(element) => {
-        article = element;
-      }}
-      onClick={(event) => props.onClick(event)}
-    />
-  );
-}
-
 function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePreviewModal) {
+  let modal: HTMLElement | undefined;
+  let modalOpen = false;
+  type Target = "search" | "item" | "button" | "close" | "body";
+  const targets = new Map<HTMLElement, Target>();
+  const capture = (target: Target) => {
+    let node: HTMLElement;
+    onCleanup(() => targets.delete(node));
+    return (element: HTMLElement) => targets.set((node = element), target);
+  };
+  // Keyed rows can move without remounting; navigation follows their committed DOM order.
+  const ordered = (target: Target) =>
+    [...targets]
+      .filter(([, kind]) => kind === target)
+      .map(([node]) => node)
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
+  const activeItem = () => ordered("item").find((node) => node.classList.contains("is-active"));
   const filteredFiles = createMemo(() => {
     const query = props.layout === "files" ? props.query.trim().toLowerCase() : "";
     return query
@@ -81,6 +75,14 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   );
   const codeSource = createMemo(() => activeFile()?.contents ?? "");
   const codeChunks = createMemo(() => chunkFileContents(codeSource()));
+  const documentHtml = createMemo(() =>
+    toSanitizedMarkdownHtml(stripFrontmatterBlock(codeSource()), {
+      mode: "document",
+      remoteImages: false,
+      codeBlockChrome: "none",
+      fileLinks: false,
+    }),
+  );
   const listMode = createMemo(() =>
     props.loading && !props.error
       ? "loading"
@@ -110,10 +112,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     host.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail }));
   const close = () => emit("file-preview-close");
   const focusModal = () => {
+    if (!host.isConnected || !modal?.isConnected || !modalOpen) {
+      return;
+    }
     const target =
-      host.querySelector<HTMLElement>(".search") ??
-      host.querySelector<HTMLElement>(".item.is-active, .button") ??
-      host.querySelector<HTMLElement>(".close-button");
+      ordered("search")[0] ?? activeItem() ?? ordered("button")[0] ?? ordered("close")[0];
     target?.focus({ preventScroll: true });
   };
   const select = (path: string) => {
@@ -141,7 +144,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     event.stopPropagation();
     const files =
       props.layout === "document"
-        ? [...host.querySelectorAll<HTMLButtonElement>(".item")]
+        ? ordered("item")
             .filter((button) => !button.closest("details:not([open])"))
             .flatMap((button) =>
               filteredFiles().filter((file) => file.path === button.dataset.path),
@@ -180,40 +183,35 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
       select(file.path);
     }
   };
-  createEffect(
-    () =>
-      [
+  createScrollPosition(() => ({
+    // A sibling inventory read must not move the document being read.
+    reset: {
+      identity: [
         props.layout,
         props.query,
         activeFile()?.path,
         activeFile()?.contents,
         activeFile()?.message,
-      ] as const,
-    (next, previous) => {
-      // A sibling inventory read must not move the document being read.
-      if (!previous || next.some((value, index) => value !== previous[index])) {
-        const body = host.querySelector<HTMLElement>(".detail-body");
-        if (body) {
-          body.scrollTop = 0;
-          body.scrollLeft = 0;
-        }
-      }
+      ],
+      target: () => ordered("body")[0],
     },
-  );
-  createEffect(
-    () => [props.activePath, props.query, props.files] as const,
-    (next, previous) => {
-      host.querySelector<HTMLElement>(".item.is-active")?.scrollIntoView?.({ block: "nearest" });
-      if (!previous || (props.layout === "document" && next[0] !== previous[0])) {
-        focusModal();
-      }
+    reveal: {
+      identity: [props.activePath, props.query, props.files, props.layout],
+      target: activeItem,
     },
-  );
+  }));
+  createPendingFocus(() => ({ path: props.activePath, layout: props.layout }), {
+    requested: (next, previous) =>
+      !previous || (next.layout === "document" && next.path !== previous.path),
+    focus: focusModal,
+  });
   const item = (file: FilePreviewModalFile) => (
     <button
+      ref={capture("item")}
       class={["item", { "is-active": file.path === activeFile()?.path }]}
       data-path={file.path}
       aria-current={file.path === activeFile()?.path ? "true" : "false"}
+      autofocus={props.layout === "document" && file.path === activeFile()?.path}
       onPointerDown={preventItemPointerFocus}
       onMouseDown={preventItemPointerFocus}
       onClick={() => select(file.path)}
@@ -262,8 +260,17 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
   };
   return (
     <>
-      <style>{styles}</style>
+      <style>{`${styles}\nopenclaw-file-preview-modal { ${kbdStyles} }`}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...targets.keys()]
+            .filter((element) => element.isConnected && element.autofocus)
+            .toSorted((left, right) =>
+              left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+            )[0] ?? null
+        }
+        ref={(element) => (modal = element)}
+        prop:onOpenChange={(open: boolean) => (modalOpen = open)}
         label={label()}
         style={{
           "--openclaw-modal-width": "min(1100px, 92vw)",
@@ -280,7 +287,9 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                 <>
                   <span class="search-icon">⌕</span>
                   <input
+                    ref={capture("search")}
                     class="search"
+                    autofocus
                     placeholder={props.searchPlaceholder || t("filePreview.searchPlaceholder")}
                     value={props.query}
                     onInput={(event) =>
@@ -293,9 +302,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
             >
               <h1 class="heading">{label()}</h1>
               <button
+                ref={capture("close")}
                 class="close-button"
                 type="button"
                 aria-label={t("common.close")}
+                autofocus={props.loading || Boolean(props.error) || !activeFile()}
                 onClick={close}
               >
                 <Icon name="x" />
@@ -330,13 +341,17 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
             {detailMode() === "error" ? (
               <section class="detail empty">
                 <p role="alert">{props.error}</p>
-                <button class="button" onClick={() => emit("file-preview-retry")}>
+                <button
+                  ref={capture("button")}
+                  class="button"
+                  onClick={() => emit("file-preview-retry")}
+                >
                   {t("common.retry")}
                 </button>
               </section>
             ) : detailMode() === "loading" ? (
               <section class="detail">
-                <div class="detail-body">
+                <div ref={capture("body")} class="detail-body">
                   <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />
                 </div>
               </section>
@@ -376,11 +391,16 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
                         </div>
                       </div>
                     </Show>
-                    <div class="detail-body">
+                    <div ref={capture("body")} class="detail-body">
                       {contentMode() === "message" ? (
                         <p role="status">{file().message}</p>
                       ) : contentMode() === "markdown" ? (
-                        <MarkdownContent contents={file().contents} onClick={handleDocumentLink} />
+                        <SanitizedHtml
+                          tag="article"
+                          class="markdown"
+                          onClick={handleDocumentLink}
+                          html={documentHtml()}
+                        />
                       ) : (
                         <div class="code-content">
                           <For each={codeChunks()}>
@@ -403,10 +423,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
               <span class="foot-group">
                 <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
               </span>
-              <span class="spacer" />
-              <button class="button" onClick={close}>
-                {t("common.close")} <Kbd keys="esc" class="kbd" />
-              </button>
+              <openclaw-modal-actions>
+                <button ref={capture("button")} class="button" onClick={close}>
+                  {t("common.close")} <Kbd keys="esc" class="kbd" />
+                </button>
+              </openclaw-modal-actions>
             </footer>
           </Show>
         </div>

@@ -1,19 +1,15 @@
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
   ImageGenerationProvider,
-  ImageGenerationRequest,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   imageSourceUploadFileName,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -48,29 +44,6 @@ const MAI_IMAGE_MAX_RESULTS = 1;
 const MAI_IMAGE_OUTPUT_MIME = "image/png";
 const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
-type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
-
-function ensureMaiImageModel(
-  providerConfig: ModelProviderConfig | undefined,
-  model: string,
-): { modelName: string; hasMetadata: boolean } {
-  const configuredName = providerConfig?.models?.find((candidate) => candidate.id === model)?.name;
-  const modelName = configuredName || model;
-  const normalizedModel = normalizeOptionalLowercaseString(model);
-  const hasMetadata =
-    Boolean(configuredName) && normalizeOptionalLowercaseString(configuredName) !== normalizedModel;
-  if (
-    !isFoundryMaiImageModel(modelName) &&
-    (hasMetadata ||
-      (normalizedModel?.startsWith("mai-") && !normalizedModel.startsWith("mai-image-")))
-  ) {
-    throw new Error(
-      `Microsoft Foundry image generation supports MAI image deployments only, got "${modelName}".`,
-    );
-  }
-  return { modelName, hasMetadata };
-}
-
 function isMaiImageEditModel(modelName: string): boolean {
   const normalized = normalizeOptionalLowercaseString(modelName);
   return normalized === "mai-image-2.5" || normalized === "mai-image-2.5-flash";
@@ -96,117 +69,6 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
     );
   }
   return { width, height };
-}
-
-function resolveConfiguredEndpoint(params: {
-  providerConfig: ModelProviderConfig | undefined;
-  preparedBaseUrl?: string;
-}): string {
-  const endpoint =
-    extractFoundryEndpoint(params.preparedBaseUrl) ??
-    extractFoundryEndpoint(params.providerConfig?.baseUrl) ??
-    extractFoundryEndpoint(process.env.AZURE_OPENAI_ENDPOINT);
-  if (!endpoint) {
-    throw new Error("Microsoft Foundry endpoint missing for MAI image generation.");
-  }
-  return endpoint;
-}
-
-function buildRuntimeModel(params: {
-  providerConfig: ModelProviderConfig | undefined;
-  model: string;
-  modelName: string;
-}): ProviderRuntimeModel {
-  const api = isFoundryProviderApi(params.providerConfig?.api)
-    ? params.providerConfig.api
-    : DEFAULT_API;
-  return {
-    id: params.model,
-    name: params.modelName,
-    api,
-    provider: PROVIDER_ID,
-    baseUrl: params.providerConfig?.baseUrl ?? "",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32_000,
-    maxTokens: 0,
-  };
-}
-
-async function resolveMaiImageAuth(params: {
-  req: ImageGenerationRequest;
-  providerConfig: ModelProviderConfig | undefined;
-  model: string;
-  modelName: string;
-}): Promise<{ headers: Record<string, string>; baseUrl?: string }> {
-  const auth = await resolveApiKeyForProvider({
-    provider: PROVIDER_ID,
-    cfg: params.req.cfg,
-    agentDir: params.req.agentDir,
-    store: params.req.authStore,
-  });
-  if (!auth.apiKey) {
-    throw new Error("Microsoft Foundry API key missing");
-  }
-  if (auth.apiKey !== "__entra_id_dynamic__") {
-    return {
-      headers: {
-        "api-key": auth.apiKey,
-      },
-    };
-  }
-
-  const prepared = await prepareFoundryRuntimeAuth({
-    config: params.req.cfg,
-    agentDir: params.req.agentDir,
-    env: process.env,
-    provider: PROVIDER_ID,
-    modelId: params.model,
-    model: buildRuntimeModel({
-      providerConfig: params.providerConfig,
-      model: params.model,
-      modelName: params.modelName,
-    }),
-    apiKey: auth.apiKey,
-    authMode: auth.mode,
-    ...(auth.profileId ? { profileId: auth.profileId } : {}),
-  });
-  if (!prepared?.apiKey) {
-    throw new Error("Microsoft Foundry Entra ID token missing after runtime auth refresh.");
-  }
-  return {
-    headers: {
-      Authorization: `Bearer ${prepared.apiKey}`,
-    },
-    ...(prepared.baseUrl ? { baseUrl: prepared.baseUrl } : {}),
-  };
-}
-
-function buildEditFormData(params: {
-  req: ImageGenerationRequest;
-  image: ImageGenerationSourceImage;
-  model: string;
-}): FormData {
-  const mimeType = normalizeOptionalLowercaseString(params.image.mimeType) ?? MAI_IMAGE_OUTPUT_MIME;
-  if (!MAI_IMAGE_UPLOAD_MIME_TYPES.has(mimeType)) {
-    throw new Error("Microsoft Foundry MAI image edits require a PNG or JPEG input image.");
-  }
-  const form = new FormData();
-  form.set("model", params.model);
-  form.set("prompt", params.req.prompt);
-  form.set(
-    "image",
-    new Blob([bufferToBlobPart(params.image.buffer)], {
-      type: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
-    }),
-    imageSourceUploadFileName({
-      image: params.image,
-      index: 0,
-      fileNamePrefix: "microsoft-foundry-input",
-    }),
-  );
-  return form;
 }
 
 function parseMaiImageResponse(payload: unknown, label: string) {
@@ -250,7 +112,23 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       if (!model) {
         throw new Error("Microsoft Foundry MAI image generation requires a deployment name.");
       }
-      const { modelName, hasMetadata } = ensureMaiImageModel(providerConfig, model);
+      const configuredName = providerConfig?.models?.find(
+        (candidate) => candidate.id === model,
+      )?.name;
+      const modelName = configuredName || model;
+      const normalizedModel = normalizeOptionalLowercaseString(model);
+      const hasMetadata =
+        Boolean(configuredName) &&
+        normalizeOptionalLowercaseString(configuredName) !== normalizedModel;
+      if (
+        !isFoundryMaiImageModel(modelName) &&
+        (hasMetadata ||
+          (normalizedModel?.startsWith("mai-") && !normalizedModel.startsWith("mai-image-")))
+      ) {
+        throw new Error(
+          `Microsoft Foundry image generation supports MAI image deployments only, got "${modelName}".`,
+        );
+      }
       const inputImages = req.inputImages ?? [];
       const mode = inputImages.length > 0 ? "edits" : "generations";
       if (req.count !== undefined && req.count !== 1) {
@@ -272,11 +150,57 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         );
       }
 
-      const auth = await resolveMaiImageAuth({ req, providerConfig, model, modelName });
-      const endpoint = resolveConfiguredEndpoint({
-        providerConfig,
-        preparedBaseUrl: auth.baseUrl,
+      const credentials = await resolveApiKeyForProvider({
+        provider: PROVIDER_ID,
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        store: req.authStore,
       });
+      if (!credentials.apiKey) {
+        throw new Error("Microsoft Foundry API key missing");
+      }
+      let auth: { headers: Record<string, string>; baseUrl?: string };
+      if (credentials.apiKey !== "__entra_id_dynamic__") {
+        auth = { headers: { "api-key": credentials.apiKey } };
+      } else {
+        const api = isFoundryProviderApi(providerConfig?.api) ? providerConfig.api : DEFAULT_API;
+        const prepared = await prepareFoundryRuntimeAuth({
+          config: req.cfg,
+          agentDir: req.agentDir,
+          env: process.env,
+          provider: PROVIDER_ID,
+          modelId: model,
+          model: {
+            id: model,
+            name: modelName,
+            api,
+            provider: PROVIDER_ID,
+            baseUrl: providerConfig?.baseUrl ?? "",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 32_000,
+            maxTokens: 0,
+          },
+          apiKey: credentials.apiKey,
+          authMode: credentials.mode,
+          ...(credentials.profileId ? { profileId: credentials.profileId } : {}),
+        });
+        if (!prepared?.apiKey) {
+          throw new Error("Microsoft Foundry Entra ID token missing after runtime auth refresh.");
+        }
+        auth = {
+          headers: { Authorization: `Bearer ${prepared.apiKey}` },
+          ...(prepared.baseUrl ? { baseUrl: prepared.baseUrl } : {}),
+        };
+      }
+      const endpoint =
+        extractFoundryEndpoint(auth.baseUrl) ??
+        extractFoundryEndpoint(providerConfig?.baseUrl) ??
+        extractFoundryEndpoint(process.env.AZURE_OPENAI_ENDPOINT);
+      if (!endpoint) {
+        throw new Error("Microsoft Foundry endpoint missing for MAI image generation.");
+      }
       const resolvedBaseUrl = `${endpoint}${MAI_IMAGE_BASE_PATH}`;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
@@ -311,29 +235,40 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       };
+      let request: ReturnType<typeof postJsonRequest>;
       if (mode === "edits") {
         requestOptions.headers.delete("Content-Type");
+        const image = expectDefined(inputImages[0], "Microsoft Foundry edit source image");
+        const mimeType = normalizeOptionalLowercaseString(image.mimeType) ?? MAI_IMAGE_OUTPUT_MIME;
+        if (!MAI_IMAGE_UPLOAD_MIME_TYPES.has(mimeType)) {
+          throw new Error("Microsoft Foundry MAI image edits require a PNG or JPEG input image.");
+        }
+        const form = new FormData();
+        form.set("model", model);
+        form.set("prompt", req.prompt);
+        form.set(
+          "image",
+          new Blob([bufferToBlobPart(image.buffer)], {
+            type: mimeType === "image/jpg" ? "image/jpeg" : mimeType,
+          }),
+          imageSourceUploadFileName({
+            image,
+            index: 0,
+            fileNamePrefix: "microsoft-foundry-input",
+          }),
+        );
+        request = postMultipartRequest({ ...requestOptions, body: form });
       } else {
         requestOptions.headers.set("Content-Type", "application/json");
+        request = postJsonRequest({
+          ...requestOptions,
+          body: {
+            model,
+            prompt: req.prompt,
+            ...resolveMaiImageSize(req.size),
+          },
+        });
       }
-      const request =
-        mode === "edits"
-          ? postMultipartRequest({
-              ...requestOptions,
-              body: buildEditFormData({
-                req,
-                image: expectDefined(inputImages[0], "Microsoft Foundry edit source image"),
-                model,
-              }),
-            })
-          : postJsonRequest({
-              ...requestOptions,
-              body: {
-                model,
-                prompt: req.prompt,
-                ...resolveMaiImageSize(req.size),
-              },
-            });
 
       const { response, release } = await request;
       try {
@@ -344,7 +279,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MAI_IMAGE_MAX_RESULTS,
-              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+              resolveGeneratedImageDownloadMaxBytes(req.cfg),
             ),
           },
         );

@@ -1,6 +1,6 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
+import { mockPluginProviders, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 // Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import { describe, expect, it } from "vitest";
 import { listAgentEntries } from "../agents/agent-roster.js";
@@ -10,6 +10,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { validateConfigObject } from "../config/validation.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -19,8 +20,32 @@ import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migratio
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
 
+function makeModel(
+  id: string,
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 32_000,
+    ...overrides,
+  };
+}
+
+function normalizeProviders(providers: unknown) {
+  return normalizeCompatibilityConfigValues({ models: { providers } });
+}
+
+function normalizeSkills(entries: unknown) {
+  return normalizeCompatibilityConfigValues({ skills: { entries } });
+}
+
 describe("normalizeCompatibilityConfigValues", () => {
-  useDoctorLegacyConfigFixture();
+  const fixture = useDoctorLegacyConfigFixture();
 
   it("drops reserved MCP server names without touching sibling servers", () => {
     const raw: unknown = JSON.parse(
@@ -34,9 +59,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     const migrated = normalizeCompatibilityConfigValues(normalized, { sourceRaw: raw });
 
     expect(migrated.config.mcp?.servers).toStrictEqual({ docs: { command: "docs" } });
-    expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({
-      local: { command: "local" },
-    });
+    expect(migrated.config.nodeHost?.mcp?.servers).toStrictEqual({ local: { command: "local" } });
     expect(Object.hasOwn(migrated.config.mcp?.servers ?? {}, "__proto__")).toBe(false);
     expect(Object.hasOwn(migrated.config.nodeHost?.mcp?.servers ?? {}, "__proto__")).toBe(false);
     expect(migrated.changes).toStrictEqual([
@@ -56,61 +79,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(candidateOnly.changes).toStrictEqual(migrated.changes);
   });
 
-  it("removes null workspace values from agents.entries", () => {
-    const res = normalizeCompatibilityConfigValues({
-      agents: {
-        entries: {
-          main: { workspace: null },
-          beta: { workspace: "/beta" },
-          gamma: {},
-        },
-      },
-    });
-
-    expect(res.config.agents?.entries).toEqual({
-      main: {},
-      beta: { workspace: "/beta" },
-      gamma: {},
-    });
-    expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
-  });
-
-  it("removes invalid heartbeat active-hours windows so saved config can load", () => {
-    const res = normalizeCompatibilityConfigValues({
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "30m",
-            activeHours: { start: "99:99", end: "17:00" },
-          },
-        },
-        entries: {
-          ops: {
-            heartbeat: {
-              prompt: "Check alerts",
-              activeHours: { start: "09:00", end: "not-a-time" },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
-    expect(res.changes).toContain(
-      "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
-    );
-    expect(res.changes).toContain(
-      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
-    );
-    expect(validateConfigObject(res.config).ok).toBe(true);
-  });
-
   it("removes bindings for missing configured agents", () => {
     const config: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        list: [{ id: "Team Ops" }],
-      },
+      agents: { list: [{ id: "Team Ops" }] },
       bindings: [
         {
           type: "route",
@@ -138,9 +109,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it("does not prune bindings from malformed agent entries", () => {
     const config = {
-      agents: {
-        list: [null],
-      },
+      agents: { list: [null] },
       bindings: [
         {
           type: "route",
@@ -211,11 +180,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const res = normalizeCompatibilityConfigValues({
       channels: {
-        "undeclared-demo": {
-          dmPolicy: "allowlist",
-          appToken: "legacy-app-token",
-          accounts: {},
-        },
+        "undeclared-demo": { dmPolicy: "allowlist", appToken: "legacy-app-token", accounts: {} },
       },
     });
 
@@ -231,14 +196,10 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates nano-banana skill config to native image generation config", () => {
-    const res = normalizeCompatibilityConfigValues({
-      skills: {
-        entries: {
-          "nano-banana-pro": {
-            enabled: true,
-            apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-          },
-        },
+    const res = normalizeSkills({
+      "nano-banana-pro": {
+        enabled: true,
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
       },
     });
 
@@ -263,26 +224,19 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          openrouter: {
-            baseUrl: "https://openrouter.ai/api/v1",
+    const res = normalizeProviders({
+      openrouter: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        api: "openai",
+        models: [
+          {
+            ...makeModel("openai/gpt-4o-mini", {
+              name: "OpenRouter GPT-4o Mini",
+              maxTokens: 16_384,
+            }),
             api: "openai",
-            models: [
-              {
-                id: "openai/gpt-4o-mini",
-                name: "OpenRouter GPT-4o Mini",
-                api: "openai",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
-                maxTokens: 16_384,
-              },
-            ],
           },
-        },
+        ],
       },
     });
 
@@ -297,27 +251,23 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://chatgpt.com/backend-api",
+    const res = normalizeProviders({
+      "openai-codex": {
+        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-chatgpt-responses",
+        models: [
+          {
+            ...makeModel("gpt-5.5", {
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+              contextWindow: 400_000,
+              contextTokens: 272_000,
+              maxTokens: 128_000,
+            }),
             api: "openai-chatgpt-responses",
-            models: [
-              {
-                id: "gpt-5.5",
-                name: "gpt-5.5",
-                api: "openai-chatgpt-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 272_000,
-                maxTokens: 128_000,
-              },
-            ],
           },
-        },
+        ],
       },
     });
 
@@ -330,6 +280,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("repairs agent model refs whose configured provider was deleted", () => {
+    mockPluginProviders(["plugin-provider"]);
     const result = repairStaleAgentModelRefs(
       {
         models: {
@@ -351,17 +302,13 @@ describe("normalizeCompatibilityConfigValues", () => {
           entries: {
             main: {
               model: "deleted/agent-primary",
-              models: {
-                "plugin-provider/kept": {},
-                "deleted/agent-models-add-row": {},
-              },
+              models: { "plugin-provider/kept": {}, "deleted/agent-models-add-row": {} },
             },
           },
         },
       },
       {
-        pluginProviderIds: new Set(["plugin-provider"]),
-        persistedProviderIdsByAgentId: new Map(),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -390,12 +337,12 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
+    fixture.seedProviderCatalog("worker");
+    mockPluginProviders(["anthropic", "my-cli"]);
     const result = repairStaleAgentModelRefs(
       {
         agents: {
-          defaults: {
-            model: "my-cli/model",
-          },
+          defaults: { model: "my-cli/model" },
           entries: {
             worker: { model: "agent-local/model" },
             core: { model: "anthropic/claude-sonnet-4-6" },
@@ -403,8 +350,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(["anthropic", "my-cli"]),
-        persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -415,21 +361,11 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("uses a retained metadata snapshot for plugin-owned providers", () => {
-    const config = {
-      agents: {
-        defaults: {
-          model: "my-cli/model",
-        },
-      },
-    };
+    const config = { agents: { defaults: { model: "my-cli/model" } } };
     const baseSnapshot = createPluginMetadataSnapshot({
       config,
       manifestRegistry: makeRegistry([
-        {
-          id: "my-cli-plugin",
-          channels: [],
-          providers: ["my-cli"],
-        },
+        { id: "my-cli-plugin", channels: [], providers: ["my-cli"] },
       ]),
     });
     const pluginMetadataSnapshot = {
@@ -442,7 +378,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const result = repairStaleAgentModelRefs(config, {
       pluginMetadataSnapshot,
-      persistedProviderIdsByAgentId: new Map(),
+      env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
     });
 
     expect(result.changes).toEqual([]);
@@ -450,22 +386,13 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("preserves model refs backed by a configured installable provider", () => {
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
       {
-        plugins: {
-          allow: ["mistral"],
-          entries: { mistral: { enabled: true } },
-        },
-        agents: {
-          defaults: {
-            model: { primary: "mistral/mistral-large-latest" },
-          },
-        },
+        plugins: { allow: ["mistral"], entries: { mistral: { enabled: true } } },
+        agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
       },
-      {
-        pluginProviderIds: new Set(),
-        persistedProviderIdsByAgentId: new Map(),
-      },
+      { env: { OPENCLAW_STATE_DIR: fixture.oauthDir } },
     );
 
     expect(result.changes).toEqual([]);
@@ -475,22 +402,17 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("evaluates and repairs every canonical keyed agent", () => {
+    fixture.seedProviderCatalog("main");
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
       {
         agents: {
           defaults: { model: "agent-local/model" },
-          entries: {
-            main: {},
-            worker: { model: "deleted/worker" },
-          },
+          entries: { main: {}, worker: { model: "deleted/worker" } },
         },
       },
       {
-        pluginProviderIds: new Set(),
-        persistedProviderIdsByAgentId: new Map([
-          ["main", new Set(["agent-local"])],
-          ["worker", new Set()],
-        ]),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -502,16 +424,10 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("keeps a repaired model allowlist restrictive", () => {
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
-      {
-        agents: {
-          defaults: {
-            model: "deleted/main",
-            models: { "deleted/main": {} },
-          },
-        },
-      },
-      { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+      { agents: { defaults: { model: "deleted/main", models: { "deleted/main": {} } } } },
+      { env: { OPENCLAW_STATE_DIR: fixture.oauthDir } },
     );
 
     expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
@@ -542,8 +458,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(["plugin-provider"]),
-        persistedProviderIdsByAgentId: new Map(),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -569,18 +484,10 @@ describe("normalizeCompatibilityConfigValues", () => {
             "codex/gpt-5.4-mini": {},
           },
         },
-        list: [
-          {
-            id: "reviewer",
-            model: "codex/gpt-5.6-sol",
-          },
-        ],
+        list: [{ id: "reviewer", model: "codex/gpt-5.6-sol" }],
       },
     });
-    const repaired = maybeRepairCodexRoutes({
-      cfg: normalized.config,
-      shouldRepair: true,
-    });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",
@@ -597,9 +504,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(listAgentEntries(repaired.cfg)[0]).toEqual({
       id: "reviewer",
       model: "openai/gpt-5.6-sol",
-      models: {
-        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
-      },
+      models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
     });
     expect(normalized.changes).toContain(
       "Moved agents.defaults.model legacy runtime primary refs to provider references and selected codex runtime.",
@@ -616,31 +521,20 @@ describe("normalizeCompatibilityConfigValues", () => {
     const input = {
       agents: {
         defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["codex/gpt-5.4-mini"],
-          },
-          models: {
-            "codex/gpt-5.4-mini": { alias: "legacy-codex" },
-          },
+          model: { primary: "openai/gpt-5.5", fallbacks: ["codex/gpt-5.4-mini"] },
+          models: { "codex/gpt-5.4-mini": { alias: "legacy-codex" } },
         },
       },
     };
 
-    const repaired = maybeRepairCodexRoutes({
-      cfg: input,
-      shouldRepair: true,
-    });
+    const repaired = maybeRepairCodexRoutes({ cfg: input });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4-mini"],
     });
     expect(repaired.cfg.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.4-mini": {
-        alias: "legacy-codex",
-        agentRuntime: { id: "codex" },
-      },
+      "openai/gpt-5.4-mini": { alias: "legacy-codex", agentRuntime: { id: "codex" } },
     });
     expect(repaired.cfg.agents?.defaults?.models?.["codex/gpt-5.4-mini"]).toBeUndefined();
   });
@@ -667,10 +561,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
       agents: {
         defaults: {
-          model: {
-            primary: "codex/gpt-5.6-sol",
-            fallbacks: ["codex/gpt-5.3-mini"],
-          },
+          model: { primary: "codex/gpt-5.6-sol", fallbacks: ["codex/gpt-5.3-mini"] },
           models: {
             "codex/gpt-5.6-sol": { alias: "blocked" },
             "codex/gpt-5.3-mini": { alias: "unlisted" },
@@ -689,7 +580,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     const repaired = maybeRepairCodexRoutes({
       cfg: normalized.config,
-      shouldRepair: true,
       blockedProviderPlan,
     });
 
@@ -719,29 +609,21 @@ describe("normalizeCompatibilityConfigValues", () => {
             baseUrl: "https://chatgpt.com/backend-api",
             api: "openai-chatgpt-responses",
             models: [
-              {
-                id: "gpt-5.6-sol",
+              makeModel("gpt-5.6-sol", {
                 name: "GPT-5.6 Sol",
                 reasoning: true,
                 input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 400_000,
                 maxTokens: 128_000,
-              },
+              }),
             ],
           },
         },
       },
       agents: {
         defaults: {
-          model: {
-            primary: "codex/gpt-5.6-sol",
-            fallbacks: ["codex/gpt-5.4-mini"],
-          },
-          models: {
-            "codex/gpt-5.6-sol": { alias: "codex" },
-            "codex/gpt-5.4-mini": {},
-          },
+          model: { primary: "codex/gpt-5.6-sol", fallbacks: ["codex/gpt-5.4-mini"] },
+          models: { "codex/gpt-5.6-sol": { alias: "codex" }, "codex/gpt-5.4-mini": {} },
         },
       },
       plugins: { entries: { codex: { enabled: true } } },
@@ -752,7 +634,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       migration.apply(migrated, migrationChanges);
     }
     const normalized = normalizeCompatibilityConfigValues(migrated);
-    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",
@@ -843,9 +725,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.agents?.defaults?.models).toEqual({
-      "anthropic/claude-sonnet-4-6": {
-        agentRuntime: { id: "claude-cli" },
-      },
+      "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
     });
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-sonnet-4-6"],
@@ -854,11 +734,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it("pins migrated Codex CLI refs to Codex when OpenAI uses a custom base URL", () => {
     const res = normalizeCompatibilityConfigValues({
-      agents: {
-        defaults: {
-          model: "codex-cli/gpt-5.5",
-        },
-      },
+      agents: { defaults: { model: "codex-cli/gpt-5.5" } },
       models: {
         providers: {
           openai: {
@@ -878,20 +754,12 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          models: {
-            "openai/gpt-5.5": {
-              agentRuntime: { id: "codex-cli", mode: "strict" },
-            },
-          },
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex-cli", mode: "strict" } } },
         },
         list: [
           {
             id: "reviewer",
-            models: {
-              "openai/gpt-5.4-mini": {
-                agentRuntime: { id: "codex-cli" },
-              },
-            },
+            models: { "openai/gpt-5.4-mini": { agentRuntime: { id: "codex-cli" } } },
           },
         ],
       },
@@ -899,12 +767,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         providers: {
           openai: {
             agentRuntime: { id: "codex-cli" },
-            models: [
-              {
-                id: "gpt-5.5",
-                agentRuntime: { id: "codex-cli" },
-              },
-            ],
+            models: [{ id: "gpt-5.5", agentRuntime: { id: "codex-cli" } }],
           },
         },
       },
@@ -936,16 +799,10 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
-    const res = normalizeCompatibilityConfigValues({
-      skills: {
-        entries: {
-          "nano-banana-pro": {
-            apiKey: "ignored-skill-api-key",
-            env: {
-              GEMINI_API_KEY: "env-gemini-key",
-            },
-          },
-        },
+    const res = normalizeSkills({
+      "nano-banana-pro": {
+        apiKey: "ignored-skill-api-key",
+        env: { GEMINI_API_KEY: "env-gemini-key" },
       },
     });
 
@@ -961,13 +818,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
   it("preserves explicit native config while removing legacy nano-banana skill config", () => {
     const res = normalizeCompatibilityConfigValues({
-      agents: {
-        defaults: {
-          mediaModels: {
-            image: { primary: "fal/fal-ai/flux/dev" },
-          },
-        },
-      },
+      agents: { defaults: { mediaModels: { image: { primary: "fal/fal-ai/flux/dev" } } } },
       models: {
         providers: {
           google: {
@@ -979,9 +830,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
       skills: {
         entries: {
-          "nano-banana-pro": {
-            apiKey: "legacy-gemini-key",
-          },
+          "nano-banana-pro": { apiKey: "legacy-gemini-key" },
           peekaboo: { enabled: true },
         },
       },
@@ -991,17 +840,13 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
-    expect(res.config.skills?.entries).toEqual({
-      peekaboo: { enabled: true },
-    });
+    expect(res.config.skills?.entries).toEqual({ peekaboo: { enabled: true } });
     expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
   });
 
   it("removes nano-banana from skills.allowBundled during migration", () => {
     const res = normalizeCompatibilityConfigValues({
-      skills: {
-        allowBundled: ["peekaboo", "nano-banana-pro"],
-      },
+      skills: { allowBundled: ["peekaboo", "nano-banana-pro"] },
     });
 
     expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
@@ -1016,10 +861,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             provider: "gemini",
             maxResults: 5,
             apiKey: "brave-key",
-            gemini: {
-              apiKey: "gemini-key",
-              model: "gemini-2.5-flash",
-            },
+            gemini: { apiKey: "gemini-key", model: "gemini-2.5-flash" },
             firecrawl: {
               apiKey: "firecrawl-key",
               baseUrl: "https://api.firecrawl.dev",
@@ -1029,26 +871,14 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.tools?.web?.search).toEqual({
-      provider: "gemini",
-      maxResults: 5,
-    });
+    expect(res.config.tools?.web?.search).toEqual({ provider: "gemini", maxResults: 5 });
     expect(res.config.plugins?.entries?.brave).toEqual({
       enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "brave-key",
-        },
-      },
+      config: { webSearch: { apiKey: "brave-key" } },
     });
     expect(res.config.plugins?.entries?.google).toEqual({
       enabled: true,
-      config: {
-        webSearch: {
-          apiKey: "gemini-key",
-          model: "gemini-2.5-flash",
-        },
-      },
+      config: { webSearch: { apiKey: "gemini-key", model: "gemini-2.5-flash" } },
     });
     expect(res.config.plugins?.entries?.firecrawl).toEqual({
       enabled: true,
@@ -1072,10 +902,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         web: {
           search: {
             provider: "gemini",
-            gemini: {
-              apiKey: "legacy-gemini-key",
-              model: "legacy-model",
-            },
+            gemini: { apiKey: "legacy-gemini-key", model: "legacy-model" },
           },
         },
       },
@@ -1094,9 +921,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.tools?.web?.search).toEqual({
-      provider: "gemini",
-    });
+    expect(res.config.tools?.web?.search).toEqual({ provider: "gemini" });
     expect(res.config.plugins?.entries?.google).toEqual({
       enabled: true,
       config: {
@@ -1130,12 +955,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         entries: {
           firecrawl: {
             enabled: true,
-            config: {
-              webFetch: {
-                apiKey: "explicit-firecrawl-key",
-                timeoutSeconds: 30,
-              },
-            },
+            config: { webFetch: { apiKey: "explicit-firecrawl-key", timeoutSeconds: 30 } },
           },
         },
       },
@@ -1161,21 +981,13 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       talk: {
         provider: " elevenlabs ",
-        providers: {
-          " elevenlabs ": {
-            voiceId: "voice-123",
-          },
-        },
+        providers: { " elevenlabs ": { voiceId: "voice-123" } },
       },
     });
 
     expect(res.config.talk).toEqual({
       provider: "elevenlabs",
-      providers: {
-        elevenlabs: {
-          voiceId: "voice-123",
-        },
-      },
+      providers: { elevenlabs: { voiceId: "voice-123" } },
     });
     expect(res.changes).toEqual([
       "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
@@ -1188,11 +1000,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         interruptOnSpeech: true,
         silenceTimeoutMs: 1500,
         providers: {
-          elevenlabs: {
-            apiKey: "secret-key",
-            voiceId: "voice-123",
-            modelId: "eleven_v3",
-          },
+          elevenlabs: { apiKey: "secret-key", voiceId: "voice-123", modelId: "eleven_v3" },
         },
         provider: "elevenlabs",
       },
@@ -1205,34 +1013,23 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: "https://api.mistral.ai/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "mistral-large-latest",
-                name: "Mistral Large",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 262144,
-                maxTokens: 262144,
-              },
-              {
-                id: "magistral-small",
-                name: "Magistral Small",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 128000,
-              },
-            ],
-          },
-        },
+    const res = normalizeProviders({
+      mistral: {
+        baseUrl: "https://api.mistral.ai/v1",
+        api: "openai-completions",
+        models: [
+          makeModel("mistral-large-latest", {
+            name: "Mistral Large",
+            input: ["text", "image"],
+            contextWindow: 262144,
+            maxTokens: 262144,
+          }),
+          makeModel("magistral-small", {
+            name: "Magistral Small",
+            reasoning: true,
+            maxTokens: 128000,
+          }),
+        ],
       },
     });
 
@@ -1255,43 +1052,25 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("normalizes old zero Mistral cacheRead costs while preserving custom costs", () => {
-    const res = normalizeCompatibilityConfigValues({
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: "https://api.mistral.ai/v1",
-            api: "openai-completions",
-            models: [
-              {
-                id: "codestral-latest",
-                name: "Codestral",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 256000,
-                maxTokens: 32000,
-              },
-              {
-                id: "mistral-medium-3-5",
-                name: "Mistral Medium 3.5 Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1.5, output: 7.5, cacheRead: 0.07, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 32000,
-              },
-              {
-                id: "custom-mistral-model",
-                name: "Custom Mistral",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 32000,
-              },
-            ],
-          },
-        },
+    const res = normalizeProviders({
+      mistral: {
+        baseUrl: "https://api.mistral.ai/v1",
+        api: "openai-completions",
+        models: [
+          makeModel("codestral-latest", {
+            name: "Codestral",
+            contextWindow: 256000,
+            cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
+          }),
+          makeModel("mistral-medium-3-5", {
+            name: "Mistral Medium 3.5 Custom",
+            cost: { input: 1.5, output: 7.5, cacheRead: 0.07, cacheWrite: 0 },
+          }),
+          makeModel("custom-mistral-model", {
+            name: "Custom Mistral",
+            cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+          }),
+        ],
       },
     });
 

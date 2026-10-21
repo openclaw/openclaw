@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { tryResolveLegacyDataOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   acpSessionRowMatchesEntry,
@@ -78,7 +78,7 @@ export function legacyAcpSessionKeyCandidates(
 
 /** Legacy file imports inspect every supported prior key before deciding whether metadata is superseded. */
 export function selectAcpMigrationRowForStoreEntry(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionKey: string,
   agentId: string,
   cfg: OpenClawConfig,

@@ -1,9 +1,10 @@
-// Tests heartbeat event emission and listener cleanup.
+// Tests heartbeat event emission and Gateway callback cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitHeartbeatEvent,
+  emitLegacyHeartbeatCronOutcome,
   getLastHeartbeatEvent,
-  onHeartbeatEvent,
+  heartbeatNotifications,
   resetHeartbeatEventsForTest,
   resolveIndicatorType,
 } from "./heartbeat-events.js";
@@ -37,9 +38,53 @@ describe("heartbeat events", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    {
+      status: "ok" as const,
+      completionStatus: "succeeded" as const,
+      delivered: true,
+      expected: "sent",
+    },
+    {
+      status: "ok" as const,
+      completionStatus: "succeeded" as const,
+      delivered: false,
+      expected: "ok-empty",
+    },
+    {
+      status: "error" as const,
+      completionStatus: "failed" as const,
+      delivered: false,
+      expected: "failed",
+    },
+    {
+      status: "ok" as const,
+      completionStatus: "unknown" as const,
+      delivered: false,
+      expected: "skipped",
+    },
+  ])(
+    "projects receipt settlement into the existing $expected diagnostic",
+    ({ expected, ...outcome }) => {
+      emitLegacyHeartbeatCronOutcome({
+        jobId: "converted",
+        action: "finished",
+        ...outcome,
+        summary: "Synthetic automation result",
+        durationMs: 12,
+      });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: expected,
+        preview: "Synthetic automation result",
+        durationMs: 12,
+        silent: !outcome.delivered,
+      });
+    },
+  );
+
   it("adds a delivery-disabled message to target-none events without changing the reason", () => {
     const listener = vi.fn();
-    const unsubscribe = onHeartbeatEvent(listener);
+    heartbeatNotifications.onEvent = listener;
 
     emitHeartbeatEvent({ status: "skipped", reason: "target-none" });
 
@@ -52,7 +97,7 @@ describe("heartbeat events", () => {
     expect(getLastHeartbeatEvent()).toEqual(expected);
     expect(listener).toHaveBeenCalledWith(expected);
 
-    unsubscribe();
+    heartbeatNotifications.onEvent = () => {};
   });
 
   it("preserves an explicit message for target-none events", () => {
@@ -78,24 +123,22 @@ describe("heartbeat events", () => {
     });
   });
 
-  it("delivers events to listeners, isolates listener failures, and supports unsubscribe", () => {
+  it("delivers events to the Gateway callback and isolates its failures", () => {
     const seen: string[] = [];
-    const unsubscribeFirst = onHeartbeatEvent((evt) => {
-      seen.push(`first:${evt.status}`);
-    });
-    onHeartbeatEvent(() => {
+    heartbeatNotifications.onEvent = () => {
       throw new Error("boom");
-    });
-    const unsubscribeThird = onHeartbeatEvent((evt) => {
-      seen.push(`third:${evt.status}`);
-    });
+    };
+    expect(() => emitHeartbeatEvent({ status: "failed" })).not.toThrow();
+    expect(getLastHeartbeatEvent()?.status).toBe("failed");
 
+    heartbeatNotifications.onEvent = (evt) => {
+      seen.push(evt.status);
+    };
     emitHeartbeatEvent({ status: "ok-empty" });
-    unsubscribeFirst();
-    unsubscribeThird();
+    heartbeatNotifications.onEvent = () => {};
     emitHeartbeatEvent({ status: "failed" });
 
-    expect(seen).toEqual(["first:ok-empty", "third:ok-empty"]);
+    expect(seen).toEqual(["ok-empty"]);
   });
 
   it("shares heartbeat state across duplicate module instances", async () => {
@@ -105,9 +148,9 @@ describe("heartbeat events", () => {
     first.resetHeartbeatEventsForTest();
 
     const seen: string[] = [];
-    const stop = first.onHeartbeatEvent((evt) => {
+    first.heartbeatNotifications.onEvent = (evt) => {
       seen.push(evt.status);
-    });
+    };
 
     second.emitHeartbeatEvent({ status: "ok-token", preview: "pong" });
 
@@ -118,7 +161,6 @@ describe("heartbeat events", () => {
     });
     expect(seen).toEqual(["ok-token"]);
 
-    stop();
     first.resetHeartbeatEventsForTest();
   });
 });

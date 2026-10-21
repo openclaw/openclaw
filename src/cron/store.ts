@@ -1,9 +1,10 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-store.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -13,7 +14,7 @@ import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js
 import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { resolveCronJobsStorePath } from "./store/paths.js";
+import { resolveCronJobsStorePath, resolveCronJobsStorePathAsync } from "./store/paths.js";
 import {
   assertCronStoreCanPersist,
   readCronJobsFingerprint,
@@ -28,6 +29,7 @@ import type {
 } from "./store/save-worker.types.js";
 import {
   isCronRuntimeOnlySave,
+  loadCronStoreForChanges,
   prepareCronStoreChanges,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
@@ -39,7 +41,12 @@ import type {
 } from "./store/transaction-hooks.types.js";
 import type { LoadedCronStore } from "./store/types.js";
 import type { CronStoreFile } from "./types.js";
-export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
+export {
+  resolveCronJobsStorePath,
+  resolveCronJobsStorePathAsync,
+  resolveCronJobsStorePathFromConfig,
+  resolveCronJobsStorePathFromConfigAsync,
+} from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
 export type { LoadedCronStore } from "./store/types.js";
@@ -50,6 +57,7 @@ const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
 // Stale receipts must never equal a nonnegative publication fact, even after eviction.
 const STALE_CRON_STORE_REVISION = -1;
 const cronStoreRevisions = new Map<string, number>();
+const cronMutationListeners = new Map<string, Set<() => void>>();
 let nextCronStoreRevision = 0;
 
 /** Reads the process-local committed revision for one canonical SQLite partition. */
@@ -71,6 +79,37 @@ export function noteCronJobsStoreCommit(storeKey?: string): void {
   cronStoreRevisions.delete(storeKey);
   cronStoreRevisions.set(storeKey, ++nextCronStoreRevision);
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
+}
+
+/** Empty schedulers have no next tick, so explicit provisioning publishes to their lifecycle. */
+export function subscribeCronJobsStoreMutations(
+  storePath: string,
+  listener: () => void,
+): () => void {
+  const storeKey = cronStoreKey(storePath);
+  const listeners = cronMutationListeners.get(storeKey) ?? new Set<() => void>();
+  cronMutationListeners.set(storeKey, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      cronMutationListeners.delete(storeKey);
+    }
+  };
+}
+
+/** Provisioning publishes after the outer commit; runtime saves only invalidate revisions. */
+export function publishCronJobsStoreMutation(storePath: string, db?: EngineConnection): void {
+  const storeKey = cronStoreKey(storePath);
+  const publish = () => {
+    noteCronJobsStoreCommit(storeKey);
+    for (const listener of cronMutationListeners.get(storeKey) ?? []) {
+      listener();
+    }
+  };
+  if (!db || !deferSqlitePostCommitPublication(db, publish)) {
+    publish();
+  }
 }
 
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
@@ -106,7 +145,7 @@ export async function loadCronJobsStoreWithConfigJobs(
 }
 
 export function assertCronJobsStoreUnchanged(
-  db: DatabaseSync,
+  db: EngineConnection,
   storePath: string,
   expectedJobsFingerprint: string,
 ): undefined {
@@ -275,7 +314,15 @@ function saveCronJobsStoreChangesNative(
   return commitCronStoreNative(
     storeKey,
     ({ db }, admittedHooks) =>
-      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
+      saveCronStoreChangesInDatabase(
+        db,
+        storeKey,
+        storeKey,
+        prepared,
+        loadCronStoreForChanges(db, storeKey),
+        options,
+        admittedHooks,
+      ),
     transactionHooks,
     "cron.config-mutation",
   ).value;
@@ -356,9 +403,19 @@ export async function saveCronJobsStore(
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
-/** Resolves the public plugin-SDK cron store path. */
+/** @deprecated Await resolveCronStorePathAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCronStorePath(storePath?: string) {
+  warnPluginSdkDeprecation({
+    family: "cron-store-path",
+    method: "resolveCronStorePath",
+    replacement: "resolveCronStorePathAsync",
+  });
   return resolveCronJobsStorePath(storePath);
+}
+
+/** Resolves the public plugin-SDK cron partition through the shared-state worker. */
+export async function resolveCronStorePathAsync(storePath?: string): Promise<string> {
+  return resolveCronJobsStorePathAsync(storePath);
 }
 
 /** Plugin-SDK alias for loading the cron store. */

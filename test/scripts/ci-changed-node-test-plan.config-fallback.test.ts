@@ -19,10 +19,6 @@ import {
 } from "../../scripts/lib/extension-test-plan.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
-import {
-  buildVitestRunPlans,
-  resolveChangedTestTargetPlan,
-} from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { isSharedVitestExcludedPath } from "../vitest/vitest.pattern-file.ts";
@@ -32,14 +28,34 @@ import {
   materializeGatewayCallsitesFixture,
   fallbackGroups,
   selectedFiles,
-  expectCanonicalGroupedConcurrency,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
+const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 
-const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
+function mockNativeInventory(files: string[], ordinary: string) {
+  vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue([
+    ...files,
+    ordinary,
+  ]);
+  const resolveConfig = extensionTestPlan.resolveExtensionTestConfig;
+  vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
+    files.includes(target) ? workerConfig : resolveConfig(target),
+  );
+  vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
+  return vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+}
+
+function expectInventory(shards: ReturnType<typeof planExtensionTargets>, files: string[]) {
+  expect(
+    fallbackGroups(shards)
+      .flatMap((group) => group.includePatterns ?? [])
+      .toSorted(),
+  ).toEqual(files.toSorted());
+}
 
 function planExtensionTargets(files: string[]) {
   return packChangedExtensionConfigShards(
@@ -98,6 +114,7 @@ it.each([
           "extensions/qa-lab/src/gateway-child.test.ts",
           "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
           "extensions/qa-lab/src/providers/shared/auth-store.test.ts",
+          "extensions/qa-lab/src/suite-runtime-agent-session.test.ts",
         ],
         requiresDist: false,
       }),
@@ -144,7 +161,6 @@ describe("CI changed Node test plan", () => {
     "groups explicit runtime consumers for worker=$worker with $ordinaryFiles ordinary files",
     ({ worker, ordinaryFiles }) => {
       const codexConfig = "test/vitest/vitest.extension-codex.config.ts";
-      const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
       const config = worker ? workerConfig : codexConfig;
       // These consumers are registered under the app-server-support config.
       // Explicit-file prerequisite authority must survive a config migration.
@@ -161,314 +177,168 @@ describe("CI changed Node test plan", () => {
       ];
       const ordinarySibling = "extensions/codex/src/ordinary.test.ts";
       const inventory = worker ? [...files, ordinarySibling] : files;
-      try {
-        vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
-        vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
-          target.endsWith(".test.ts") && target !== ordinarySibling ? config : codexConfig,
+      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
+      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
+        target.endsWith(".test.ts") && target !== ordinarySibling ? config : codexConfig,
+      );
+      const jobs = planExtensionTargets(inventory);
+      const groups = fallbackGroups(jobs);
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        inventory.toSorted(),
+      );
+      const prepared = jobs.filter((job) => job.pretestBuildMode);
+      expect(prepared).toHaveLength(1);
+      expect(prepared[0]).toMatchObject({
+        configs: [config],
+        pretestBuildMode: "runtime",
+        planConcurrency: 1,
+      });
+      expect(prepared[0]?.includePatterns).toEqual(
+        (ordinaryFiles === 5 ? files : runtimeFiles).toSorted(),
+      );
+      const preparedFiles = ordinaryFiles === 5 ? files.length : runtimeFiles.length;
+      expect(prepared[0]?.predictedSeconds).toBe(
+        60 + Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
+      );
+      expect(prepared[0]?.predictedTestSeconds).toBe(
+        Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
+      );
+      for (const group of groups) {
+        expect(group.includePatterns!.length).toBeLessThanOrEqual(
+          worker ? 12 : CODEX_TEST_PROCESS_FILE_LIMIT,
         );
-        const jobs = planExtensionTargets(inventory);
-        const groups = fallbackGroups(jobs);
-        expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
-          inventory.toSorted(),
+      }
+      for (const job of jobs) {
+        expect(job.predictedTestSeconds).toBe(
+          job.predictedSeconds! - (job.pretestBuildMode ? 60 : 0),
         );
-        const prepared = jobs.filter((job) => job.pretestBuildMode);
-        expect(prepared).toHaveLength(1);
-        expect(prepared[0]).toMatchObject({
-          configs: [config],
-          pretestBuildMode: "runtime",
-          planConcurrency: 1,
-        });
-        expect(prepared[0]?.includePatterns).toEqual(
-          (ordinaryFiles === 5 ? files : runtimeFiles).toSorted(),
-        );
-        const preparedFiles = ordinaryFiles === 5 ? files.length : runtimeFiles.length;
-        expect(prepared[0]?.predictedSeconds).toBe(
-          60 + Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
-        );
-        expect(prepared[0]?.predictedTestSeconds).toBe(
-          Math.ceil(preparedFiles * (worker ? 17.31 : 2.49)),
-        );
-        for (const group of groups) {
-          expect(group.includePatterns!.length).toBeLessThanOrEqual(
-            worker ? 12 : CODEX_TEST_PROCESS_FILE_LIMIT,
-          );
+        const workerFiles = fallbackGroups([job])
+          .filter((group) => group.configs.includes(workerConfig))
+          .flatMap((group) => group.includePatterns ?? []);
+        expect(workerFiles.length).toBeLessThanOrEqual(20);
+        if (job.predictedSeconds! > 300 || job.pretestBuildMode) {
+          expect(fallbackGroups([job])).toHaveLength(1);
         }
-        for (const job of jobs) {
-          expect(job.predictedTestSeconds).toBe(
-            job.predictedSeconds! - (job.pretestBuildMode ? 60 : 0),
-          );
-          const workerFiles = fallbackGroups([job])
-            .filter((group) => group.configs.includes(workerConfig))
-            .flatMap((group) => group.includePatterns ?? []);
-          expect(workerFiles.length).toBeLessThanOrEqual(20);
-          if (job.predictedSeconds! > 300 || job.pretestBuildMode) {
-            expect(fallbackGroups([job])).toHaveLength(1);
-          }
-        }
-      } finally {
-        vi.restoreAllMocks();
       }
     },
   );
 
   it("packs measured native plugin envelopes without changing their one-file process lifetime", () => {
-    const config = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = workerConfig;
     const files = Array.from(
       { length: 18 },
       (_, index) => `extensions/telegram/src/native-fixture-${index}.test.ts`,
     );
-    expect(files).toHaveLength(18);
     const ordinary = "extensions/telegram/src/ordinary-fixture.test.ts";
     const inventory = [...files, ordinary];
-    try {
-      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
-      const resolveConfig = extensionTestPlan.resolveExtensionTestConfig;
-      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
-        files.includes(target) ? config : resolveConfig(target),
-      );
-      vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
-      const costs = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
-      const before = planExtensionTargets(inventory);
-      expect(before).toHaveLength(1);
-      const groups = fallbackGroups(before).filter((group) => group.configs.includes(config));
-      expect(groups).toHaveLength(2);
-      const runs = [1, 2].map((id) => ({
-        id,
-        createdAt: "2026-09-26T00:00:00Z",
-        completeInventory: false,
-        pullRequestMergeRef: true,
-        logs: [
-          {
-            kind: "compact" as const,
-            labels: ["blacksmith-8vcpu-ubuntu-2404"],
-            text: [
-              "2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
-              `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`,
-              ...groups.flatMap((group, index) => [
-                `2026-09-26T00:0${index * 4}:00Z [shard:${group.shard_name}] begin`,
-                `2026-09-26T00:0${index * 4}:01Z [shard:${group.shard_name}] [test] inner parallelism 2`,
-                `2026-09-26T00:0${index * 4 + 3}:12Z [shard:${group.shard_name}] end (exit 0)`,
-              ]),
-            ].join("\n"),
-          },
-        ],
-      }));
-      const measured = refitTestTimings(runs).timings.compactGroupSeconds.blacksmith;
-      expect(Object.values(measured)).toEqual([192, 192]);
-      costs.mockReturnValue(measured);
-      const after = planExtensionTargets(inventory);
-      expect(after).toHaveLength(2);
-      expect(
-        after.every(
-          (job) =>
-            job.predictedSeconds! <= 300 &&
-            job.planConcurrency === 1 &&
-            job.runner === "blacksmith-8vcpu-ubuntu-2404",
-        ),
-      ).toBe(true);
-      expect(
-        fallbackGroups(after)
-          .flatMap((group) => group.includePatterns ?? [])
-          .toSorted(),
-      ).toEqual(inventory.toSorted());
-      expect(
-        fallbackGroups(after)
-          .filter((group) => group.configs.includes(config))
-          .map((group) => group.includePatterns),
-      ).toEqual(groups.map((group) => group.includePatterns));
-      expect(extensionTestPlan.splitExtensionTestProcessTargets(config, files)).toEqual(
-        files.toSorted().map((file) => [file]),
-      );
-      // Exact measurements cannot price a different selection, config, or worker policy.
-      const selected = groups[0]!.includePatterns!;
-      expect(
-        extensionTestPlan.estimateExtensionTestCost(config, selected.length - 1, selected.slice(1)),
-      ).toBeLessThan(192);
-      expect(
-        extensionTestPlan.estimateExtensionTestCost(
-          "test/vitest/vitest.extension-telegram.config.ts",
-          selected.length,
-          selected,
-        ),
-      ).toBeLessThan(192);
-      const otherWorkerKey = extensionTestPlan.createExtensionTestTimingKey(config, selected, {
-        OPENCLAW_VITEST_MAX_WORKERS: "8",
-      })!;
-      costs.mockReturnValue({ [otherWorkerKey]: 500 });
-      expect(
-        extensionTestPlan.estimateExtensionTestCost(config, selected.length, selected),
-      ).toBeLessThan(192);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    const costs = mockNativeInventory(files, ordinary);
+    const before = planExtensionTargets(inventory);
+    expect(before).toHaveLength(1);
+    const groups = fallbackGroups(before).filter((group) => group.configs.includes(config));
+    expect(groups).toHaveLength(2);
+    const runs = [1, 2].map((id) => ({
+      id,
+      createdAt: "2026-09-26T00:00:00Z",
+      completeInventory: false,
+      pullRequestMergeRef: true,
+      logs: [
+        {
+          kind: "compact" as const,
+          labels: ["blacksmith-8vcpu-ubuntu-2404"],
+          text: [
+            "2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+            `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`,
+            ...groups.flatMap((group, index) => [
+              `2026-09-26T00:0${index * 4}:00Z [shard:${group.shard_name}] begin`,
+              `2026-09-26T00:0${index * 4}:01Z [shard:${group.shard_name}] [test] inner parallelism 2`,
+              `2026-09-26T00:0${index * 4 + 3}:12Z [shard:${group.shard_name}] end (exit 0)`,
+            ]),
+          ].join("\n"),
+        },
+      ],
+    }));
+    const measured = refitTestTimings(runs).timings.compactGroupSeconds.blacksmith;
+    expect(Object.values(measured)).toEqual([192, 192]);
+    costs.mockReturnValue(measured);
+    const after = planExtensionTargets(inventory);
+    expect(after).toHaveLength(2);
+    expect(
+      after.every(
+        (job) =>
+          job.predictedSeconds! <= 300 &&
+          job.planConcurrency === 1 &&
+          job.runner === "blacksmith-8vcpu-ubuntu-2404",
+      ),
+    ).toBe(true);
+    expectInventory(after, inventory);
+    expect(
+      fallbackGroups(after)
+        .filter((group) => group.configs.includes(config))
+        .map((group) => group.includePatterns),
+    ).toEqual(groups.map((group) => group.includePatterns));
+    expect(extensionTestPlan.splitExtensionTestProcessTargets(config, files)).toEqual(
+      files.toSorted().map((file) => [file]),
+    );
+    // Exact measurements cannot price a different selection, config, or worker policy.
+    const selected = groups[0]!.includePatterns!;
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(config, selected.length - 1, selected.slice(1)),
+    ).toBeLessThan(192);
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(
+        "test/vitest/vitest.extension-telegram.config.ts",
+        selected.length,
+        selected,
+      ),
+    ).toBeLessThan(192);
+    const otherWorkerKey = extensionTestPlan.createExtensionTestTimingKey(config, selected, {
+      OPENCLAW_VITEST_MAX_WORKERS: "8",
+    })!;
+    costs.mockReturnValue({ [otherWorkerKey]: 500 });
+    expect(
+      extensionTestPlan.estimateExtensionTestCost(config, selected.length, selected),
+    ).toBeLessThan(192);
   });
 
   it("fills native file budgets without subdividing exact measured envelopes", () => {
-    const config = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = workerConfig;
     const files = Array.from(
       { length: 36 },
       (_, index) => `extensions/codex/src/native-fixture-${String(index).padStart(2, "0")}.test.ts`,
     );
     const ordinary = "extensions/codex/src/ordinary-fixture.test.ts";
     const inventory = [...files, ordinary];
-    try {
-      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(inventory);
-      const resolveConfig = extensionTestPlan.resolveExtensionTestConfig;
-      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((target) =>
-        files.includes(target) ? config : resolveConfig(target),
-      );
-      vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
-      const costs = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
-      const create = () => planExtensionTargets(inventory);
-      const unmeasured = create();
-      expect(unmeasured).toHaveLength(2);
-      expect(
-        fallbackGroups(unmeasured)
-          .flatMap((group) => group.includePatterns ?? [])
-          .toSorted(),
-      ).toEqual(inventory.toSorted());
+    const costs = mockNativeInventory(files, ordinary);
+    const create = () => planExtensionTargets(inventory);
+    const unmeasured = create();
+    expect(unmeasured).toHaveLength(2);
+    expectInventory(unmeasured, inventory);
 
-      const measuredFiles = files.slice(0, 12);
-      const measuredKey = extensionTestPlan.createExtensionTestTimingKey(config, measuredFiles)!;
-      costs.mockReturnValue({ [measuredKey]: 300 });
-      const measured = create();
-      const measuredJob = expectDefined(
-        measured.find((job) =>
-          fallbackGroups([job]).some((group) => group.includePatterns?.includes(measuredFiles[0]!)),
-        ),
-        "complete measured native envelope",
-      );
-      expect(fallbackGroups([measuredJob])).toHaveLength(1);
-      expect(measuredJob.includePatterns).toEqual(measuredFiles);
-      expect(measuredJob.predictedSeconds).toBe(300);
-      expect(measured).toHaveLength(3);
-      expect(
-        fallbackGroups(measured)
-          .flatMap((group) => group.includePatterns ?? [])
-          .toSorted(),
-      ).toEqual(inventory.toSorted());
-      for (const job of [...unmeasured, ...measured]) {
-        expect(job.planConcurrency).toBe(1);
-        expect(job.predictedSeconds).toBeLessThanOrEqual(300);
-        expect(
-          fallbackGroups([job])
-            .filter((group) => group.configs.includes(config))
-            .flatMap((group) => group.includePatterns ?? []).length,
-        ).toBeLessThanOrEqual(20);
-      }
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  it.each([
-    { name: "helper alone", changedPaths: [githubActivityHelper] },
-    {
-      name: "helper trio",
-      changedPaths: [
-        githubActivityHelper,
-        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
-        "test/scripts/github-activity-helper.test.ts",
-      ],
-    },
-  ])(
-    "keeps hidden maintainer helper targets with canonical tooling metadata for $name",
-    ({ changedPaths }) => {
-      expect(resolveChangedTestTargetPlan(changedPaths, { broad: true })).toMatchObject({
-        mode: "targets",
-        targets: expect.arrayContaining(["test/scripts/github-activity-helper.test.ts"]),
-      });
-      const shards = createChangedNodeTestShards(changedPaths);
-      expect(shards).not.toBeNull();
-      expect(
-        fallbackGroups(shards ?? []).flatMap((group) => group.includePatterns ?? []),
-      ).toContain("test/scripts/github-activity-helper.test.ts");
-      expectCanonicalGroupedConcurrency(shards);
-    },
-  );
-
-  it.each([
-    {
-      changedPath: "extensions/codex/src/session-upstream-marker.ts",
-      target: "extensions/codex/src/session-upstream-marker.test.ts",
-      config: "test/vitest/vitest.extension-codex.config.ts",
-    },
-  ])("selects affected extension files for $changedPath", ({ changedPath, target, config }) => {
-    const shards = createChangedNodeTestShards([changedPath]);
-
-    expect(shards).not.toBeNull();
-    const groups = fallbackGroups(shards ?? []).filter((group) => group.configs.includes(config));
-    expect(groups.length).toBeGreaterThan(0);
-    expect(groups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
-    expect(groups.flatMap((group) => group.includePatterns ?? [])).toContain(target);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).length).toBeLessThan(
-      listExecutableExtensionFiles([changedPath.split("/").slice(0, 2).join("/")]).length,
+    const measuredFiles = files.slice(0, 12);
+    const measuredKey = extensionTestPlan.createExtensionTestTimingKey(config, measuredFiles)!;
+    costs.mockReturnValue({ [measuredKey]: 300 });
+    const measured = create();
+    const measuredJob = expectDefined(
+      measured.find((job) =>
+        fallbackGroups([job]).some((group) => group.includePatterns?.includes(measuredFiles[0]!)),
+      ),
+      "complete measured native envelope",
     );
-  });
-
-  it("serializes bounded Memory Core jobs for changed targets", () => {
-    const shards = createChangedNodeTestShards([
-      "extensions/memory-core/src/memory/mmr.ts",
-      "extensions/memory-core/src/memory/mmr.test.ts",
-    ]);
-    expect(shards).not.toBeNull();
-    const memoryShards =
-      shards?.filter((shard) =>
-        fallbackGroups([shard]).some((group) =>
-          group.includePatterns?.some((file) => file.startsWith("extensions/memory-core/")),
-        ),
-      ) ?? [];
-    expect(memoryShards.length).toBeGreaterThan(0);
-    for (const shard of memoryShards) {
-      expect(shard).toMatchObject({
-        planConcurrency: 1,
-        predictedSeconds: expect.any(Number),
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-      });
+    expect(fallbackGroups([measuredJob])).toHaveLength(1);
+    expect(measuredJob.includePatterns).toEqual(measuredFiles);
+    expect(measuredJob.predictedSeconds).toBe(300);
+    expect(measured).toHaveLength(3);
+    expectInventory(measured, inventory);
+    for (const job of [...unmeasured, ...measured]) {
+      expect(job.planConcurrency).toBe(1);
+      expect(job.predictedSeconds).toBeLessThanOrEqual(300);
       expect(
-        fallbackGroups([shard])
-          .filter((group) =>
-            group.configs.includes("test/vitest/vitest.extension-database-workers.config.ts"),
-          )
+        fallbackGroups([job])
+          .filter((group) => group.configs.includes(config))
           .flatMap((group) => group.includePatterns ?? []).length,
       ).toBeLessThanOrEqual(20);
     }
-    const groups = fallbackGroups(memoryShards).filter((group) =>
-      group.includePatterns?.some((file) => file.startsWith("extensions/memory-core/")),
-    );
-    expect(
-      groups.every(
-        (group) =>
-          group.configs.length === 1 &&
-          group.configs[0] === "test/vitest/vitest.extension-database-workers.config.ts",
-      ),
-    ).toBe(true);
-    const targets = groups
-      .flatMap((group) => group.includePatterns ?? [])
-      .filter((file) => file.startsWith("extensions/memory-core/"));
-    expect(targets).toContain("extensions/memory-core/src/memory/mmr.test.ts");
-    expect(targets.length).toBeLessThan(
-      listExecutableExtensionFiles(["extensions/memory-core"]).length,
-    );
   });
-
-  it.each(["src/agents/simple-completion-runtime.plugin-scope.test.ts"])(
-    "prepares runtime artifacts for changed fixture %s",
-    (target) => {
-      const shards = createChangedNodeTestShards([target]);
-      expect(shards).not.toBeNull();
-      const owners = shards?.filter((shard) => selectedFiles([shard]).includes(target));
-      expect(owners).toHaveLength(1);
-      const owner = expectDefined(owners?.[0], "runtime-prepared target owner");
-      expect(selectedFiles([owner])).toEqual([target]);
-      expect(owner).toMatchObject({
-        configs: [],
-        requiresDist: false,
-        pretestBuildMode: "runtime",
-      });
-    },
-  );
 
   it.each([13])("prepares generic E2E targets across %s files", (fileCount) => {
     const cwd = argvTempDirs.make("changed-e2e-preparation-");
@@ -496,77 +366,6 @@ describe("CI changed Node test plan", () => {
       expect(shard.targets!.length).toBeLessThanOrEqual(12);
       expect(shard.planConcurrency).toBeUndefined();
     }
-  });
-
-  it("retains delivery-cache coverage and private QA preparation", () => {
-    const target = "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts";
-    expect(resolveChangedTestTargetPlan([target]).targets).toEqual([
-      target,
-      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
-      "test/scripts/test-projects-build-admission.test.ts",
-    ]);
-    const shards = createChangedNodeTestShards([target]);
-    expect(shards).not.toBeNull();
-    const groups = fallbackGroups(shards ?? []);
-    expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual([
-      target,
-      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
-      "test/scripts/ci-node-test-plan.test.ts",
-    ]);
-    const qaOwners = shards?.filter((shard) =>
-      shard.groups?.some((group) => group.includePatterns?.includes(target)),
-    );
-    expect(qaOwners).toHaveLength(1);
-    expect(qaOwners?.[0]).toMatchObject({
-      pretestBuildMode: "private-qa",
-      planConcurrency: 1,
-    });
-    expect(groups.find((group) => group.includePatterns?.includes(target))).toMatchObject({
-      configs: ["test/vitest/vitest.infra.config.ts"],
-      pretestBuildMode: "private-qa",
-    });
-    // Each config in the pair keeps its complete, separate include inventory.
-    const paired = groups.filter((group) => group.shard_name === "core-tooling-isolated");
-    expect(paired).toHaveLength(1);
-    expect(paired[0]?.configs).toEqual([
-      "test/vitest/vitest.tooling-docker.config.ts",
-      "test/vitest/vitest.tooling-isolated.config.ts",
-    ]);
-    expect(paired[0]?.includePatterns).toBeUndefined();
-    expect(paired[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-    expect(shards?.find((job) => job.groups?.includes(paired[0]!))?.planConcurrency).toBe(1);
-    expect(
-      buildVitestRunPlans(["test/scripts/test-projects-build-admission.test.ts"])[0]?.config,
-    ).toBe("test/vitest/vitest.tooling-isolated.config.ts");
-    expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
-    expect(shards).toContainEqual(
-      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-    );
-    expect(buildVitestRunPlans([target])).toEqual([
-      expect.objectContaining({
-        config: "test/vitest/vitest.infra.config.ts",
-        includePatterns: [target],
-      }),
-    ]);
-  });
-
-  it("routes lifecycle edits to the prepared QA config without losing boundary coverage", () => {
-    const target = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
-    const shards = createChangedNodeTestShards([target]);
-    expect(shards).not.toBeNull();
-    const qaShards = shards?.filter((shard) => shard.pretestBuildMode === "private-qa") ?? [];
-    expect(qaShards).toHaveLength(1);
-    for (const shard of qaShards) {
-      expect(shard).toMatchObject({
-        configs: ["test/vitest/vitest.extension-qa.config.ts"],
-        includePatterns: [target],
-        pretestBuildMode: "private-qa",
-      });
-    }
-    expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
-      expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),
-    ]);
   });
 
   it("keeps unowned root sources and dependency hubs away from unrelated directory tests", () => {

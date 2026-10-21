@@ -11,14 +11,12 @@ import {
   cloneEnvWithPlatformSemantics,
   getRuntimeConfig,
   isSessionArchiveArtifactName,
-  isIncognitoOpenClawAgentSqlitePath,
   isUsageCountedSessionTranscriptFileName,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   parseUsageCountedSessionIdFromFileName,
-  readBoundIncognitoMemoryCorpus,
   readSessionTranscriptCorpusInWorker,
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
@@ -54,6 +52,7 @@ function sqliteContentRevision(params: {
   sessionId: string;
   sessionKey?: string;
   storePath: string;
+  readOnly: boolean;
 }): string | undefined {
   try {
     return readTranscriptContentRevisionSync(params);
@@ -109,9 +108,11 @@ function toArtifactCorpusEntry(
   };
 }
 
-function resolveSessionTranscriptCorpusScope(agentId: string): SessionTranscriptCorpusScope {
+function resolveSessionTranscriptCorpusScope(
+  agentId: string,
+  cfg: SessionTranscriptCorpusScope["cfg"],
+): SessionTranscriptCorpusScope {
   const normalizedAgentId = normalizeAgentId(agentId);
-  const cfg = getRuntimeConfig();
   const env = cloneEnvWithPlatformSemantics(process.env);
   const configuredStore = cfg.session?.store;
   const storePath = resolveStorePath(configuredStore, {
@@ -150,20 +151,44 @@ function projectSessionTranscriptCorpusEntries(
   const includeContentRevision = options.includeContentRevision !== false;
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const entryOwnersBySessionId = new Map<string, string>();
+  const instanceScope = {
+    agentId: normalizedAgentId,
+    env,
+    hydrateSkillPromptRefs: false,
+    projection: "list",
+    readConsistency: "latest",
+    storePath: databasePath,
+  } satisfies Parameters<typeof listSessionTranscriptInstances>[0];
   const retainedInstances = options.includeRetainedSqlite
-    ? listSessionTranscriptInstances(
-        {
-          agentId: normalizedAgentId,
-          env,
-          hydrateSkillPromptRefs: false,
-          projection: "list",
-          readConsistency: "latest",
-          storePath: databasePath,
-        },
-        {},
-        continuation,
-      )
+    ? listSessionTranscriptInstances(instanceScope, {}, continuation)
     : [];
+  const retainedInstanceIds = new Set(retainedInstances.map((instance) => instance.sessionId));
+  const activeSessionIdsToRead = [
+    ...new Set(
+      sessionEntries.flatMap(({ entry }) => {
+        const sessionId = entry.sessionId?.trim();
+        return sessionId && !retainedInstanceIds.has(sessionId) ? [sessionId] : [];
+      }),
+    ),
+  ];
+  const ownershipInstances = [
+    ...retainedInstances,
+    ...(activeSessionIdsToRead.length > 0
+      ? listSessionTranscriptInstances(
+          instanceScope,
+          { includeAllWindows: true, sessionIds: activeSessionIdsToRead },
+          continuation,
+        )
+      : []),
+  ];
+  // Current metadata can lose a captured owner, but cannot establish ownership of
+  // transcript bytes that predate provenance capture. Use each window's recorded facts.
+  const pluginOwnersBySessionId = new Map<string, string>();
+  for (const instance of ownershipInstances) {
+    if (instance.provenanceKnown && instance.entry.pluginOwnerId) {
+      pluginOwnersBySessionId.set(instance.sessionId, instance.entry.pluginOwnerId);
+    }
+  }
   const archivedIdentitiesByName = new Map(
     listSessionTranscriptArchivesReadOnly({
       agentId: normalizedAgentId,
@@ -186,6 +211,7 @@ function projectSessionTranscriptCorpusEntries(
   ): SessionTranscriptCorpusEntry => {
     const classification = classifySessionEntry(sessionKey, entry, cronGeneratedSessionKeys);
     const transcriptKey = artifactKind === "active-session" ? sessionKey.trim() : sessionKey;
+    const pluginOwnerId = pluginOwnersBySessionId.get(sessionId);
     const contentRevision = includeContentRevision
       ? sqliteContentRevision({
           agentId,
@@ -193,6 +219,7 @@ function projectSessionTranscriptCorpusEntries(
           sessionId,
           ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
           storePath: databasePath,
+          readOnly: options.readOnly === true,
         })
       : undefined;
     return {
@@ -205,6 +232,7 @@ function projectSessionTranscriptCorpusEntries(
       storePath,
       ...(updatedAtMs !== undefined ? { updatedAtMs } : {}),
       ...(transcriptKey ? { sessionKey: transcriptKey } : {}),
+      ...(pluginOwnerId ? { pluginOwnerId } : {}),
       ...(classification.generatedByDreamingNarrative
         ? { generatedByDreamingNarrative: true }
         : {}),
@@ -377,36 +405,10 @@ async function readSessionTranscriptCorpusArtifacts(
 export async function listSessionTranscriptCorpusEntriesForAgent(
   agentId: string,
   options: SessionTranscriptCorpusOptions = {},
-  source?: {
-    memoryCorpus(
-      scope: SessionTranscriptCorpusScope,
-      options: SessionTranscriptCorpusOptions,
-    ): Promise<SessionTranscriptCorpusEntry[]>;
-  },
 ): Promise<SessionTranscriptCorpusEntry[]> {
-  const scope = resolveSessionTranscriptCorpusScope(agentId);
-  const capturedOptions = { ...options };
-  if (source) {
-    return source.memoryCorpus(scope, capturedOptions);
-  }
-  const incognito = readBoundIncognitoMemoryCorpus(scope, capturedOptions);
-  if (incognito) {
-    return incognito;
-  }
+  const { config, ...capturedOptions } = options;
+  const scope = resolveSessionTranscriptCorpusScope(agentId, config ?? getRuntimeConfig());
   const prepareArtifacts = () => readSessionTranscriptCorpusArtifacts(scope, capturedOptions);
-  if (
-    isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
-      agentId: scope.normalizedAgentId,
-      env: scope.env,
-    })
-  ) {
-    return projectSessionTranscriptCorpusEntries(
-      scope,
-      capturedOptions,
-      await prepareArtifacts(),
-      readCorpusSessionEntries(scope, capturedOptions),
-    );
-  }
   return readSessionTranscriptCorpusInWorker(scope, capturedOptions, prepareArtifacts);
 }
 
@@ -418,15 +420,12 @@ export function readSessionTranscriptCorpusInventory(
   databasePath: string,
   continuation?: CanonicalSessionReaderContinuation,
 ): SessionTranscriptCorpusEntry[] {
+  const readOnlyOptions = { ...options, readOnly: true };
   return projectSessionTranscriptCorpusEntries(
     scope,
-    options,
+    readOnlyOptions,
     artifacts,
-    readCorpusSessionEntries(
-      { ...scope, storePath: databasePath },
-      { ...options, readOnly: true },
-      continuation,
-    ),
+    readCorpusSessionEntries({ ...scope, storePath: databasePath }, readOnlyOptions, continuation),
     databasePath,
     continuation,
   );

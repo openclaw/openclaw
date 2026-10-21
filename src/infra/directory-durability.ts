@@ -8,7 +8,7 @@ import {
   type PublishFileExclusiveFailurePhase,
   type PublishFileExclusiveResult,
 } from "@openclaw/fs-safe/durability";
-import { FsSafeError } from "./fs-safe.js";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 
 export {
   ensureDurableDirectory,
@@ -23,7 +23,6 @@ export {
   type DirectorySyncOutcome,
   type DirectoryReceipt,
   type ExactDirectoryReceipt,
-  type DurableDirectoryReceipt,
   type PinnedDirectory,
 } from "@openclaw/fs-safe/durability";
 

@@ -75,6 +75,17 @@ function findApprovalEvent(
   throw new Error(`Expected approval event ${JSON.stringify(fields)}`);
 }
 
+function expectHumanApprovalRoundtrip() {
+  expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+  ]);
+  expect(mockCallGatewayTool.mock.calls.map(([, options]) => options)).toEqual([
+    { timeoutMs: 130_000 },
+    { timeoutMs: 130_000 },
+  ]);
+}
+
 function mockApprovalDecision(id: string, decision: "allow-once" | "allow-always" | "deny") {
   mockCallGatewayTool
     .mockResolvedValueOnce({ id, status: "accepted" })
@@ -127,7 +138,7 @@ function createParams() {
     requestApproval: async (request) =>
       (await callGatewayTool(
         "plugin.approval.request",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         {
           pluginId: "codex",
           ...request,
@@ -139,7 +150,7 @@ function createParams() {
     waitForApproval: async (request) => {
       const result = (await callGatewayTool(
         "plugin.approval.waitDecision",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         { id: request.approvalId },
       )) as { id?: string } & Partial<
         NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
@@ -279,10 +290,7 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, { status: "denied", approvalId: "plugin:approval-auto-review" });
   });
 
@@ -304,10 +312,7 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "accept" });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     expect(gatewayRequestPayload()).toMatchObject({
       title: "Codex app-server network approval",
       description: "Network: https://example.test",
@@ -479,11 +484,8 @@ describe("Codex app-server approval bridge", () => {
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     });
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", decision: "allow-once" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", decision: "allow-once" });
+    mockApprovalDecision("plugin:approval-execve-1", "allow-once");
+    mockApprovalDecision("plugin:approval-execve-2", "allow-once");
 
     for (const [approvalId, command] of [
       ["execve-approval-1", "git status"],
@@ -633,10 +635,7 @@ describe("Codex app-server approval bridge", () => {
     );
     expect(result).toEqual({ permissions: {}, scope: "turn" });
     expect(mockInvokeNativeHookRelay).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
   });
 
   it("denies command approvals when OpenClaw tool policy rewrites params", async () => {
@@ -818,10 +817,7 @@ describe("Codex app-server approval bridge", () => {
     );
 
     expect(result).toEqual({ decision: "decline" });
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, {
       status: "unavailable",
       approvalId: "plugin:approval-stale",
@@ -896,10 +892,7 @@ describe("Codex app-server approval bridge", () => {
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, {
       status: "denied",
       approvalId: "plugin:future-approval",
@@ -937,10 +930,7 @@ describe("Codex app-server approval bridge", () => {
       { method: "item/permissions/requestApproval", autoApprove: true },
     );
     expect(result).toEqual({ permissions: expectedPermissions, scope: "turn" });
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_permission_approval" }),
     );

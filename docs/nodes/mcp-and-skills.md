@@ -41,7 +41,9 @@ Gateway:
 The headless node host starts these servers, lists their tools, and publishes
 the descriptors after connecting. Tool calls return to that node through
 `mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
-plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+plugin. OAuth and enterprise-managed MCP authorization are not supported by this
+node-hosted v1 path. Configure enterprise servers in `mcp.servers` on the Gateway
+and run `openclaw mcp login <server-name>` there.
 
 Current node hosts declare the built-in `mcp.tools.call.v1` command family during
 their initial pairing even when no MCP server is configured. A node paired on an
@@ -56,6 +58,10 @@ catalog. If an MCP transport closes or an SSE or stateful Streamable HTTP sessio
 expires, the node withdraws that server's stale tools and reconnects with
 bounded backoff. The failed call that detects an expired session is not replayed;
 a later call can use the replacement connection after its tools are republished.
+
+If a node warns that an MCP server's cleanup could not be confirmed, check that
+server process on the node. Other servers continue shutting down or reconnecting;
+the warning does not confirm that the affected server has stopped.
 
 Gateway operators can ignore all agent-visible tools published by paired nodes,
 including node-hosted MCP tools, with

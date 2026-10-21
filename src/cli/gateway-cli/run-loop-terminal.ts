@@ -1,10 +1,10 @@
+import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { sameManagedUpdateOwner, type GatewayRunSignalRequest } from "./run-loop-request.js";
-import type { createGatewayRestartRuntimePreparation } from "./run-loop-runtime-preparation.js";
 import type { createGatewayRunSignals } from "./run-loop-signals.js";
 import type { GatewayUpdateSuccessor } from "./update-successor.js";
 
@@ -20,7 +20,6 @@ export function createGatewayRunTerminal(params: {
   >;
   logger: Pick<SubsystemLogger, "info" | "error">;
   updateSuccessor: GatewayUpdateSuccessor;
-  restartRuntime: ReturnType<typeof createGatewayRestartRuntimePreparation>;
   getSignals: () => ReturnType<typeof createGatewayRunSignals>;
   getHost: () => HostLifecycle | undefined;
   getRequest: () => GatewayRunSignalRequest | null;
@@ -45,7 +44,6 @@ export function createGatewayRunTerminal(params: {
     runtime: eagerLifecycleRuntime,
     logger: gatewayLog,
     updateSuccessor,
-    restartRuntime,
     finishLoop,
     completeBoot,
     releaseLockIfHeld,
@@ -55,14 +53,14 @@ export function createGatewayRunTerminal(params: {
   } = params;
   const getManagedUpdateOwner = () => params.getRequest()?.restartIntent?.successorOwner;
   const finishLoopAfterSignals = async (code: number) => {
-    if (restartRuntime.pending) {
-      await restartRuntime.release();
-    }
     for (;;) {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
       }
-      await params.getSignals().pending;
+      await measureGatewayCloseStep(
+        "restart.close.terminal-signals",
+        () => params.getSignals().pending,
+      );
     }
     finishLoop(code);
   };
@@ -76,10 +74,9 @@ export function createGatewayRunTerminal(params: {
       return;
     }
     if (!params.isForcedExitStarted()) {
-      await params.getSignals().drain();
-    }
-    if (restartRuntime.pending) {
-      await restartRuntime.release();
+      await measureGatewayCloseStep("restart.close.terminal-signals", () =>
+        params.getSignals().drain(),
+      );
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
@@ -89,7 +86,10 @@ export function createGatewayRunTerminal(params: {
         if (params.isForcedExitStarted() || !params.getSignals().pending) {
           break;
         }
-        await params.getSignals().pending;
+        await measureGatewayCloseStep(
+          "restart.close.terminal-signals",
+          () => params.getSignals().pending,
+        );
       }
       if (hostStopOwner && params.getHost() !== hostStopOwner) {
         return;
@@ -117,7 +117,10 @@ export function createGatewayRunTerminal(params: {
         if (params.isForcedExitStarted() || !params.getSignals().pending) {
           break;
         }
-        await params.getSignals().pending;
+        await measureGatewayCloseStep(
+          "restart.close.terminal-signals",
+          () => params.getSignals().pending,
+        );
       }
       if (
         committed &&
@@ -167,7 +170,9 @@ export function createGatewayRunTerminal(params: {
     owner: HostLifecycle,
     shutdownFailure: GatewayShutdownFailure | undefined,
   ) => {
-    await updateSuccessor.waitForStopSettlement();
+    await measureGatewayCloseStep("restart.close.update-stop-settlement", () =>
+      updateSuccessor.waitForStopSettlement(),
+    );
     if (params.getHost() !== owner) {
       return;
     }
@@ -179,7 +184,9 @@ export function createGatewayRunTerminal(params: {
       }
       // This continuation belongs to the run loop, not to the closed kernel or
       // requesting lane. Native stop starts only after the existing joins.
-      const result = await owner.finishStop();
+      const result = await measureGatewayCloseStep("restart.close.hosted-stop", () =>
+        owner.finishStop(),
+      );
       if (result.outcome === "retired" || params.getHost() !== owner) {
         return;
       }

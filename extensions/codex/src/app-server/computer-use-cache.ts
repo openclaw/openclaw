@@ -1,4 +1,3 @@
-/** Shared Computer Use plugin cache reconciliation for isolated Codex homes. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -100,7 +99,7 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
     const physicalSourceRoot = await fs.realpath(sourcePluginRoot);
     await fs.cp(physicalSourceRoot, stagedPath, { recursive: true });
     if (ownedParent) {
-      await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+      assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
     }
     if (stat) {
       params.assertCurrent?.();
@@ -108,13 +107,13 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
       // the next startup instead of retaining a backup/rollback protocol.
       await fs.rm(physicalCachePath, { recursive: true, force: true });
       if (ownedParent) {
-        await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
+        assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
       }
     }
     params.assertCurrent?.();
     await fs.rename(stagedPath, physicalCachePath);
   } finally {
-    if (!ownedParent || (await directoryIdentityIsStable(ownedParent))) {
+    if (!ownedParent || directoryIdentityIsStable(ownedParent)) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
   }

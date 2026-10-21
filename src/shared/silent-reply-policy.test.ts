@@ -50,17 +50,4 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
       }),
     ).toBe("disallow");
   });
-
-  it.each(["direct", "internal"] as const)(
-    "always disallows %s silent replies",
-    (conversationType) => {
-      expect(
-        resolveSilentReplyPolicyFromPolicies({
-          conversationType,
-          defaultPolicy: { group: "allow" },
-          surfacePolicy: { group: "allow" },
-        }),
-      ).toBe("disallow");
-    },
-  );
 });

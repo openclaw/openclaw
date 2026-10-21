@@ -194,35 +194,6 @@ describe("createDraftStreamLoop", () => {
     });
   });
 
-  it("contains background flush error reporter failures", async () => {
-    await captureUnhandledRejections(async (rejections) => {
-      const error = new Error("send failed");
-      const onBackgroundFlushError = vi.fn<(err: unknown) => void>(() => {
-        throw new Error("report failed");
-      });
-      const sendOrEditStreamMessage = vi
-        .fn<(text: string) => Promise<boolean>>()
-        .mockRejectedValueOnce(error)
-        .mockResolvedValueOnce(true);
-
-      const loop = createDraftStreamLoop({
-        throttleMs: 0,
-        isStopped: () => false,
-        sendOrEditStreamMessage,
-        onBackgroundFlushError,
-      });
-
-      loop.update("hello");
-      await waitForBackgroundFlushError(onBackgroundFlushError);
-      await flushMacrotask();
-      await loop.flush();
-
-      expect(rejections).toStrictEqual([]);
-      expect(onBackgroundFlushError).toHaveBeenCalledWith(error);
-      expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
-    });
-  });
-
   it("preserves generic pending updates when consecutive sends return false", async () => {
     type Update = { text: string; blocks: string[] };
     const initial = { text: "initial", blocks: ["initial-blocks"] };

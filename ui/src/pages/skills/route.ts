@@ -1,5 +1,4 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -62,15 +61,9 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
     loader: (context: ApplicationContext, options) =>
       loadSkillsRouteData(context, options, surface),
     component: () =>
-      import("./skills-page.tsx").then(() => ({
+      import("./skills-page.tsx").then((module) => ({
         header: true,
-        render: (data: SkillsRouteData | undefined) =>
-          data
-            ? html`<openclaw-skills-page
-                .routeData=${data}
-                .surface=${surface}
-              ></openclaw-skills-page>`
-            : nothing,
+        renderSolid: module.createSkillsRenderer(surface),
       })),
   });
 }

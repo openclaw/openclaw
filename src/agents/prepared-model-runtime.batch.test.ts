@@ -7,12 +7,14 @@ import {
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { publishConfiguredModelRuntimeSnapshots } from "../gateway/server-startup-model-runtime.js";
 import * as cryptoDigest from "../infra/crypto-digest.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as inlineProviderModels from "./embedded-agent-runner/model.inline-provider.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
 import * as configuredModels from "./model-selection-shared.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
   getPreparedModelRuntimeSnapshot,
@@ -73,11 +75,7 @@ describe("prepared fleet batches", () => {
       });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(120_000);
-      const publication = refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        startup: true,
-        catalogMode: "static",
-      });
+      const publication = publishConfiguredModelRuntimeSnapshots({ cfg: config });
       const ready = expect(publication).resolves.toBeUndefined();
       // Attach before advancing timers so the expected pre-fix rejection is always observed.
       void ready.catch(() => undefined);
@@ -323,7 +321,9 @@ describe("prepared fleet batches", () => {
     });
     cancelled = true;
     markPreparedModelRuntimeSnapshotsStale("cancel before workspace preparation");
-    await expect(publication).rejects.toThrow("superseded");
+    await expect(publication).rejects.toBeInstanceOf(
+      PreparedModelRuntimePublicationSupersededError,
+    );
     expect(lateLoads).toBe(0);
   });
 

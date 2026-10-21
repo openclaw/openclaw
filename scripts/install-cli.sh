@@ -43,9 +43,11 @@ installer_error() {
   local msg="$1"
   emit_json error message "$msg"
   log "ERROR: $msg"
+  log "Support: https://community.openclaw.ai/"
 }
 installer_npm_version_error() {
   log "ERROR: unable to determine npm version; no package changes were made"
+  log "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
   fail "Could not publish the cloned checkout: ${1}. Inspect the destination for partial files, move it or choose another --git-dir, then retry."
@@ -148,6 +150,10 @@ FRESH_GIT_MIN_FREE_KIB=$((6 * 1024 * 1024))
 print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
   --json                              Emit NDJSON events (no human output)
   --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
@@ -297,7 +303,7 @@ preflight_fresh_git_disk_space() {
   local available_kib
   local available_gib
 
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     return 0
   fi
 
@@ -629,7 +635,7 @@ parse_node_release_version() {
   NODE_RELEASE_VERSION_CORE=""
   while [[ "$version" == [[:space:]]* ]]; do version="${version#?}"; done
   while [[ "$version" == *[[:space:]] ]]; do version="${version%?}"; done
-  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+  if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
     return 1
   fi
   major="${BASH_REMATCH[1]}"
@@ -640,6 +646,9 @@ parse_node_release_version() {
       return 1
     fi
   done
+  if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+    return 1
+  fi
 
   NODE_RELEASE_VERSION_CORE="${major}.${minor}.${patch}"
 }
@@ -651,7 +660,7 @@ node_release_version_is_supported() {
 
 # Download labels are plain numeric Node distribution versions. Installed
 # runtimes use node_release_version_is_supported, which accepts canonical
-# release labels with a leading v or build metadata.
+# release labels with a leading v, build metadata, or future-major prereleases.
 node_version_is_supported() {
   local version="${1#v}"
   local major minor patch
@@ -961,7 +970,7 @@ ensure_pnpm() {
   local repo_dir="${1:-$PWD}"
   local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
   spec="$(repo_pnpm_spec "$repo_dir" || true)"
-  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.9.0"
+  [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
   version="${spec#pnpm@}"
   version="${version%%+*}"
   pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -1103,8 +1112,7 @@ install_openclaw() {
   if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
     log "npm install openclaw@${resolved_requested} did not produce a usable package; retrying once"
     if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$npm_cmd" "${npm_install_args[@]}" || [[ ! -f "$installed_entry" || -e "$lifecycle_pending" || -e "$legacy_install_guard" ]]; then
-      emit_json error message "npm install did not produce a usable OpenClaw package"
-      log "ERROR: npm install did not produce a usable OpenClaw package"
+      installer_error "npm install did not produce a usable OpenClaw package"
       return 1
     fi
   fi
@@ -1134,7 +1142,7 @@ install_openclaw_from_git() {
   fi
 
   emit_json step name openclaw status start method git repo "$repo_url"
-  if [[ -d "$repo_dir/.git" ]]; then
+  if [[ -e "$repo_dir/.git" ]]; then
     log "Installing Openclaw from git checkout: ${repo_dir}"
   else
     log "Installing Openclaw from GitHub (${repo_url})..."
@@ -1144,15 +1152,9 @@ install_openclaw_from_git() {
   ensure_git
   emit_json step name git-tools status ok
 
-  if [[ -d "$repo_dir/.git" ]] &&
-    ! git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
-    fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
-  fi
+  validate_git_checkout "$repo_dir" || return 1
 
-  if [[ ! -d "$repo_dir/.git" ]]; then
-    if [[ -d "$repo_dir" && -n "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
-      fail "Git install dir exists but is not a git repo: ${repo_dir}"
-    fi
+  if [[ ! -e "$repo_dir/.git" ]]; then
     emit_json step name git-clone status start
     clone_git_checkout_transactionally "$repo_url" "$repo_dir" --filter=blob:none
     emit_json step name git-clone status ok
@@ -1362,6 +1364,7 @@ main() {
   fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  log "Support: https://community.openclaw.ai/"
 
   if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
     "${PREFIX}/bin/openclaw" onboard

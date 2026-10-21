@@ -1,5 +1,5 @@
 import photon from "@silvia-odwyer/photon-node";
-import type { Locator, Page } from "playwright";
+import type { ElementHandle, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 export async function waitForControlUiProofSurface(
@@ -54,19 +54,14 @@ export async function takeControlUiViewportScreenshot(
 }
 
 async function captureControlUiViewport(page: Page): Promise<Buffer> {
-  // CDP repaints the current viewport but does not settle semantic presentation.
-  // Keep capture independent of unrelated dashboard RPCs and descendant motion.
-  const session = await page.context().newCDPSession(page);
-  try {
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    return Buffer.from(result.data, "base64");
-  } finally {
-    await session.detach();
-  }
+  // Playwright retains its viewport emulation while capturing the full frame.
+  // Element crops stay outside the browser so recording geometry does not change.
+  return page.screenshot({
+    fullPage: false,
+    animations: "allow",
+    caret: "initial",
+    scale: "device",
+  });
 }
 
 export async function takeControlUiElementScreenshot(
@@ -104,6 +99,7 @@ export async function takeControlUiScreenshotFrame(
     page,
     options.animations === "disabled",
   );
+  const targetElements = new Map<Locator, ElementHandle>();
   try {
     await expect
       .poll(async () => {
@@ -120,7 +116,14 @@ export async function takeControlUiScreenshotFrame(
         ...(options.scrollTo ? [options.scrollTo] : []),
       ]),
     ];
+    const inspect = async () => ({
+      presentation: await inspectControlUiFrameTargets(targets, targetElements),
+      scroll: options.scrollTo
+        ? await inspectControlUiProofScroll(options.scrollTo, false)
+        : undefined,
+    });
     let previous: string | undefined;
+    let settled: Awaited<ReturnType<typeof inspect>> | undefined;
     let requestedScroll: string | null | undefined;
     await expect
       .poll(
@@ -137,33 +140,31 @@ export async function takeControlUiScreenshotFrame(
           await preparation.evaluate((state) => state.prepare());
           await waitForControlUiFrameLayout(targets);
           const images = await preparation.evaluate((state) => state.images());
-          const presentation = await inspectControlUiFrameTargets(targets);
-          const scroll = options.scrollTo
-            ? await inspectControlUiProofScroll(options.scrollTo, false)
-            : undefined;
+          const { presentation, scroll } = await inspect();
           const current = JSON.stringify({ images, presentation, scroll });
           const stable = current === previous;
           previous = current;
           // A recenter can expose another lazy image; repeat readiness, never captures.
-          return (
+          const ready =
             stable &&
             requestedScroll !== null &&
             scroll === requestedScroll &&
-            presentation.every((target) => target.visible) &&
-            images.every((image) => image.decoded)
+            presentation.every((target) => target.visible && target.sameTarget) &&
+            images.every((image) => image.decoded);
+          if (!ready) {
+            return false;
+          }
+          // A renderer can replace a target while its intersection is pending.
+          // Keep the final readiness read inside preparation, not after polling.
+          settled = await inspect();
+          return (
+            settled.presentation.every((target) => target.visible && target.sameTarget) &&
+            JSON.stringify(settled) === JSON.stringify({ presentation, scroll })
           );
         },
         { message: "Proof frame did not reach visible, settled targets" },
       )
       .toBe(true);
-    const settled = await inspectControlUiFrameTargets(targets);
-    expect(
-      settled.every((target) => target.visible),
-      "Proof content must remain visible",
-    ).toBe(true);
-    if (options.scrollTo) {
-      expect(await inspectControlUiProofScroll(options.scrollTo, false)).toBe(requestedScroll);
-    }
     if (options.animationFrameBeforeCapture) {
       await page.evaluate(
         () =>
@@ -173,13 +174,9 @@ export async function takeControlUiScreenshotFrame(
       );
     }
     const frame = await captureControlUiFrame(page, options.elements ?? [], options);
-    expect(
-      await inspectControlUiFrameTargets(targets),
-      "Proof content moved or disappeared during frame capture",
-    ).toEqual(settled);
-    if (options.scrollTo) {
-      expect(await inspectControlUiProofScroll(options.scrollTo, false)).toBe(requestedScroll);
-    }
+    expect(await inspect(), "Proof content moved or disappeared during frame capture").toEqual(
+      settled,
+    );
     return frame;
   } finally {
     try {
@@ -187,38 +184,64 @@ export async function takeControlUiScreenshotFrame(
         await preparation.evaluate((state) => state.restore());
       }
     } finally {
-      await preparation.dispose();
+      await Promise.all([
+        preparation.dispose(),
+        ...[...targetElements.values()].map((element) => element.dispose()),
+      ]);
     }
   }
 }
 
-async function inspectControlUiFrameTargets(targets: readonly Locator[]) {
+async function inspectControlUiFrameTargets(
+  targets: readonly Locator[],
+  targetElements: Map<Locator, ElementHandle>,
+) {
   return Promise.all(
     targets.map(async (target) => {
-      const intersects = await target.evaluate(
-        (element) =>
-          new Promise<boolean>((resolve) => {
+      const matches = await target.elementHandles();
+      if (matches.length > 1) {
+        await Promise.all(matches.map((element) => element.dispose()));
+        throw new Error("Proof target must resolve to one element");
+      }
+      const element = matches[0];
+      if (!element) {
+        return { bounds: null, visible: false, sameTarget: false };
+      }
+      const previous = targetElements.get(target);
+      targetElements.set(target, element);
+      try {
+        // Retain one DOM identity across the asynchronous intersection delivery
+        // and Playwright's frame-relative bounds read; never re-resolve a locator.
+        const presentation = await element.evaluate((node, previousNode) => {
+          if (!(node instanceof Element)) {
+            throw new Error("Proof target must be an element");
+          }
+          return new Promise<{ sameTarget: boolean; visible: boolean }>((resolve) => {
             const observer = new IntersectionObserver(([entry]) => {
               observer.disconnect();
-              resolve(
-                Boolean(
-                  entry && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0,
+              resolve({
+                sameTarget: !previousNode || node === previousNode,
+                visible: Boolean(
+                  node.isConnected &&
+                  entry &&
+                  entry.intersectionRect.width > 0 &&
+                  entry.intersectionRect.height > 0 &&
+                  node.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
                 ),
-              );
+              });
             });
-            observer.observe(element);
-          }),
-      );
-      const bounds = await target.boundingBox();
-      const visible =
-        intersects &&
-        bounds !== null &&
-        bounds.width > 0 &&
-        bounds.height > 0 &&
-        (await target.evaluate((element) =>
-          element.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
-        ));
-      return { bounds, visible };
+            observer.observe(node);
+          });
+        }, previous ?? null);
+        const bounds = await element.boundingBox();
+        return {
+          sameTarget: presentation.sameTarget,
+          bounds,
+          visible: presentation.visible && bounds !== null && bounds.width > 0 && bounds.height > 0,
+        };
+      } finally {
+        await previous?.dispose();
+      }
     }),
   );
 }
@@ -367,78 +390,75 @@ async function createControlUiFramePreparation(page: Page, disableAnimations: bo
 }
 
 async function inspectControlUiProofScroll(target: Locator, shouldCenter: boolean) {
-  return target.evaluate((element, center) => {
-    if (!element.isConnected) {
-      return null;
-    }
-    if (center) {
-      // Record achieved centering in the same task: a later reset must not become readiness.
-      element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
-    }
-    const geometry: number[][] = [];
-    for (let owner: Element | null = element; owner;) {
-      const rect = owner.getBoundingClientRect();
-      geometry.push([rect.x, rect.y, rect.width, rect.height, owner.scrollLeft, owner.scrollTop]);
-      const root = owner.getRootNode();
-      owner = owner.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
-    }
-    return JSON.stringify(geometry);
-  }, shouldCenter);
+  return (
+    await target.evaluate(
+      inspectProofGeometry,
+      shouldCenter ? ("center" as const) : ("read" as const),
+    )
+  ).scroll;
 }
 
 async function waitForControlUiFrameLayout(targets: readonly Locator[]): Promise<void> {
   await expect
-    .poll(async () => {
-      const ready = await Promise.all(
-        targets.map((target) =>
-          target.evaluate(async (element) => {
-            let previous: Array<[Element, ...number[]]> = [];
-            let stableFrames = 0;
-            for (let frame = 0; frame < 60; frame += 1) {
-              await new Promise<void>((resolve) => {
-                // Layout delivery continues when a fixture pauses its application clock.
-                const observer = new IntersectionObserver(() => {
-                  observer.disconnect();
-                  resolve();
-                });
-                observer.observe(element);
-              });
-              if (!element.isConnected) {
-                return false;
-              }
-              const geometry: typeof previous = [];
-              for (let owner: Element | null = element; owner;) {
-                const rect = owner.getBoundingClientRect();
-                geometry.push([
-                  owner,
-                  rect.x,
-                  rect.y,
-                  rect.width,
-                  rect.height,
-                  owner.scrollLeft,
-                  owner.scrollTop,
-                ]);
-                const root = owner.getRootNode();
-                owner = owner.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
-              }
-              const unchanged =
-                geometry.length === previous.length &&
-                geometry.every((row, index) =>
-                  row.every((value, column) => value === previous[index]![column]),
-                );
-              stableFrames = unchanged ? stableFrames + 1 : 0;
-              if (stableFrames >= 3) {
-                return true;
-              }
-              previous = geometry;
-            }
-            throw new Error("Proof layout did not settle within 60 layout updates");
-          }),
-        ),
-      );
-      return ready.every(Boolean);
-    })
+    .poll(async () =>
+      (
+        await Promise.all(
+          targets.map((target) => target.evaluate(inspectProofGeometry, "settle" as const)),
+        )
+      ).every((result) => result.settled),
+    )
     .toBe(true);
+}
+
+// Serialized by Playwright: keep the shared geometry reader inside this function.
+async function inspectProofGeometry(element: Element, mode: "read" | "center" | "settle") {
+  const geometry = () => {
+    const rows: Array<[Element, ...number[]]> = [];
+    for (let owner: Element | null = element; owner;) {
+      const { x, y, width, height } = owner.getBoundingClientRect();
+      rows.push([owner, x, y, width, height, owner.scrollLeft, owner.scrollTop]);
+      const root = owner.getRootNode();
+      owner = owner.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return rows;
+  };
+  if (mode !== "settle") {
+    if (!element.isConnected) {
+      return { scroll: null, settled: false };
+    }
+    // Record achieved centering in this task, not a later reset.
+    if (mode === "center") {
+      element.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+    }
+    return { scroll: JSON.stringify(geometry().map(([, ...values]) => values)), settled: false };
+  }
+  let previous: ReturnType<typeof geometry> = [];
+  let stableFrames = 0;
+  for (let frame = 0; frame < 60; frame += 1) {
+    await new Promise<void>((resolve) => {
+      // Intersection delivery continues when fixtures pause the application clock.
+      const observer = new IntersectionObserver(() => {
+        observer.disconnect();
+        resolve();
+      });
+      observer.observe(element);
+    });
+    if (!element.isConnected) {
+      return { scroll: null, settled: false };
+    }
+    const current = geometry();
+    const unchanged =
+      current.length === previous.length &&
+      current.every((row, index) =>
+        row.every((value, column) => value === previous[index]![column]),
+      );
+    stableFrames = unchanged ? stableFrames + 1 : 0;
+    if (stableFrames >= 3) {
+      return { scroll: null, settled: true };
+    }
+    previous = current;
+  }
+  throw new Error("Proof layout did not settle within 60 layout updates");
 }
 
 async function captureControlUiFrame(
@@ -451,22 +471,17 @@ async function captureControlUiFrame(
     throw new Error("Proof capture requires a viewport");
   }
   if (options.fullPage) {
-    const extent = await page.evaluate(() => ({
-      width: Math.max(
-        document.body.scrollWidth,
-        document.body.offsetWidth,
-        document.documentElement.clientWidth,
-        document.documentElement.scrollWidth,
-        document.documentElement.offsetWidth,
-      ),
-      height: Math.max(
-        document.body.scrollHeight,
-        document.body.offsetHeight,
-        document.documentElement.clientHeight,
-        document.documentElement.scrollHeight,
-        document.documentElement.offsetHeight,
-      ),
-    }));
+    const extent = await page.evaluate(() => {
+      const maximum = (axis: "Width" | "Height") =>
+        Math.max(
+          document.documentElement[`client${axis}`],
+          ...[document.body, document.documentElement].flatMap((element) => [
+            element[`scroll${axis}`],
+            element[`offset${axis}`],
+          ]),
+        );
+      return { width: maximum("Width"), height: maximum("Height") };
+    });
     expect(extent, "Full-page proof must fit the viewport-frame dimensions").toEqual(viewport);
   }
   const bounds = await Promise.all(elements.map((element) => element.boundingBox()));
@@ -487,6 +502,7 @@ async function captureControlUiFrame(
     return rect;
   });
   // Keep the prepared presentation in place while taking one unclipped frame.
+  const deviceScale = await page.evaluate(() => window.devicePixelRatio);
   const png = await captureControlUiViewport(page);
   expect(
     await Promise.all(elements.map((element) => element.boundingBox())),
@@ -494,9 +510,18 @@ async function captureControlUiFrame(
   ).toEqual(rectangles);
   const image = photon.PhotonImage.new_from_byteslice(png);
   try {
+    const width = image.get_width();
+    const height = image.get_height();
     // Backing dimensions can round independently at fractional device scales.
-    const scaleX = image.get_width() / viewport.width;
-    const scaleY = image.get_height() / viewport.height;
+    expect(Math.abs(width - viewport.width * deviceScale), "Proof frame width").toBeLessThanOrEqual(
+      1,
+    );
+    expect(
+      Math.abs(height - viewport.height * deviceScale),
+      "Proof frame height",
+    ).toBeLessThanOrEqual(1);
+    const scaleX = width / viewport.width;
+    const scaleY = height / viewport.height;
     expect(scaleX, "Proof frame horizontal scale").toBeGreaterThan(0);
     expect(scaleY, "Proof frame vertical scale").toBeGreaterThan(0);
     return {
@@ -504,8 +529,8 @@ async function captureControlUiFrame(
       elements: rectangles.map((rect) => {
         const x = Math.floor(rect.x * scaleX);
         const y = Math.floor(rect.y * scaleY);
-        const right = Math.ceil((rect.x + rect.width) * scaleX);
-        const bottom = Math.ceil((rect.y + rect.height) * scaleY);
+        const right = Math.min(width, Math.ceil((rect.x + rect.width) * scaleX));
+        const bottom = Math.min(height, Math.ceil((rect.y + rect.height) * scaleY));
         const crop = photon.crop(image, x, y, right, bottom);
         try {
           expect([crop.get_width(), crop.get_height()]).toEqual([right - x, bottom - y]);

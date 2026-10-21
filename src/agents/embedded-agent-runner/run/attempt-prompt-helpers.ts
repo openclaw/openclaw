@@ -1,15 +1,12 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
   ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
-import { pruneMapToMaxSize } from "../../../infra/map-size.js";
 import type { HookRunner } from "../../../plugins/hooks.js";
-import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
-import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
 import type {
-  PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
@@ -23,13 +20,13 @@ import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../../bash-process-scope.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
+import { resolvePluginTurnContext } from "../../plugin-turn-context.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { normalizeContextTokenBudget } from "../utils.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -45,17 +42,6 @@ type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
     ) => boolean;
   };
 
-// Draining consumes durable injections. Retain them for retries of the same run.
-const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
-const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
-
-/** Release at run termination so active retries retain cache headroom. */
-export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): void {
-  if (runId) {
-    promptBuildDrainCache.delete(runId);
-  }
-}
-
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -63,42 +49,11 @@ export async function resolvePromptBuildHookResult(params: {
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
 }): Promise<ResolvedPromptBuildHookResult> {
-  const runId = params.hookCtx.runId;
-  const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
-    ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
-      }
-    : await drainPluginNextTurnInjectionContext({
-        cfg: params.config,
-        sessionKey: params.hookCtx.sessionKey,
-        agentId: params.hookCtx.agentId,
-      });
-  if (runId && !cachedInjections) {
-    promptBuildDrainCache.delete(runId);
-    pruneMapToMaxSize(promptBuildDrainCache, PROMPT_BUILD_DRAIN_CACHE_MAX - 1);
-    promptBuildDrainCache.set(runId, queuedContext.queuedInjections);
-  }
-  // Hook ordering mirrors the prompt assembly boundary: queued injections first,
-  // then prepare/heartbeat contributions, then prompt-build hooks.
+  const turnContext = await resolvePluginTurnContext(params);
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
     log.warn(`${hookName} hook failed: ${String(hookErr)}`);
     return undefined;
   };
-  const turnPrepareResult =
-    params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
-      ? await params.hookRunner
-          .runAgentTurnPrepare(
-            {
-              prompt: params.prompt,
-              messages: params.messages,
-              queuedInjections: queuedContext.queuedInjections,
-            },
-            params.hookCtx,
-          )
-          .catch(logHookFailure("agent_turn_prepare"))
-      : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
     params.hookRunner?.runHeartbeatPromptContribution &&
@@ -142,7 +97,7 @@ export async function resolvePromptBuildHookResult(params: {
         ),
       )
     : undefined;
-  const pendingContext = [queuedContext, turnPrepareResult, heartbeatContribution];
+  const pendingContext = [turnContext, heartbeatContribution];
   const joinContext = (key: "prependContext" | "appendContext") =>
     joinPresentTextSegments([...pendingContext, promptBuildResult].map((source) => source?.[key]));
   return {
@@ -461,8 +416,8 @@ export function buildAfterTurnRuntimeContext(params: {
           ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
         }
       : undefined;
-  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
-  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+  const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
+  const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {

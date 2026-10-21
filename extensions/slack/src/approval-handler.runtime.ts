@@ -1,7 +1,7 @@
 import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ChannelApprovalCapabilityHandlerContext,
   type ExpiredApprovalView,
   type PendingApprovalView,
@@ -175,27 +175,7 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
   return { text, blocks };
 }
 
-async function updateMessage(
-  client: WebClient,
-  accountId: string,
-  { channelId, messageTs }: SlackPendingApproval,
-  { text, blocks }: SlackPendingDelivery,
-): Promise<void> {
-  try {
-    await runSlackApprovalMessageUpdate({ accountId, channelId, messageTs }, () =>
-      client.chat.update({
-        channel: channelId,
-        ts: messageTs,
-        text: truncateSlackTextByUtf8Bytes(text, SLACK_EDIT_TEXT_MAX_BYTES),
-        blocks,
-      }),
-    );
-  } catch (err) {
-    logError(`slack approvals: failed to update message: ${String(err)}`);
-  }
-}
-
-export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   SlackPendingDelivery,
   { to: string; threadTs?: string; teamId?: string },
   SlackPendingApproval,
@@ -213,7 +193,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
           })
         : false;
     },
-    shouldHandle: (params) => {
+    shouldHandle: async (params) => {
       const resolved = resolveHandlerContext(params);
       if (!resolved) {
         return false;
@@ -302,7 +282,22 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
         return;
       }
       const client = resolveApprovalClient(resolved.context, entry.teamId);
-      await updateMessage(client, resolved.accountId, entry, payload);
+      const { channelId, messageTs } = entry;
+      const { text, blocks } = payload;
+      try {
+        await runSlackApprovalMessageUpdate(
+          { accountId: resolved.accountId, channelId, messageTs },
+          () =>
+            client.chat.update({
+              channel: channelId,
+              ts: messageTs,
+              text: truncateSlackTextByUtf8Bytes(text, SLACK_EDIT_TEXT_MAX_BYTES),
+              blocks,
+            }),
+        );
+      } catch (err) {
+        logError(`slack approvals: failed to update message: ${String(err)}`);
+      }
       await setSlackSessionStatus({
         client,
         channelId: entry.channelId,

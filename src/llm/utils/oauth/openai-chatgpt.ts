@@ -102,6 +102,7 @@ async function loginOpenAICodex(callbacks: OpenAICodexLoginCallbacks): Promise<O
     }),
     callbacks.signal,
   );
+  throwIfOAuthLoginAborted(callbacks.signal);
   if (!credentials) {
     throw new Error("OpenAI Codex OAuth login did not return credentials.");
   }

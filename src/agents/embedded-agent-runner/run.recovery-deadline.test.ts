@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
@@ -44,9 +45,11 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     typeof createDeferred<CompactEmbeddedAgentSessionRuntimeParams>
   >;
   let attemptStarted: ReturnType<typeof createDeferred<void>>;
+  let runtimeConfig: typeof import("../../config/runtime-snapshot.js");
 
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
+    runtimeConfig = await import("../../config/runtime-snapshot.js");
     ({ prepareEmbeddedAttemptTimeout: prepareTimeout } =
       await import("./run/attempt-timeout-prepare.js"));
     ({ delegateCompactionToRuntime: delegate } = await import("../../context-engine/delegate.js"));
@@ -77,8 +80,8 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       .mockImplementation((lane, task, options) =>
         enqueue(
           lane,
-          (marker) => {
-            const work = task(marker);
+          () => {
+            const work = task();
             queuedTasks.push(work);
             return work;
           },
@@ -104,17 +107,12 @@ describe("overflow recovery deadline ownership through the public runner", () =>
         markTimedOutDuringCompaction: () => {},
         markTimedOutByRunBudget: () => {},
       });
-      const response = setTimeout(
-        () =>
-          model.resolve(
-            makeAttemptResult({
-              sessionIdUsed: params.sessionId,
-              promptError: makeOverflowError(),
-              assistantTexts: [],
-            }),
-          ),
-        16_000,
-      );
+      const overflow = makeAttemptResult({
+        sessionIdUsed: params.sessionId,
+        promptError: makeOverflowError(),
+        assistantTexts: [],
+      });
+      const response = setTimeout(() => model.resolve(overflow), 16_000);
       attemptStarted.resolve();
       try {
         return await model.promise;
@@ -139,12 +137,17 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     restoreQueue?.();
     restoreCompact();
     vi.useRealTimers();
+    runtimeConfig.clearRuntimeConfigSnapshot();
   });
   afterAll(cleanupSharedRunIntegrationSessions);
 
-  async function start() {
+  async function start(progressRequests = 0) {
     const workspaceDir = tempDirs.make("openclaw-recovery-deadline-");
     const sessionManager = SessionManager.inMemory(workspaceDir);
+    const config: OpenClawConfig = {
+      agents: { defaults: { compaction: { timeoutSeconds: 180 } } },
+    };
+    runtimeConfig.setRuntimeConfigSnapshot(config);
     const run = runEmbeddedAgent({
       ...createOverflowRunParams({ workspaceDir }),
       agentHarnessRuntimeOverride: "openclaw",
@@ -154,7 +157,7 @@ describe("overflow recovery deadline ownership through the public runner", () =>
       sessionManager,
       sessionPersistence: "detached",
       timeoutMs: 600_000,
-      config: { agents: { defaults: { compaction: { timeoutSeconds: 180 } } } },
+      config,
       abortSignal: parent.signal,
     });
     const observed = run.then(
@@ -167,24 +170,21 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     if (!("compactionTimeoutReset" in entered)) {
       throw new Error(`Recovery did not reach the native delegate: ${JSON.stringify(entered)}`);
     }
-    return { run, observed, compaction: entered };
+    for (let request = 0; request < progressRequests; request += 1) {
+      await vi.advanceTimersByTimeAsync(100_000);
+      entered.compactionTimeoutReset?.();
+    }
+    return { observed, compaction: entered };
   }
 
   it("lets progressing recovery finish within the finite execution budget", async () => {
-    const { observed, compaction } = await start();
+    const { observed, compaction } = await start(4);
     let settled = false;
     void observed.then(() => {
       settled = true;
     });
-    for (let request = 0; request < 4; request += 1) {
-      await vi.advanceTimersByTimeAsync(100_000);
-      compaction.compactionTimeoutReset?.();
-    }
     await vi.advanceTimersByTimeAsync(80_000);
-    expect(
-      settled ? await observed : undefined,
-      "per-request compaction progress remains valid within the execution budget",
-    ).toBeUndefined();
+    expect(settled ? await observed : undefined).toBeUndefined();
     expect(compaction.abortSignal?.aborted).toBe(false);
     releaseCompaction.resolve({
       ok: true,
@@ -195,21 +195,14 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
-  it("propagates the queue timeout into active recovery despite per-request progress", async () => {
-    const { observed, compaction } = await start();
-    for (let request = 0; request < 7; request += 1) {
-      await vi.advanceTimersByTimeAsync(100_000);
-      compaction.compactionTimeoutReset?.();
-    }
+  it("propagates the detached execution deadline despite per-request progress", async () => {
+    const { observed, compaction } = await start(7);
     await vi.advanceTimersByTimeAsync(110_000);
-    expect(
-      compaction.abortSignal?.aborted,
-      "queue timeout must reach the active recovery owner",
-    ).toBe(true);
+    expect(compaction.abortSignal?.aborted).toBe(true);
     const result = await observed;
     expect(result).toMatchObject({
       kind: "rejected",
-      error: { name: "CommandLaneTaskTimeoutError" },
+      error: { message: "Detached execution stalled" },
     });
     if (result.kind === "rejected") {
       expect(compaction.abortSignal?.reason).toBe(result.error);
@@ -222,10 +215,9 @@ describe("overflow recovery deadline ownership through the public runner", () =>
     await vi.advanceTimersByTimeAsync(180_000);
     expect(compaction.abortSignal?.aborted).toBe(true);
     releaseCompaction.resolve({ ok: false, compacted: false, reason: "Compaction timed out" });
-    const result = await observed;
-    expect(result).toMatchObject({
+    expect(await observed).toMatchObject({
       kind: "resolved",
-      result: { meta: { error: { kind: "context_overflow" } } },
+      result: { meta: { error: { kind: "compaction_failure" } } },
     });
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
   });

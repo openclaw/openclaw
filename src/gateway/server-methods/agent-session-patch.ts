@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
@@ -31,8 +31,7 @@ import { resolveSessionStoreKey } from "../session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import {
   normalizeTrustedGroupMetadata,
-  requestGroupMatchesTrusted,
-  resolveTrustedGroupMetadata,
+  resolveAgentSessionGroup,
   type TrustedGroupMetadata,
 } from "./agent-subagent-registration.js";
 
@@ -65,7 +64,7 @@ type AgentSessionReuseInput = {
 };
 
 /** Re-evaluate the entry from each read; callers retain admission and concurrent-rotation fencing. */
-export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
+async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) {
   const lifecycleTimestamps = params.freshEntry
     ? await resolveSessionLifecycleTimestampsAsync({
         entry: params.freshEntry,
@@ -167,7 +166,7 @@ export async function buildAgentSessionPatch(
     requestLabel?: string;
     explicitSessionKey?: string;
     pluginOwnerId?: string;
-    fallbackSessionId: string;
+    fallbackSessionId?: string;
     touchInteraction: boolean;
   },
 ): Promise<AgentSessionPatchBuild> {
@@ -204,36 +203,13 @@ export async function buildAgentSessionPatch(
       }
     }
   }
-  const trustedGroup = resolveTrustedGroupMetadata({
+  const nextGroup = resolveAgentSessionGroup({
     sessionKey: params.canonicalSessionKey,
     spawnedBy: freshSpawnedBy,
     stored: storedGroup,
     inherited: inheritedGroup,
+    requested: params.normalizedSpawned,
   });
-  const validatedGroup = trustedGroup.groupId
-    ? resolveTrustedGroupId({
-        groupId: trustedGroup.groupId,
-        sessionKey: params.canonicalSessionKey,
-        spawnedBy: freshSpawnedBy,
-      })
-    : undefined;
-  const trustRequestSelectors =
-    Boolean(trustedGroup.groupId) &&
-    requestGroupMatchesTrusted({
-      requestGroupId: params.normalizedSpawned.groupId,
-      trustedGroupId: trustedGroup.groupId,
-    });
-  const nextGroup = validatedGroup?.dropped
-    ? { groupId: undefined, groupChannel: undefined, groupSpace: undefined }
-    : {
-        groupId: trustedGroup.groupId,
-        groupChannel:
-          trustedGroup.groupChannel ??
-          (trustRequestSelectors ? params.normalizedSpawned.groupChannel : undefined),
-        groupSpace:
-          trustedGroup.groupSpace ??
-          (trustRequestSelectors ? params.normalizedSpawned.groupSpace : undefined),
-      };
 
   const effectiveDelivery = mergeDeliveryContext(
     deliveryContextFromSession(params.freshEntry),
@@ -260,7 +236,7 @@ export async function buildAgentSessionPatch(
     params.freshEntry?.sessionId &&
     params.freshEntry.sessionId !== params.initialEntry.sessionId,
   );
-  const freshSessionId = reuse.sessionId ?? params.fallbackSessionId;
+  const freshSessionId = reuse.sessionId ?? params.fallbackSessionId ?? randomUUID();
   const freshRotatedSessionId = Boolean(
     params.freshEntry?.sessionId && params.freshEntry.sessionId !== freshSessionId,
   );

@@ -1,4 +1,9 @@
-import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  coerceErrorMessage,
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -7,15 +12,46 @@ const STORAGE_ERRORS = [
   ["SQLITE_LOCKED", "database table is locked", 6],
   ["SQLITE_READONLY", "attempt to write a readonly database", 8],
   ["SQLITE_IOERR", "disk I/O error", 10],
+  ["SQLITE_IOERR", "unable to open database file", 14],
   ["SQLITE_FULL", "database or disk is full", 13],
   ["transcript_writer_fenced", "session writer claim changed before transcript persistence", -1],
+  [
+    "session_actor_reconciliation",
+    "Session actor requires reconciliation before another command",
+    -2,
+  ],
 ] as const;
 export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0];
 
 /** Classify native errors before flattening; legacy rows require exact known messages. */
 export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFailure | undefined {
+  let reconciliation: GatewayStorageFailure | undefined;
+  for (const candidate of collectNestedErrorCandidates(error)) {
+    const failure = classifyStorageFailure(candidate);
+    if (failure === "session_actor_reconciliation") {
+      reconciliation = failure;
+    } else if (failure) {
+      return failure;
+    }
+  }
+  return reconciliation;
+}
+
+function classifyStorageFailure(error: unknown): GatewayStorageFailure | undefined {
   const fields = typeof error === "string" ? { message: error } : isRecord(error) ? error : {};
   const code = fields.errorCode ?? fields.code;
+  if (code === "ENOSPC") {
+    return "SQLITE_FULL";
+  }
+  if (code === "EIO") {
+    return "SQLITE_IOERR";
+  }
+  if (
+    typeof code === "string" &&
+    (code === "SQLITE_CANTOPEN" || code.startsWith("SQLITE_CANTOPEN_"))
+  ) {
+    return "SQLITE_IOERR";
+  }
   const nativeCode = fields.errcode;
   const primaryCode =
     typeof nativeCode === "number" && Number.isInteger(nativeCode) && nativeCode >= 0
@@ -50,6 +86,33 @@ const nativeOpenFailures = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeOpenFailures"),
   () => new WeakSet<object>(),
 );
+
+type SqliteSnapshotFailureScope = { failure?: { error: unknown } };
+const snapshotFailureScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteSnapshotFailureScopes"),
+  () => new AsyncLocalStorage<SqliteSnapshotFailureScope>(),
+);
+
+/** A failed native request stays an inspection failure if an optional consumer catches it. */
+export async function withSqliteSnapshotFailureScope<T>(operation: () => Promise<T>): Promise<T> {
+  if (snapshotFailureScopes.getStore()) {
+    return operation();
+  }
+  const scope: SqliteSnapshotFailureScope = {};
+  const result = await snapshotFailureScopes.run(scope, operation);
+  if (scope.failure) {
+    throw scope.failure.error;
+  }
+  return result;
+}
+
+/** Call after request cleanup settles, with the final error and its native cause intact. */
+export function recordSqliteSnapshotFailure(error: unknown): void {
+  const scope = snapshotFailureScopes.getStore();
+  if (scope) {
+    scope.failure ??= { error };
+  }
+}
 
 export function markSqliteNativeOpenFailure(error: unknown): void {
   if (error !== null && typeof error === "object") {

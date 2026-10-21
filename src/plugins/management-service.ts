@@ -82,7 +82,6 @@ import {
   createPluginCache,
   getPluginCache,
   getProcessPluginCache,
-  retainPluginCache,
   withPluginCache,
 } from "./plugin-cache.js";
 import { resolvePluginConfigEnablement } from "./plugin-config-enablement.js";
@@ -130,17 +129,12 @@ export function loadFreshManagedPluginMetadata(
     const params = configWide
       ? { config, env: capturedEnv }
       : resolveManagedPluginMetadataParams(config, capturedEnv);
-    const release = retainPluginCache(cache);
-    try {
-      const assertCurrent = await preparePluginMetadataMachineStateAsync({ env: capturedEnv });
-      assertCurrent();
-      // Management requires fresh inventory even when a generic reader could reuse boot facts.
-      return configWide
-        ? resolveConfigWidePluginMetadataSnapshot({ ...params, allowCurrent: false })
-        : loadPluginMetadataSnapshot({ ...params, allowCurrent: false });
-    } finally {
-      release();
-    }
+    const assertCurrent = await preparePluginMetadataMachineStateAsync({ env: capturedEnv });
+    assertCurrent();
+    // Management requires fresh inventory even when a generic reader could reuse boot facts.
+    return configWide
+      ? resolveConfigWidePluginMetadataSnapshot({ ...params, allowCurrent: false })
+      : loadPluginMetadataSnapshot({ ...params, allowCurrent: false });
   });
 }
 
@@ -234,15 +228,17 @@ export const listManagedPlugins = withManagedPluginCache(
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
     const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
-    const diagnosticsEnabled = createInstalledPluginEnabledPredicate(
+    const isEnabled = createInstalledPluginEnabledPredicate(
       metadata.index.plugins,
       params.config,
+      env,
     );
+    const ownership = createInstalledPluginOwnershipResolver(metadata.index, env);
     const { diagnostics: pluginDiagnostics } = projectPluginInstallHealth(
       {
         plugins: metadata.index.plugins.map((record) => {
           const manifest = metadata.byPluginId.get(record.pluginId);
-          const enabled = diagnosticsEnabled(record.pluginId);
+          const enabled = isEnabled(record.pluginId);
           return {
             id: record.pluginId,
             source: manifest?.source ?? record.source ?? record.manifestPath,
@@ -253,6 +249,7 @@ export const listManagedPlugins = withManagedPluginCache(
         diagnostics: [...metadata.diagnostics],
       },
       { metadata, config: params.config, env },
+      ownership,
     );
     // Prepare the merged entry once; display names never add install identities.
     const officialEntries = prepareCatalogEntries(officialCatalog.entries);
@@ -273,19 +270,12 @@ export const listManagedPlugins = withManagedPluginCache(
       >
     >();
     let categoryTargetCount = 0;
-    // Hosted loading can yield; prepare this phase from the current config.
-    const isEnabled = createInstalledPluginEnabledPredicate(
-      metadata.index.plugins,
-      params.config,
-      env,
-    );
-    const ownershipResolver = createInstalledPluginOwnershipResolver(metadata.index);
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
       const enabled = isEnabled(record.pluginId);
       const manifest = metadata.byPluginId.get(record.pluginId);
       const localCatalog = normalizeManifestCatalog(manifest?.catalog);
-      const ownership = ownershipResolver.resolvePackage(record.pluginId);
-      const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+      const packageOwner = ownership.resolvePackage(record.pluginId);
+      const installOwner = packageOwner.ok ? packageOwner.value.installOwner : undefined;
       const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
       const { entry: officialEntry, clawhubPackage } = resolveInstalledHostedOfficialEntry({
         record,

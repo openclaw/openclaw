@@ -1,4 +1,5 @@
 import type { MessagePort } from "node:worker_threads";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createRealtimeVoiceAudioQueue } from "./realtime-session-lifecycle.js";
 
 /** A call-bound mono PCM16/24kHz sink. Transfer port; share state, never transfer it.
@@ -32,6 +33,7 @@ export function createRealtimeVoiceAudioPortSender(output: RealtimeVoiceAudioOut
           { type: "flushed", marker } satisfies RealtimeVoiceAudioOutputMessage,
           [],
         );
+        recordWorkerMessage("realtime", "to_worker");
       }
       return;
     }
@@ -43,8 +45,10 @@ export function createRealtimeVoiceAudioPortSender(output: RealtimeVoiceAudioOut
       { type: "audio", audio: bytes } satisfies RealtimeVoiceAudioOutputMessage,
       [bytes.buffer],
     );
+    recordWorkerMessage("realtime", "to_worker", audio.byteLength);
   };
   const acknowledge = (message: { type: "ack" } | { type: "flush"; marker: number }) => {
+    recordWorkerMessage("realtime", "from_worker");
     if (!live()) {
       return;
     }
@@ -87,6 +91,7 @@ export function createRealtimeVoiceAudioPortSender(output: RealtimeVoiceAudioOut
       queue.clear();
       // The same port orders interruption after old PCM and before new PCM.
       output.port.postMessage({ type: "clear" } satisfies RealtimeVoiceAudioOutputMessage, []);
+      recordWorkerMessage("realtime", "to_worker");
     },
     close,
   };

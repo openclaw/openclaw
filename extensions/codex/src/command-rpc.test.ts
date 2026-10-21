@@ -1,27 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  replaceRuntimeAuthProfileStoreSnapshots,
-  type AuthProfileStore,
-} from "openclaw/plugin-sdk/agent-runtime";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createEmptyPluginRegistry,
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  clearSessionStoreCacheForTest,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateAuthProfileStoreWithLock } from "openclaw/plugin-sdk/provider-auth";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import {
@@ -29,14 +12,15 @@ import {
   prepareCodexControlSessionAuth,
   type CodexControlRequestOptions,
 } from "./command-rpc.js";
+import { createThreadResumeResponse, useCodexControlTestState } from "./commands.test-support.js";
 
-const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
-const withCodexAppServerJsonClientMock = vi.hoisted(() => vi.fn());
+const requestMock = vi.hoisted(() => vi.fn());
+const clientMock = vi.hoisted(() => vi.fn<typeof withCodexAppServerJsonClient>());
 
 vi.mock("./app-server/request.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./app-server/request.js")>()),
-  requestCodexAppServerJson: requestCodexAppServerJsonMock,
-  withCodexAppServerJsonClient: withCodexAppServerJsonClientMock,
+  requestCodexAppServerJson: requestMock,
+  withCodexAppServerJsonClient: clientMock,
 }));
 
 describe("Codex command RPC helpers", () => {
@@ -44,87 +28,53 @@ describe("Codex command RPC helpers", () => {
   let agentDir: string;
   let config: OpenClawConfig;
   let harness: ReturnType<typeof createClientHarness>;
-  let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
   const sessionKey = "agent:main:control";
-  const resumeResponse = {
-    thread: {
-      id: "thread-1",
-      sessionId: "session-1",
-      projectId: null,
-      cliVersion: "0.150.1",
-      createdAt: 1,
-      updatedAt: 1,
-      cwd: "/repo",
-      ephemeral: false,
-      modelProvider: "openai",
-      preview: "",
-      source: "appServer",
-      status: { type: "idle" },
-      turns: [],
-    },
-    model: "gpt-5.5",
-    modelProvider: "openai",
-    cwd: "/repo",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
+  const startOptions = {
+    transport: "stdio" as const,
+    homeScope: "user" as const,
+    command: "codex",
+    args: ["app-server"],
+    headers: {},
   };
+  const expectedAuthority = {
+    assertCurrent: expect.any(Function),
+    assertCurrentAsync: expect.any(Function),
+    source: expect.any(Function),
+  };
+  const resumeResponse = createThreadResumeResponse({ threadId: "thread-1" });
 
-  beforeEach(async () => {
-    previousPluginRegistry = getActivePluginRegistry();
-    const registry = createEmptyPluginRegistry();
-    // Provide the provider hook contract; source discovery is outside this control-auth fixture.
-    registry.providers.push({
-      pluginId: "openai",
-      provider: { id: "openai", label: "OpenAI", auth: [] },
-      source: "test",
-    });
-    setActivePluginRegistry(registry);
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-auth-"));
-    agentDir = path.join(tempDir, "agents", "main", "agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    vi.stubEnv("OPENAI_API_KEY", undefined);
-    vi.stubEnv("CODEX_API_KEY", undefined);
-    config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
-    setAuthStore({ version: 1, profiles: {} });
-    harness = createClientHarness();
-    requestCodexAppServerJsonMock.mockReset();
-    requestCodexAppServerJsonMock.mockResolvedValue(resumeResponse);
-    withCodexAppServerJsonClientMock.mockReset();
-    withCodexAppServerJsonClientMock.mockImplementation(
-      async (
-        _options: Parameters<typeof withCodexAppServerJsonClient>[0],
-        run: Parameters<typeof withCodexAppServerJsonClient>[1],
-      ) =>
-        await run(requestCodexAppServerJsonMock, harness.client, {
-          assertCurrent: () => undefined,
-          abort: vi.fn(),
-        }),
-    );
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      entry: { sessionId: "session-1", updatedAt: Date.now() },
-    });
+  useCodexControlTestState({
+    prefix: "openclaw-codex-control-auth-",
+    cleanup: () => harness.client.close(),
+    setup: async (root) => {
+      tempDir = root;
+      agentDir = path.join(tempDir, "agents", "main", "agent");
+      config = { agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } };
+      setRuntimeConfigSnapshot(config);
+      harness = createClientHarness();
+      requestMock.mockReset().mockResolvedValue(resumeResponse);
+      clientMock.mockReset();
+      clientMock.mockImplementation(
+        async (_options, run) =>
+          await run(requestMock, harness.client, {
+            assertCurrent: () => undefined,
+            abort: vi.fn(),
+          }),
+      );
+      await writeSession();
+    },
   });
 
-  afterEach(async () => {
-    if (previousPluginRegistry) {
-      setActivePluginRegistry(previousPluginRegistry);
-    } else {
-      resetPluginRuntimeStateForTest();
-    }
-    harness.client.close();
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    clearRuntimeAuthProfileStoreSnapshots();
-    clearSessionStoreCacheForTest();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  function setAuthStore(store: AuthProfileStore) {
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
+  async function setAuthStore(store: AuthProfileStore) {
+    const saved = await updateAuthProfileStoreWithLock({
+      agentDir,
+      stateDir: tempDir,
+      updater: (current) => {
+        Object.assign(current, store);
+        return true;
+      },
+    });
+    expect(saved).not.toBeNull();
   }
 
   function resume(options: Partial<CodexControlRequestOptions> = {}) {
@@ -132,21 +82,24 @@ describe("Codex command RPC helpers", () => {
       {},
       "thread/resume",
       { threadId: "thread-1" },
-      {
-        config,
-        agentDir,
-        sessionKey,
-        sessionId: "session-1",
-        onResponse: vi.fn(),
-        ...options,
-      },
+      { config, agentDir, sessionKey, sessionId: "session-1", onResponse: vi.fn(), ...options },
     );
   }
 
-  function acquiredOptions() {
-    return withCodexAppServerJsonClientMock.mock.calls[0]?.[0] as Parameters<
-      typeof withCodexAppServerJsonClient
-    >[0];
+  function writeSession(
+    entry: Partial<Parameters<typeof upsertSessionEntry>[0]["entry"]> = {},
+    storePath?: string,
+  ) {
+    return upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry: { sessionId: "session-1", updatedAt: Date.now(), ...entry },
+    });
+  }
+
+  function acquired() {
+    return clientMock.mock.calls[0]![0];
   }
 
   it.each(["before-write", "after-write"] as const)(
@@ -155,26 +108,18 @@ describe("Codex command RPC helpers", () => {
       let ownerCurrent = true;
       let writes = 0;
       let settled = false;
-      requestCodexAppServerJsonMock.mockImplementationOnce(
-        async (request: { assertCurrent?: () => void }) => {
-          request.assertCurrent?.();
-          writes += 1;
-          ownerCurrent = false;
-          return resumeResponse;
-        },
-      );
+      requestMock.mockImplementationOnce(async (request: { assertCurrent?: () => void }) => {
+        request.assertCurrent?.();
+        writes += 1;
+        ownerCurrent = false;
+        return resumeResponse;
+      });
       const result = codexControlRequest(
         {},
         "thread/fork",
         { threadId: "source-thread", excludeTurns: true },
         {
-          startOptions: {
-            transport: "stdio",
-            homeScope: "user",
-            command: "codex",
-            args: ["app-server"],
-            headers: {},
-          },
+          startOptions,
           authProfileId: null,
           assertOwnerCurrent: () => {
             if (!ownerCurrent) {
@@ -204,17 +149,17 @@ describe("Codex command RPC helpers", () => {
 
   it("keeps plugin reads without an admitted session on the selected auth partition", async () => {
     const options = { config, authProfileId: "openai:selected" };
-    const startOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
-    await expect(prepareCodexControlSessionAuth(options, startOptions)).resolves.toEqual({
+    const readOptions = { transport: "stdio" as const, command: "codex", args: [], headers: {} };
+    await expect(prepareCodexControlSessionAuth(options, readOptions)).resolves.toEqual({
+      release: expect.any(Function),
       authProfileId: "openai:selected",
       source: undefined,
       clientOptions: { authProfileId: "openai:selected" },
     });
     await expect(
-      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, startOptions),
+      prepareCodexControlSessionAuth({ ...options, onResponse: vi.fn() }, readOptions),
     ).rejects.toThrow("requires admitted session authority");
-    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
-    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
+    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
   });
 
   it("requires session authority for thread/resume without its native fork selection", async () => {
@@ -223,20 +168,10 @@ describe("Codex command RPC helpers", () => {
         {},
         "thread/resume",
         { threadId: "source-thread" },
-        {
-          startOptions: {
-            transport: "stdio" as const,
-            homeScope: "user" as const,
-            command: "codex",
-            args: ["app-server"],
-            headers: {},
-          },
-          authProfileId: null,
-          onResponse: vi.fn(),
-        },
+        { startOptions, authProfileId: null, onResponse: vi.fn() },
       ),
     ).rejects.toThrow("requires admitted session authority");
-    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
+    expect(clientMock).not.toHaveBeenCalled();
   });
 
   it("resumes with the prepared environment API key and publishes no legacy profile", async () => {
@@ -245,21 +180,16 @@ describe("Codex command RPC helpers", () => {
 
     await resume({ onResponse });
 
-    expect(acquiredOptions()).toMatchObject({
+    expect(acquired()).toMatchObject({
       preparedAuth: { kind: "api-key", apiKey: "control-platform-key" },
       authRequirement: "api-key",
       agentDir,
     });
-    expect(acquiredOptions().authProfileId).toBeUndefined();
+    expect(acquired().authProfileId).toBeUndefined();
     expect(onResponse).toHaveBeenCalledWith(
       expect.objectContaining({ thread: expect.objectContaining({ id: "thread-1" }) }),
       harness.client,
-      {
-        authProfileId: undefined,
-        assertCurrent: expect.any(Function),
-        assertCurrentAsync: expect.any(Function),
-        source: expect.any(Function),
-      },
+      { authProfileId: undefined, ...expectedAuthority },
     );
   });
 
@@ -283,41 +213,33 @@ describe("Codex command RPC helpers", () => {
               accountId: "control-account",
             }
           : { type, provider: "openai", token };
-      setAuthStore({
+      await setAuthStore({
         version: 1,
         profiles: { "openai:old": credential, "openai:ready": credential },
         order: { openai: ["openai:old", "openai:ready"] },
         usageStats: { "openai:old": { cooldownUntil: Date.now() + 60_000 } },
       });
-      await upsertSessionEntry({
-        agentId: "main",
-        sessionKey,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          authProfileOverride: "openai:old",
-          authProfileOverrideSource: "auto",
-        },
+      await writeSession({
+        authProfileOverride: "openai:old",
+        authProfileOverrideSource: "auto",
       });
       const onResponse = vi.fn();
 
       await resume({ authProfileId: "openai:old", onResponse });
 
-      expect(acquiredOptions()).toMatchObject({
+      expect(acquired()).toMatchObject({
         authRequirement: "subscription",
+        authBindingFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
         preparedAuth: {
           kind: "profile",
           profileId: "openai:ready",
           snapshot: { loginParams: { type: "chatgptAuthTokens", accessToken: token } },
         },
       });
-      expect(acquiredOptions().authProfileId).toBeUndefined();
-      expect(acquiredOptions().authBindingFingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(acquired().authProfileId).toBeUndefined();
       expect(onResponse).toHaveBeenCalledWith(expect.anything(), harness.client, {
         authProfileId: "openai:ready",
-        assertCurrent: expect.any(Function),
-        assertCurrentAsync: expect.any(Function),
-        source: expect.any(Function),
+        ...expectedAuthority,
       });
     },
   );
@@ -327,7 +249,7 @@ describe("Codex command RPC helpers", () => {
     const explicitStorePath = path.join(tempDir, "explicit", "sessions.json");
     const configuredStorePath = path.join(tempDir, "configured", "sessions.json");
     config.session = { store: configuredStorePath };
-    setAuthStore({
+    await setAuthStore({
       version: 1,
       profiles: {
         "openai:first": { type: "api_key", provider: "openai", key: "automatic-key" },
@@ -335,27 +257,15 @@ describe("Codex command RPC helpers", () => {
       },
       order: { openai: ["openai:first", "openai:pinned"] },
     });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath: explicitStorePath,
-      sessionKey,
-      entry: {
-        sessionId: "session-1",
-        updatedAt: Date.now(),
-        authProfileOverride: "openai:pinned",
-        authProfileOverrideSource: "user",
-      },
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath: configuredStorePath,
-      sessionKey,
-      entry: { sessionId: "unrelated-session", updatedAt: Date.now() },
-    });
+    await writeSession(
+      { authProfileOverride: "openai:pinned", authProfileOverrideSource: "user" },
+      explicitStorePath,
+    );
+    await writeSession({ sessionId: "unrelated-session" }, configuredStorePath);
 
     await resume({ storePath: explicitStorePath, authProfileId: "openai:first" });
 
-    expect(acquiredOptions()).toMatchObject({
+    expect(acquired()).toMatchObject({
       authRequirement: "api-key",
       preparedAuth: { kind: "api-key", apiKey: "pinned-key" },
     });
@@ -363,19 +273,13 @@ describe("Codex command RPC helpers", () => {
 
   it("rejects a mismatched admitted row before auth or client acquisition", async () => {
     const storePath = path.join(tempDir, "authority-mismatched", "sessions.json");
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: { sessionId: "another-session", updatedAt: Date.now() },
-    });
+    await writeSession({ sessionId: "another-session" }, storePath);
 
     await expect(resume({ storePath })).rejects.toThrow(
       "Codex session generation is no longer current: session-1",
     );
 
-    expect(withCodexAppServerJsonClientMock).not.toHaveBeenCalled();
-    expect(requestCodexAppServerJsonMock).not.toHaveBeenCalled();
+    expect([clientMock.mock.calls, requestMock.mock.calls]).toEqual([[], []]);
   });
 
   it("keeps native-auth control subscriptions outside prepared login", async () => {
@@ -383,12 +287,12 @@ describe("Codex command RPC helpers", () => {
 
     await resume({ authProfileId: null });
 
-    expect(acquiredOptions().preparedAuth).toBeUndefined();
-    expect(acquiredOptions().authRequirement).toBeUndefined();
+    expect(acquired().preparedAuth).toBeUndefined();
+    expect(acquired().authRequirement).toBeUndefined();
   });
 
   it("keeps omitted Unix scope on the explicit user-scoped supervision connection", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({ data: [] });
+    requestMock.mockResolvedValue({ data: [] });
     const pluginConfig = {
       appServer: {
         transport: "unix" as const,
@@ -396,27 +300,22 @@ describe("Codex command RPC helpers", () => {
         requestTimeoutMs: 321,
       },
     };
-    const startOptions = {
+    const unixOptions = {
+      ...startOptions,
       transport: "unix" as const,
-      homeScope: "user" as const,
-      command: "codex",
       args: ["app-server", "--listen", "stdio://"],
       url: "unix:///tmp/codex.sock",
-      headers: {},
     };
 
     await codexControlRequest(
       pluginConfig,
       "thread/list",
       { archived: false },
-      {
-        startOptions,
-        authProfileId: null,
-      },
+      { startOptions: unixOptions, authProfileId: null },
     );
 
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ startOptions, timeoutMs: 321, authProfileId: null }),
+    expect(requestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ startOptions: unixOptions, timeoutMs: 321, authProfileId: null }),
     );
   });
 });

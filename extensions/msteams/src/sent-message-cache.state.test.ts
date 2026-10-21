@@ -38,6 +38,10 @@ function resolveNamedAccountMemory(accountId: string) {
   });
 }
 
+const ownedScope = { accountId: "support", botId: "bot-a" };
+const wasSent = (messageId: string, scope: { accountId: string; botId?: string }) =>
+  wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId, ...scope });
+
 describe("Teams persistent sent-message account authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -56,17 +60,11 @@ describe("Teams persistent sent-message account authority", () => {
       defaultTtlMs: TTL_MS,
     });
     await legacy.register("conv-1:legacy", { sentAt: Date.now() });
-    await expect(
-      wasMSTeamsMessageSentWithPersistence({
-        conversationId: "conv-1",
-        messageId: "legacy",
-        accountId: "default",
-      }),
-    ).resolves.toBe(true);
+    await expect(wasSent("legacy", { accountId: "default" })).resolves.toBe(true);
 
     const persisted = createDeferred<void>();
-    const openStore = msteamsRuntimeStub.state.openKeyedStore;
-    vi.spyOn(msteamsRuntimeStub.state, "openKeyedStore").mockImplementation(
+    const openStore = msteamsRuntimeStub.state.openKeyedStoreV2;
+    vi.spyOn(msteamsRuntimeStub.state, "openKeyedStoreV2").mockImplementation(
       <T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         const register = store.register.bind(store);
@@ -82,46 +80,16 @@ describe("Teams persistent sent-message account authority", () => {
         return store;
       },
     );
-    await expect(
-      wasMSTeamsMessageSentWithPersistence({
-        conversationId: "conv-1",
-        messageId: "legacy",
-        accountId: "support",
-      }),
-    ).resolves.toBe(false);
-    recordMSTeamsSentMessage("conv-1", "owned", { accountId: "support", botId: "bot-a" });
+    await expect(wasSent("legacy", { accountId: "support" })).resolves.toBe(false);
+    recordMSTeamsSentMessage("conv-1", "owned", ownedScope);
     await persisted.promise;
     resolveNamedAccountMemory("support").clear();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
-    await expect(
-      wasMSTeamsMessageSentWithPersistence({
-        conversationId: "conv-1",
-        messageId: "owned",
-        accountId: "support",
-        botId: "bot-a",
-      }),
-    ).resolves.toBe(true);
-    for (const scope of [
-      { accountId: "finance", botId: "bot-a" },
-      { accountId: "support", botId: "bot-b" },
-    ]) {
-      await expect(
-        wasMSTeamsMessageSentWithPersistence({
-          conversationId: "conv-1",
-          messageId: "owned",
-          ...scope,
-        }),
-      ).resolves.toBe(false);
-    }
-    recordMSTeamsSentMessage("conv-1", "unknown", { accountId: "support", botId: "bot-a" });
-    await expect(
-      wasMSTeamsMessageSentWithPersistence({
-        conversationId: "conv-1",
-        messageId: "unknown",
-        accountId: "support",
-        botId: "bot-a",
-      }),
-    ).resolves.toBe(false);
+    await expect(wasSent("owned", ownedScope)).resolves.toBe(true);
+    await expect(wasSent("owned", { ...ownedScope, accountId: "finance" })).resolves.toBe(false);
+    await expect(wasSent("owned", { ...ownedScope, botId: "bot-b" })).resolves.toBe(false);
+    recordMSTeamsSentMessage("conv-1", "unknown", ownedScope);
+    await expect(wasSent("unknown", ownedScope)).resolves.toBe(false);
   });
 });

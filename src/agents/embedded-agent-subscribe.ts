@@ -1,7 +1,4 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-/**
- * Subscribes to embedded-agent sessions and streams formatted replies/events.
- */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,13 +16,10 @@ import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { cleanupRunToolStartData } from "./embedded-agent-subscribe.handlers.tools.start.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeState,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { createEmbeddedModelState } from "./embedded-agent-subscribe.model-state.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 import { createEmbeddedToolLifecycleRunner } from "./embedded-agent-subscribe.tool-lifecycle.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -77,7 +71,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
-  const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
+  const state = new EmbeddedAgentSubscribeState(params);
   const {
     captureModelEvent,
     recordAuxiliaryUsage,
@@ -383,10 +377,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     captureModelEvent,
     incrementCompactionCount,
     noteCompactionTokensAfter,
-    getUsageTotals,
-    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
-    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({
@@ -414,7 +405,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (compactionRetry) {
-      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
       const { reject } = compactionRetry;
       compactionRetry = undefined;
       reject(createAbortError("Unsubscribed during compaction"));
@@ -422,7 +412,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.
     if (params.session.isCompacting) {
-      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
       try {
         params.session.abortCompaction();
       } catch (err) {
@@ -458,25 +447,25 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       providerStarted?: boolean;
       aborted?: boolean;
     }) => {
-      if (typeof meta.replayInvalid === "boolean") {
+      if (meta.replayInvalid !== undefined) {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
       }
       if (meta.livenessState) {
         state.livenessState = meta.livenessState;
       }
-      if (typeof meta.stopReason === "string") {
+      if (meta.stopReason !== undefined) {
         state.terminalStopReason = meta.stopReason;
       }
-      if (typeof meta.yielded === "boolean") {
+      if (meta.yielded !== undefined) {
         state.yielded = meta.yielded;
       }
       if (meta.timeoutPhase) {
         state.timeoutPhase = meta.timeoutPhase;
       }
-      if (typeof meta.providerStarted === "boolean") {
+      if (meta.providerStarted !== undefined) {
         state.providerStarted = meta.providerStarted;
       }
-      if (typeof meta.aborted === "boolean") {
+      if (meta.aborted !== undefined) {
         state.terminalAborted = meta.aborted;
       }
     },

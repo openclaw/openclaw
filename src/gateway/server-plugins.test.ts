@@ -6,6 +6,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
+  getOwnedSessionTranscriptWriterFence,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
+import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -71,19 +75,10 @@ vi.mock("../plugins/loader.js", async (importOriginal) => ({
   loadOpenClawPluginsAsync: loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => {
-  const {
-    buildPluginRuntimeLoadOptions,
-    getPluginRuntimeLoadContext: readPluginRuntimeLoadContext,
-    setPluginRuntimeLoadContext,
-  } = await importOriginal<typeof import("../plugins/runtime/load-context.js")>();
-  return {
-    buildPluginRuntimeLoadOptions,
-    getPluginRuntimeLoadContext: readPluginRuntimeLoadContext,
-    setPluginRuntimeLoadContext,
-    createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
-  };
-});
+vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime/load-context.js")>()),
+  pluginRuntimeLoaderLogger,
+}));
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable,
@@ -591,10 +586,10 @@ describe("loadGatewayPlugins", () => {
 
   test("captures retired plugin reply owners through their canonical Gateway binding", async () => {
     const { admitReplyTurn } = await import("../auto-reply/reply/reply-turn-admission.js");
-    const { captureGatewayReplyRunRestartAbort } =
-      await import("../auto-reply/reply/reply-run-registry.js");
-    const { captureGatewaySessionWorkAdmissions } =
-      await import("../sessions/session-lifecycle-admission.js");
+    const { captureSessionControllerStop, stopSession } =
+      await import("../sessions/session-controller.stop.js");
+    const { captureGatewaySessionControllerWork } =
+      await import("../sessions/session-controller.lifecycle.js");
     const { replaceSessionEntry } = await import("../config/sessions/session-accessor.js");
     const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
     const stateDir = sessionDirs.make();
@@ -614,7 +609,7 @@ describe("loadGatewayPlugins", () => {
       inspection.register("sdk-wrapper", { id: "native", dispose: () => database.close() });
       return inspection;
     });
-    const operations: import("../auto-reply/reply/reply-run-registry.js").ReplyOperation[] = [];
+    const operations: import("../sessions/session-controller.js").ReplyOperation[] = [];
     const runtimes: Awaited<ReturnType<ServerPluginsModule["loadGatewayPlugins"]>>[] = [];
     try {
       for (const [name, resolver, sdkHost, inspection] of [
@@ -685,8 +680,13 @@ describe("loadGatewayPlugins", () => {
         }),
       );
       expect(closingResolver).not.toHaveBeenCalled();
-      const admissions = captureGatewaySessionWorkAdmissions(closingResolver);
-      const aborted = captureGatewayReplyRunRestartAbort(closingResolver)(() => {});
+      const admissions = captureGatewaySessionControllerWork(closingResolver);
+      const capture = captureSessionControllerStop({
+        operations: operations.filter((operation) =>
+          gatewayRequestScopeModule.hasGatewayContextOwner(operation, closingResolver),
+        ),
+      });
+      const aborted = stopSession({ capture, source: "restart" }).activeCancelled;
       expect({
         closing: admissions.isActive({
           scope: storePath,
@@ -869,6 +869,37 @@ describe("loadGatewayPlugins", () => {
         { timeoutMs: 5 },
       ),
     ).resolves.toEqual({ status: "accepted", runId: "run-accepted" });
+  });
+
+  test("isolates an autonomous agent from its caller transcript writer", async () => {
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("separate-transcript-writer"));
+    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+      expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
+      opts.respond(true, { status: "accepted", runId: "child-run" });
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: {
+          agentId: "main",
+          sessionId: "parent-session",
+          sessionKey: "agent:main:parent",
+          storePath: "/tmp/transcript-writer-parent.sqlite",
+          expectedWriterRunId: "parent-run",
+        },
+        withTranscriptWrite: trackAsyncWork,
+      },
+      async () => {
+        await expect(
+          serverPluginsModule.dispatchGatewayMethodInProcess("agent", {
+            sessionKey: "agent:main:child",
+          }),
+        ).resolves.toEqual({ status: "accepted", runId: "child-run" });
+        expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
+          expectedWriterRunId: "parent-run",
+        });
+      },
+    );
   });
 
   test("carries delegated tool-policy handoffs only in synthetic client context", async () => {

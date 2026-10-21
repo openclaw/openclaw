@@ -112,7 +112,6 @@ export function createExecApprovalChannelRuntime<
   let shouldRun = false;
   let startPromise: Promise<void> | null = null;
   let replayPromise: Promise<void> | null = null;
-  let lifecycleRevision = 0;
 
   const spawn = (label: string, promise: Promise<void>): void => {
     void promise.catch((err: unknown) => {
@@ -156,7 +155,6 @@ export function createExecApprovalChannelRuntime<
       return;
     }
     const entry = pending.begin(request.id, { request, entries: [] });
-    const requestRevision = lifecycleRevision;
     let entries: TPending[];
     try {
       const eligibility = opts?.alreadyAccepted === true ? true : adapter.shouldHandle(request);
@@ -164,7 +162,6 @@ export function createExecApprovalChannelRuntime<
       if (
         !eligible ||
         (opts?.ignoreIfInactive && !shouldRun) ||
-        requestRevision !== lifecycleRevision ||
         !pending.isCurrent(entry) ||
         entry.queued
       ) {
@@ -177,17 +174,11 @@ export function createExecApprovalChannelRuntime<
       pending.remove(request.id, entry);
       throw err;
     }
-    if (!pending.isCurrent(entry)) {
-      return;
-    }
     if (!entries.length) {
       pending.remove(request.id, entry);
       return;
     }
     await pending.completeDelivery(entry, { request, entries });
-    if (!pending.isCurrent(entry)) {
-      return;
-    }
 
     const timeoutMs = Math.max(0, request.expiresAtMs - nowMs());
     pending.scheduleExpiry(entry, timeoutMs, (expired) => {
@@ -407,7 +398,6 @@ export function createExecApprovalChannelRuntime<
     },
 
     async stop(): Promise<void> {
-      lifecycleRevision += 1;
       shouldRun = false;
       if (startPromise) {
         await startPromise.catch(() => {});
@@ -420,9 +410,7 @@ export function createExecApprovalChannelRuntime<
       gatewayClient?.stop();
       gatewayClient = null;
       await replayPromise?.catch(() => {});
-      if (wasActive) {
-        pending.clear();
-      }
+      pending.clear();
       await adapter.onStopped?.();
       if (wasActive) {
         log.debug("stopped");

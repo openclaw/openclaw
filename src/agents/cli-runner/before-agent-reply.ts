@@ -1,5 +1,5 @@
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  buildHandledBeforeAgentReplyMeta,
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
 } from "../../plugins/before-agent-reply.js";
@@ -7,6 +7,7 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
+import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -58,16 +59,24 @@ export async function runCliBeforeAgentReply(
             }),
         });
   if (hookResult?.handled) {
-    const handledMeta = buildHandledBeforeAgentReplyMeta(hookResult.reply);
+    const finalText = hookResult.reply?.text ?? "";
+    const prepared = prepareAgentRunTerminalReply({ rawText: finalText });
     const syntheticBackend = resolveCliBackendConfig(params.provider, params.config, {
       agentId: params.agentId,
     });
     const sessionBindingDisabled = syntheticBackend?.config.sessionMode === "none";
     cliBackendLog.info(
-      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(handledMeta.finalAssistantVisibleText)}`,
+      `cli synthetic turn: provider=${params.provider} model=<synthetic> requestedModel=${params.model ?? ""} durationMs=${Date.now() - hookStartedAt} ${formatCliBackendOutputDigest(finalText)}`,
     );
     return {
-      payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
+      payloads: hookResult.reply
+        ? buildHandledBeforeAgentReplyPayloads(
+            copyReplyPayloadMetadata(hookResult.reply, {
+              ...hookResult.reply,
+              text: prepared.text,
+            }),
+          )
+        : [],
       meta: {
         durationMs: Date.now() - hookStartedAt,
         agentMeta: {
@@ -76,7 +85,10 @@ export async function runCliBeforeAgentReply(
           model: params.model ?? "",
           ...(sessionBindingDisabled ? { clearCliSessionBinding: true } : {}),
         },
-        ...handledMeta,
+        finalAssistantVisibleText: prepared.text,
+        finalAssistantRawText: finalText,
+        terminalReply: hookResult.reply ? prepared.terminalReply : { disposition: "silent" },
+        providerStarted: false,
       },
     };
   }

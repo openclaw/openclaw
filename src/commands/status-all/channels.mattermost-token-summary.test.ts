@@ -1,172 +1,143 @@
-// Mattermost token summary tests cover status-all credential source counting and safe display output.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountInspectionResult } from "../../channels/account-inspection.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import {
-  summarizeTokenConfig,
-  type ChannelAccountTokenSummaryRow,
-} from "./channels-token-summary.js";
+import { buildChannelsTable } from "./channels.js";
 
-function tokenRow(params: {
-  account: Record<string, unknown>;
-  snapshot?: Partial<ChannelAccountSnapshot>;
-  enabled?: boolean;
-}): ChannelAccountTokenSummaryRow {
-  return {
-    account: params.account,
-    enabled: params.enabled ?? true,
-    snapshot: {
-      accountId: "primary",
-      ...params.snapshot,
-    } as ChannelAccountSnapshot,
-  };
+const mocks = vi.hoisted(() => ({ resolveInspectedChannelAccount: vi.fn() }));
+vi.mock("../../channels/account-inspection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/account-inspection.js")>()),
+  resolveInspectedChannelAccount: mocks.resolveInspectedChannelAccount,
+}));
+vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/read-only.js")>()),
+  resolveReadOnlyChannelPluginsForConfig: () => ({
+    plugins: [
+      {
+        id: "mattermost",
+        meta: { label: "Mattermost" },
+        config: {
+          listAccountIds: () => ["primary"],
+          defaultAccountId: () => "primary",
+        },
+      },
+    ],
+    manifestRecords: [],
+    missingConfiguredChannelIds: [],
+    loadFailures: [],
+  }),
+}));
+
+beforeEach(() => vi.clearAllMocks());
+
+async function summarize(
+  account: Record<string, unknown>,
+  snapshot: Partial<ChannelAccountSnapshot> = {},
+  showSecrets = false,
+) {
+  mocks.resolveInspectedChannelAccount.mockResolvedValueOnce({
+    kind: "inspected",
+    account,
+    enabled: true,
+    configured: true,
+    snapshot: { accountId: "primary", ...snapshot },
+  } satisfies ChannelAccountInspectionResult);
+  const table = await buildChannelsTable({}, { showSecrets });
+  const row = table.rows[0];
+  if (!row) {
+    throw new Error("channel row missing");
+  }
+  return row;
 }
 
-function summarize(accounts: ChannelAccountTokenSummaryRow[]) {
-  return summarizeTokenConfig({ accounts, showSecrets: false });
-}
+describe("channel table credential summaries", () => {
+  it("does not require appToken for bot-token-only channels", async () => {
+    const summary = await summarize(
+      { botToken: "bot-token-value", baseUrl: "https://mm.example.com" },
+      { botTokenSource: "config" },
+    );
 
-describe("summarizeTokenConfig", () => {
-  it("does not require appToken for bot-token-only channels", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          botToken: "bot-token-value",
-          baseUrl: "https://mm.example.com",
-        },
-        snapshot: { botTokenSource: "config" },
-      }),
-    ]);
-
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("bot token config");
-    expect(summary.detail).not.toContain("need bot+app");
-  });
-
-  it("keeps bot+app requirement when both fields exist", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          botToken: "bot-token",
-          appToken: "",
-        },
-      }),
-    ]);
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("need bot+app");
-  });
-
-  it("reports configured-but-unavailable Slack credentials as warn", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          configured: true,
-          botToken: "",
-          appToken: "",
-          botTokenSource: "config",
-          appTokenSource: "config",
-          botTokenStatus: "configured_unavailable",
-          appTokenStatus: "configured_unavailable",
-        },
-        snapshot: {
-          botTokenSource: "config",
-          appTokenSource: "config",
-        },
-      }),
-    ]);
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("unavailable in this command path");
-  });
-
-  it("treats status-only available HTTP credentials as resolved", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          mode: "http",
-          botToken: "",
-          signingSecret: "", // pragma: allowlist secret
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-          botTokenStatus: "available",
-          signingSecretStatus: "available", // pragma: allowlist secret
-        },
-        snapshot: {
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-        },
-      }),
-    ]);
-
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("credentials ok");
-  });
-
-  it("treats Slack HTTP signing-secret availability as required config", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          mode: "http",
-          botToken: "xoxb-http",
-          signingSecret: "", // pragma: allowlist secret
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-          botTokenStatus: "available",
-          signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-        },
-        snapshot: {
-          botTokenSource: "config",
-          signingSecretSource: "config", // pragma: allowlist secret
-        },
-      }),
-    ]);
-
-    expect(summary.state).toBe("warn");
-    expect(summary.detail).toContain("configured http credentials unavailable");
+    expect(summary).toMatchObject({
+      state: "ok",
+      detail: expect.stringMatching(
+        /^bot token config \(sha256:[a-f0-9]{8} · len 15\) · accounts 1\/1$/u,
+      ),
+    });
   });
 
   it.each([
     {
-      mode: "http",
+      name: "requires both bot and app tokens",
+      account: { botToken: "bot-token", appToken: "" },
+      snapshot: {},
+      expected: { state: "warn", detail: expect.stringContaining("need bot+app") },
+    },
+    {
+      name: "warns for configured-but-unavailable credentials",
       account: {
+        botToken: "",
+        appToken: "",
+        botTokenStatus: "configured_unavailable",
+        appTokenStatus: "configured_unavailable",
+      },
+      snapshot: { botTokenSource: "config", appTokenSource: "config" },
+      expected: {
+        state: "warn",
+        detail: expect.stringContaining("unavailable in this command path"),
+      },
+    },
+    {
+      name: "accepts status-only available HTTP credentials",
+      account: {
+        mode: "http",
+        botToken: "",
+        signingSecret: "", // pragma: allowlist secret
+        botTokenStatus: "available",
+        signingSecretStatus: "available", // pragma: allowlist secret
+      },
+      snapshot: { botTokenSource: "config", signingSecretSource: "config" }, // pragma: allowlist secret
+      expected: { state: "ok", detail: expect.stringContaining("credentials ok") },
+    },
+    {
+      name: "prioritizes unavailable credentials in HTTP mode",
+      account: {
+        mode: "http",
         botToken: "bot-token",
         signingSecret: "", // pragma: allowlist secret
         signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
       },
-      detail: "configured http credentials unavailable in this command path · accounts 1",
+      snapshot: {},
+      expected: {
+        state: "warn",
+        detail: "configured http credentials unavailable in this command path · accounts 1",
+      },
     },
     {
-      mode: "socket",
+      name: "preserves public unavailable-credential precedence in socket mode",
       account: {
+        mode: "socket",
         botToken: "bot-token",
         appToken: "",
         appTokenStatus: "configured_unavailable",
       },
-      detail: "partial tokens (need bot+app) · accounts 1",
-    },
-  ])(
-    "preserves unavailable-versus-partial precedence in $mode mode",
-    ({ mode, account, detail }) => {
-      expect(summarize([tokenRow({ account: { mode, ...account } })])).toEqual({
+      snapshot: {},
+      expected: {
         state: "warn",
-        detail,
-      });
+        detail: "configured credentials unavailable in this command path · accounts 1",
+      },
     },
-  );
-
-  it("requires token values for socket mode even when status fields report available", () => {
-    expect(
-      summarize([
-        tokenRow({
-          account: {
-            botToken: "",
-            appToken: "",
-            botTokenStatus: "available",
-            appTokenStatus: "available",
-          },
-        }),
-      ]),
-    ).toEqual({ state: "setup", detail: "no tokens (need bot+app)" });
+    {
+      name: "requires socket token values despite available status fields",
+      account: {
+        botToken: "",
+        appToken: "",
+        botTokenStatus: "available",
+        appTokenStatus: "available",
+      },
+      snapshot: {},
+      expected: { state: "setup", detail: "no tokens (need bot+app)" },
+    },
+  ])("$name", async ({ account, snapshot, expected }) => {
+    expect(await summarize(account, snapshot)).toMatchObject(expected);
   });
 
   it.each([
@@ -174,11 +145,8 @@ describe("summarizeTokenConfig", () => {
     [`abc😀${"x".repeat(10)}`, "abc…xxxx · len 15"],
     [`${"x".repeat(10)}😀abc`, "xxxx…abc · len 15"],
     ["a😀b", "a😀b · len 4"],
-  ])("formats a visible token hint without splitting %p", (token, expectedHint) => {
-    const summary = summarizeTokenConfig({
-      accounts: [tokenRow({ account: { token }, snapshot: { tokenSource: "config" } })],
-      showSecrets: true,
-    });
+  ])("formats a visible token hint without splitting %p", async (token, expectedHint) => {
+    const summary = await summarize({ token }, { tokenSource: "config" }, true);
 
     expect(summary.detail).toContain(`token config (${expectedHint})`);
   });

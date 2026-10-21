@@ -8,6 +8,10 @@ import type {
   PluginInstanceConsumer,
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
+  PluginRetentionSnapshot,
+  PluginRetentionReason,
+  PluginRetentionOwner,
+  PluginWorkRelease,
 } from "./plugin-instance.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
@@ -23,9 +27,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void;
-  retainWork(): () => void;
+  retainWork(reason?: PluginRetentionReason): PluginWorkRelease;
+  retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
   waitForRetainedWork(
@@ -38,6 +43,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind?: "work" | "custody",
+    diagnostics?: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner },
   ): PluginInstanceConsumer;
   runInRegistry<T>(
     registry: PluginRegistry | undefined,

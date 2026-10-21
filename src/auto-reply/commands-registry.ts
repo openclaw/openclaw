@@ -382,7 +382,7 @@ type ResolvedCommandArgMenu = {
   title?: string;
 };
 
-/** @deprecated Use resolveCommandArgMenuAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use resolveCommandArgMenuAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {
   warnPluginSdkDeprecation({
     family: "native-command-menu",
@@ -397,11 +397,7 @@ export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCom
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey,
     });
-    setVerboseMenuTitle(
-      menu,
-      params.command,
-      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
-    );
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
   }
   return menu;
 }
@@ -418,11 +414,7 @@ export async function resolveCommandArgMenuAsync(
       storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
       sessionKey,
     });
-    setVerboseMenuTitle(
-      menu,
-      params.command,
-      entry?.verboseLevel ?? resolveAgentConfig(params.cfg, agentId)?.verboseDefault ?? "off",
-    );
+    setVerboseMenuTitle(menu, params.command, params.cfg, agentId, entry?.verboseLevel);
   }
   return menu;
 }
@@ -430,9 +422,12 @@ export async function resolveCommandArgMenuAsync(
 function setVerboseMenuTitle(
   menu: ResolvedCommandArgMenu,
   command: ChatCommandDefinition,
-  level: string,
+  cfg: OpenClawConfig,
+  agentId: string,
+  level: string | undefined,
 ): void {
-  menu.title = `Current verbose level: ${level}.\n${formatCommandArgMenuTitle({ command, menu })}`;
+  const effectiveLevel = level ?? resolveAgentConfig(cfg, agentId)?.verboseDefault ?? "off";
+  menu.title = `Current verbose level: ${effectiveLevel}.\n${formatCommandArgMenuTitle({ command, menu })}`;
 }
 
 function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCommandArgMenu | null {

@@ -63,6 +63,22 @@ describe("Solid copy button", () => {
     },
   );
 
+  it("retires completed feedback and its reset timer when the payload changes", async () => {
+    const [text, setText] = createSignal("first");
+    const view = render(() => <CopyButton text={text()} idleLabel={`Copy ${text()}`} />);
+    fireEvent.click(view.getByRole("button", { name: "Copy first" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.getByRole("status").textContent).toBe("Copied!");
+
+    setText("second");
+    flush();
+    const current = view.getByRole<HTMLButtonElement>("button", { name: "Copy second" });
+    expect(current.dataset.copyState).toBeUndefined();
+    expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(current.getAttribute("aria-label")).toBe("Copy second");
+  });
+
   it("keeps focus and pending copy across an idle-label update, then resets to the latest label", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);

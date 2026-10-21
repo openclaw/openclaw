@@ -1,8 +1,22 @@
 import { fork } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import {
+  assertChildRuntimeAvailable,
+  observeChildRuntime,
+} from "../infra/child-runtime-viability.js";
+import {
+  getDatabaseEngineInput,
+  getDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
+import {
+  getOrLoadSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmission,
+  readSqliteDatabaseCleanClose,
+} from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -11,6 +25,8 @@ import {
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
+import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
 import {
   restoreAgentSchemaInspectionError,
   type AgentSchemaInspectionResponse,
@@ -30,6 +46,7 @@ type ReaderProcess = {
   retired: boolean;
   closeBudgetMs: number;
   failure?: Error;
+  runtimeFailure?: Error;
 };
 
 export type AgentSchemaInspectionSnapshot = { pathname: string; identity: FileIdentityStat };
@@ -58,14 +75,17 @@ export function createAgentSchemaInspectionWorker() {
   let inspectionCount = 0;
   let snapshotCount = 0;
   let sequence = 0;
+  let releasePrestart: (() => void) | undefined;
   const startReader = (timeoutMs: number): ReaderProcess => {
     const entry = resolveRuntimeProcessEntrypointUrl("agentSchemaInspection");
+    assertChildRuntimeAvailable();
     const child = fork(entry, [], {
       execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
       serialization: "advanced",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     processCount += 1;
+    const runtimeFailure = observeChildRuntime(child);
     const closed = createDeferredCore();
     const started: ReaderProcess = {
       child,
@@ -78,6 +98,7 @@ export function createAgentSchemaInspectionWorker() {
       retireReader(started);
     });
     child.once("close", () => {
+      started.runtimeFailure = runtimeFailure();
       started.retired = true;
       closed.resolve();
     });
@@ -85,11 +106,13 @@ export function createAgentSchemaInspectionWorker() {
   };
   const operations = {
     inspect: async (
-      input: AgentSchemaInspectionInput | StateSchemaInspectionInput,
+      request:
+        | { kind: "agent"; input: AgentSchemaInspectionInput }
+        | { kind: "state"; input: StateSchemaInspectionInput },
       callerSignal?: AbortSignal,
       snapshotPath?: string,
-      kind?: "state",
     ): Promise<AgentSchemaInspection | StateSchemaInspection | null> => {
+      const { input, kind } = request;
       const signal = resolveSqliteInspectionSignal(callerSignal);
       signal?.throwIfAborted();
       if (disposed || busy) {
@@ -101,6 +124,124 @@ export function createAgentSchemaInspectionWorker() {
       }
       busy = true;
       try {
+        const schemaOnly =
+          kind === "agent" &&
+          !input.verifyCurrentSchemaShape &&
+          !input.requireStartupMigrationReadiness &&
+          !input.inspectOwnership &&
+          !input.inspectEmptyStore;
+        let postgresAgent = Boolean(getDatabaseEngineInput("agent"));
+        let postgresAgentId: string | undefined;
+        const selection = getDatabaseEngineSelection();
+        if (schemaOnly && selection?.postgres) {
+          // Update admission includes retained stores that can differ from the selected engine.
+          if (!existsSync(snapshotPath ?? input.pathname)) {
+            return null;
+          }
+          const { readBackupEngine, readBackupEngineImage } =
+            await import("../infra/database-engine/physical-store.js");
+          const physical = snapshotPath
+            ? readBackupEngineImage(snapshotPath, input.pathname)
+            : readBackupEngine(input.pathname);
+          signal?.throwIfAborted();
+          if (physical.engine === "sqlite") {
+            if (postgresAgent && !snapshotPath) {
+              // The caller assumed PostgreSQL; defer to its artifact-preserving SQLite copy.
+              return null;
+            }
+            postgresAgent = false;
+          } else if (!postgresAgent) {
+            const { withPostgresStoreMetadata } =
+              await import("../infra/database-engine/postgres-store-metadata.js");
+            const result = await withPostgresStoreMetadata(
+              selection.postgres,
+              physical,
+              async (_client, metadata) => {
+                if (metadata.store !== "agent") {
+                  throw new Error("PostgreSQL agent inspection requires an agent store.");
+                }
+                return { version: metadata.version };
+              },
+            );
+            signal?.throwIfAborted();
+            inspectionCount += 1;
+            return result;
+          }
+        }
+        if (kind === "agent" && postgresAgent) {
+          if (snapshotPath) {
+            throw new Error(
+              "PostgreSQL agent inspection requires its live engine owner, not a SQLite snapshot.",
+            );
+          }
+          const { getPendingOpenClawAgentDatabasePreparation } =
+            await import("./openclaw-agent-execution.js");
+          await getPendingOpenClawAgentDatabasePreparation(input.pathname);
+          signal?.throwIfAborted();
+          let agentId =
+            input.agentId ??
+            getOrLoadSqliteDatabaseAdmissionForPath(
+              input.pathname,
+              agentSchemaMetadataKey,
+              () => undefined,
+            )?.agentId;
+          if (!agentId) {
+            const { prepareSqliteTargetFromSessionStorePath } =
+              await import("../config/sessions/session-sqlite-target.js");
+            const target = await prepareSqliteTargetFromSessionStorePath(
+              input.pathname,
+              { env: input.env ?? process.env },
+              signal,
+            );
+            if (
+              !target.agentId ||
+              (target.ownerSource !== undefined &&
+                target.ownerSource !== "database-path" &&
+                target.ownerSource !== "database-registry")
+            ) {
+              throw new Error(
+                "PostgreSQL schema inspection could not establish the custom store owner.",
+              );
+            }
+            agentId = target.agentId;
+          }
+          postgresAgentId = agentId;
+        }
+        if (
+          kind !== "state" &&
+          !postgresAgent &&
+          !snapshotPath &&
+          input.requireStartupMigrationReadiness &&
+          readSqliteDatabaseCleanClose(input.pathname)
+        ) {
+          const validation = getOrLoadSqliteDatabaseAdmissionForPath(
+            input.pathname,
+            agentDatabaseValidationKey,
+            () => undefined,
+          );
+          const metadata = getOrLoadSqliteDatabaseAdmissionForPath(
+            input.pathname,
+            agentSchemaMetadataKey,
+            () => undefined,
+          );
+          if (
+            validation?.schema?.facts?.userVersion === input.supportedVersion &&
+            Atomics.load(new Int32Array(validation.valid), 0) === 1 &&
+            Atomics.load(new Int32Array(validation.schema.valid), 0) === 1 &&
+            prepareSqliteDatabaseAdmission(input.pathname) ===
+              `${validation.identity}:${validation.birthtime}` &&
+            metadata?.agentId === validation.agentId &&
+            (input.agentId === undefined || input.agentId === validation.agentId) &&
+            metadata.role === "agent" &&
+            metadata.schemaVersion === input.supportedVersion
+          ) {
+            return {
+              version: input.supportedVersion,
+              integrityGateOutcome: "cached",
+              agentSchemaMeta: metadata,
+            };
+          }
+        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -118,6 +259,8 @@ export function createAgentSchemaInspectionWorker() {
         );
         const active = (reader ??= startReader(timeoutMs));
         active.closeBudgetMs = timeoutMs;
+        releasePrestart?.();
+        releasePrestart = undefined;
         const requestId = ++sequence;
         const response = createDeferredCore<AgentSchemaInspection | StateSchemaInspection | null>();
         let failure: Error | undefined;
@@ -143,14 +286,17 @@ export function createAgentSchemaInspectionWorker() {
           } else {
             if (kind === "state") {
               const stateInspection = message.stateInspection;
-              if (!stateInspection) {
+              if (stateInspection === null) {
+                response.resolve(null);
+                return;
+              }
+              if (stateInspection === undefined) {
                 failure = new Error("Invalid state schema inspection response");
                 kill();
                 return;
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),
@@ -174,7 +320,8 @@ export function createAgentSchemaInspectionWorker() {
           response.reject(
             signal?.aborted
               ? toStringifiedError(signal.reason)
-              : (failure ??
+              : (active.runtimeFailure ??
+                  failure ??
                   active.failure ??
                   (exitSignal === "SIGKILL"
                     ? sqliteInspectionTimeoutError(
@@ -205,7 +352,18 @@ export function createAgentSchemaInspectionWorker() {
         signal?.addEventListener("abort", onAbort, { once: true });
         try {
           active.child.send(
-            { type: kind === "state" ? "inspect-state" : "inspect", requestId, input, snapshot },
+            {
+              type: kind === "state" ? "inspect-state" : "inspect",
+              requestId,
+              input: {
+                ...input,
+                ...(postgresAgentId ? { agentId: postgresAgentId } : {}),
+                // Advanced IPC cannot clone the Windows case-insensitive env Proxy.
+                ...("env" in input && input.env ? { env: { ...input.env } } : {}),
+              },
+              snapshot,
+              ...(kind === "agent" && postgresAgent ? { databaseEngineSelection: selection } : {}),
+            },
             (error) => {
               if (error) {
                 failure ??= error;
@@ -239,6 +397,27 @@ export function createAgentSchemaInspectionWorker() {
     },
   };
   return {
+    /** Load the isolated reader while startup discovers its targets; no database is opened. */
+    prestart(callerSignal?: AbortSignal): void {
+      const signal = resolveSqliteInspectionSignal(callerSignal);
+      signal?.throwIfAborted();
+      if (disposed || busy) {
+        throw new Error("Agent schema inspection worker is unavailable for prestart");
+      }
+      if (reader) {
+        return;
+      }
+      // An unused reader has no work to settle. Inspection installs its full budget below.
+      const active = (reader = startReader(0));
+      const onAbort = () => {
+        active.retired = true;
+        active.child.kill("SIGKILL");
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const release = () => signal?.removeEventListener("abort", onAbort);
+      releasePrestart = release;
+      void active.closed.then(release);
+    },
     get processCount() {
       return processCount;
     },
@@ -253,7 +432,7 @@ export function createAgentSchemaInspectionWorker() {
       callerSignal?: AbortSignal,
       snapshotPath?: string,
     ): Promise<AgentSchemaInspection | null> => {
-      const result = await operations.inspect(input, callerSignal, snapshotPath);
+      const result = await operations.inspect({ kind: "agent", input }, callerSignal, snapshotPath);
       if (result && "schemas" in result) {
         throw new Error("Unexpected state schema inspection result");
       }
@@ -262,16 +441,18 @@ export function createAgentSchemaInspectionWorker() {
     inspectState: async (
       input: StateSchemaInspectionInput,
       callerSignal: AbortSignal | undefined,
-      snapshotPath: string,
-    ): Promise<StateSchemaInspection> => {
-      const result = await operations.inspect(input, callerSignal, snapshotPath, "state");
-      if (!result || !("schemas" in result)) {
-        throw new Error("Missing state schema inspection result");
+      snapshotPath?: string,
+    ): Promise<StateSchemaInspection | null> => {
+      const result = await operations.inspect({ kind: "state", input }, callerSignal, snapshotPath);
+      if (result && !("schemas" in result)) {
+        throw new Error("Unexpected agent schema inspection result");
       }
       return result;
     },
     async [Symbol.asyncDispose]() {
       disposed = true;
+      releasePrestart?.();
+      releasePrestart = undefined;
       if (!reader) {
         return;
       }

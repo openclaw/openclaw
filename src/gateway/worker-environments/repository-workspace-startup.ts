@@ -1,5 +1,6 @@
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
+import { prepareRepositoryGitHubIdentity } from "./repository-github-identity.js";
 import {
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
@@ -9,7 +10,6 @@ import type {
   WorkerTunnelHandle,
   WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
-import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 /** Prepare source on the worker and durably accept its initial state before activation. */
 export async function syncSessionRepositoryWorkspace(params: {
@@ -24,6 +24,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   recovery?: true;
   preparedRepository?: PreparedRepositoryWorkspace;
   assertCurrent: () => void;
+  markPhase?: (phase: string) => void;
 }) {
   const store = getSessionRepositoryWorkspaceStore();
   let repository = params.repository;
@@ -56,17 +57,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   params.assertCurrent();
   const github = prepared
     ? undefined
-    : (
-        await prepareGitHubPublicationFact({
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          agentId: params.agentId,
-          assertCurrent: () => {
-            params.assertCurrent();
-            return true;
-          },
-        })
-      )?.github;
+    : await prepareRepositoryGitHubIdentity(params.agentId, params.assertCurrent);
   params.assertCurrent();
   const source: Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }> = {
     kind: "repository",
@@ -80,24 +71,24 @@ export async function syncSessionRepositoryWorkspace(params: {
       !repository.checkpointRef &&
       repository.runSetupScript &&
       params.runSetupScript === true,
-    ...(github ? { gitToken: github.token } : {}),
+    ...(github?.token ? { gitToken: github.token } : {}),
   };
   const sync = async (checkpoint?: typeof source.checkpoint) => {
     params.assertCurrent();
-    return await params.tunnel.syncWorkspace({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      generation: params.generation,
-      gitAuthor: params.gitAuthor,
-      source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
-      authorize: params.assertCurrent,
-    });
+    const start = () =>
+      params.tunnel.syncWorkspace({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        generation: params.generation,
+        gitAuthor: params.gitAuthor,
+        source: { ...source, ...(checkpoint ? { checkpoint } : {}) },
+        authorize: github?.assertSelected ?? params.assertCurrent,
+      });
+    return github ? await github.start(start) : await start();
   };
+  params.markPhase?.("repositorySync");
   const synced = repository.checkpointRef
-    ? await withSessionRepositoryCheckpoint(
-        { workspaceId: repository.workspaceId, includePublication: true },
-        sync,
-      )
+    ? await withSessionRepositoryCheckpoint({ workspaceId: repository.workspaceId }, sync)
     : await sync();
   params.assertCurrent();
   if (synced.mode !== "repository") {
@@ -132,15 +123,18 @@ export async function syncSessionRepositoryWorkspace(params: {
     }
     return synced;
   }
+  params.markPhase?.("repositoryQuiesce");
   const quiescence = await params.tunnel.quiesceWorkspace(synced.remoteWorkspaceDir);
   let reconciliation: Awaited<ReturnType<WorkerTunnelHandle["reconcileWorkspace"]>> | undefined;
   try {
     params.assertCurrent();
+    params.markPhase?.("repositoryReconcile");
     reconciliation = await params.tunnel.reconcileWorkspace({
       remoteWorkspaceDir: synced.remoteWorkspaceDir,
       baseManifestRef: synced.baseManifestRef,
       source: {
         kind: "repository",
+        markPhase: params.markPhase,
         authorize: params.assertCurrent,
         referenceManifestRef: synced.manifestRef,
         prepareCheckpoint: (payload) =>
@@ -152,14 +146,19 @@ export async function syncSessionRepositoryWorkspace(params: {
           }),
       },
     });
+    params.markPhase?.("repositoryQuiescenceRenewal");
     await quiescence.assertActive();
+    params.markPhase?.("repositoryVerification");
     await reconciliation.verifyStable();
+    params.markPhase?.("repositoryLocalVerification");
     await reconciliation.verifyLocalStable();
     params.assertCurrent();
+    params.markPhase?.("repositoryAcceptance");
     await reconciliation.publishStagedResult();
     params.assertCurrent();
     return { ...synced, manifestRef: reconciliation.manifestRef };
   } finally {
+    params.markPhase?.("repositoryCleanup");
     try {
       await reconciliation?.discardPreparedStagedResult();
     } finally {

@@ -5,7 +5,7 @@ import {
   readPersonalGitHubPublicationInDatabase,
   type PersonalGitHubPublicationRow,
 } from "../../gateway/github-personal-publication-store.worker.js";
-import { readGitHubPublicationSessionLifecycle } from "../../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../../state/github-publication-session-lifecycles.worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -31,6 +31,7 @@ export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: 
     identity_login: "fixture-user",
     title: "Synthetic publication",
     body: null,
+    draft: null,
     status: "requested",
     gateway_instance_id: "fixture-gateway",
     execution_id: null,
@@ -59,9 +60,12 @@ export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: 
     receipt: readPersonalGitHubPublicationInDatabase(openOpenClawStateDatabase().db, owner, {
       requestId: row.request_id,
     }),
-    lifecycle: readGitHubPublicationSessionLifecycle({
-      publicationKind: "personal",
-      requestId: row.request_id,
-    }),
+    lifecycle: readGitHubPublicationSessionLifecycle(
+      {
+        publicationKind: "personal",
+        requestId: row.request_id,
+      },
+      openOpenClawStateDatabase().db,
+    ),
   });
 }

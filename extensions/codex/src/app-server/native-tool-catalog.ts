@@ -26,7 +26,7 @@ export function parseCodexNativeToolCatalog(
 ): CodexDynamicToolSpec[] {
   const fail = () =>
     new Error(
-      "The canonical Codex native tool catalog is missing, corrupt, or changed; the thread is preserved. Reconnect and inspect its native metadata before retrying.",
+      "The saved Codex native tool catalog is missing, corrupt, or changed; the thread is preserved. Reconnect and inspect its native metadata before retrying.",
     );
   if (!isJsonObject(metadata) || metadata.id !== threadId) {
     throw fail();
@@ -60,7 +60,7 @@ export function parseCodexNativeToolCatalog(
       type: "function",
       name: value.name,
       description: value.description,
-      inputSchema: structuredClone(value.inputSchema),
+      inputSchema: value.inputSchema,
       ...(value.deferLoading === true ? { deferLoading: true } : {}),
     };
   };
@@ -116,7 +116,7 @@ export async function loadCodexNativeToolCatalog(params: {
       buildCodexAppServerConnectionFingerprint(appServer, agentDir)
   ) {
     throw new Error(
-      "Canonical Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
+      "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
     );
   }
   const metadata = await readCodexClientSessionMeta(

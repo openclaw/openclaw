@@ -2,9 +2,10 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
-  TOKENHUB_MODEL_CATALOG,
+  buildTokenHubProvider,
+  buildTokenPlanProvider,
+  TENCENT_PROVIDER_CATALOG,
   TOKENHUB_PROVIDER_ID,
-  TOKENPLAN_MODEL_CATALOG,
   TOKENPLAN_PROVIDER_ID,
 } from "./models.js";
 import {
@@ -13,7 +14,6 @@ import {
   TOKENHUB_DEFAULT_MODEL_REF,
   TOKENPLAN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
-import { buildTokenHubProvider, buildTokenPlanProvider } from "./provider-catalog.js";
 import { wrapTencentProviderStream } from "./stream.js";
 
 const TENCENT_PROVIDERS = [
@@ -27,7 +27,6 @@ const TENCENT_PROVIDERS = [
     applyConfig: applyTokenHubConfig,
     choiceId: "tokenhub-api-key",
     buildProvider: buildTokenHubProvider,
-    modelCatalog: TOKENHUB_MODEL_CATALOG,
   },
   {
     providerId: TOKENPLAN_PROVIDER_ID,
@@ -39,7 +38,6 @@ const TENCENT_PROVIDERS = [
     applyConfig: applyTokenPlanConfig,
     choiceId: "tokenplan-api-key",
     buildProvider: buildTokenPlanProvider,
-    modelCatalog: TOKENPLAN_MODEL_CATALOG,
   },
 ] as const;
 
@@ -91,14 +89,9 @@ export default definePluginEntry({
           run: async () => ({ provider: provider.buildProvider() }),
         },
         augmentModelCatalog: () =>
-          provider.modelCatalog.map((entry) => ({
-            provider: provider.providerId,
-            id: entry.id,
-            name: entry.name,
-            reasoning: entry.reasoning,
-            input: [...entry.input],
-            contextWindow: entry.contextWindow,
-          })),
+          TENCENT_PROVIDER_CATALOG.augmentModelCatalog().filter(
+            (entry) => entry.provider === provider.providerId,
+          ),
         wrapStreamFn: wrapTencentProviderStream,
       });
     }

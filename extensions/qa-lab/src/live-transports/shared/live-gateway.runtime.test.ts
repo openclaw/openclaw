@@ -1,4 +1,3 @@
-// Qa Lab tests cover live gateway plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -37,15 +36,6 @@ function createStubTransport(baseUrl = "http://127.0.0.1:43123") {
         "qa-channel": {
           enabled: true,
           baseUrl,
-          botUserId: "openclaw",
-          botDisplayName: "OpenClaw QA",
-          allowFrom: ["*"],
-          pollTimeoutMs: 250,
-        },
-      },
-      messages: {
-        groupChat: {
-          mentionPatterns: ["\\b@?openclaw\\b"],
         },
       },
     }),
@@ -61,6 +51,7 @@ function gatewayParams(overrides: Partial<StartOptions> = {}): StartOptions {
     providerMode: "mock-openai",
     primaryModel: "mock-openai/gpt-5.6-luna",
     alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    controlUiEnabled: false,
     ...overrides,
   };
 }
@@ -81,10 +72,9 @@ describe("createQaLiveLaneGateway", () => {
 
   beforeEach(() => {
     gatewayStop.mockReset().mockResolvedValue({ process: "confirmed-stopped", errors: [] });
-    gatewayCall.mockReset();
-    mockStop.mockReset();
-    startQaGatewayChild.mockReset();
-    startQaProviderServer.mockReset();
+    for (const mock of [gatewayCall, mockStop, startQaGatewayChild, startQaProviderServer]) {
+      mock.mockReset();
+    }
 
     startQaGatewayChild.mockResolvedValue({
       call: gatewayCall,
@@ -92,12 +82,7 @@ describe("createQaLiveLaneGateway", () => {
       stop: gatewayStop,
     });
     startQaProviderServer.mockImplementation(async (providerMode: string) =>
-      providerMode === "mock-openai"
-        ? {
-            baseUrl: "http://127.0.0.1:44080",
-            stop: mockStop,
-          }
-        : null,
+      providerMode === "mock-openai" ? { baseUrl: "http://127.0.0.1:44080", stop: mockStop } : null,
     );
   });
 
@@ -120,18 +105,14 @@ describe("createQaLiveLaneGateway", () => {
   });
 
   it("closes child admission while provider startup is pending", async () => {
-    let release!: (mock: { baseUrl: string; stop: typeof mockStop }) => void;
-    startQaProviderServer.mockReturnValueOnce(
-      new Promise((resolve) => {
-        release = resolve;
-      }),
-    );
+    const provider = Promise.withResolvers<{ baseUrl: string; stop: typeof mockStop }>();
+    startQaProviderServer.mockReturnValueOnce(provider.promise);
     gatewayStop.mockResolvedValue({ process: "never-spawned", errors: [] });
     const owner = createQaLiveLaneGateway();
     const startup = owner.start(gatewayParams());
     const rejection = expect(startup).rejects.toThrow("lifecycle is closed");
     const stopping = owner.stop();
-    release({ baseUrl: "http://127.0.0.1:44080", stop: mockStop });
+    provider.resolve({ baseUrl: "http://127.0.0.1:44080", stop: mockStop });
     await rejection;
     await expect(stopping).resolves.toEqual({ process: "never-spawned", errors: [] });
     expect(startQaGatewayChild).not.toHaveBeenCalled();
@@ -174,7 +155,7 @@ describe("createQaLiveLaneGateway", () => {
   });
 
   it("disables memory search for transport-only live lanes", async () => {
-    await ownGateway().start(gatewayParams({ controlUiEnabled: false }));
+    await ownGateway().start(gatewayParams());
 
     const { mutateConfig } = firstGatewayOptions() ?? {};
     if (!mutateConfig) {
@@ -193,21 +174,12 @@ describe("createQaLiveLaneGateway", () => {
           contextEngine: "custom-context",
         },
       },
-      memory: {
-        search: {
-          enabled: true,
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
+      memory: { search: { enabled: true } },
     });
 
     expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
     expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
-    expect(cfg?.plugins?.slots?.memory).toBe("none");
-    expect(cfg?.plugins?.slots?.contextEngine).toBe("custom-context");
+    expect(cfg?.plugins?.slots).toEqual({ memory: "none", contextEngine: "custom-context" });
     expect(cfg?.memory?.search?.enabled).toBe(false);
   });
 
@@ -225,7 +197,6 @@ describe("createQaLiveLaneGateway", () => {
         providerMode: "live-frontier",
         primaryModel: "openai/gpt-5.6-luna",
         alternateModel: "openai/gpt-5.6-luna",
-        controlUiEnabled: false,
       }),
     );
 
@@ -289,7 +260,7 @@ describe("createQaLiveLaneGateway", () => {
 
   it("retries only mock cleanup after gateway preservation succeeds", async () => {
     mockStop.mockRejectedValueOnce(new Error("mock down"));
-    const harness = await ownGateway().start(gatewayParams({ controlUiEnabled: false }));
+    const harness = await ownGateway().start(gatewayParams());
     const stopOptions = { preserveToDir: ".artifacts/qa-e2e/debug" };
 
     await expect(harness.stop(stopOptions)).rejects.toThrow("mock down");
@@ -305,7 +276,7 @@ describe("createQaLiveLaneGateway", () => {
       process: "unconfirmed",
       errors: [new Error("gateway down")],
     });
-    const harness = await ownGateway().start(gatewayParams({ controlUiEnabled: false }));
+    const harness = await ownGateway().start(gatewayParams());
 
     await expect(harness.stop()).rejects.toThrow("gateway down");
     expect(mockStop).toHaveBeenCalledTimes(1);

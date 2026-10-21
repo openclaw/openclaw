@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -10,16 +9,18 @@ import type {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startComputerHostProcess } from "./computer-process.js";
 import { ComputerHostFinalizationError, type ComputerHostInput } from "./computer-protocol.js";
+import {
+  computerCapabilities,
+  observeSettlement as observe,
+  runExit,
+  whileHeld,
+} from "./computer.test-support.js";
 
-const computerUse: ComputerUseCapabilityDescriptor = {
-  contractVersion: 2,
-  provider: { id: "fixture", label: "Fixture", generation: "native-generation" },
-  actions: ["screenshot", "left_click"],
-  targets: ["screen"],
-  deliveryModes: ["foreground"],
-  observations: ["image"],
-  features: { recording: false, agentCursor: false, multiDisplay: false },
-};
+const computerUse = computerCapabilities({
+  id: "fixture",
+  label: "Fixture",
+  generation: "native-generation",
+});
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
@@ -35,31 +36,16 @@ function createChildFixture(options: { startupError?: string; finalizationError?
   const invocationReceived = createDeferredCore<Extract<ComputerHostInput, { type: "invoke" }>>();
   const messages: ComputerHostInput[] = [];
   const inputs: SpawnInput[] = [];
-  let input: SpawnInput | undefined;
-  let resultSettled = false;
+  const activity = { resultSettled: false, lastOutputAtMs: 0 };
   const exit = (exitCode = 0) => {
-    resultSettled = true;
-    exited.resolve({
-      reason: "exit",
-      exitCode,
-      exitSignal: null,
-      durationMs: 1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    });
+    activity.resultSettled = true;
+    exited.resolve(runExit({ exitCode, durationMs: 1 }));
   };
-  const emit = (message: unknown) => input?.onStdout?.(`${JSON.stringify(message)}\n`);
+  const emit = (message: unknown) => inputs.at(-1)?.onStdout?.(`${JSON.stringify(message)}\n`);
   const run: ManagedRun = {
     runId: "synthetic-computer",
     startedAtMs: 0,
-    activity: {
-      get resultSettled() {
-        return resultSettled;
-      },
-      lastOutputAtMs: 0,
-    },
+    activity,
     wait: () => exited.promise,
     cancel: vi.fn(() => exit()),
     stdin: {
@@ -92,7 +78,6 @@ function createChildFixture(options: { startupError?: string; finalizationError?
     acquireScopeCleanup: () => cleanupScope,
     spawn: async (params) => {
       params.assertCurrent?.();
-      input = params;
       inputs.push(params);
       return run;
     },
@@ -133,7 +118,34 @@ function createChildFixture(options: { startupError?: string; finalizationError?
     stopReceived,
     invocationReceived,
     run,
+    invoke: (overrides: Partial<Parameters<typeof child.invoke>[0]> = {}) =>
+      child.invoke({
+        command: "computer.act",
+        params: { action: "left_click" },
+        assertCurrent: () => {},
+        ...overrides,
+      }),
+    async joinCleanup(observation: ReturnType<typeof observe>, beforeJoin?: () => Promise<void>) {
+      await whileHeld(extinction, async () => {
+        await beforeJoin?.();
+        await cleanupStarted.promise;
+        expect(observation.settled).not.toHaveBeenCalled();
+      });
+      await observation.done;
+    },
   };
+}
+
+async function expectJoinedFailure(
+  f: ReturnType<typeof createChildFixture>,
+  beforeJoin?: () => Promise<void>,
+) {
+  const closing = f.child.close();
+  const observed = observe(closing);
+  const rejected = expect(closing).rejects.toBeInstanceOf(ComputerHostFinalizationError);
+  await f.joinCleanup(observed, beforeJoin);
+  await rejected;
+  expect(f.child.isCurrent()).toBe(false);
 }
 
 describe("Gateway computer process", () => {
@@ -149,10 +161,9 @@ describe("Gateway computer process", () => {
     expect(process.env.DISPLAY).toBe(originalDisplay);
     expect(process.env.DBUS_SESSION_BUS_ADDRESS).toBe(originalBus);
 
-    const result = child.invoke({
+    const result = f.invoke({
       command: "screen.snapshot",
       params: { executionId: "fixture" },
-      assertCurrent: () => {},
     });
     const invocation = await f.invocationReceived.promise;
     f.emit({
@@ -161,16 +172,14 @@ describe("Gateway computer process", () => {
       payload: JSON.stringify({ format: "png", base64: "cGl4ZWxz" }),
     });
     await expect(result).resolves.toEqual({ format: "png", base64: "cGl4ZWxz" });
-    const settled = vi.fn();
-    const closing = child.close().then(settled);
+    const close = child.close();
+    const closing = observe(close);
     await f.stopReceived.promise;
     expect(child.isCurrent()).toBe(false);
-    expect(settled).not.toHaveBeenCalled();
+    expect(closing.settled).not.toHaveBeenCalled();
     f.exit();
-    await f.cleanupStarted.promise;
-    expect(settled).not.toHaveBeenCalled();
-    f.extinction.resolve();
-    await closing;
+    await f.joinCleanup(closing);
+    await close;
     expect(f.run.cancel).not.toHaveBeenCalled();
   });
 
@@ -180,11 +189,7 @@ describe("Gateway computer process", () => {
       const f = createChildFixture({ finalizationError: /Invalid Gateway computer response/ });
       const { child } = f;
       await child.ready;
-      const result = child.invoke({
-        command: "computer.act",
-        params: { action: "left_click" },
-        assertCurrent: () => {},
-      });
+      const result = f.invoke();
       const rejected = expect(result).rejects.toThrow("Invalid Gateway computer response");
       const invocation = await f.invocationReceived.promise;
       f.emit(
@@ -201,24 +206,6 @@ describe("Gateway computer process", () => {
     },
   );
 
-  it("reports a failed graceful exit only after joining descendant cleanup", async () => {
-    const f = createChildFixture({ finalizationError: /shutdown failed/ });
-    const { child } = f;
-    await child.ready;
-    const settled = vi.fn();
-    const closing = child.close();
-    const observed = closing.then(settled, settled);
-    const rejected = expect(closing).rejects.toBeInstanceOf(ComputerHostFinalizationError);
-    await f.stopReceived.promise;
-    f.exit(1);
-    await f.cleanupStarted.promise;
-    expect(settled).not.toHaveBeenCalled();
-    f.extinction.resolve();
-    await rejected;
-    await observed;
-    expect(child.isCurrent()).toBe(false);
-  });
-
   it("retains the eager cleanup handle when startup and the first physical cleanup attempt fail", async () => {
     const f = createChildFixture({
       startupError: "synthetic provider startup failed",
@@ -232,45 +219,34 @@ describe("Gateway computer process", () => {
     f.exit(1);
     await expect(firstClose).rejects.toBe(joinFailure);
 
-    const settled = vi.fn();
-    const retry = f.child.close();
-    const observed = retry.then(settled, settled);
-    const rejected = expect(retry).rejects.toBeInstanceOf(ComputerHostFinalizationError);
-    await f.cleanupStarted.promise;
-    try {
-      expect(settled).not.toHaveBeenCalled();
+    await expectJoinedFailure(f, async () => {
+      await f.cleanupStarted.promise;
       expect(f.cleanupScope).toHaveBeenCalledTimes(2);
-    } finally {
-      f.extinction.resolve();
-    }
-    await rejected;
-    await observed;
+    });
   });
 
-  it.each(["exit", "fatal transport error"])(
-    "preserves an unexpected idle %s through joined finalization",
+  it.each(["graceful exit", "idle exit", "fatal transport error"])(
+    "preserves %s failure through joined finalization",
     async (failure) => {
-      const f = createChildFixture({ finalizationError: /process exited|fatal transport error/ });
+      const graceful = failure === "graceful exit";
+      const f = createChildFixture({
+        finalizationError: graceful ? /shutdown failed/ : /process exited|fatal transport error/,
+      });
       await f.child.ready;
-      if (failure === "exit") {
-        f.exit(1);
-      } else {
-        f.emit({ type: "error", message: "fatal transport error" });
-        f.exit();
-      }
-      await f.cleanupStarted.promise;
-      const settled = vi.fn();
-      const closing = f.child.close();
-      const observed = closing.then(settled, settled);
-      const rejected = expect(closing).rejects.toBeInstanceOf(ComputerHostFinalizationError);
-      try {
+      if (!graceful) {
+        if (failure === "fatal transport error") {
+          f.emit({ type: "error", message: failure });
+        }
+        f.exit(failure === "idle exit" ? 1 : 0);
+        await f.cleanupStarted.promise;
         expect(f.child.isCurrent()).toBe(false);
-        expect(settled).not.toHaveBeenCalled();
-      } finally {
-        f.extinction.resolve();
       }
-      await rejected;
-      await observed;
+      await expectJoinedFailure(f, async () => {
+        if (graceful) {
+          await f.stopReceived.promise;
+          f.exit(1);
+        }
+      });
     },
   );
 
@@ -279,30 +255,19 @@ describe("Gateway computer process", () => {
     const { child } = f;
     await child.ready;
     const controller = new AbortController();
-    const settled = vi.fn();
     const reason = new Error("caller cancelled");
-    const result = child.invoke({
-      command: "computer.act",
-      params: { action: "left_click" },
-      signal: controller.signal,
-      assertCurrent: () => {},
-    });
+    const result = f.invoke({ signal: controller.signal });
     const rejected = expect(result).rejects.toBe(reason);
-    const observed = result.then(settled, settled);
+    const observed = observe(result);
     const invocation = await f.invocationReceived.promise;
     controller.abort(reason);
     await f.stopReceived.promise;
     expect(f.messages).toContainEqual({ type: "cancel", id: invocation.id });
-    expect(settled).not.toHaveBeenCalled();
+    expect(observed.settled).not.toHaveBeenCalled();
     f.exit();
-    await f.cleanupStarted.promise;
-    expect(settled).not.toHaveBeenCalled();
-    f.extinction.resolve();
+    await f.joinCleanup(observed);
     await rejected;
-    await observed;
-    await expect(
-      child.invoke({ command: "screen.snapshot", params: {}, assertCurrent: () => {} }),
-    ).rejects.toThrow();
+    await expect(f.invoke({ command: "screen.snapshot", params: {} })).rejects.toThrow();
     expect(f.messages.filter((message) => message.type === "invoke")).toHaveLength(1);
   });
 });

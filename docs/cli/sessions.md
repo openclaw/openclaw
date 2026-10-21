@@ -210,6 +210,9 @@ openclaw sessions delete "agent:main:scratch-1" --yes --json
 Repeated keys are processed once, in first-occurrence order, after surrounding
 whitespace is removed. This also applies to `sessions archive`.
 
+Human-readable archive/delete reports escape terminal control characters in
+session keys, paths, and diagnostics. JSON output preserves the original values.
+
 <Warning>
   Delete is destructive. In an interactive terminal it asks once before
   deleting the valid keys. Non-interactive and `--json` deletion requires
@@ -407,7 +410,9 @@ Flags:
 
 When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
-traffic. Use `--store <path>` for explicit offline repair of a SQLite database or
+traffic. Once connected, the CLI waits for cleanup to finish without a fixed
+request deadline; connection startup still has a timeout. Use `--store <path>`
+for explicit offline repair of a SQLite database or
 legacy store selector.
 
 Automatic offline fallback applies only when the configured local Gateway cannot
@@ -430,6 +435,8 @@ JSON result. Dry runs do not load harness plugins.
 
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
+Artifacts retained by a deferred plugin import receipt or migration manifest
+remain protected even after their canonical session entry is gone.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
 other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,
@@ -536,11 +543,16 @@ openclaw sessions compact "agent:work:main" --agent work --json
   does not impose a client deadline by default; the Gateway owns the
   configured compaction lifecycle.
 - With `--max-lines <n>`, it permanently truncates the SQLite transcript to the
-  last `n` lines. This path does not create a backup archive.
+  last `n` lines. The Gateway finishes rebuilding the retained transcript's
+  indexes in its storage worker before reporting success, so the next turn does
+  not wait for background index maintenance. This path does not create a backup archive.
 - `--agent <id>`: agent that owns the session; required for `global` keys.
 - `--url` / `--token` / `--password`: Gateway connection overrides.
 - `--timeout <ms>`: optional client-side RPC timeout in milliseconds.
 - `--json`: print the raw RPC payload.
+
+Human-readable compaction reports escape terminal control characters in session
+keys and error details. JSON output preserves the original values.
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.

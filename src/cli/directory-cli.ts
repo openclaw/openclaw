@@ -1,5 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -17,7 +16,7 @@ import { resolveInstallableChannelPlugin } from "../commands/channel-setup/chann
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -55,21 +54,6 @@ function formatDirectoryScope(channelId: string, accountId: string): string {
   const channel = JSON.stringify(sanitizeTerminalText(channelId));
   const account = JSON.stringify(sanitizeTerminalText(accountId));
   return `channel ${channel}, account ${account}`;
-}
-
-function printDirectoryList(params: {
-  title: string;
-  emptyMessage: string;
-  entries: Array<{ id: string; name?: string | undefined }>;
-}): void {
-  if (params.entries.length === 0) {
-    defaultRuntime.log(theme.muted(params.emptyMessage));
-    return;
-  }
-
-  const tableWidth = getTerminalTableWidth();
-  defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
-  defaultRuntime.log(formatDirectoryTable(params.entries, tableWidth));
 }
 
 /** Register directory lookup commands and shared channel/account resolution. */
@@ -138,7 +122,7 @@ export function registerDirectoryCli(program: Command) {
     }
     // Config writes refresh the active runtime snapshot. Directory execution must use that
     // prepared view, never the authored config that was just persisted.
-    const runtimeConfig = getRuntimeConfig();
+    const runtimeConfig = await captureRuntimeConfigAsyncReader()();
     const selection = explicitChannel
       ? {
           channel: resolvedExplicit?.channelId,
@@ -218,15 +202,18 @@ export function registerDirectoryCli(program: Command) {
       defaultRuntime.writeJson(result);
       return;
     }
-    printDirectoryList({
-      title,
-      emptyMessage: `${emptyMessage} for ${
-        action === "listGroupMembers"
-          ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
-          : ""
-      }${formatDirectoryScope(channelId, accountId)}.`,
-      entries: result,
-    });
+    const scopedEmptyMessage = `${emptyMessage} for ${
+      action === "listGroupMembers"
+        ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
+        : ""
+    }${formatDirectoryScope(channelId, accountId)}.`;
+    if (result.length === 0) {
+      defaultRuntime.log(theme.muted(scopedEmptyMessage));
+      return;
+    }
+    const tableWidth = getTerminalTableWidth();
+    defaultRuntime.log(`${theme.heading(title)} ${theme.muted(`(${result.length})`)}`);
+    defaultRuntime.log(formatDirectoryTable(result, tableWidth));
   };
 
   const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {

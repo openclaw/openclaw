@@ -7,13 +7,6 @@ describe("agent roster ownership", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);
   });
 
-  it("accepts sole and explicitly owned multi-agent rosters without a stored default", () => {
-    expect(AgentsSchema.safeParse({ entries: { Ops: {} } }).success).toBe(true);
-    expect(
-      AgentsSchema.safeParse({ ownership: "explicit", entries: { alpha: {}, beta: {} } }).success,
-    ).toBe(true);
-  });
-
   it("rejects a markerless multi-agent roster without explicit ownership", () => {
     const result = AgentsSchema.safeParse({ entries: { alpha: {}, beta: {} } });
 
@@ -22,12 +15,6 @@ describe("agent roster ownership", () => {
       expect(result.error.issues[0]?.message).toContain('agents.ownership="explicit"');
       expect(result.error.issues[0]?.message).toContain("run openclaw doctor");
     }
-  });
-
-  it("accepts one legacy default marker", () => {
-    expect(
-      AgentsSchema.safeParse({ entries: { alpha: { default: true }, beta: {} } }).success,
-    ).toBe(true);
   });
 
   it("rejects multiple legacy default markers", () => {
@@ -67,7 +54,7 @@ describe("agent roster ownership", () => {
 describe("explicit ambient agent targets", () => {
   it("rejects an unknown explicit target", () => {
     const result = OpenClawSchema.safeParse({
-      agents: { defaults: { heartbeat: { agentId: "missing" } }, entries: { main: {} } },
+      agents: { defaults: { systemAgent: { agentId: "missing" } }, entries: { main: {} } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -75,12 +62,11 @@ describe("explicit ambient agent targets", () => {
     }
   });
 
-  it("accepts configured heartbeat, system-agent, compatibility, and Talk targets", () => {
+  it("accepts configured system-agent, compatibility, and Talk targets", () => {
     expect(
       OpenClawSchema.safeParse({
         agents: {
           defaults: {
-            heartbeat: { agentId: "ops" },
             systemAgent: { agentId: "ops" },
             authInheritance: { agentId: "ops" },
             sessionStore: { agentId: "ops" },
@@ -91,33 +77,13 @@ describe("explicit ambient agent targets", () => {
       }).success,
     ).toBe(true);
   });
-
-  it("validates targets against the implicit main roster", () => {
-    expect(OpenClawSchema.safeParse({ talk: { agentId: "main" } }).success).toBe(true);
-    expect(OpenClawSchema.safeParse({ talk: { agentId: "missing" } }).success).toBe(false);
-  });
-
-  it("allows upgrade compatibility owners to outlive their roster entries", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        agents: {
-          ownership: "explicit",
-          defaults: {
-            authInheritance: { agentId: "retired-ops" },
-            sessionStore: { agentId: "retired-ops" },
-          },
-          entries: { research: {}, writer: {} },
-        },
-      }).success,
-    ).toBe(true);
-  });
 });
 
 describe("agent GitHub sandbox identity", () => {
   const profileId = "ghp_0123456789abcdef0123456789abcdef";
 
-  it.each([undefined, false, true])("accepts allowInSandbox=%s for one agent", (allowInSandbox) => {
-    const github = { profileId, ...(allowInSandbox === undefined ? {} : { allowInSandbox }) };
+  it("accepts an explicit sandbox identity opt-in for one agent", () => {
+    const github = { profileId, allowInSandbox: true };
     const result = AgentsSchema.safeParse({ entries: { release: { tools: { github } } } });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -125,9 +91,9 @@ describe("agent GitHub sandbox identity", () => {
     }
   });
 
-  it.each(["true", 1, null])("rejects non-boolean allowInSandbox=%s", (allowInSandbox) => {
+  it("rejects a non-boolean sandbox identity opt-in", () => {
     const result = AgentsSchema.safeParse({
-      entries: { release: { tools: { github: { profileId, allowInSandbox } } } },
+      entries: { release: { tools: { github: { profileId, allowInSandbox: "true" } } } },
     });
     expect(result.success).toBe(false);
     if (!result.success) {

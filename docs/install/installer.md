@@ -22,6 +22,12 @@ native builds use these assembled scripts. The npm package keeps both source
 files together for installed updater compatibility. Installing from the website
 never downloads a separate policy helper.
 
+Git installs retry transient remote-ref lookup failures up to three times. Failed
+lookups print Git's diagnostic with URLs, authorization headers, and GitHub tokens
+redacted. Missing refs and authentication failures stop without retrying.
+Release-tag fetches stay depth-limited when the existing checkout is shallow;
+full-history checkouts retain their history.
+
 | Script                             | Platform                      | What it does                                                                                                                   |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | [`install.sh`](#installsh)         | macOS / Linux / WSL           | Installs Node if needed, installs OpenClaw via npm (default) or git, can run onboarding.                                       |
@@ -35,6 +41,8 @@ Before changing packages, every installer checks the exact npm executable it wil
 On npm 12, local `.tgz` and `.tar.gz` installs and updates need a comma-free archive filename and parent path. npm uses commas to separate lifecycle approvals, so move the archive to a comma-free path before retrying. Relative tarball arguments are still supported; the installer resolves their full path for approval.
 
 Install-method switches verify the replacement before retiring the current owner. Source wrappers use a same-directory atomic replacement; when an npm shim shares that path, the installer moves only an identity-matched source wrapper aside and restores it if npm installation, lifecycle checks, or candidate verification fails. On upgrades, `install.sh` and `install.ps1` run `openclaw doctor --fix`; repair or final verification failure exits nonzero, and the success banner appears only after those steps complete.
+
+Installer help includes [official OpenClaw support](https://community.openclaw.ai/) alongside the self-service FAQ. Handled installation failures also show the support link in human-readable output; `install-cli.sh --json` keeps its existing error and completion events without human support text. Review diagnostics for credentials and personal data before sharing them.
 
 ## Private Node recovery
 
@@ -138,11 +146,14 @@ checks also default to five minutes.
   <Step title="Detect OS">
     Supports macOS and Linux (including WSL).
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime" />
+    <a id="ensure-a-supported-node-js-runtime" />
     Checks the Node version and linked SQLite library, then installs Node if needed (Node 26 through Homebrew `node` on macOS; Node 24 LTS through NodeSource setup scripts on Linux apt/dnf/yum). On RPM-based Linux, a supported distro Node that links unsafe SQLite remains installed while OpenClaw receives a user-space Node runtime. On macOS, Homebrew is installed only when the installer needs it for Node or Git. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
     On Alpine/musl Linux, the installer uses apk packages instead of NodeSource and verifies the actual linked SQLite version. Current stable Alpine package streams can provide a new-enough Node with vulnerable system SQLite; when that happens, use an official `node:26-alpine` container or a glibc-based host instead.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git" />
     Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
   </Step>
   <Step title="Install OpenClaw">
@@ -246,6 +257,15 @@ If run inside an OpenClaw checkout (`package.json` + `pnpm-workspace.yaml`), the
 If no TTY is available and no install method is set, it defaults to `npm` and warns.
 
 The script exits with code `2` for invalid method selection or invalid `--install-method` values.
+
+Existing checkout roots may use a `.git` directory or a `.git` file, including
+linked Git worktrees. All three installers validate the checkout's own commit before
+updating it and refuse incomplete checkouts or nonempty non-repository paths.
+When another worktree owns a requested branch, `install.sh` and `install-cli.sh`
+check out its selected commit detached. For `main`, they begin at the local branch
+and rebase onto `origin/main` only when Git updates are enabled; other branch
+selectors use the fetched `origin` branch.
+These remain moving-branch installs even when `HEAD` is detached.
 
 With `--install-method git`, `install.sh` and `install-cli.sh` accept a full
 40-character commit SHA through `--version`. The installer uses the existing
@@ -357,7 +377,8 @@ system Node packages.
     Linux ARMv7 stops before installation because official Node 24+ ARMv7 binaries are unavailable. Use a 64-bit OS on compatible hardware or another supported host.
     On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk`, then verifies both Node and the actual linked SQLite library. Current stable Alpine package streams may still link vulnerable SQLite even with a new-enough Node; use an official `node:26-alpine` container or a glibc-based host when the safety check rejects the package.
   </Step>
-  <Step title="Ensure Git">
+  <Step title="Install Git if missing">
+    <a id="ensure-git-1" />
     If Git is missing, attempts install via apt/dnf/yum/apk on Linux or Homebrew on macOS.
     On FreeBSD, install Git with `pkg install git` before retrying.
   </Step>
@@ -494,10 +515,14 @@ its existing service-refresh behavior.
 ### Flow (install.ps1)
 
 <Steps>
-  <Step title="Ensure PowerShell + Windows environment">
+  <Step title="Check PowerShell and Windows">
+    <a id="ensure-powershell-windows-environment" />
+    <a id="ensure-powershell-%2B-windows-environment" />
     Requires PowerShell 5+.
   </Step>
-  <Step title="Ensure a supported Node.js runtime">
+  <Step title="Install a supported Node.js runtime">
+    <a id="ensure-a-supported-nodejs-runtime-1" />
+    <a id="ensure-a-supported-node-js-runtime-1" />
     If missing, attempts install via winget, then Chocolatey, then Scoop. If those methods are unavailable, fail, or leave an unsupported runtime, the script downloads the official Node.js 26 Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 24.16+ and Node 26.1+ are supported; Node 22, 23, and 25 are unsupported.
   </Step>
   <Step title="Install OpenClaw">

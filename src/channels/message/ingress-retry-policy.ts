@@ -7,10 +7,7 @@ import {
   collectNestedErrorCandidates,
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
-import {
-  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SESSION_WORK_START_CHANGED_ERROR_CODE,
-} from "../../config/sessions/work-start-error.js";
+import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/work-start-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 
 export const DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS = 8;
@@ -95,7 +92,6 @@ export function resolveIngressFailureDisposition(params: {
   now?: number;
 }): IngressFailureDisposition {
   const now = params.now ?? Date.now();
-  const maxAttempts = params.config?.maxAttempts ?? DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
   const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
@@ -111,11 +107,9 @@ export function resolveIngressFailureDisposition(params: {
   // Retrying this terminal generation blocks the authorized reset behind it.
   const reason = errorCodes.has(SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE)
     ? "restart-recovery-tombstone"
-    : attempt >= maxAttempts && errorCodes.has(SESSION_WORK_START_CHANGED_ERROR_CODE)
-      ? "session-start-conflict-retry-limit"
-      : shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)
-        ? "retry-limit-exceeded"
-        : undefined;
+    : shouldDeadLetterRetryableIngressEvent(params.event, attempt, params.config, now)
+      ? "retry-limit-exceeded"
+      : undefined;
   return reason
     ? { kind: "fail", reason, message, attempt }
     : { kind: "release", attempt, message };

@@ -17,6 +17,31 @@ import type {
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
+export function catalogSessionRowsByKey(rows: readonly GatewaySessionRow[]) {
+  const byKey = new Map<string, GatewaySessionRow>();
+  for (const row of rows) {
+    if (!byKey.has(row.key)) {
+      byKey.set(row.key, row);
+    }
+  }
+  return byKey;
+}
+
+export function catalogSessionActivity(
+  sessions: readonly SessionCatalogSession[],
+  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
+  isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
+) {
+  const rows = sessions.flatMap((session) => {
+    const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+    return row ? [row] : [];
+  });
+  return {
+    running: rows.some(isRunVisuallyActive),
+    unread: rows.some((row) => row.unread === true),
+  };
+}
+
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
   if (
@@ -136,6 +161,7 @@ export function projectSidebarSessionCatalogs(
   ownerId: string | null,
   liveRows: readonly GatewaySessionRow[],
   isSessionHidden?: (row: SessionVisibilityRow) => boolean,
+  involvingSessionKeys?: ReadonlySet<string>,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
   const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
@@ -143,6 +169,14 @@ export function projectSidebarSessionCatalogs(
     const visibleHosts: SessionCatalogHost[] = [];
     for (const host of catalog.hosts) {
       const sessions = host.sessions.filter((session) => {
+        // Catalog access and creator attribution do not establish involvement.
+        // Only the Gateway-filtered backing roster can admit a catalog row.
+        if (
+          involvingSessionKeys &&
+          (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
+        ) {
+          return false;
+        }
         const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
         // A committed archive can leave the loaded roster before the catalog refreshes.
         // Its adopted key still belongs to the canonical session lifecycle owner.
@@ -163,10 +197,18 @@ export function projectSidebarSessionCatalogs(
   });
 }
 
+export type CatalogRowControls = Partial<
+  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
+>;
+
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined) => void;
+  rowRef?: (
+    element: HTMLElement,
+    controls: CatalogRowControls,
+    previousFocus: Element | null,
+  ) => () => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

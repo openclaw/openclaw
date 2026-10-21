@@ -1,7 +1,36 @@
 import { vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+
+const activePreparedFixtures: ReturnType<typeof createReplyOperation>[] = [];
+
+export function activatePreparedRun(sessionKey = "session-key") {
+  const operation = createReplyOperation({
+    sessionKey,
+    sessionId: "active-session",
+    resetTriggered: false,
+  });
+  operation.setPhase("running");
+  activePreparedFixtures.push(operation);
+  return operation;
+}
+
+export async function cleanupPreparedReplyFixtures() {
+  for (const operation of activePreparedFixtures.splice(0)) {
+    operation.complete();
+    await operation.ownerSettlement;
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+}
 
 export function createInboundBody<T extends string>(body: T) {
   return { Body: body, RawBody: body, CommandBody: body };
@@ -13,6 +42,19 @@ export function createSessionBody<T extends string>(body: T) {
 
 export function createProviderSurface<T extends string>(provider: T) {
   return { Provider: provider, Surface: provider };
+}
+
+export function createTelegramGroupSession(): SessionEntry {
+  return {
+    sessionId: "session-telegram-group",
+    updatedAt: 1,
+    systemSent: true,
+    chatType: "group",
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "telegram", to: "-100123" },
+      origin: { provider: "telegram", surface: "telegram", chatType: "group", to: "-100123" },
+    }),
+  };
 }
 
 export function createInboundTurn<
@@ -34,22 +76,19 @@ export function createSessionTurn<
 export function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
+  const route = {
+    ThreadHistoryBody: "Earlier message in this thread",
+    OriginatingChannel: "slack",
+    OriginatingTo: "C123",
+    ChatType: "group",
+  };
   const defaults = {
-    ctx: {
-      ...createInboundBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
-      ChatType: "group",
-    },
+    ctx: { ...createInboundBody(""), ...route },
     sessionCtx: {
       ...createSessionBody(""),
-      ThreadHistoryBody: "Earlier message in this thread",
+      ...route,
       media: [{ path: "/tmp/input.png" }],
       Provider: "slack",
-      ChatType: "group",
-      OriginatingChannel: "slack",
-      OriginatingTo: "C123",
     },
     cfg: { session: {}, channels: {}, agents: { defaults: {} } },
     agentId: "default",
@@ -69,10 +108,7 @@ export function baseParams(
     } as never,
     commandSource: "",
     allowTextCommands: true,
-    directives: {
-      hasThinkDirective: false,
-      thinkLevel: undefined,
-    } as never,
+    directives: { hasThinkDirective: false, thinkLevel: undefined } as never,
     defaultActivation: "always",
     resolvedThinkLevel: "high",
     resolvedVerboseLevel: "off",
@@ -134,9 +170,6 @@ export function baseParams(
 
 export function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   const params = baseParams();
-  params.command = {
-    ...params.command,
-    senderIsOwner: true,
-  };
+  params.command.senderIsOwner = true;
   return params;
 }

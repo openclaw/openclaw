@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -37,10 +37,13 @@ function generationWindowIdentity(
   generation: SqliteSessionGenerationComparison,
   canonicalKey: string,
 ) {
+  // Derived previews and local write clocks do not distinguish retained histories.
   const {
     updated_at: _updatedAt,
     transcript_updated_at: _transcriptUpdatedAt,
     transcript_observed_at: _transcriptObservedAt,
+    row_transcript_json: _rowTranscript,
+    row_transcript_updated_at: _rowTranscriptUpdatedAt,
     ...identity
   } = rehomeSqliteSessionGenerationWindow(
     generation.window,
@@ -105,7 +108,7 @@ export function readClaim(
   key: string,
   canonicalKey: string,
 ): SessionClaim | undefined {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const row = readExactSessionEntryRowForCanonicalRepair(database, key);
     if (!row) {
       return undefined;
@@ -134,7 +137,7 @@ export function readComparisonClaim(
   key: string,
   canonicalKey: string,
 ): SessionComparisonClaim | undefined {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const row = readExactSessionEntryRowForCanonicalRepair(database, key);
     if (!row) {
       return undefined;

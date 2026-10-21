@@ -3,11 +3,18 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import {
+  repositorySessionNeedsWorker,
+  sessionPlacementActionReason,
+} from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
+
+registerSessionOrganizationEnglish();
 
 registerNewSessionSetupEnglish();
 
@@ -19,21 +26,6 @@ type ChatPanePlacementComposerState =
   | { kind: "busy"; message: string }
   | { kind: "dispatch-required" }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
-
-export type PlacementComposerPresentation = {
-  state: ChatPanePlacementComposerState;
-  blocksSend: boolean;
-  busyMessage: string | null;
-  startup: ApplicationPlacementStartupStatus | null;
-  diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
-  workerRuntimeInstall: Extract<
-    NonNullable<GatewaySessionRow["placement"]>,
-    { state: "active" | "provisioning" }
-  >["workerRuntimeInstall"];
-  runError: { summary: string } | null;
-  failedUnavailableMessage: string;
-  disabledBanner: ChatComposerDisabledBanner | undefined;
-};
 
 function resolvePlacementComposerState(params: {
   reclaimingKey: string | null;
@@ -96,6 +88,7 @@ function resolvePlacementComposerState(params: {
 
 export function resolvePlacementComposer(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey: string | null;
@@ -105,7 +98,7 @@ export function resolvePlacementComposer(params: {
   workspaceResultReconciling: boolean;
   onRecover: () => void;
   onReclaim: () => void;
-}): PlacementComposerPresentation {
+}) {
   const controls = resolveChatPanePlacement(params);
   // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
   const canSendDuringWorkspaceSync =
@@ -195,12 +188,8 @@ export function resolvePlacementComposer(params: {
       actionStyle: "primary",
       disabledReason: recover ? controls.recoveryDisabledReason : controls.reclaimDisabledReason,
       onAction: recover ? params.onRecover : params.onReclaim,
-    },
+    } satisfies ChatComposerDisabledBanner,
   };
-}
-
-export function repositorySessionNeedsWorker(row: GatewaySessionRow | undefined): boolean {
-  return Boolean(row?.repositoryWorkspaceId && (!row.placement || row.placement.state === "local"));
 }
 
 export function resolveChatPaneWorkerPresentation(
@@ -266,17 +255,12 @@ export function resolveChatPaneDesktopTarget(
 
 export function resolveChatPanePlacement(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey?: string | null;
   row: GatewaySessionRow | undefined;
-}): {
-  moving: boolean;
-  restarting: boolean;
-  moveDisabledReason: string | undefined;
-  reclaimDisabledReason: string | undefined;
-  recoveryDisabledReason: string | undefined;
-} {
+}) {
   const moving =
     params.movingKey === params.row?.key ||
     (params.row?.placementMove !== undefined && params.row.placementMove.error === undefined);
@@ -285,7 +269,6 @@ export function resolveChatPanePlacement(params: {
   const action = resolveCloudWorkerStopAction(params.row?.placement);
   const readWriteAccess = (method: string) =>
     readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
-  const moveAccess = readWriteAccess("sessions.move");
   const reclaimAccess = readWriteAccess("sessions.reclaim");
   const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
@@ -296,14 +279,15 @@ export function resolveChatPanePlacement(params: {
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming || placementState !== "active"
+    : reclaiming || !params.row
       ? t("sessionsView.actionUnavailable")
-      : moveAccess.allowed
-        ? undefined
-        : moveAccess.reason;
+      : sessionPlacementActionReason(params.gatewaySnapshot, params.row, params.requiredProfile);
   const recoveryDisabledReason = restarting
     ? t("common.loading")
-    : moving || reclaiming || (!dispatchRequired && recoveryAction !== "restart")
+    : moving ||
+        reclaiming ||
+        params.row?.placementMove !== undefined ||
+        (!dispatchRequired && recoveryAction !== "restart")
       ? t("sessionsView.actionUnavailable")
       : params.row?.archived
         ? t("chat.archivedSessionDisabled")

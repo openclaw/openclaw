@@ -29,9 +29,7 @@ export function createCronCompletionDeliveryFence(params: {
   const assertCurrent = () => {
     context.admission.assertCurrent();
     signal.throwIfAborted();
-    if (
-      state.deps.isAgentAvailable?.(handle.agentId, undefined, { deletionBlocked: false }) === false
-    ) {
+    if (state.deps.isAgentAvailable?.(handle.agentId, { deletionBlocked: false }) === false) {
       throw new CronRunReceiptRevisionError(
         handle.receiptId,
         describeUnavailableCronAgent(handle.agentId),
@@ -59,7 +57,7 @@ export function createCronCompletionDeliveryFence(params: {
           type: "cron.markDeliveryStarted",
           input: { storeKey: handle.storeKey, handle: { ...handle } },
           assertCurrent,
-          snapshot: { allowMissingJob: allowMissingJob(), defaultAgentId: admittedDefaultAgentId },
+          snapshot: {},
           publish() {
             committed = true;
           },

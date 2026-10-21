@@ -2,7 +2,7 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
@@ -31,7 +31,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
   const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
   const log = (line: string) => (line.includes("[telegram][diag]") ? logInfo : logError)(line);
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,

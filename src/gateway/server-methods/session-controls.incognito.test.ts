@@ -1,30 +1,45 @@
 import "./tools-effective.test-support.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  admitModelTurn,
+  completionConfig,
+} from "../../agents/bash-tools.lifecycle.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import * as sessionEventHandoff from "../../auto-reply/reply/session-event-handoff.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
-  replaceSessionEntrySync,
+  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../../infra/node-claude-skill-protocol.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../../infra/node-commands.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveNodeHostGatewayPlatformIdentity } from "../../node-host/gateway-platform-identity.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { prepareNodeClaudeSkillRuntime } from "../node-claude-skill-runtime.js";
 import { NodeRegistry } from "../node-registry.js";
@@ -42,24 +57,21 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const { toolsEffectiveInventoryMocks } = await import("./tools-effective.test-support.js");
 const { testing, toolsEffectiveHandlers } = await import("./tools-effective.js");
 
-const { cfg, heartbeat, prepareRegistry, ingress } = vi.hoisted(() => ({
+const { cfg, prepareRegistry, ingress } = vi.hoisted(() => ({
   cfg: {
     agents: { entries: { main: {}, native: {}, sibling: {} } },
     gateway: { terminal: { enabled: true } },
   },
-  heartbeat: vi.fn(),
   ingress: vi.fn(async () => {}),
   prepareRegistry: vi.fn(async () => false),
 }));
-// mock-isolation: Exercise Gateway admission and actor persistence without running a model turn.
+// mock-isolation: Node ingress and model I/O are synthetic; wake admission and actor storage stay real.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: ingress }));
+// mock-isolation: Keep model I/O synthetic while the real dispatcher owns wake admission and settlement.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 vi.mock("../../config/io.js", async (original) => ({
   ...(await original<typeof import("../../config/io.js")>()),
   getRuntimeConfig: () => cfg,
-}));
-vi.mock("../../infra/heartbeat-wake.js", async (original) => ({
-  ...(await original<typeof import("../../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: heartbeat,
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (original) => ({
   ...(await original<
@@ -68,9 +80,16 @@ vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (ori
   prepareOptionalSubagentSessionListReadCache: prepareRegistry,
 }));
 
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
+const model = vi.mocked(runEmbeddedAgent);
+const wakeReceipts: ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>[] = [];
+
 const dirs = useAutoCleanupTempDirTracker(afterAll);
-const authority = { assertCurrent() {} };
-let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
 const context = createGatewayRequestContext(makeContextParams());
 context.getRuntimeConfig = () => cfg;
@@ -91,31 +110,76 @@ function request(method: string, params: Record<string, unknown>): GatewayReques
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-session-controls-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
+  const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  const completion = completionConfig(path.join(env.OPENCLAW_STATE_DIR!, "workspace"));
+  Object.assign(cfg, {
+    ...completion,
+    agents: { ...completion.agents, entries: cfg.agents.entries },
   });
-  assert(opened);
-  actor = opened;
+  await fs.writeFile(configPath, JSON.stringify(cfg));
+  openOpenClawStateDatabase();
 });
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot(cfg);
+  // Shared cleanup retires plugin facts, so each case repeats Gateway startup preparation.
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost").mockImplementation((...args) => {
+    const receipt = enqueue(...args);
+    wakeReceipts.push(receipt);
+    return receipt;
+  });
+  model.mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
+  for (const receipt of wakeReceipts) {
+    receipt.cancel();
+  }
+  await Promise.allSettled(wakeReceipts.splice(0).map((receipt) => receipt.settled));
+  clearRuntimeConfigSnapshot();
   testing.resetToolsEffectiveCacheForTest();
   toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockClear();
-  heartbeat.mockClear();
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
 });
 afterAll(async () => {
-  await actor?.close();
+  memorySessionActorOwners.reset();
   await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
 });
+
+async function processWake(
+  options: GatewayRequestHandlerOptions,
+  sessionKey: string,
+  text: string,
+) {
+  const original = loadSessionEntry({ sessionKey });
+  assert(original);
+  model.mockImplementationOnce(async (params) => {
+    await admitModelTurn(params);
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  await systemHandlers["system-event"]!(options);
+  expect(wakeReceipts).toHaveLength(1);
+  await expect(wakeReceipts[0]!.settled).resolves.toMatchObject({
+    status: "completed",
+    executionStarted: true,
+  });
+  expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  expect(model).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      sessionKey,
+      sessionId: original.sessionId,
+      prompt: expect.stringContaining(text),
+    }),
+  );
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+}
 
 it.each([false, true])(
   "guards actor tool disclosure after catalogue preparation (replaced=%s)",
@@ -128,7 +192,7 @@ it.each([false, true])(
       model: "gpt-4.1",
       modelProvider: "openai",
     };
-    await actor.sessions.create(authority, { sessionKey, entry });
+    await replaceSessionEntry({ sessionKey }, entry);
     const entered = createDeferredCore();
     const release = createDeferredCore();
     toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockImplementationOnce(async () => {
@@ -139,30 +203,28 @@ it.each([false, true])(
     const options = request("tools.effective", { agentId: "main", sessionKey });
     const host = observeHostDataSql();
     try {
-      await withIncognitoSessionActor(actor, async () => {
-        const pending = Promise.resolve(toolsEffectiveHandlers["tools.effective"]!(options));
-        try {
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            pending.then(() => {
-              const response = vi.mocked(options.respond).mock.calls[0];
-              if (response?.[2]) {
-                throw new Error(response[2].message);
-              }
-            }),
-            "Tool inventory handler settled before catalogue preparation",
+      const pending = Promise.resolve(toolsEffectiveHandlers["tools.effective"]!(options));
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending.then(() => {
+            const response = vi.mocked(options.respond).mock.calls[0];
+            if (response?.[2]) {
+              throw new Error(response[2].message);
+            }
+          }),
+          "Tool inventory handler settled before catalogue preparation",
+        );
+        if (replaced) {
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey },
+            { ...entry, sessionId: "successor" },
           );
-          if (replaced) {
-            await replaceSessionEntry(
-              { agentId: "main", sessionKey },
-              { ...entry, sessionId: "successor" },
-            );
-          }
-        } finally {
-          release.resolve();
-          await pending;
         }
-      });
+      } finally {
+        release.resolve();
+        await pending;
+      }
       expect(options.respond).toHaveBeenCalledWith(
         !replaced,
         replaced ? undefined : expect.objectContaining({ groups: [] }),
@@ -183,7 +245,7 @@ it("refuses terminal ownership after its actor session is replaced during catalo
     updatedAt: Date.now(),
     incognito: true,
   };
-  await actor.sessions.create(authority, { sessionKey, entry });
+  await replaceSessionEntry({ sessionKey }, entry);
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const policy = createTerminalLaunchPolicy(cfg);
@@ -205,38 +267,36 @@ it("refuses terminal ownership after its actor session is replaced during catalo
     isTerminalEnabled: policy.isEnabled,
     isConnectionActive: () => true,
   };
-  await withIncognitoSessionActor(actor, async () => {
-    const pending = openTerminalSession(options, {
-      agentId: "main",
-      sessionKey,
-      cols: 80,
-      rows: 24,
-      resolveCatalogPlan: async () => {
-        entered.resolve();
-        await release.promise;
-        return { kind: "local", argv: ["synthetic-shell"], cwd: "/synthetic" };
-      },
-    });
-    const settled = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "Terminal settled before catalogue preparation",
-      );
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey },
-        { ...entry, sessionId: "replacement" },
-      );
-    } finally {
-      release.resolve();
-      await settled;
-    }
-    await expect(pending).rejects.toThrow(/session|generation|snapshot/i);
+  const pending = openTerminalSession(options, {
+    agentId: "main",
+    sessionKey,
+    cols: 80,
+    rows: 24,
+    resolveCatalogPlan: async () => {
+      entered.resolve();
+      await release.promise;
+      return { kind: "local", argv: ["synthetic-shell"], cwd: "/synthetic" };
+    },
   });
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      pending,
+      "Terminal settled before catalogue preparation",
+    );
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { ...entry, sessionId: "replacement" },
+    );
+  } finally {
+    release.resolve();
+    await settled;
+  }
+  await expect(pending).rejects.toThrow(/session|current/i);
   expect(open).not.toHaveBeenCalled();
   manager.disposeAll();
 });
@@ -245,30 +305,23 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
   const parent = "agent:sibling:dashboard:incognito-control-parent";
   const grandparent = "agent:main:dashboard:incognito-control-grandparent";
   const child = "agent:main:dashboard:incognito-control-child";
-  const sibling = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "sibling",
-    env,
-    authority,
-  });
-  assert(sibling);
-  await actor.sessions.create(authority, {
-    sessionKey: grandparent,
-    entry: { sessionId: "grandparent", updatedAt: Date.now(), incognito: true },
-  });
-  await sibling.sessions.create(authority, {
-    sessionKey: parent,
-    entry: {
+  await replaceSessionEntry(
+    { sessionKey: grandparent },
+    { sessionId: "grandparent", updatedAt: Date.now(), incognito: true },
+  );
+  await replaceSessionEntry(
+    { agentId: "sibling", sessionKey: parent },
+    {
       sessionId: "parent",
       updatedAt: Date.now(),
       incognito: true,
       parentSessionKey: grandparent,
     },
-  });
-  await actor.sessions.create(authority, {
-    sessionKey: child,
-    entry: { sessionId: "child", updatedAt: Date.now(), incognito: true, parentSessionKey: parent },
-  });
+  );
+  await replaceSessionEntry(
+    { sessionKey: child },
+    { sessionId: "child", updatedAt: Date.now(), incognito: true, parentSessionKey: parent },
+  );
   const options = request("system-event", {
     text: "Synthetic wake",
     sessionKey: child,
@@ -276,21 +329,15 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
   });
   const host = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      await systemHandlers["system-event"]!(options);
-      expect(await resolveApprovalSessionAudienceWithFallback(child, "main")).toEqual([
-        child,
-        parent,
-        grandparent,
-      ]);
-    });
-    expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(child)).toEqual(["Synthetic wake"]);
-    expect(heartbeat).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: child }));
+    await processWake(options, child, "Synthetic wake");
+    expect(await resolveApprovalSessionAudienceWithFallback(child, "main")).toEqual([
+      child,
+      parent,
+      grandparent,
+    ]);
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
-    await sibling.close();
   }
 });
 
@@ -301,7 +348,7 @@ it("rejects a replaced actor source during approval lineage preparation", async 
     updatedAt: Date.now(),
     incognito: true,
   };
-  await actor.sessions.create(authority, { sessionKey, entry });
+  await replaceSessionEntry({ sessionKey }, entry);
   const entered = createDeferredCore();
   const finish = createDeferredCore();
   prepareRegistry.mockImplementationOnce(async () => {
@@ -309,52 +356,48 @@ it("rejects a replaced actor source during approval lineage preparation", async 
     await finish.promise;
     return false;
   });
-  await withIncognitoSessionActor(actor, async () => {
-    const pending = resolveApprovalSessionAudienceWithFallback(sessionKey, "main");
-    const settled = pending.then(
-      () => undefined,
-      () => undefined,
+  const pending = resolveApprovalSessionAudienceWithFallback(sessionKey, "main");
+  const settled = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  try {
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      pending,
+      "Approval lineage settled before registry preparation",
     );
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "Approval lineage settled before registry preparation",
-      );
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey },
-        { ...entry, sessionId: "successor" },
-      );
-    } finally {
-      finish.resolve();
-      await settled;
-    }
-    await expect(pending).rejects.toThrow(/generation|current/);
-  });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      { ...entry, sessionId: "successor" },
+    );
+  } finally {
+    finish.resolve();
+    await settled;
+  }
+  await expect(pending).rejects.toThrow(/session|current/i);
 });
 
-it.each(["agent:native:dashboard:incognito-native-controls", "agent:native:controls"])(
-  "preserves unbound native wake %s without actor allocation",
+it.each(["agent:native:dashboard:incognito-native-controls"])(
+  "preserves unbound wake %s without allocating another owner",
   async (sessionKey) => {
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: "native", sessionKey },
-      { sessionId: sessionKey, updatedAt: 1 },
+      { sessionId: sessionKey, updatedAt: Date.now() },
     );
-    const before = captureOpenClawAgentDatabaseExecution.listIncognito(env);
+    const before = memorySessionActorOwners.list();
     const options = request("system-event", { text: "Native wake", sessionKey, wake: true });
-    await systemHandlers["system-event"]!(options);
-    expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(sessionKey)).toEqual(["Native wake"]);
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(env)).toEqual(before);
+    await processWake(options, sessionKey, "Native wake");
+    expect(memorySessionActorOwners.list()).toEqual(before);
   },
 );
 
 it("joins accepted actor node work, preserves changed session settings, and canonicalizes subscriptions without host SQL", async () => {
   const sessionKey = "agent:main:dashboard:incognito-node-event";
-  await actor.sessions.create(authority, {
-    sessionKey,
-    entry: { sessionId: "node-event", updatedAt: Date.now(), incognito: true, sendPolicy: "allow" },
-  });
+  await replaceSessionEntry(
+    { sessionKey },
+    { sessionId: "node-event", updatedAt: Date.now(), incognito: true, sendPolicy: "allow" },
+  );
   const selected = createDeferredCore();
   const continueAdmission = createDeferredCore();
   const entered = createDeferredCore();
@@ -376,63 +419,61 @@ it("joins accepted actor node work, preserves changed session settings, and cano
   assert(admission);
   const host = observeHostDataSql();
   try {
-    await withIncognitoSessionActor(actor, async () => {
-      let settled = false;
-      const pending = admission
-        .run(() =>
-          handleNodeEvent(
-            nodeContext,
-            "synthetic-node",
-            {
-              event: "voice.transcript",
-              payloadJSON: JSON.stringify({ sessionKey, text: "Synthetic voice turn" }),
+    let settled = false;
+    const pending = admission
+      .run(() =>
+        handleNodeEvent(
+          nodeContext,
+          "synthetic-node",
+          {
+            event: "voice.transcript",
+            payloadJSON: JSON.stringify({ sessionKey, text: "Synthetic voice turn" }),
+          },
+          {
+            isConnectionCurrent: async () => {
+              connectionChecks += 1;
+              if (connectionChecks === 2) {
+                selected.resolve();
+                await continueAdmission.promise;
+              }
+              return true;
             },
-            {
-              isConnectionCurrent: async () => {
-                connectionChecks += 1;
-                if (connectionChecks === 2) {
-                  selected.resolve();
-                  await continueAdmission.promise;
-                }
-                return true;
-              },
-            },
-          ),
-        )
-        .then(() => {
-          settled = true;
-        });
-      try {
-        await awaitGateBeforeSettlement(
-          selected.promise,
-          pending,
-          "Node event settled before session selection",
-        );
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { sendPolicy: "deny", thinkingLevel: "high", systemSent: true },
-        );
-        continueAdmission.resolve();
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Node event settled before ingress admission",
-        );
-        expect(settled).toBe(false);
-      } finally {
-        continueAdmission.resolve();
-        finish.resolve();
-        await pending;
-      }
-      expect((await actor.sessions.read(authority, { sessionKey })).entry).toMatchObject({
-        sendPolicy: "deny",
-        thinkingLevel: "high",
-        systemSent: true,
+          },
+        ),
+      )
+      .then(() => {
+        settled = true;
       });
-      await handleNodeEvent(nodeContext, "synthetic-node", {
-        event: "chat.subscribe",
-        payloadJSON: JSON.stringify({ sessionKey }),
-      });
+    try {
+      await awaitGateBeforeSettlement(
+        selected.promise,
+        pending,
+        "Node event settled before session selection",
+      );
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sendPolicy: "deny", thinkingLevel: "high", systemSent: true },
+      );
+      continueAdmission.resolve();
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Node event settled before ingress admission",
+      );
+      expect(settled).toBe(false);
+    } finally {
+      continueAdmission.resolve();
+      finish.resolve();
+      await pending;
+    }
+    expect(loadSessionEntry({ sessionKey })).toMatchObject({
+      sendPolicy: "deny",
+      thinkingLevel: "high",
+      systemSent: true,
+    });
+    await handleNodeEvent(nodeContext, "synthetic-node", {
+      event: "chat.subscribe",
+      payloadJSON: JSON.stringify({ sessionKey }),
     });
     expect(ingress).toHaveBeenCalledWith(
       expect.objectContaining({ sessionKey, sessionId: "node-event" }),
@@ -465,13 +506,7 @@ it.each(["actor", "native"] as const)(
       execNode: "skill-node",
       execCwd: "/synthetic",
     };
-    if (sourceKind === "actor") {
-      await actor.sessions.create(authority, { sessionKey, entry });
-    } else {
-      await upsertSessionEntryCore({ agentId, sessionKey }, entry);
-    }
-    const withSource = <T>(operation: () => Promise<T>) =>
-      sourceKind === "actor" ? withIncognitoSessionActor(actor, operation) : operation();
+    await replaceSessionEntry({ agentId, sessionKey }, entry);
     const registry = new NodeRegistry();
     const nodeClient = makeClient("skill-connection", "skill-node", [], {
       clientId: "openclaw-node-host",
@@ -508,35 +543,33 @@ it.each(["actor", "native"] as const)(
     const host = sourceKind === "actor" ? observeHostDataSql() : undefined;
     let runtime: Awaited<ReturnType<typeof prepareNodeClaudeSkillRuntime>>;
     try {
-      await withSource(() =>
-        withPluginRuntimeGatewayRequestScope(
-          { context: gateway, client: undefined, isWebchatConnect: () => true },
-          async () => {
-            runtime = await prepareNodeClaudeSkillRuntime(run, new AbortController().signal);
-            assert(runtime);
-            runtime.assertCurrent();
-            await upsertSessionEntryCore(
-              { agentId, sessionKey },
-              {
-                skillLibrarySelections: [
-                  {
-                    skillId: "next-turn-skill",
-                    revision: "a".repeat(64),
-                    name: "next-turn-skill",
-                    ownerProfileId: null,
-                  },
-                ],
-              },
-            );
-            runtime.assertCurrent();
-            await replaceSessionEntry(
-              { agentId, sessionKey },
-              { ...entry, execNode: "replacement-node" },
-            );
-            expect(() => runtime!.assertCurrent()).toThrow(/assignment|authority/);
-            await runtime.close();
-          },
-        ),
+      await withPluginRuntimeGatewayRequestScope(
+        { context: gateway, client: undefined, isWebchatConnect: () => true },
+        async () => {
+          runtime = await prepareNodeClaudeSkillRuntime(run, new AbortController().signal);
+          assert(runtime);
+          runtime.assertCurrent();
+          await upsertSessionEntryCore(
+            { agentId, sessionKey },
+            {
+              skillLibrarySelections: [
+                {
+                  skillId: "next-turn-skill",
+                  revision: "a".repeat(64),
+                  name: "next-turn-skill",
+                  ownerProfileId: null,
+                },
+              ],
+            },
+          );
+          runtime.assertCurrent();
+          await replaceSessionEntry(
+            { agentId, sessionKey },
+            { ...entry, execNode: "replacement-node" },
+          );
+          expect(() => runtime!.assertCurrent()).toThrow(/assignment|authority/);
+          await runtime.close();
+        },
       );
       if (host) {
         expect(host.queries).toEqual([]);

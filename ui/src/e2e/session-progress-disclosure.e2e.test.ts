@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -16,6 +13,31 @@ import {
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const viewport = { width: 1440, height: 900 };
+
+function disclosure(scope: Page | Locator, placement: "details" | "composer") {
+  const card = scope.locator(`[data-progress-card-placement="${placement}"]`);
+  const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
+  return {
+    card,
+    open,
+    show: async (value: boolean) => {
+      await openChatDetails(scope);
+      expect(await open()).toBe(value);
+    },
+  };
+}
+
+async function setOnline(
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  scope: Page | Locator,
+  online: boolean,
+) {
+  await gateway.setOnline(online);
+  await scope
+    .locator(".agent-chat__input--offline")
+    .waitFor({ state: online ? "hidden" : "visible" });
+}
 
 async function scrollTranscriptUp(page: Page, thread: Locator, distance: number) {
   const before = await thread.evaluate((element) => element.scrollTop);
@@ -37,11 +59,6 @@ async function scrollTranscriptUp(page: Page, thread: Locator, distance: number)
     await page.mouse.wheel(0, -distance);
     await wheel.evaluate((state) => state.delivered);
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThan(before);
-    return {
-      requested: distance,
-      before,
-      after: await thread.evaluate((element) => element.scrollTop),
-    };
   } finally {
     await wheel.evaluate((state) => state.cancel());
     await wheel.dispose();
@@ -57,6 +74,15 @@ async function installProgressGateway(page: Page, sessionKey: string, canonicalK
     hasActiveRun: true,
     activeRunIds: ["progress-run"],
   };
+  const card = {
+    sessionKey: canonicalKey,
+    revision: 1,
+    updatedAt: Date.now(),
+    steps: [
+      { step: "Inspect the conversation", status: "in_progress" },
+      { step: "Verify navigation", status: "pending" },
+    ],
+  };
   return installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
@@ -69,48 +95,30 @@ async function installProgressGateway(page: Page, sessionKey: string, canonicalK
     })),
     methodResponses: {
       "progressCard.get": {
-        cases: [
-          {
-            match: { sessionKey: canonicalKey },
-            response: {
-              card: {
-                sessionKey: canonicalKey,
-                revision: 1,
-                updatedAt: Date.now(),
-                steps: [
-                  { step: "Inspect the conversation", status: "in_progress" },
-                  { step: "Verify navigation", status: "pending" },
-                ],
-              },
-            },
-          },
-        ],
+        cases: [{ match: { sessionKey: canonicalKey }, response: { card } }],
       },
     },
   });
 }
 
 suite.define(() => {
-  it("keeps Details choices through transcript input, reconnect, navigation, and scope reset", async () => {
-    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
-    const sessionKey = "agent:main:main";
-    const gateway = await installProgressGateway(page, sessionKey);
-    const card = page.locator('[data-progress-card-placement="details"]');
-    const panel = page.locator(".chat-details:popover-open");
-    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-    const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
-    const sidebar = page.locator("openclaw-app-sidebar");
-    const openSettings = async () => {
-      await sidebar.locator(".sidebar-identity-card").click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-identity-menu")
-        .getByRole("menuitem", { exact: true, name: "Settings" })
-        .click();
-    };
-    try {
+  it("keeps Details choices through transcript input, reconnect, navigation, and scope reset", () =>
+    suite.withPage({ viewport }, async ({ page }) => {
+      const sessionKey = "agent:main:main";
+      const gateway = await installProgressGateway(page, sessionKey);
+      const { card, open, show } = disclosure(page, "details");
+      const panel = page.locator(".chat-details:visible");
+      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const openSettings = async () => {
+        await sidebar.locator(".sidebar-identity-card").click();
+        await sidebar
+          .locator(".sidebar-identity-menu")
+          .getByRole("menuitem", { exact: true, name: "Settings" })
+          .click();
+      };
       await page.goto(suite.server.baseUrl + "chat");
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
       expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
       await openChatDetails(page);
@@ -126,30 +134,19 @@ suite.define(() => {
       await card.locator("summary").press("Enter");
       expect(await open()).toBe(false);
       const retainedCard = await card.elementHandle();
-      await gateway.setOnline(false);
-      const offline = page.locator(".agent-chat__input--offline");
-      await offline.waitFor();
-      expect(await retainedCard!.evaluate((element) => element.isConnected)).toBe(true);
-      expect(await open()).toBe(false);
-      await gateway.setOnline(true);
-      await offline.waitFor({ state: "hidden" });
-      expect(await retainedCard!.evaluate((element) => element.isConnected)).toBe(true);
-      expect(await open()).toBe(false);
+      for (const online of [false, true]) {
+        await setOnline(gateway, page, online);
+        expect(await retainedCard!.evaluate((element) => element.isConnected)).toBe(true);
+        expect(await open()).toBe(false);
+      }
       await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
       await waitForChatScrollIdle(page);
       expect(await panel.count()).toBe(0);
-      await gateway.emitChatFinal({
-        sessionKey,
-        runId: "progress-run",
-        text: "Progress is complete.",
-      });
-      await page
-        .locator(".chat-bubble")
-        .getByText("Progress is complete.", { exact: true })
-        .waitFor();
+      const text = "Progress is complete.";
+      await gateway.emitChatFinal({ sessionKey, runId: "progress-run", text });
+      await page.locator(".chat-bubble").getByText(text, { exact: true }).waitFor();
       expect(await panel.count()).toBe(0);
-      await openChatDetails(page);
-      expect(await open()).toBe(false);
+      await show(false);
       await card.locator("summary").press("Space");
       expect(await open()).toBe(true);
       const retainedPane = await page.locator("openclaw-chat-pane").elementHandle();
@@ -158,21 +155,18 @@ suite.define(() => {
       expect(await retainedPane!.evaluate((element) => element.isConnected)).toBe(true);
       expect(await panel.count()).toBe(0);
       await page.goBack();
-      await openChatDetails(page);
-      expect(await open()).toBe(true);
+      await show(true);
       await card.locator("summary").click();
       expect(await open()).toBe(false);
       await openSettings();
       await page.locator("openclaw-chat-pane").waitFor({ state: "hidden" });
       await page.goBack();
       expect(await panel.count()).toBe(0);
-      await openChatDetails(page);
-      expect(await open()).toBe(false);
+      await show(false);
       await page.reload();
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
-      await openChatDetails(page);
-      expect(await open()).toBe(true);
+      await show(true);
       await card.locator("summary").click();
       await openSettings();
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
@@ -187,74 +181,54 @@ suite.define(() => {
       expect((await gateway.getSocketUrls()).at(-1)).toBe(replacementUrl);
       await page.goBack();
       await page.goBack();
-      await card.waitFor({ state: "attached" });
+      await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
       expect(await panel.count()).toBe(0);
-      await openChatDetails(page);
-      expect(await open()).toBe(true);
+      await show(true);
       await retainedCard!.dispose();
       await retainedPane!.dispose();
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 
   it.each(["open", "closed"] as const)(
     "keeps a manually %s Details card after resolving a stored short-name pane through reconnect",
-    async (choice) => {
-      const artifactDir = createControlUiE2eArtifactDir("session-progress-reconnect-" + choice);
-      const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
-      await context.addInitScript((settingsKey) => {
-        localStorage.setItem(
-          settingsKey,
-          JSON.stringify({
-            chatSplitLayout: {
-              activePaneId: "p1",
-              columnWeights: [0.5, 0.5],
-              columns: [
-                {
-                  id: "c1",
+    (choice) =>
+      suite.withPage({ viewport }, async ({ page, context }) => {
+        await context.addInitScript((settingsKey) => {
+          localStorage.setItem(
+            settingsKey,
+            JSON.stringify({
+              chatSplitLayout: {
+                activePaneId: "p1",
+                columnWeights: [0.5, 0.5],
+                columns: ["agent:main:main", "notes"].map((sessionKey, index) => ({
+                  id: `c${index + 1}`,
                   paneWeights: [1],
-                  panes: [{ id: "p1", sessionKey: "agent:main:main" }],
-                },
-                { id: "c2", paneWeights: [1], panes: [{ id: "p2", sessionKey: "notes" }] },
-              ],
-            },
-          }),
-        );
-      }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
-      const page = await context.newPage();
-      const gateway = await installProgressGateway(page, "notes", "agent:main:notes");
-      const pane = page
-        .locator(".chat-split-view__cell")
-        .nth(1)
-        .locator('openclaw-chat-pane[aria-hidden="false"]');
-      const card = pane.locator('[data-progress-card-placement="details"]');
-      const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
-      try {
+                  panes: [{ id: `p${index + 1}`, sessionKey }],
+                })),
+              },
+            }),
+          );
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
+        const gateway = await installProgressGateway(page, "notes", "agent:main:notes");
+        const pane = page
+          .locator(".chat-split-view__cell")
+          .nth(1)
+          .locator('openclaw-chat-pane[aria-hidden="false"]');
+        const { card, open } = disclosure(pane, "details");
+        const paneKey = () =>
+          pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey);
         await page.goto(suite.server.baseUrl + "chat");
-        await card.waitFor({ state: "attached" });
-        // Activate the seeded pane before opening Details: activation resolves its
-        // short key, and that identity change intentionally closes an open popover.
+        await page.locator(".agent-chat__composer-combobox textarea").first().waitFor();
+        // Short-key resolution closes the popover, so activate before opening it.
         await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await expect
-          .poll(() =>
-            pane.evaluate(
-              (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-            ),
-          )
-          .toBe("agent:main:notes");
+        await expect.poll(paneKey).toBe("agent:main:notes");
         await openChatDetails(pane);
         const retainedCard = await card.elementHandle();
-        await gateway.setOnline(false);
-        await pane.locator(".agent-chat__input--offline").waitFor();
-        // Disconnect clears selected-session metadata, so reopen the public
-        // popover before sending keyboard input to the retained card.
+        await setOnline(gateway, pane, false);
+        // Disconnect clears selected-session metadata and closes the popover.
         await openChatDetails(pane);
         const summary = card.locator("summary");
         await summary.waitFor({ state: "visible" });
-        expect(await pane.locator(".chat-details:popover-open").isVisible()).toBe(true);
-        // Both choices are made while disconnected, not inferred from a default
-        // or another pane's earlier presentation of the same card lifetime.
+        expect(await pane.locator(".chat-details:visible").isVisible()).toBe(true);
         const initialOpen = await open();
         await summary.focus();
         expect(await summary.evaluate((element) => document.activeElement === element)).toBe(true);
@@ -264,46 +238,31 @@ suite.define(() => {
           await summary.press("Space");
         }
         await expect.poll(open).toBe(choice === "open");
-        await page.screenshot({ path: path.join(artifactDir, "disconnected.png") });
-        await gateway.setOnline(true);
-        await pane.locator(".agent-chat__input--offline").waitFor({ state: "hidden" });
+        await setOnline(gateway, pane, true);
         expect(await retainedCard!.evaluate((element) => element.isConnected)).toBe(true);
         await openChatDetails(pane);
-        await page.screenshot({ path: path.join(artifactDir, "reconnected.png") });
         expect(await open()).toBe(choice === "open");
-        expect(
-          await pane.evaluate(
-            (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
-          ),
-        ).toBe("agent:main:notes");
+        expect(await paneKey()).toBe("agent:main:notes");
         await retainedCard!.dispose();
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
-    },
+      }),
   );
 
-  it("retains automatic collapse, escalating reopen, and pinning in the compact Home dock", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("session-progress-home-disclosure");
-    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
-    const page = await context.newPage();
-    const gateway = await installProgressGateway(page, "agent:main:main");
-    const home = page.locator("openclaw-home-session");
-    const card = home.locator('[data-progress-card-placement="composer"]');
-    const thread = home.locator(".chat-thread");
-    const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
-    const offsets: Array<{ requested: number; before: number; after: number }> = [];
-    const gestures = async (count: number, distance: number) => {
-      await thread.hover();
-      for (let index = 0; index < count; index++) {
-        if (index) {
-          await page.waitForTimeout(201); // Separate native input bursts.
+  it("retains automatic collapse, escalating reopen, and pinning in the compact Home dock", () =>
+    suite.withPage({ viewport }, async ({ page }) => {
+      const gateway = await installProgressGateway(page, "agent:main:main");
+      const home = page.locator("openclaw-home-session");
+      const { card, open } = disclosure(home, "composer");
+      const thread = home.locator(".chat-thread");
+      const gestures = async (count: number, distance: number) => {
+        await thread.hover();
+        for (let index = 0; index < count; index++) {
+          if (index) {
+            await page.waitForTimeout(201); // Separate native input bursts.
+          }
+          await scrollTranscriptUp(page, thread, distance);
         }
-        offsets.push(await scrollTranscriptUp(page, thread, distance));
-      }
-      await page.waitForTimeout(300); // The production disclosure settlement boundary.
-    };
-    try {
+        await page.waitForTimeout(300); // The production disclosure settlement boundary.
+      };
       // Home cannot dock beside the same Home chat; start on the public New route.
       await page.goto(suite.server.baseUrl + "new");
       await openProgressHomeDock(page);
@@ -322,11 +281,9 @@ suite.define(() => {
       await gestures(1, 200);
       await expect.poll(open).toBe(false);
       const retained = await card.elementHandle();
-      await gateway.setOnline(false);
-      await home.locator(".agent-chat__input--offline").waitFor();
+      await setOnline(gateway, home, false);
       expect(await open()).toBe(false);
-      await gateway.setOnline(true);
-      await home.locator(".agent-chat__input--offline").waitFor({ state: "hidden" });
+      await setOnline(gateway, home, true);
       expect(await retained!.evaluate((element) => element.isConnected)).toBe(true);
       expect(await open()).toBe(false);
       await card.locator("summary").press("Enter");
@@ -350,12 +307,5 @@ suite.define(() => {
       await gestures(3, 320);
       expect(await open()).toBe(false);
       await retained!.dispose();
-    } finally {
-      await writeFile(
-        path.join(artifactDir, "wheel-offsets.json"),
-        JSON.stringify(offsets, null, 2),
-      );
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 });

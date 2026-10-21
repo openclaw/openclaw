@@ -4,7 +4,6 @@ import path from "node:path";
 import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
 import {
@@ -19,7 +18,7 @@ import {
 } from "../shared/path-binding.js";
 import { createTarArchive } from "./dir-fetch-archive.js";
 import {
-  classifyFsSafeReadError,
+  createReadErrorClassifier,
   readAbsolutePath,
   resolveBoundReadDirectory,
   statRequiredDirectory,
@@ -34,34 +33,7 @@ type DirFetchParams = {
   expectedBinding?: unknown;
 };
 
-function classifyFsError(err: unknown) {
-  const safeCode = classifyFsSafeReadError(err);
-  if (safeCode) {
-    return safeCode;
-  }
-  const code = (err as { code?: string } | null)?.code;
-  if (code === "ENOENT") {
-    return "NOT_FOUND";
-  }
-  return "READ_ERROR";
-}
-
-async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> {
-  // du -sk gives size in 1KB blocks (512-byte blocks on macOS with -k)
-  // We use maxBytes * 4 as the rough heuristic ceiling (generous, gzip compresses)
-  const heuristicKb = Math.ceil((maxBytes * 4) / 1024);
-  const result = await runCommandBuffered(["du", "-sk", dirPath], {
-    discardOutput: { stderr: true },
-    maxOutputBytes: 64 * 1024,
-    timeoutMs: 10_000,
-  }).catch(() => null);
-  if (!result || result.termination !== "exit" || result.code !== 0) {
-    // `du` is optional; the capped tar command remains authoritative.
-    return true;
-  }
-  const match = /^(\d+)/.exec(result.stdout.toString("utf8").trim());
-  return match ? Number.parseInt(match[0], 10) <= heuristicKb : true;
-}
+const classifyFsError = createReadErrorClassifier({ ENOENT: "NOT_FOUND" } as const);
 
 async function listTreeEntries(
   root: string,
@@ -148,13 +120,6 @@ export async function handleDirFetch(params: DirFetchParams) {
     }
 
     preflightEntries = entries;
-  } else if (!(await preflightDu(canonical, maxBytes))) {
-    return {
-      ok: false as const,
-      code: "TREE_TOO_LARGE",
-      message: `directory tree exceeds estimated size limit (${maxBytes} bytes raw)`,
-      canonicalPath: canonical,
-    };
   }
 
   // Preflight must build the capped archive so approval cannot accept an oversized tree.
@@ -186,7 +151,7 @@ export async function handleDirFetch(params: DirFetchParams) {
     return {
       ok: false as const,
       code: "CANONICAL_PATH_CHANGED",
-      message: "canonical path differs from the authorized target",
+      message: "resolved path differs from the authorized target",
       canonicalPath: canonical,
     };
   }

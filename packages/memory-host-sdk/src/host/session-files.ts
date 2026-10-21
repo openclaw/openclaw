@@ -2,10 +2,10 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { safeStatSync } from "@openclaw/fs-safe/path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeAgentId } from "./config-utils.js";
 import { normalizeComparablePath, readRegularFile, statRegularFile } from "./fs-utils.js";
-import { hashText } from "./hash.js";
 import { createSubsystemLogger } from "./openclaw-runtime-io.js";
 import { isCronRunSessionKey } from "./openclaw-runtime-paths.js";
 import {
@@ -21,14 +21,13 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isExecCompletionEvent,
   isHeartbeatUserMessage,
-  isIncognitoOpenClawAgentSqlitePath,
-  isIncognitoSessionKey,
   isSessionArchiveArtifactName,
-  isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
   materializeSessionArchiveForRead,
   parseUsageCountedSessionIdFromFileName,
   prepareSessionEntryInWorker,
+  prepareSessionEntriesInWorker,
+  prepareAssistantTranscriptText,
   readSessionEntrySnapshotInWorker,
   readRestoredSessionTranscript,
   readTranscriptStatsAsync,
@@ -436,9 +435,6 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
   ) {
     return null;
   }
-  if (isSilentReplyPayloadText(normalized)) {
-    return null;
-  }
   // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
   // nothing to do" reply to a heartbeat tick. Drop on the assistant side
   // directly so we do not have to rely on cross-message coupling with the
@@ -484,7 +480,7 @@ function sqliteSessionFileState(
   };
 }
 
-/** @deprecated Await statSessionEntry. Removed at the next Plugin SDK major; prepared statistics do not read SQLite. */
+/** @deprecated Await statSessionEntry. Final compatibility day: 2026-12-31; prepared statistics do not read SQLite. Removal in the first January 2027 stable release. */
 export function statSessionEntrySync(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
@@ -548,28 +544,14 @@ async function yieldSessionEntryParseIfNeeded(
 export async function buildSessionEntry(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
-  source?: {
-    memoryEntry(
-      absPath: string,
-      options: BuildSessionEntryOptions,
-    ): Promise<SessionFileEntry | null>;
-  },
 ): Promise<SessionFileEntry | null> {
-  if (source) {
-    return source.memoryEntry(absPath, opts);
-  }
   const identity = resolveBuildSessionSqliteIdentity(absPath, opts);
   const incognito = identity && captureIncognitoMemoryReader(identity);
   if (incognito) {
     return incognito.memoryEntry(absPath, opts);
   }
   const prepare = async () => {
-    // Unbound private stores retain their native owner until the atomic cutover.
-    if (
-      identity &&
-      !isIncognitoSessionKey(opts.sessionKey) &&
-      !isIncognitoOpenClawAgentSqlitePath(identity.storePath, { agentId: identity.agentId })
-    ) {
+    if (identity) {
       const { onTranscriptMessage, parseYieldEveryLines, ...options } = { ...opts, ...identity };
       if (onTranscriptMessage || parseYieldEveryLines !== undefined) {
         const snapshot = await readSessionEntrySnapshotInWorker(
@@ -596,12 +578,71 @@ export async function buildSessionEntry(
   }
 }
 
+/** Prepare a bounded indexing group in one background transcript-worker request. */
+export async function buildSessionEntries(
+  inputs: readonly { absPath: string; options?: BuildSessionEntryOptions }[],
+): Promise<(SessionFileEntry | null)[]> {
+  const results: (SessionFileEntry | null)[] = inputs.map(() => null);
+  const workerInputs: Parameters<typeof prepareSessionEntriesInWorker>[0] = [];
+  const workerIndexes: number[] = [];
+  const otherEntries: Promise<void>[] = [];
+  for (const [index, input] of inputs.entries()) {
+    const options = input.options ?? {};
+    const identity = resolveBuildSessionSqliteIdentity(input.absPath, options);
+    const incognito = identity && captureIncognitoMemoryReader(identity);
+    if (
+      identity &&
+      !incognito &&
+      !options.onTranscriptMessage &&
+      options.parseYieldEveryLines === undefined
+    ) {
+      workerInputs.push({ absPath: input.absPath, options: { ...options, ...identity } });
+      workerIndexes.push(index);
+    } else {
+      otherEntries.push(
+        (incognito
+          ? incognito.memoryEntry(input.absPath, options)
+          : buildSessionEntry(input.absPath, options)
+        ).then((entry) => {
+          results[index] = entry;
+        }),
+      );
+    }
+  }
+  const prepareWorkerEntries = async () => {
+    if (workerInputs.length === 0) {
+      return;
+    }
+    const prepared = await prepareSessionEntriesInWorker(workerInputs);
+    const restored: Promise<void>[] = [];
+    for (const [offset, result] of prepared.entries()) {
+      const index = workerIndexes[offset]!;
+      if ("cold" in result) {
+        const input = inputs[index]!;
+        restored.push(
+          buildSessionEntry(input.absPath, input.options).then((entry) => {
+            results[index] = entry;
+          }),
+        );
+      } else {
+        results[index] = result.entry
+          ? attachSessionEntryResetRecallCutoff(result.entry, result.resetRecallCutoff)
+          : null;
+      }
+    }
+    await Promise.all(restored);
+  };
+  await Promise.all([...otherEntries, prepareWorkerEntries()]);
+  return results;
+}
+
 /** The shared transcript worker runs the same projection as inline readers. */
 export async function buildSessionEntryInProcess(
   absPath: string,
   opts: BuildSessionEntryOptions = {},
+  snapshot?: SessionEntrySnapshot,
 ): Promise<SessionFileEntry | null> {
-  return buildSessionEntryFromSource(absPath, opts);
+  return buildSessionEntryFromSource(absPath, opts, snapshot);
 }
 
 /** Project an actor-owned snapshot without reopening its physical store on the caller. */
@@ -619,7 +660,7 @@ export async function buildSessionEntryFromSnapshot(
   const result = await buildSessionEntryFromSource(
     absPath,
     {
-      ...structuredClone(options),
+      ...options,
       ...(onTranscriptMessage
         ? {
             onTranscriptMessage(message, observedAt) {
@@ -647,7 +688,9 @@ async function buildSessionEntryFromSource(
       (sqliteIdentity
         ? readTranscriptExportSnapshotReadOnlySync(sqliteIdentity, {
             // Observers require original messages and run only after the snapshot closes.
-            projectEvent: opts.onTranscriptMessage ? undefined : projectSessionEntryRecord,
+            projectEvent: opts.onTranscriptMessage
+              ? undefined
+              : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
           })
         : null);
     const sqliteSource =
@@ -682,7 +725,7 @@ async function buildSessionEntryFromSource(
           absPath,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          hash: hashText("\n\n"),
+          hash: sha256Hex("\n\n"),
           content: "",
           lineMap: [],
           messageTimestampsMs: [],
@@ -818,8 +861,14 @@ async function buildSessionEntryFromSource(
       ) {
         continue;
       }
-      const rawText = collectRawSessionText(message.content);
-      if (rawText === null) {
+      if ("display" in message && message.display === false) {
+        continue;
+      }
+      const rawText = prepareAssistantTranscriptText(
+        message,
+        collectRawSessionText(message.content) ?? undefined,
+      );
+      if (rawText === undefined) {
         continue;
       }
 

@@ -240,17 +240,6 @@ export async function createBrokerNativeResourceServer(options: {
       }
       return;
     }
-    if (
-      request.type === "resource-close" &&
-      (!Number.isSafeInteger(request.requestId) || request.requestId === 0)
-    ) {
-      publishParent({
-        type: "resource-failed",
-        id: request.id,
-        error: encodeNativeWorkerFailure(new Error("Invalid native resource close request ID")),
-      });
-      return;
-    }
     const resource = resources.get(request.id);
     if (!resource) {
       if (sourceSealed && request.type === "resource-close") {

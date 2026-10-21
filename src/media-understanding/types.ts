@@ -2,8 +2,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
-import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderResolveSyntheticAuthContext } from "../plugins/provider-external-auth.types.js";
 
 /** Agent-owned runtime handle carried opaquely through media provider requests. */
 type MediaPreparedModelRuntime = Readonly<{
@@ -76,7 +76,7 @@ export type MediaUnderstandingProviderRequestAuth =
 
 export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
   language?: string;
-  query?: Record<string, string | number | boolean>;
+  query?: Record<string, string | number | boolean | string[]>;
 };
 
 type MediaUnderstandingProviderRequest = ImagesDescriptionInput & {
@@ -100,13 +100,19 @@ type MediaUnderstandingTextResult = {
 
 export type AudioTranscriptionResult = MediaUnderstandingTextResult;
 
-type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
+export type AudioTranscriptionConfigContext = Pick<
+  AudioTranscriptionRequest,
+  "baseUrl" | "headers" | "request" | "model"
+> & {
   cfg: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
   profile?: string;
   preferredProfile?: string;
 };
+
+type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> &
+  AudioTranscriptionConfigContext;
 
 export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
@@ -181,11 +187,7 @@ type MediaUnderstandingDocumentModelDefaults = {
   image?: string | false;
 };
 
-export type MediaUnderstandingProviderAuthContext = {
-  config?: OpenClawConfig;
-  provider: string;
-  providerConfig?: ModelProviderConfig;
-};
+export type MediaUnderstandingProviderAuthContext = ProviderResolveSyntheticAuthContext;
 
 export type MediaUnderstandingProviderAuthResult =
   | { kind: "none"; source: string }
@@ -212,6 +214,8 @@ export type MediaUnderstandingProvider = {
     ctx: MediaUnderstandingProviderAuthContext,
   ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
+  /** Checks provider-owned credentials and transport settings without uploading audio. */
+  isAudioConfigured?: (context: AudioTranscriptionConfigContext) => boolean | Promise<boolean>;
   /** Called after file loading. Result.error is only a rejection before audio upload;
    * upload/HTTP failures must throw and stop automatic provider selection. */
   transcribeAudioWithContext?: (

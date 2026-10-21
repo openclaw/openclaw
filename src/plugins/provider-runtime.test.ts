@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
-import { createRequireRecord, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -10,8 +10,11 @@ import type { ProviderExternalAuthProfile } from "./provider-external-auth.types
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   createProviderRuntimeLogger,
+  DEMO_SANITIZED_MESSAGE,
+  DEMO_TOOL,
   expectAugmentedCodexCatalog,
   expectCodexMissingAuthHint,
+  PROVIDER_RUNTIME_TEST_MODEL as MODEL,
 } from "./provider-runtime.test-support.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
@@ -110,38 +113,9 @@ let createEmptyPluginRegistry: typeof import("./registry-empty.js").createEmptyP
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
-const MODEL: ProviderRuntimeModel = {
-  id: "demo-model",
-  name: "Demo Model",
-  api: "openai-responses",
-  provider: "demo",
-  baseUrl: "https://api.example.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
-};
 const DEMO_PROVIDER_ID = "demo";
 const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
 const DEMO_REPLAY_MESSAGES: AgentMessage[] = [{ role: "user", content: "hello", timestamp: 1 }];
-const DEMO_SANITIZED_MESSAGE: AgentMessage = {
-  role: "assistant",
-  content: [{ type: "text", text: "sanitized" }],
-  api: MODEL.api,
-  provider: MODEL.provider,
-  model: MODEL.id,
-  usage: createZeroUsageFixture(),
-  stopReason: "stop",
-  timestamp: 2,
-};
-const DEMO_TOOL = {
-  name: "demo-tool",
-  label: "Demo tool",
-  description: "Demo tool",
-  parameters: { type: "object", properties: {} },
-  execute: vi.fn(async () => ({ content: [], details: undefined })),
-} as unknown as AnyAgentTool;
 
 function createOpenAiCatalogProviderPlugin(
   overrides: Partial<ProviderPlugin> = {},
@@ -442,87 +416,83 @@ describe("provider-runtime", () => {
     });
   });
 
-  it("dispatches session OAuth operations to the owning provider", async () => {
+  it.each([true, false])("dispatches session OAuth with owner available=%s", async (available) => {
     const loginOAuth = vi.fn(async () => ({
       access: "login-access",
       refresh: "login-refresh",
       expires: 123,
     }));
-    const refreshOAuth = vi.fn(async (credential) => ({
-      ...credential,
-      access: "refreshed-access",
-    }));
-    resolvePluginProvidersMock.mockReturnValue([
-      {
-        id: "plugin-oauth",
-        label: "Plugin OAuth",
-        auth: [],
-        loginOAuth,
-        refreshOAuth,
-        formatApiKey: (credential) =>
-          credential.type === "oauth" ? `formatted:${credential.access}` : "",
+    const refreshConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          "plugin-oauth": { baseUrl: "https://caller.example.com/anthropic", models: [] },
+        },
       },
-    ]);
+    };
+    const refreshOAuth = vi.fn<NonNullable<ProviderPlugin["refreshOAuth"]>>(
+      async (credential, config) => ({
+        ...credential,
+        access:
+          config?.models?.providers?.["plugin-oauth"]?.baseUrl ===
+          "https://caller.example.com/anthropic"
+            ? "refreshed-access"
+            : "wrong-region-access",
+      }),
+    );
+    if (!available) {
+      resolveOwningPluginIdsForProviderMock.mockReturnValue(["plugin-oauth"]);
+    }
+    resolvePluginProvidersMock.mockReturnValue(
+      available
+        ? [
+            {
+              id: "plugin-oauth",
+              label: "Plugin OAuth",
+              auth: [],
+              loginOAuth,
+              refreshOAuth,
+              formatApiKey: (credential) =>
+                credential.type === "oauth" ? `formatted:${credential.access}` : "",
+            },
+          ]
+        : [],
+    );
 
-    await expect(
-      loginProviderOAuthWithPlugin({
-        provider: "plugin-oauth",
-        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
-      }),
-    ).resolves.toMatchObject({
-      status: "available",
-      credentials: { access: "login-access", refresh: "login-refresh" },
+    const login = await loginProviderOAuthWithPlugin({
+      provider: "plugin-oauth",
+      context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
     });
-    await expect(
-      resolveProviderOAuthCredentialWithPlugin({
+    const credential = await resolveProviderOAuthCredentialWithPlugin({
+      provider: "plugin-oauth",
+      ...(available ? { config: refreshConfig } : {}),
+      credential: {
+        type: "oauth",
         provider: "plugin-oauth",
-        credential: {
-          type: "oauth",
-          provider: "plugin-oauth",
-          access: "old-access",
-          refresh: "refresh",
-          expires: 1,
-        },
-        refresh: true,
-      }),
-    ).resolves.toMatchObject({
-      status: "available",
-      apiKey: "formatted:refreshed-access",
-      credential: { access: "refreshed-access" },
+        access: "old-access",
+        refresh: "refresh",
+        expires: 1,
+      },
+      refresh: true,
     });
+    if (available) {
+      expect(login).toMatchObject({
+        status: "available",
+        credentials: { access: "login-access", refresh: "login-refresh" },
+      });
+      expect(credential).toMatchObject({
+        status: "available",
+        apiKey: "formatted:refreshed-access",
+        credential: { access: "refreshed-access" },
+      });
+    } else {
+      expect(login).toEqual({ status: "configured-unavailable" });
+      expect(credential).toEqual({ status: "configured-unavailable" });
+    }
     expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
-      status: "available",
+      status: available ? "available" : "configured-unavailable",
     });
-    expect(loginOAuth).toHaveBeenCalledOnce();
-    expect(refreshOAuth).toHaveBeenCalledOnce();
-  });
-
-  it("distinguishes an owned but unavailable OAuth provider", async () => {
-    resolveOwningPluginIdsForProviderMock.mockReturnValue(["plugin-oauth"]);
-    resolvePluginProvidersMock.mockReturnValue([]);
-
-    await expect(
-      loginProviderOAuthWithPlugin({
-        provider: "plugin-oauth",
-        context: { onAuth: vi.fn(), onPrompt: vi.fn(async () => "") },
-      }),
-    ).resolves.toEqual({ status: "configured-unavailable" });
-    await expect(
-      resolveProviderOAuthCredentialWithPlugin({
-        provider: "plugin-oauth",
-        credential: {
-          type: "oauth",
-          provider: "plugin-oauth",
-          access: "old-access",
-          refresh: "refresh",
-          expires: 1,
-        },
-        refresh: true,
-      }),
-    ).resolves.toEqual({ status: "configured-unavailable" });
-    expect(resolveProviderOAuthRefreshCapabilityWithPlugin({ provider: "plugin-oauth" })).toEqual({
-      status: "configured-unavailable",
-    });
+    expect(loginOAuth).toHaveBeenCalledTimes(available ? 1 : 0);
+    expect(refreshOAuth).toHaveBeenCalledTimes(available ? 1 : 0);
   });
 
   it("auto-discovers only usage providers declared by their owning plugin", () => {
@@ -693,30 +663,50 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("matches active provider hooks through a custom provider's native api owner", () => {
+  it.each([
+    {
+      providerId: "ollama",
+      requestedProvider: "ollama-spark",
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      aliases: [],
+      loaded: true,
+      matches: true,
+    },
+    {
+      providerId: "qwen",
+      requestedProvider: "modelstudio",
+      api: "dashscope",
+      baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+      aliases: ["modelstudio"],
+      loaded: false,
+      matches: false,
+    },
+  ])("selects $requestedProvider hooks by its configured API owner $api", (row) => {
     const provider: ProviderPlugin = {
-      id: "ollama",
-      label: "Ollama",
+      id: row.providerId,
+      label: row.providerId,
+      aliases: row.aliases,
       auth: [],
       createStreamFn: vi.fn(() => vi.fn()),
     };
-    const registry = createEmptyPluginRegistry();
-    registry.providers.push({
-      pluginId: "ollama",
-      provider,
-      source: "test",
-    });
-    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+    if (row.loaded) {
+      const registry = createEmptyPluginRegistry();
+      registry.providers.push({ pluginId: row.providerId, provider, source: "test" });
+      setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+    } else {
+      resolvePluginProvidersMock.mockReturnValue([provider]);
+    }
 
     const plugin = resolveProviderRuntimePlugin({
-      provider: "ollama-spark",
-      workspaceDir: "/tmp/workspace",
+      provider: row.requestedProvider,
+      ...(row.loaded ? { workspaceDir: "/tmp/workspace" } : {}),
       config: {
         models: {
           providers: {
-            "ollama-spark": {
-              api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
+            [row.requestedProvider]: {
+              api: row.api,
+              baseUrl: row.baseUrl,
               models: [],
             },
           },
@@ -724,9 +714,17 @@ describe("provider-runtime", () => {
       } as never,
     });
 
-    expect(plugin?.id).toBe("ollama");
-    expect(plugin?.pluginId).toBe("ollama");
-    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    if (row.matches) {
+      expect(plugin?.id).toBe(row.providerId);
+      expect(plugin?.pluginId).toBe(row.providerId);
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    } else {
+      expect(plugin).toBeUndefined();
+      expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
+        row.requestedProvider,
+        row.api,
+      ]);
+    }
   });
 
   it("installs provider stream hooks into the AI transport host", () => {
@@ -1975,10 +1973,15 @@ describe("provider-runtime", () => {
       baseUrl: "https://runtime.example.com/v1",
       expiresAt: 123,
     }));
-    const refreshOAuth = vi.fn(async (cred) => ({
-      ...cred,
-      access: "refreshed-access-token",
-    }));
+    const refreshOAuth = vi.fn<NonNullable<ProviderPlugin["refreshOAuth"]>>(
+      async (cred, config) => ({
+        ...cred,
+        access:
+          config?.models?.providers?.[DEMO_PROVIDER_ID]?.baseUrl === "https://caller.example.com/v1"
+            ? "request-scoped-access-token"
+            : "refreshed-access-token",
+      }),
+    );
     const resolveUsageAuth = vi.fn(async () => ({
       token: "usage-token",
       accountId: "usage-account",
@@ -2140,6 +2143,13 @@ describe("provider-runtime", () => {
         actual: () =>
           refreshProviderOAuthCredentialWithPlugin({
             provider: DEMO_PROVIDER_ID,
+            config: {
+              models: {
+                providers: {
+                  [DEMO_PROVIDER_ID]: { baseUrl: "https://caller.example.com/v1", models: [] },
+                },
+              },
+            },
             context: createDemoProviderContext({
               type: "oauth",
               access: "oauth-access",
@@ -2148,7 +2158,7 @@ describe("provider-runtime", () => {
             }),
           }),
         expected: {
-          access: "refreshed-access-token",
+          access: "request-scoped-access-token",
         },
       },
       {
@@ -2417,38 +2427,6 @@ describe("provider-runtime", () => {
     expect(plugin).toBeUndefined();
     expect(getLastResolvePluginProvidersParams().providerRefs).toEqual(["tui-pty-mock"]);
     expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
-  });
-
-  it("does not match alias hooks when an exact custom provider declares a foreign api owner", () => {
-    const qwenPlugin: ProviderPlugin = {
-      id: "qwen",
-      label: "Qwen",
-      aliases: ["modelstudio"],
-      auth: [],
-      createStreamFn: vi.fn(() => vi.fn()),
-    };
-    resolvePluginProvidersMock.mockReturnValue([qwenPlugin]);
-
-    const plugin = resolveProviderRuntimePlugin({
-      provider: "modelstudio",
-      config: {
-        models: {
-          providers: {
-            modelstudio: {
-              api: "dashscope",
-              baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-              models: [],
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(plugin).toBeUndefined();
-    expect(getLastResolvePluginProvidersParams().providerRefs).toEqual([
-      "modelstudio",
-      "dashscope",
-    ]);
   });
 
   it("applies foreign transport normalization for custom provider hosts", () => {

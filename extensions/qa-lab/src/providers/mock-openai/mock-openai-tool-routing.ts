@@ -246,7 +246,7 @@ export function canCallScenarioTool(
     (!requireDeclaredTool || hasDeclaredTool(body, name)) &&
     (hasToolDefinition(body, name) ||
       hasCodeModeExecSurface(body) ||
-      hasToolDefinition(body, "tool_call"))
+      hasToolDefinition(body, "dispatch_action"))
   );
 }
 
@@ -258,7 +258,7 @@ function readScenarioCompletedToolName(
     toolCall?.name === "wait"
       ? (findGeneratedCodeModeWaitTarget(input, toolCall) ?? toolCall)
       : toolCall;
-  if (call?.name === "tool_call") {
+  if (call?.name === "dispatch_action") {
     const id = parseToolCallArguments(call)?.id;
     return typeof id === "string" ? id : undefined;
   }
@@ -274,7 +274,7 @@ export function unwrapScenarioCatalogOutput(
   projection: "details" | "content" = "details",
 ) {
   const call = findToolCallByCallId(input, extractToolOutputCallId(input));
-  if (call?.name !== "tool_call") {
+  if (call?.name !== "dispatch_action") {
     return output;
   }
   const envelope = parseToolOutputJson(output);
@@ -436,8 +436,10 @@ export function readProgressCommand(input: ResponsesInputItem[], command: string
   for (const item of input) {
     if (item.type === "function_call" || item.type === "custom_tool_call") {
       const wireArgs = parseToolCallArguments(item);
-      const name = item.name === "tool_call" ? readScenarioCompletedToolName(item) : item.name;
-      const args = item.name === "tool_call" && isRecord(wireArgs?.args) ? wireArgs.args : wireArgs;
+      const name =
+        item.name === "dispatch_action" ? readScenarioCompletedToolName(item) : item.name;
+      const args =
+        item.name === "dispatch_action" && isRecord(wireArgs?.args) ? wireArgs.args : wireArgs;
       if (
         pendingCall ||
         typeof item.call_id !== "string" ||
@@ -489,9 +491,9 @@ export function buildScenarioToolCallEvents(
   if (
     !hasToolDefinition(body, name) &&
     !hasCodeModeExecSurface(body) &&
-    hasToolDefinition(body, "tool_call")
+    hasToolDefinition(body, "dispatch_action")
   ) {
-    return buildScenarioToolCallEvents(body, "tool_call", { id: name, args });
+    return buildScenarioToolCallEvents(body, "dispatch_action", { id: name, args });
   }
   if (
     name === "exec" ||
@@ -555,7 +557,11 @@ export function extractScenarioPlannedTool(events: StreamEvent[]) {
       : typeof wireArgs?.code === "string"
         ? wireArgs.code
         : undefined;
-  if (wireName === "tool_call" && typeof wireArgs?.id === "string" && isRecord(wireArgs.args)) {
+  if (
+    wireName === "dispatch_action" &&
+    typeof wireArgs?.id === "string" &&
+    isRecord(wireArgs.args)
+  ) {
     return { name: wireArgs.id, args: wireArgs.args, wireName, ...identity };
   }
   if (wireName !== "exec" || !source) {

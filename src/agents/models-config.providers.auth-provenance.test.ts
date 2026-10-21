@@ -12,6 +12,7 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
 const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
@@ -78,6 +79,7 @@ describe("models-config provider auth provenance", () => {
     requestedProvider: string,
     refSource: "store" | "env",
   ) {
+    prepareSharedAuthStoreOwnershipForNative();
     const { resolveImplicitProviders } = await import("./models-config.providers.implicit.js");
     const { planOpenClawModelsJson } = await import("./models-config.plan.js");
     const { clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =

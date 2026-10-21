@@ -11,24 +11,27 @@ import {
   resolveCronAuthenticatedCallerOrigin,
   resolveCronAuthenticatedChannelRequester,
 } from "../tools-allow-provenance.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronStoredJob } from "../types.js";
 import { findJobOrThrow, isJobEnabled } from "./jobs-scheduling.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
-import { publishCronRunReceiptMutation, type CronRunReceiptOwnerMutation } from "./run-receipts.js";
-import { emit, type CronServiceState } from "./state.js";
+import { publishCronRunReceiptMutation } from "./run-receipts.js";
+import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
 export async function persistUpdatedJob(params: {
   state: CronServiceState;
-  previousJob: CronJob;
-  nextJob: CronJob;
+  previousJob: CronStoredJob;
+  nextJob: CronStoredJob;
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
-  ownerMutation?: CronRunReceiptOwnerMutation;
   commitGuard?: () => void;
+  streamAuthority?: Pick<
+    CronAddOptions,
+    "execPolicy" | "sessionEntryCurrent" | "streamExecApproval"
+  >;
   agentId?: string;
   preconditionJob?: CronJob;
   jobMutation: CronJobMutation;
@@ -51,6 +54,7 @@ export async function persistUpdatedJob(params: {
     (isJobEnabled(previousJob) && !isJobEnabled(nextJob)) ||
     !cronJobMessageToolAuthorityInputsEqual(previousJob, nextJob);
   const messageSourceAuthorityChanged =
+    !isDeepStrictEqual(previousJob.operatorSource, nextJob.operatorSource) ||
     !cronJobMessageActionAuthorityInputsEqual(previousJob, nextJob) ||
     (triggerStateChanged &&
       Boolean(
@@ -65,13 +69,13 @@ export async function persistUpdatedJob(params: {
     method: params.mutationMethod,
     assertCurrent: () => {
       params.commitGuard?.();
-      params.ownerMutation?.assertCurrent();
       const currentDefaultAgentId = state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId;
       resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
       resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
+    streamAuthority: params.streamAuthority,
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,
     expectedJob: { id: previousJob.id, configRevision: resolveCronJobConfigRevision(previousJob) },
@@ -80,7 +84,6 @@ export async function persistUpdatedJob(params: {
     suppressScheduledJobId: nextJob.id,
     receiptMutation: {
       jobId: nextJob.id,
-      owner: params.ownerMutation?.prepared,
       triggerStateChanged,
       scheduleChanged,
     },

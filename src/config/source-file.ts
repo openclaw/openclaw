@@ -7,7 +7,9 @@ import {
   type WatchScope,
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import {
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
@@ -171,6 +173,7 @@ export function createConfigFileAdapter(opts: {
         subscription: watch(plan.root, {
           scopes: plan.scopes,
           mode: next.mode,
+          intervalMs: FS_RECONCILE_MS,
           pollIntervalMs: resolveFsObservationIntervalMs(),
           signal: next.lifetime.signal,
           onInvalidate: (hint) =>
@@ -267,12 +270,7 @@ export function createConfigFileAdapter(opts: {
             next.stability.close(),
             ...[...next.sources.values()].map((source) => source.subscription.close()),
           ]).then(([, ...results]) => {
-            const errors = results.flatMap((result) =>
-              result.status === "rejected" ? [result.reason] : [],
-            );
-            if (errors.length) {
-              throw new AggregateError(errors, "Config observation retirement failed");
-            }
+            throwSettledAggregate(results, "Config observation retirement failed");
           });
         }
         return closing;
@@ -280,7 +278,7 @@ export function createConfigFileAdapter(opts: {
     };
     watcher = next;
     status = "active";
-    void enqueueRefresh(next);
+    return enqueueRefresh(next);
   };
 
   const handleWatcherError = (source: Watcher, error: unknown, eventWatchFailed = false) => {
@@ -327,7 +325,7 @@ export function createConfigFileAdapter(opts: {
       void retirement.then(
         () => {
           if (!stopped && !watcher) {
-            createWatcher(true);
+            void createWatcher(true);
           }
         },
         () => {},
@@ -360,12 +358,13 @@ export function createConfigFileAdapter(opts: {
   };
 
   return {
-    start: () => {
+    start: async () => {
       if (!started && !stopped) {
         started = true;
-        createWatcher(false);
+        await createWatcher(false);
       }
     },
+    whenSettled: () => watcher?.stability.whenSettled() ?? Promise.resolve(),
     observePaths: (paths: readonly string[]) => reconcilePaths([...acceptedPaths, ...paths]),
     acceptPaths: (paths: readonly string[]) => {
       acceptedPaths = [...paths];
@@ -379,12 +378,7 @@ export function createConfigFileAdapter(opts: {
       if (previous) {
         void retire(previous).catch(() => {});
       }
-      const errors = (await Promise.allSettled(retiring)).flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Config watcher shutdown failed");
-      }
+      throwSettledAggregate(await Promise.allSettled(retiring), "Config watcher shutdown failed");
     },
     status: () => status,
   };

@@ -285,6 +285,9 @@ then retries. An unpinned setup can rotate to another eligible node.
   **Analyze now**. Failed batches are retried only on that explicit action to
   avoid repeated model spend.
 
+Malformed distraction JSON in stored cards makes timeline reads fail visibly;
+it is not treated as an empty distraction list. The stored card remains unchanged.
+
 ## Related
 
 - [Manage plugins](/plugins/manage-plugins)

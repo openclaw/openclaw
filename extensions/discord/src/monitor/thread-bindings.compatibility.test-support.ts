@@ -7,7 +7,7 @@ import type {
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -16,27 +16,22 @@ import { expect, it, vi, type Mock } from "vitest";
 import { discordPlugin } from "../channel.js";
 import * as discordSend from "../send.js";
 import {
-  unbindThreadBindingsBySessionKey,
-  unbindThreadBindingsBySessionKeyAsync,
+  unbindThreadBindingsBySessionKey as unbind,
+  unbindThreadBindingsBySessionKeyAsync as unbindAsync,
 } from "./thread-bindings.lifecycle.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
+type OpenMock<T> = Mock<(options: OpenKeyedStoreOptions) => T>;
+type Store = PluginStateKeyedStore<ThreadBindingRecord>;
+type SyncStore = PluginStateSyncKeyedStore<ThreadBindingRecord>;
 type BindingStoreMocks = {
-  openKeyedStore: Mock<
-    (
-      options: OpenKeyedStoreOptions,
-    ) => Pick<PluginStateKeyedStore<ThreadBindingRecord>, "entries" | "register" | "delete">
-  >;
-  openSyncKeyedStore: Mock<
-    (
-      options: OpenKeyedStoreOptions,
-    ) => Pick<
-      PluginStateSyncKeyedStore<ThreadBindingRecord>,
-      "entries" | "register" | "delete" | "update"
-    >
-  >;
+  openKeyedStoreV2: OpenMock<Pick<Store, "entries" | "register" | "delete">>;
+  openSyncKeyedStore: OpenMock<Pick<SyncStore, "entries" | "register" | "delete" | "update">>;
 };
+
+const refuse = (method: "sendMessageDiscord" | "sendWebhookMessageDiscord", message: string) =>
+  vi.spyOn(discordSend, method).mockRejectedValue(new Error(message));
 
 export function registerThreadBindingCompatibilityTests({
   stores,
@@ -57,31 +52,34 @@ export function registerThreadBindingCompatibilityTests({
     await withOpenClawTestState({ label: "discord-binding-commit-order" }, async () => {
       const entered = createDeferred<void>();
       const finish = createDeferred<void>();
+      const pause = async () => {
+        entered.resolve();
+        await finish.promise;
+      };
       const introOperation = boundary.startsWith("committed-intro-");
       const webhookSend = introOperation
-        ? vi
-            .spyOn(discordSend, "sendWebhookMessageDiscord")
-            .mockRejectedValue(new Error("Synthetic transport boundary"))
+        ? refuse("sendWebhookMessageDiscord", "Synthetic transport boundary")
         : undefined;
       const botSend = introOperation
-        ? vi
-            .spyOn(discordSend, "sendMessageDiscord")
-            .mockRejectedValue(new Error("Unexpected bot intro"))
+        ? refuse("sendMessageDiscord", "Unexpected bot intro")
         : undefined;
       const queuedOperation = boundary.startsWith("queued-");
-      stores.openKeyedStore.mockImplementation((options) => {
-        const store = createPluginStateKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+      const removes = boundary === "committed-intro-unbind" || boundary === "queued-unbind";
+      stores.openKeyedStoreV2.mockImplementation((options) => {
+        const store = createPluginStateKeyedStoreV2ForTests<ThreadBindingRecord>(
+          "discord",
+          options,
+          { assertCurrent() {} },
+        );
         return {
           ...store,
           register: async (...args: Parameters<typeof store.register>) => {
             if (boundary === "stopping-unbind") {
-              entered.resolve();
-              await finish.promise;
+              await pause();
             }
             await store.register(...args);
             if (queuedOperation || introOperation) {
-              entered.resolve();
-              await finish.promise;
+              await pause();
             }
           },
         };
@@ -90,6 +88,7 @@ export function registerThreadBindingCompatibilityTests({
         createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options),
       );
       const saved = persistedBinding();
+      const originalTarget = { targetSessionKey: saved.value.targetSessionKey };
       const bindingTarget = introOperation
         ? saved.value.targetSessionKey
         : "agent:main:subagent:replacement";
@@ -110,46 +109,33 @@ export function registerThreadBindingCompatibilityTests({
         webhookId: "synthetic-webhook",
         webhookToken: "synthetic-token",
       });
-      const outcome = expect(mutation).resolves.toMatchObject({
-        targetSessionKey: bindingTarget,
-      });
+      const outcome = expect(mutation).resolves.toMatchObject({ targetSessionKey: bindingTarget });
       let stopping: Promise<void> | undefined;
       let followup: Promise<unknown[]> | undefined;
-      let followupFailure: unknown;
+      const followupFailure = vi.fn(() => []);
       try {
         await entered.promise;
         expect(store.lookup(saved.key)?.targetSessionKey).toBe(
           boundary === "stopping-unbind" ? saved.value.targetSessionKey : bindingTarget,
         );
         if (boundary === "committed-intro-unbind") {
-          expect(
-            unbindThreadBindingsBySessionKey({
-              targetSessionKey: saved.value.targetSessionKey,
-              sendFarewell: false,
-            }),
-          ).toHaveLength(1);
+          expect(unbind({ ...originalTarget, sendFarewell: false })).toHaveLength(1);
           expect(store.lookup(saved.key)).toBeUndefined();
           expect(manager.getByThreadId("thread-1")).toBeUndefined();
         } else if (boundary === "stopping-unbind") {
           stopping = manager.stop();
-          expect(() =>
-            unbindThreadBindingsBySessionKey({ targetSessionKey: saved.value.targetSessionKey }),
-          ).toThrow("manager is stopping");
+          expect(() => unbind(originalTarget)).toThrow("manager is stopping");
           expect(store.lookup(saved.key)).toEqual(saved.value);
-          expect(notify).not.toHaveBeenCalled();
         } else if (queuedOperation) {
           const params = { targetSessionKey: bindingTarget, accountId: "work" };
           followup =
             boundary === "queued-unbind"
-              ? unbindThreadBindingsBySessionKeyAsync({ ...params, sendFarewell: false })
+              ? unbindAsync({ ...params, sendFarewell: false })
               : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
                   ...params,
                   maxAgeMs: 1000,
                 });
-          followup = followup.catch((error: unknown) => {
-            followupFailure = error;
-            return [];
-          });
+          followup = followup.catch(followupFailure);
         } else {
           const at = Date.now() + 1;
           getSessionBindingService().touch(saved.key, at, {
@@ -158,39 +144,31 @@ export function registerThreadBindingCompatibilityTests({
           });
           expect(store.lookup(saved.key)?.lastActivityAt).toBe(at);
           expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(at);
-          expect(notify).not.toHaveBeenCalled();
         }
         if (queuedOperation) {
-          let stopped = false;
-          stopping = manager.stop().then(() => {
-            stopped = true;
-          });
+          const stopped = vi.fn();
+          stopping = manager.stop().then(stopped);
           await new Promise<void>((resolve) => {
             setImmediate(resolve);
           });
-          expect(stopped).toBe(false);
+          expect(stopped).not.toHaveBeenCalled();
         }
         finish.resolve();
         await outcome;
         await stopping;
         if (followup) {
           const changed = await followup;
-          expect(followupFailure).toBeUndefined();
+          expect(followupFailure).not.toHaveBeenCalled();
           expect(changed).toHaveLength(1);
           if (boundary === "queued-age") {
             expect(store.lookup(saved.key)?.maxAgeMs).toBe(1000);
             expect(manager.getByThreadId("thread-1")?.maxAgeMs).toBe(1000);
           }
         }
-        const expectedTarget =
-          boundary === "committed-intro-unbind" || boundary === "queued-unbind"
-            ? undefined
-            : bindingTarget;
+        const expectedTarget = removes ? undefined : bindingTarget;
         expect(store.lookup(saved.key)?.targetSessionKey).toBe(expectedTarget);
         expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(expectedTarget);
-        expect(notify).toHaveBeenCalledTimes(
-          boundary === "committed-intro-unbind" || boundary === "queued-unbind" ? 1 : 0,
-        );
+        expect(notify).toHaveBeenCalledTimes(removes ? 1 : 0);
         if (introOperation) {
           expect(webhookSend).toHaveBeenCalledTimes(boundary === "committed-intro-touch" ? 1 : 0);
           expect(botSend).not.toHaveBeenCalled();
@@ -198,7 +176,6 @@ export function registerThreadBindingCompatibilityTests({
       } finally {
         finish.resolve();
         await Promise.allSettled([outcome, stopping]);
-        await manager.stop();
         await resetThreadBindingsForTests();
         resetPluginStateStoreForTests();
         webhookSend?.mockRestore();

@@ -1,4 +1,4 @@
-import { createMemo, For, Match, Show, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -9,12 +9,11 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-setup.css";
-import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
 } from "../model-providers/view-status.tsx";
-import { CandidateRows, type CandidateRowsProps } from "./candidate-models.tsx";
+import { CandidateRows } from "./candidate-models.tsx";
 import {
   renderActivationFeedback,
   ConfiguredModel,
@@ -22,11 +21,11 @@ import {
 } from "./configured-model.tsx";
 import { renderModelSetupLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
-import type { NativeModelSetup } from "./native-model-setup.tsx";
+import { NativeModelSetupView } from "./native-model-setup.tsx";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
-import type { ModelSetupPageState, ModelSetupVerifyState, ModelSetupWizardState } from "./state.ts";
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
+import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 
 registerModelSetupEnglish();
@@ -34,56 +33,9 @@ registerModelSetupEnglish();
 const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
-export type ModelSetupViewProps = CandidateRowsProps & {
-  connection?: ModelProviderLoginController["pageActions"];
-  login?: JSX.Element;
-  revision?: () => unknown;
-  agentLabel?: string;
-  credentialChoices?: readonly string[];
-  onClose?: () => void;
-  onDiscoveryShown?: () => void;
-  detectionError?: string | null;
-  page: ModelSetupPageState;
-  verify: ModelSetupVerifyState;
-  wizard: ModelSetupWizardState;
-  wizardMode: "auth" | "prepare" | "activate";
-  wizardValue: unknown;
-  canAdmin: boolean;
-  canVerify: boolean;
-  canPrepare: boolean;
-  modelConfigured?: boolean;
-  gatewayTooOld: boolean;
-  refreshWarning: string | null;
-  cancellationNotice?: string | null;
-  activationUnresolved?: boolean;
-  onUseCurrentModel?: () => void;
-  manualProviderId: string;
-  manualApiKey: string;
-  manualError: string | null;
-  moreSignInOpen: boolean;
-  firstRun: boolean;
-  nativeSessionCatalogsEnabled?: boolean;
-  onNativeSessionCatalogsChange?: (enabled: boolean) => void;
-  nativeModels?: NativeModelSetup;
-  onDetect: () => void;
-  onVerify: () => void;
-  onStartAuth: (option: AuthOption) => void;
-  onStartPrepare: (option: ModelSetupPrepareOption) => void;
-  onManualProviderChange: (providerId: string) => void;
-  onManualApiKeyChange: (apiKey: string) => void;
-  onManualConnect: () => void;
-  onMoreSignInToggle: (open: boolean) => void;
-  onOpenChat: () => void;
-  onOpenSetupAssistant?: () => void;
-  onSuccessClose: () => void;
-  onWizardValueChange: (value: unknown) => void;
-  onWizardAnswer: (value: unknown, includeValue?: boolean) => void;
-  onWizardCancel: () => void;
-  onWizardClose: () => void;
-};
 
 function EmptyState(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const installs = createMemo(() => props.result.recommendedInstalls ?? []);
+  const installs = () => props.result.recommendedInstalls ?? [];
   const visible = () => {
     props.revision?.();
     return (
@@ -232,6 +184,7 @@ function Prepare(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRe
 }
 
 function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectResult }) {
+  let input: HTMLInputElement | undefined;
   const manualProviders = createMemo(() =>
     props.embedded
       ? props.detected.manualProviders.filter(
@@ -259,6 +212,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
               {...props}
               result={{ manualProviders: manualProviders() }}
               provider={provider()}
+              nextTabTarget={() => input}
             />
           </div>
           <label class="field">
@@ -271,6 +225,10 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             </span>
             <input
               class="input"
+              ref={(element) => {
+                input = element;
+                props.onManualInput?.(element);
+              }}
               type="password"
               autocomplete="off"
               required
@@ -309,13 +267,6 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
       </section>
     </Show>
   );
-}
-
-export function revealModelSetupFeedback(root: ParentNode): void {
-  // Reveal only this attempt synchronously; never move focus or leave work past route exit.
-  root
-    .querySelector(".model-setup > .model-setup__testing, .model-setup > .model-setup__failure")
-    ?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
 }
 
 function NativeSessionDiscovery(
@@ -357,49 +308,24 @@ function renderSetupAccessWarning(canAdmin: boolean) {
   );
 }
 
-function NativeModels(props: { owner: NativeModelSetup; revision?: () => unknown }) {
-  return untrack(() => props.owner.render(props.revision));
-}
-
 function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const verify = createMemo(() =>
+  const verify = () =>
     props.verify.phase === "ok" && props.verify.modelTarget === "utility"
       ? { phase: "idle" as const }
-      : props.verify,
-  );
+      : props.verify;
   return (
     <>
       <Show when={!props.embedded && props.result.configuredModel}>
-        <ConfiguredModel
-          result={props.result}
-          verify={verify()}
-          canVerify={props.canVerify}
-          actionsDisabled={props.actionsDisabled || props.detecting === true}
-          onVerify={() => props.onVerify()}
-          onContinue={
-            props.firstRun && props.result.setupComplete && props.activation.phase !== "success"
-              ? props.onOpenChat
-              : undefined
-          }
-        />
+        <ConfiguredModel {...props} verify={verify()} />
       </Show>
-      <ConfiguredUtilityModel
-        result={props.result}
-        activation={props.activation}
-        canRepair={props.canAdmin && !props.gatewayTooOld}
-        actionsDisabled={props.actionsDisabled || props.detecting === true}
-        onOpenAssistant={() => (props.onOpenSetupAssistant ?? props.onOpenChat)()}
-        onActivateCandidate={(candidate) => props.onActivateCandidate(candidate)}
-      />
+      <ConfiguredUtilityModel {...props} />
       <Show
         when={props.canAdmin && !props.gatewayTooOld}
         fallback={renderSetupAccessWarning(props.canAdmin)}
       >
         <NativeSessionDiscovery {...props} />
         <EmptyState {...props} />
-        <Show when={props.nativeModels}>
-          {(owner) => <NativeModels owner={owner()} revision={props.revision} />}
-        </Show>
+        <Show when={props.nativeModels}>{(owner) => <NativeModelSetupView owner={owner()} />}</Show>
         <CandidateRows {...props} />
         <Prepare {...props} />
         <SignIn {...props} />
@@ -410,10 +336,8 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
 }
 
 function ModelSetupBody(props: ModelSetupViewProps) {
-  const ready = createMemo(() => (props.page.phase === "ready" ? props.page.result : undefined));
-  const error = createMemo(() =>
-    props.page.phase === "detect-error" ? props.page.message : undefined,
-  );
+  const ready = () => (props.page.phase === "ready" ? props.page.result : undefined);
+  const error = () => (props.page.phase === "detect-error" ? props.page.message : undefined);
   return (
     <Switch>
       <Match when={ready()}>
@@ -509,7 +433,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         </Show>
       </div>
       {props.canAdmin && !props.gatewayTooOld
-        ? renderActivationFeedback(props.activation)
+        ? renderActivationFeedback(props.activation, props.onFeedback)
         : undefined}
       {props.refreshWarning ? (
         <div class="callout warning" role="alert">
@@ -561,6 +485,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
       {props.login}
       <div onModal-cancel={(event: Event) => event.preventDefault()}>
         <ModelSetupWizard
+          onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
           refreshWarning={props.refreshWarning}
@@ -573,19 +498,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         />
       </div>
       <Show when={props.activation.phase === "success" ? props.activation : undefined}>
-        {(activation) => (
-          <ModelSetupSuccessDialog
-            activation={activation()}
-            onOpenChat={() =>
-              (activation().modelTarget === "utility"
-                ? (props.onOpenSetupAssistant ?? props.onOpenChat)
-                : props.onOpenChat)()
-            }
-            onClose={() => props.onSuccessClose()}
-            firstRun={props.firstRun}
-            returnToModels={props.embedded}
-          />
-        )}
+        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation()} />}
       </Show>
     </>
   );
@@ -624,19 +537,20 @@ function EmbeddedModelSetup(props: {
     <>
       {" "}
       <openclaw-modal-dialog
+        ref={(element) => props.view.onWizardDialog?.(element)}
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
-        onWa-after-show={(event: Event) =>
+        onOverlay-after-show={(event: Event) =>
           event.target === event.currentTarget ? props.view.onDiscoveryShown?.() : undefined
         }
       >
         <div class="model-setup-wizard model-setup-discovery">
           <div class="model-setup-wizard__body">{props.content}</div>
-          <div class="model-setup-wizard__footer">
+          <openclaw-modal-actions class="model-setup-wizard__footer">
             <button class="btn" onClick={() => props.view.onClose?.()}>
               {t("common.close")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

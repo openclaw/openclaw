@@ -23,7 +23,7 @@ async function resolveUncachedProjectKey(repoRoot: string): Promise<string> {
   try {
     const result = await runCommandWithTimeout(
       ["git", "-C", repoRoot, "config", "--get", "remote.origin.url"],
-      { timeoutMs: GIT_CONFIG_TIMEOUT_MS },
+      { timeoutMs: GIT_CONFIG_TIMEOUT_MS, env: { GIT_NO_LAZY_FETCH: "1" } },
     );
     if (result.code === 0) {
       const source = parseGitUrl(`git:${result.stdout.trim()}`);

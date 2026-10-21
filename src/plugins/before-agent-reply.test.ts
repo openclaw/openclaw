@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { captureGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
-  buildHandledBeforeAgentReplyMeta,
   buildHandledBeforeAgentReplyPayloads,
   runBeforeAgentReplyForTurn,
   withBeforeAgentReplyObserver,
@@ -17,12 +16,16 @@ vi.mock("./hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
 }));
 
-function runHook(runId: string) {
+function runHook(
+  runId: string,
+  overrides: Partial<Parameters<typeof runBeforeAgentReplyForTurn>[0]> = {},
+) {
   return runBeforeAgentReplyForTurn({
     runId,
     trigger: "user",
     event: { cleanedBody: runId },
     context: { runId, trigger: "user" },
+    ...overrides,
   });
 }
 
@@ -37,24 +40,16 @@ describe("before_agent_reply runner boundary", () => {
     async (outcome) => {
       const entered = createDeferred();
       const baseline = createDeferred();
-      let active = true;
+      const authority = new AbortController();
       const beforeDispatch = vi.fn(async () => undefined);
       const afterDispatch = vi.fn(async (result) => result);
       const pending = withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
-        runBeforeAgentReplyForTurn({
-          runId: `attribution-${outcome}`,
-          trigger: "user",
-          event: { cleanedBody: "hello" },
-          context: { trigger: "user" },
+        runHook(`attribution-${outcome}`, {
           awaitSessionDiffBaseline: async () => {
             entered.resolve();
             await baseline.promise;
           },
-          assertCurrent: () => {
-            if (!active) {
-              throw new Error("reply authority ended");
-            }
-          },
+          assertCurrent: () => authority.signal.throwIfAborted(),
         }),
       );
       try {
@@ -65,24 +60,19 @@ describe("before_agent_reply runner boundary", () => {
         );
         expect(beforeDispatch).not.toHaveBeenCalled();
         expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+        const error = outcome === "failed" ? "attribution failed" : "reply authority ended";
         if (outcome === "failed") {
-          baseline.reject(new Error("attribution failed"));
-          await expect(pending).rejects.toThrow("attribution failed");
+          baseline.reject(new Error(error));
         } else {
-          active = outcome !== "revoked";
-          baseline.resolve();
-          if (active) {
-            await pending;
-            expect(beforeDispatch).toHaveBeenCalledOnce();
-            expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledOnce();
-          } else {
-            await expect(pending).rejects.toThrow("reply authority ended");
+          if (outcome === "revoked") {
+            authority.abort(new Error("reply authority ended"));
           }
+          baseline.resolve();
         }
-        if (outcome !== "settled") {
-          expect(beforeDispatch).not.toHaveBeenCalled();
-          expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
-        }
+        await (outcome === "settled" ? pending : expect(pending).rejects.toThrow(error));
+        const dispatches = outcome === "settled" ? 1 : 0;
+        expect(beforeDispatch).toHaveBeenCalledTimes(dispatches);
+        expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(dispatches);
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
@@ -90,23 +80,29 @@ describe("before_agent_reply runner boundary", () => {
     },
   );
 
-  it("does not wait for attribution when no reply-claim hook applies", async () => {
-    hookRunner.hasHooks.mockReturnValue(false);
-    const awaitSessionDiffBaseline = vi.fn(async () => {});
-    await expect(
-      runBeforeAgentReplyForTurn({
-        runId: "attribution-no-hook",
-        trigger: "user",
-        event: { cleanedBody: "hello" },
-        context: { trigger: "user" },
-        awaitSessionDiffBaseline,
-      }),
-    ).resolves.toBeUndefined();
-    expect(awaitSessionDiffBaseline).not.toHaveBeenCalled();
-  });
+  it.each([
+    { name: "no reply-claim hook", trigger: "user", hasHooks: false, lookups: 1 },
+    { name: "an internal trigger", trigger: "manual", hasHooks: true, lookups: 0 },
+  ])(
+    "does not dispatch or wait for attribution with $name",
+    async ({ trigger, hasHooks, lookups }) => {
+      hookRunner.hasHooks.mockReturnValue(hasHooks);
+      const awaitSessionDiffBaseline = vi.fn(async () => {});
+      await expect(
+        runHook(`no-dispatch-${trigger}`, {
+          trigger,
+          context: { trigger },
+          awaitSessionDiffBaseline,
+        }),
+      ).resolves.toBeUndefined();
+      expect(awaitSessionDiffBaseline).not.toHaveBeenCalled();
+      expect(hookRunner.hasHooks).toHaveBeenCalledTimes(lookups);
+      expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps authority through observer finalization and rejects revoked effects", async () => {
-    let current = true;
+    const authority = new AbortController();
     let finalAuthority: (() => void) | undefined;
     const effect = vi.fn();
     hookRunner.runBeforeAgentReply.mockResolvedValue({ handled: true });
@@ -118,7 +114,7 @@ describe("before_agent_reply runner boundary", () => {
             finalAuthority = captureGuardedFetchRequestAuthority();
             expect(finalAuthority).toBeTypeOf("function");
             finalAuthority?.();
-            current = false;
+            authority.abort(new Error("root reassigned"));
             await Promise.resolve();
             finalAuthority?.();
             effect();
@@ -126,16 +122,10 @@ describe("before_agent_reply runner boundary", () => {
           },
         },
         () =>
-          runBeforeAgentReplyForTurn({
-            runId: "finalization-authority",
+          runHook("finalization-authority", {
             trigger: "cron",
-            event: { cleanedBody: "hello" },
             context: { trigger: "cron" },
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("root reassigned");
-              }
-            },
+            assertCurrent: () => authority.signal.throwIfAborted(),
           }),
       ),
     ).rejects.toThrow("root reassigned");
@@ -157,12 +147,7 @@ describe("before_agent_reply runner boundary", () => {
   it("uses the validated turn trigger when context disagrees", async () => {
     const runId = "mismatch";
     const context = { runId, trigger: "heartbeat" };
-    await runBeforeAgentReplyForTurn({
-      runId,
-      trigger: "user",
-      event: { cleanedBody: runId },
-      context,
-    });
+    await runHook(runId, { context });
 
     const expectedContext = { ...context, trigger: "user" };
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_reply", expectedContext);
@@ -170,21 +155,6 @@ describe("before_agent_reply runner boundary", () => {
       { cleanedBody: runId },
       expectedContext,
     );
-  });
-
-  it("does not dispatch for internal triggers", async () => {
-    const trigger = "manual";
-    await expect(
-      runBeforeAgentReplyForTurn({
-        runId: trigger,
-        trigger,
-        event: { cleanedBody: trigger },
-        context: { runId: trigger, trigger },
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(hookRunner.hasHooks).not.toHaveBeenCalled();
-    expect(hookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
   });
 
   it("keeps a nested run from checkpointing its parent admission", async () => {
@@ -202,20 +172,5 @@ describe("before_agent_reply runner boundary", () => {
     expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
     expect(beforeDispatch).toHaveBeenCalledOnce();
     expect(afterDispatch).toHaveBeenCalledOnce();
-  });
-});
-
-describe("buildHandledBeforeAgentReplyMeta", () => {
-  it.each([
-    ["no reply", undefined, true],
-    ["a silent token", { text: "NO_REPLY" }, true],
-    ["blank text", { text: "  " }, true],
-    ["visible text", { text: "Hook is working." }, false],
-    ["a heartbeat acknowledgement", { text: "HEARTBEAT_OK" }, false],
-    ["media without text", { mediaUrl: "https://example.test/a.png" }, false],
-  ])("marks a claim with %s as silent: %s", (_label, reply, silent) => {
-    expect(buildHandledBeforeAgentReplyMeta(reply).intentionalTerminalCompletion).toBe(
-      silent ? "silent-claim" : undefined,
-    );
   });
 });

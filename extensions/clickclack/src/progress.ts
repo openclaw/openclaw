@@ -122,9 +122,6 @@ export function createClickClackAgentProgressPublisher(params: {
         if (!frame) {
           continue;
         }
-        if (frame.lineId) {
-          queuedLines.delete(frame.lineId);
-        }
         try {
           await params.client.publishEphemeral({
             ...params.target,
@@ -136,11 +133,7 @@ export function createClickClackAgentProgressPublisher(params: {
             },
           });
         } catch (error) {
-          try {
-            params.onError?.(error);
-          } catch {
-            // Progress reporting must never affect the agent turn.
-          }
+          params.onError?.(error);
         }
       }
     })().finally(() => {
@@ -169,18 +162,6 @@ export function createClickClackAgentProgressPublisher(params: {
     queuedLines.clear();
     const controlFrames = queue.filter((frame) => !frame.lineId);
     queue.splice(0, queue.length, ...controlFrames);
-  };
-
-  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let drained = false;
-    await raceWithTimeout(
-      pending.then(() => {
-        drained = true;
-      }),
-      CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
-      () => undefined,
-    );
-    return drained;
   };
 
   const scheduleLineDrain = (): void => {
@@ -240,24 +221,30 @@ export function createClickClackAgentProgressPublisher(params: {
         return false;
       }
       const id = resolveLineId(payload);
-      if (payload.hideFromChannelProgress) {
-        if (seenLines.delete(id)) {
-          enqueueLine(id, { op: "update", line: { id, kind: normalizedKind(payload), text: "" } });
-        }
-        return false;
-      }
-      const final = isFinal(payload);
       const kind = normalizedKind(payload);
+      const hidesLine =
+        payload.hideFromChannelProgress ||
+        (payload.kind === "model-wait" && payload.phase === "end");
       const retractsExistingCommentary =
         kind === "commentary" &&
         seenLines.has(id) &&
         payload.progressText !== undefined &&
         payload.progressText.trim() === "";
-      if (retractsExistingCommentary && queuedLines.get(id)?.payload.op === "append") {
+      if (
+        (hidesLine || retractsExistingCommentary) &&
+        queuedLines.get(id)?.payload.op === "append"
+      ) {
         queuedLines.delete(id);
         seenLines.delete(id);
         return false;
       }
+      if (hidesLine) {
+        if (seenLines.delete(id)) {
+          enqueueLine(id, { op: "update", line: { id, kind, text: "" } });
+        }
+        return false;
+      }
+      const final = isFinal(payload);
       const line: Record<string, unknown> = {
         id,
         kind,
@@ -285,7 +272,11 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      const drained = await raceWithTimeout(
+        drain().then(() => true),
+        CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+        () => false,
+      );
       if (!drained) {
         // Once the durable reply has been sent and the grace period expires,
         // stale detail frames no longer help the user. Keep only control frames

@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -23,6 +22,13 @@ import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.message-injection.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { getAdmittedRunDelegatedAuthority } from "../admitted-run-context.js";
 import * as beforeToolCall from "../agent-tools.before-tool-call.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -37,6 +43,7 @@ import {
   waitUntilAborted,
 } from "./execute-plugin.test-support.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -45,6 +52,53 @@ vi.mock("../tools/gateway.js", () => ({
 const activeSessions = new Set<CliBackendLiveSessionHandle>();
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+
+async function decideNativeTool(
+  context: PreparedCliRunContext,
+  toolName = "Bash",
+  toolInput: Record<string, unknown> = { command: "echo approved" },
+) {
+  let decision: CliBackendToolPermissionResult | undefined;
+  await runPlugin(context, async function* (execution) {
+    decision = await requestNativeTool(execution, toolName, toolInput);
+    yield SUCCESS_RESULT;
+  });
+  return decision;
+}
+
+async function startInjection(
+  context: PreparedCliRunContext,
+  onMessage: (text: string) => void = () => {},
+) {
+  let handle: ReplyBackendHandle | undefined;
+  context.params.replyOperation = {
+    attachBackend: (backend: ReplyBackendHandle) => {
+      handle = backend;
+    },
+    detachBackend: vi.fn(),
+  } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+  const finish = createDeferred();
+  let signal: AbortSignal | undefined;
+  const run = runPlugin(context, async function* (execution) {
+    signal = execution.abortSignal;
+    execution.registerMessageInjection?.({
+      isAvailable: () => true,
+      queueMessage: async (text, withCurrent) => {
+        await withCurrent(() => onMessage(text));
+      },
+    });
+    await finish.promise;
+    yield SUCCESS_RESULT;
+  });
+  await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
+  const injection = handle!.messageInjectionV2!;
+  const queue = (
+    text: string,
+    options?: Parameters<typeof injection.queueMessage>[1],
+    assertCurrent = () => {},
+  ) => injection.queueMessage(text, options, assertCurrent, "run");
+  return { injection, queue, finish, run, signal };
+}
 
 function installBeforeToolCallHook(
   handler: PluginHookHandlerMap["before_tool_call"],
@@ -75,6 +129,8 @@ afterEach(() => {
 
 describe("plugin-owned CLI native tool policy", () => {
   it("uses the admitted turn policy when a warm transport retains a retired generation", async () => {
+    // Generation policy, not cold worker startup, owns this fixture's outcome.
+    vi.useFakeTimers({ toFake: ["Date"] });
     const oldHook = vi.fn();
     const previous = createMockPluginRegistry([
       { hookName: "before_tool_call", pluginId: "guard", handler: oldHook },
@@ -262,16 +318,11 @@ describe("plugin-owned CLI native tool policy", () => {
     }));
     installBeforeToolCallHook(hook, ["edit"]);
     const { context } = await createExecution({ nativeTools: ["Edit"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "Edit", {
-        file_path: "/tmp/original.txt",
-        old_string: "before",
-        new_string: "after",
-        replace_all: false,
-      });
-      yield SUCCESS_RESULT;
+    const decision = await decideNativeTool(context, "Edit", {
+      file_path: "/tmp/original.txt",
+      old_string: "before",
+      new_string: "after",
+      replace_all: false,
     });
 
     expect(hook).toHaveBeenCalledWith(
@@ -295,78 +346,44 @@ describe("plugin-owned CLI native tool policy", () => {
     });
   });
 
-  it("rejects conflicting native and canonical paths before invoking policy", async () => {
-    const hook = vi.fn(async () => undefined);
-    installBeforeToolCallHook(hook, ["read"]);
-    const { context } = await createExecution({ nativeTools: ["Read"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "Read", {
-        file_path: "/tmp/private.txt",
-        path: "/tmp/allowed.txt",
-      });
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("conflicting"),
-      }),
-    );
-    expect(hook).not.toHaveBeenCalled();
-  });
-
-  it("rejects canonical edit rewrites that the native tool cannot represent", async () => {
-    const hook = vi.fn(async () => ({
-      params: {
+  it.each([
+    ["Read", { file_path: "/tmp/private.txt", path: "/tmp/allowed.txt" }, undefined, "conflicting"],
+    [
+      "Edit",
+      { file_path: "/tmp/file.txt", old_string: "before", new_string: "after" },
+      {
         edits: [
           { oldText: "first", newText: "one" },
           { oldText: "second", newText: "two" },
         ],
       },
-    }));
-    installBeforeToolCallHook(hook, ["edit"]);
-    const { context } = await createExecution({ nativeTools: ["Edit"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution, "Edit", {
-        file_path: "/tmp/file.txt",
-        old_string: "before",
-        new_string: "after",
-      });
-      yield SUCCESS_RESULT;
+      "native edit",
+    ],
+    [
+      "Bash",
+      { command: "echo approved" },
+      new Error("policy crashed"),
+      "before_tool_call hook failed",
+    ],
+  ] as const)("fails closed for %s native policy", async (tool, input, rewrite, message) => {
+    const hook = vi.fn(async () => {
+      if (rewrite instanceof Error) {
+        throw rewrite;
+      }
+      return rewrite && { params: rewrite };
     });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("native edit"),
-      }),
-    );
-  });
-
-  it("fails closed when before_tool_call throws", async () => {
-    installBeforeToolCallHook(async () => {
-      throw new Error("policy crashed");
+    installBeforeToolCallHook(hook, tool === "Bash" ? undefined : [tool.toLowerCase()]);
+    const { context } = await createExecution({ nativeTools: [tool] });
+    expect(await decideNativeTool(context, tool, input)).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining(message),
     });
-    const { context } = await createExecution({ nativeTools: ["Bash"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
-    });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("before_tool_call hook failed"),
-      }),
-    );
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    if (tool === "Read") {
+      expect(hook).not.toHaveBeenCalled();
+    }
+    if (tool === "Bash") {
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    }
   });
 
   it("aborts before_tool_call without reaching native approval", async () => {
@@ -404,19 +421,10 @@ describe("plugin-owned CLI native tool policy", () => {
       params: "invalid",
     });
     const { context } = await createExecution({ nativeTools: ["Bash"] });
-    let decision: CliBackendToolPermissionResult | undefined;
-
-    await runPlugin(context, async function* (execution) {
-      decision = await requestNativeTool(execution);
-      yield SUCCESS_RESULT;
+    expect(await decideNativeTool(context)).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("invalid input"),
     });
-
-    expect(decision).toEqual(
-      expect.objectContaining({
-        behavior: "deny",
-        message: expect.stringContaining("invalid input"),
-      }),
-    );
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 });
@@ -442,37 +450,26 @@ describe("CLI MCP capture authority", () => {
       admittedRunContext: context.params.admittedRunContext,
       abortSignal: source.signal,
     });
+    const owner = { token: grant.token, runtimeOwnerToken };
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: grant.token,
-      adoptProcessToken: (targetToken) => {
-        transferMcpLoopbackClientGrant({
+      adoptProcessToken: (targetToken) =>
+        void transferMcpLoopbackClientGrant({
           sourceToken: grant.token,
           targetToken,
           runtimeOwnerToken,
-        });
-      },
+        }),
       revokeProcessToken: () => {
         revokeMcpLoopbackClientGrant(grant.token);
       },
-      activate: (captureKey, assertCurrent) => {
-        activateMcpLoopbackClientGrantCapture({
-          token: grant.token,
-          runtimeOwnerToken,
-          captureKey,
-          assertCurrent,
-        });
-      },
-      deactivate: (captureKey) => {
-        deactivateMcpLoopbackClientGrantCapture({
-          token: grant.token,
-          runtimeOwnerToken,
-          captureKey,
-        });
-      },
+      activate: (captureKey, assertCurrent) =>
+        void activateMcpLoopbackClientGrantCapture({ ...owner, captureKey, assertCurrent }),
+      deactivate: (captureKey) =>
+        void deactivateMcpLoopbackClientGrantCapture({ ...owner, captureKey }),
     };
     const tracking = createCliToolTracking(context);
     const captureKey = `capture-${context.params.runId}`;
-    const capture = { token: grant.token, runtimeOwnerToken, captureKey };
+    const capture = { ...owner, captureKey };
     const streamStarted = createDeferred();
     const streamClosing = createDeferred();
     const releaseCleanup = createDeferred();
@@ -534,5 +531,183 @@ describe("CLI MCP capture authority", () => {
     expect(await observedRun).toMatchObject(
       liveSession ? { name: "AbortError" } : { reason: "overall-timeout", timedOut: true },
     );
+  });
+});
+
+describe("plugin-owned CLI same-turn input", () => {
+  it("exposes plugin same-turn input to the reply run only while its turn is active", async () => {
+    const { context } = await createExecution();
+    const queued: string[] = [];
+    const { injection, queue, finish, run } = await startInjection(context, (text) => {
+      queued.push(text);
+    });
+
+    await expect(
+      queue("revoked", undefined, () => {
+        throw new Error("source revoked");
+      }),
+    ).rejects.toThrow("source revoked");
+    await queue("steer");
+    finish.resolve();
+    await run;
+
+    expect(queued).toEqual(["steer"]);
+    expect(injection.isAvailable()).toBe(false);
+  });
+
+  it("records steered input in the session transcript only after the plugin started it", async () => {
+    const { context } = await createExecution();
+    const order: string[] = [];
+    const { queue, finish, run } = await startInjection(context, (text) => {
+      if (text === "refused") {
+        throw new Error("native refused");
+      }
+      order.push(`started:${text}`);
+    });
+    const recorder = (label: string, persist: () => Promise<unknown>) => ({
+      hasPersisted: vi.fn(() => false),
+      isBlocked: vi.fn(() => false),
+      resolveMessage: vi.fn(async () => ({ role: "user" })),
+      markBlocked: vi.fn(),
+      persistApproved: vi.fn(async (params?: { cwd?: string }) => {
+        order.push(`persisted:${label}:${params?.cwd === undefined ? "no-cwd" : "cwd"}`);
+        return await persist();
+      }),
+    });
+    const accepted = recorder("steer", async () => ({ message: { role: "user" } }));
+    const refused = recorder("refused", async () => ({ message: { role: "user" } }));
+    const failing = recorder("failing", async () => {
+      throw new Error("transcript store unavailable");
+    });
+    const optionsFor = (value: object, label: string) =>
+      ({
+        userTurnTranscriptRecorder: value,
+        onQueueAccepted: () => order.push(`accepted:${label}`),
+        onQueueSettled: () => order.push(`settled:${label}`),
+      }) as unknown as Parameters<typeof queue>[1];
+
+    await queue("steer", optionsFor(accepted, "steer"));
+    await expect(queue("refused", optionsFor(refused, "refused"))).rejects.toThrow(
+      "native refused",
+    );
+    // The input already reached the model: a transcript failure must not become a
+    // replay, but it must not pass for a committed one either.
+    await expect(queue("failing", optionsFor(failing, "failing"))).resolves.toMatchObject({
+      transcriptCommit: "unconfirmed",
+      errorMessage: expect.stringContaining("transcript store unavailable"),
+    });
+    for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
+      await expect(
+        queue(callback, {
+          [callback]: () => {
+            throw new Error("observer failed");
+          },
+        }),
+      ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    }
+    finish.resolve();
+    await run;
+
+    expect(order).toEqual([
+      "started:steer",
+      "accepted:steer",
+      "persisted:steer:cwd",
+      "settled:steer",
+      "settled:refused",
+      "started:failing",
+      "accepted:failing",
+      "persisted:failing:cwd",
+      "settled:failing",
+      "started:onQueueAccepted",
+      "started:onQueueSettled",
+    ]);
+    expect(refused.persistApproved).not.toHaveBeenCalled();
+    expect(accepted.markBlocked).not.toHaveBeenCalled();
+  });
+
+  it("retains native acceptance when the transcript target cannot be resolved", async () => {
+    const { context } = await createExecution();
+    const { queue, finish, run, signal } = await startInjection(context);
+    // No receipt does not establish rejection: source resolution can return no target.
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "unconfirmed" },
+      target: () => undefined,
+    });
+
+    await expect(
+      queue("unconfirmed", { userTurnTranscriptRecorder: recorder }),
+    ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    expect(signal?.aborted).toBe(false);
+    finish.resolve();
+    await run;
+
+    expect(recorder.isBlocked()).toBe(true);
+    expect(recorder.hasPersisted()).toBe(false);
+  });
+
+  it("admits compatible CLI input and rejects a mismatched delivery surface", async () => {
+    const { context } = await createExecution();
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+    context.params.taskSuggestionDeliveryMode = "gateway";
+    const operation = createReplyOperation({
+      sessionKey: context.params.sessionKey!,
+      sessionId: context.params.sessionId,
+      resetTriggered: false,
+    });
+    context.params.replyOperation = operation;
+    operation.setPhase("running");
+    const ready = createDeferred();
+    const finish = createDeferred();
+    const queued: string[] = [];
+    const run = runPlugin(context, async function* (execution) {
+      execution.registerMessageInjection?.({
+        isAvailable: () => true,
+        queueMessage: async (text, withCurrent) => {
+          await withCurrent(() => {
+            queued.push(text);
+          });
+        },
+      });
+      ready.resolve();
+      await finish.promise;
+      yield SUCCESS_RESULT;
+    });
+    try {
+      await Promise.race([
+        ready.promise,
+        run.then(() => {
+          throw new Error("CLI run ended before injection became ready");
+        }),
+      ]);
+      const target = captureCurrentReplyMessageInjectionTarget(operation.key);
+      if (!target) {
+        throw new Error("running CLI backend did not expose a registry injection target");
+      }
+      const rejected = await beginReplyMessageInjectionTarget(target, "incompatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: undefined,
+      });
+      await expect(rejected.acceptance).resolves.toBe(false);
+      await expect(rejected.outcome).resolves.toEqual({
+        status: "rejected",
+        reason: "task_suggestion_delivery_mode_mismatch",
+      });
+      expect(queued).toEqual([]);
+      const accepted = await beginReplyMessageInjectionTarget(target, "compatible", {
+        sourceReplyDeliveryMode: "message_tool_only",
+        taskSuggestionDeliveryMode: "gateway",
+      });
+      await expect(accepted.acceptance).resolves.toBe(true);
+      await expect(accepted.outcome).resolves.toEqual({ status: "accepted" });
+      expect(queued).toEqual(["compatible"]);
+    } finally {
+      finish.resolve();
+      try {
+        await run;
+      } finally {
+        operation.complete();
+      }
+    }
+    expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
 });

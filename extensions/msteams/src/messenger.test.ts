@@ -79,8 +79,6 @@ const createRecordedSendActivity = (
   };
 };
 
-const REVOCATION_ERROR = "Cannot perform 'set' on a proxy that has been revoked";
-
 async function buildActivity(
   message: Parameters<typeof sendMSTeamsMessages>[0]["messages"][number],
   conversationRef: StoredConversationReference,
@@ -130,22 +128,6 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
-    function createRevokedThreadContext(params?: { failAfterAttempt?: number; sent?: string[] }) {
-      let attempt = 0;
-      return {
-        sendActivity: async (activity: unknown) => {
-          const { text } = activity as { text?: string };
-          const content = text ?? "";
-          attempt += 1;
-          if (params?.failAfterAttempt && attempt < params.failAfterAttempt) {
-            params.sent?.push(content);
-            return { id: `id:${content}` };
-          }
-          throw new TypeError(REVOCATION_ERROR);
-        },
-      };
-    }
-
     const baseRef: StoredConversationReference = {
       activityId: "activity123",
       user: { id: "user123", name: "User" },
@@ -155,7 +137,7 @@ describe("msteams messenger", () => {
       serviceUrl: "https://smba.trafficmanager.net/amer/",
     };
 
-    async function sendAndCaptureRevokeFallbackReference(params: {
+    async function sendAndCaptureThreadReference(params: {
       conversation: StoredConversationReference["conversation"];
       activityId?: string;
       threadId?: string;
@@ -181,7 +163,6 @@ describe("msteams messenger", () => {
           },
         }),
         conversationRef,
-        context: createRevokedThreadContext(),
         messages: [{ text: "hello" }],
       });
 
@@ -314,25 +295,6 @@ describe("msteams messenger", () => {
       expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
     });
 
-    it("does not claim no dispatch when proactive fallback preparation fails after a send", async () => {
-      const threadSent: string[] = [];
-      const error = await sendMSTeamsMessages({
-        replyStyle: "thread",
-        app: createMockApp(),
-        conversationRef: {
-          ...baseRef,
-          user: undefined,
-        },
-        context: createRevokedThreadContext({ failAfterAttempt: 2, sent: threadSent }),
-        messages: [{ text: "first" }, { text: "second" }],
-      }).catch((cause: unknown) => cause);
-
-      expect(threadSent).toEqual(["first"]);
-      expect(error).toBeInstanceOf(Error);
-      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-      expect((error as Error).message).toContain("missing user.id");
-    });
-
     it("marks invalid proactive conversation references as never dispatched", async () => {
       await expect(
         sendMSTeamsMessages({
@@ -367,9 +329,6 @@ describe("msteams messenger", () => {
           }
           return {
             itemId: "item123",
-            webUrl: "https://sharepoint.example.com/item123",
-            shareUrl: "https://sharepoint.example.com/share/item123",
-            name: "retry.txt",
           };
         });
         graphUploadMockState.getDriveItemProperties.mockResolvedValue({
@@ -435,26 +394,8 @@ describe("msteams messenger", () => {
       ).rejects.toMatchObject({ statusCode: 400 });
     });
 
-    it("falls back only for remaining thread messages after context revocation", async () => {
-      const threadSent: string[] = [];
-      const proactiveSent: string[] = [];
-      const ctx = createRevokedThreadContext({ failAfterAttempt: 2, sent: threadSent });
-
-      const ids = await sendMSTeamsMessages({
-        replyStyle: "thread",
-        app: createMockApp({ createFn: createRecordedSendActivity(proactiveSent) }),
-        conversationRef: baseRef,
-        context: ctx,
-        messages: [{ text: "one" }, { text: "two" }, { text: "three" }],
-      });
-
-      expect(threadSent).toEqual(["one"]);
-      expect(proactiveSent).toEqual(["two", "three"]);
-      expect(ids).toEqual(["id:one", "id:two", "id:three"]);
-    });
-
-    it("reconstructs threaded conversation ID for channel revoke fallback", async () => {
-      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
+    it("reconstructs threaded conversation ID without a live channel context", async () => {
+      const { proactiveSent, reference } = await sendAndCaptureThreadReference({
         conversation: {
           id: "19:abc@thread.tacv2;messageid=deadbeef",
           conversationType: "channel",
@@ -467,8 +408,8 @@ describe("msteams messenger", () => {
       expect(reference.activityId).toBeUndefined();
     });
 
-    it("uses threadId instead of activityId for channel revoke fallback (#58030)", async () => {
-      const { proactiveSent, reference } = await sendAndCaptureRevokeFallbackReference({
+    it("uses threadId instead of activityId without a live channel context (#58030)", async () => {
+      const { proactiveSent, reference } = await sendAndCaptureThreadReference({
         activityId: "current-message-id",
         conversation: {
           id: "19:abc@thread.tacv2",

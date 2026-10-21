@@ -1,8 +1,11 @@
 import { Show } from "solid-js";
-import { renderMcpServerForm, type McpServerForm } from "../../../components/mcp-server-form.ts";
+import type { McpServerForm } from "../../../components/mcp-server-form.ts";
+import { McpServersForm } from "../../../components/mcp-servers-form.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type ComposerAddServerDialogProps = {
   open: boolean;
@@ -17,9 +20,11 @@ export type ComposerAddServerDialogProps = {
 };
 
 export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
+  let nameInput!: HTMLInputElement;
   return (
     <Show when={props.open}>
       <openclaw-modal-dialog
+        prop:initialFocus={() => nameInput}
         label={t("chat.composer.menu.addMcpServerTitle")}
         description={t("chat.composer.menu.addMcpServerDescription")}
         onModal-cancel={(event) => {
@@ -57,23 +62,19 @@ export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
               )}
             </span>
           </div>
-          <LitContent
-            value={renderMcpServerForm({
-              busy: props.busy,
-              disabled: props.submitBlockedReason !== null,
-              blockedReason: props.submitBlockedReason,
-              autofocus: true,
-              onSubmit: props.onSubmit,
-              onCancel: props.onCancel,
-            })}
+          <McpServersForm
+            onNameRef={(element) => {
+              nameInput = element;
+            }}
+            busy={props.busy}
+            disabled={props.submitBlockedReason !== null}
+            blockedReason={props.submitBlockedReason}
+            autofocus
+            presentation="modal"
+            error={props.error}
+            onSubmit={props.onSubmit}
+            onCancel={props.onCancel}
           />
-          <Show when={props.error}>
-            {(error) => (
-              <div class="mcp-server-message mcp-server-message--error" role="alert">
-                {error()}
-              </div>
-            )}
-          </Show>
         </div>
       </openclaw-modal-dialog>
     </Show>

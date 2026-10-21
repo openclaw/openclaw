@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { resolvePromptBuildHookResult } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -16,6 +20,7 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
   await state?.cleanup();
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -43,6 +48,7 @@ async function createExplicitOwnerConfig() {
     session: { scope: "global" },
   });
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   return cfg;
 }
 

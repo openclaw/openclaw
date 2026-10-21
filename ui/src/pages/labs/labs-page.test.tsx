@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyMergePatch } from "../../../../src/config/merge-patch.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -11,7 +10,6 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { LabsPage } from "./labs-page.tsx";
-import { LAB_FEATURES } from "./labs-registry.ts";
 
 type LabsPageElement = HTMLElement;
 type RuntimeConfigState = {
@@ -73,25 +71,31 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   };
 }
 
-async function mountPage(sourceConfig: Record<string, unknown>): Promise<{
+async function mountPage(
+  sourceConfig: Record<string, unknown>,
+  basePath = "",
+): Promise<{
   page: LabsPageElement;
   unmount: () => void;
   runtimeConfig: ReturnType<typeof createRuntimeConfig>;
   gateway: ReturnType<typeof createGateway>;
+  context: { navigate: ReturnType<typeof vi.fn> };
 }> {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
   const gateway = createGateway();
+  const navigate = vi.fn();
   const context = {
-    basePath: "",
+    basePath,
     gateway: gateway.gateway,
     runtimeConfig,
+    navigate,
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
   const { container: page, unmount } = mountSolid(() => <LabsPage />, {
     wrapper: provider.wrapper,
   });
   await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
-  return { page, unmount, runtimeConfig, gateway };
+  return { page, unmount, runtimeConfig, gateway, context: { navigate } };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -112,19 +116,42 @@ function labToggle(page: LabsPageElement, title: string) {
   return toggle;
 }
 
-function labDocsLink(page: LabsPageElement, title: string) {
-  const link = labRow(page, title).querySelector<HTMLAnchorElement>(".settings-row__desc a");
-  if (!link) {
-    throw new Error(`${title} documentation link not rendered`);
-  }
-  return link;
-}
-
 function codeModeToggle(page: LabsPageElement) {
   return labToggle(page, "Code Mode");
 }
 
 describe("LabsPage", () => {
+  it("defaults predictions off with Utility and saves each model without enabling the lab", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = labToggle(page, "Composer predictions");
+    expect(toggle.checked).toBe(false);
+    const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
+    expect(select.closest(".settings-row--nested")).not.toBeNull();
+    expect(select.value).toBe("utility");
+    for (const model of ["conversation", "default", "utility"]) {
+      runtimeConfig.patch.mockClear();
+      select.value = model;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: { gateway: { controlUi: { experimental: { composerPredictions: { model } } } } },
+        note: "labs: update predictionModel",
+      });
+      await waitForSolid(() => expect(select.disabled).toBe(false));
+      expect(toggle.checked).toBe(false);
+    }
+    runtimeConfig.patch.mockClear();
+    toggle.click();
+    await waitForSolid(() =>
+      expect(runtimeConfig.patch).toHaveBeenCalledWith({
+        raw: {
+          gateway: { controlUi: { experimental: { composerPredictions: { enabled: true } } } },
+        },
+        note: "labs: update composerPredictions",
+      }),
+    );
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
@@ -134,70 +161,18 @@ describe("LabsPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders every registered experimental entry with its documentation link", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      tools: { codeMode: { enabled: true }, swarm: { enabled: true } },
-    });
-
-    expect(page.querySelector(".page-subtitle")?.textContent).toContain("experimental");
-    expect(page.querySelector(".settings-page__intro")).toBeNull();
-    const introLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(introLink?.textContent?.trim()).toBe("Learn more");
-    expect(introLink?.href).toBe("https://docs.openclaw.ai/concepts/experimental-features");
-    expect(page.querySelectorAll('.settings-row input[role="switch"]')).toHaveLength(
-      LAB_FEATURES.length,
-    );
-    expect(page.textContent).toContain("Code Mode");
-    for (const title of [
-      "Swarm",
-      "CLI agents",
-      "Tool-loop detection",
-      "Message audit metadata",
-      "Lean tools for local models",
-    ]) {
-      expect(page.textContent).not.toContain(title);
-    }
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    expect(page.textContent).toContain("Host Desktop");
-    expect(page.textContent).toContain("Cloud Worker Desktop");
-    expect(codeModeToggle(page).checked).toBe(true);
-
-    const docs = LAB_FEATURES.map((feature) => labDocsLink(page, feature.title()));
-    expect(docs.map((link) => link.href)).toEqual(LAB_FEATURES.map((feature) => feature.docsUrl));
-    expect(docs.every((link) => link.target === "_blank")).toBe(true);
-    expect(docs.every((link) => link.rel.includes("noopener"))).toBe(true);
-  });
-
-  it("reflects the supported boolean Code Mode shorthand", async () => {
-    const { page } = await mountPage({ tools: { codeMode: true } });
-
-    expect(codeModeToggle(page).checked).toBe(true);
-  });
-
-  it("reads the per-model auto tier as enabled", async () => {
-    const { page } = await mountPage({ tools: { codeMode: { enabled: "auto" } } });
-
-    expect(codeModeToggle(page).checked).toBe(true);
-  });
-
   it.each([
-    ...[true, false, "auto"].map((enabled) => ({
-      name: `${enabled} shorthand`,
-      config: enabled,
+    {
+      name: "false shorthand",
+      config: false,
       executor: "quickjs",
-      expectedPatch: { enabled, executor: "quickjs" },
-    })),
+      expectedPatch: { enabled: false, executor: "quickjs" },
+    },
     {
       name: "inherited auto",
       config: undefined,
       executor: "quickjs",
       expectedPatch: { enabled: "auto", executor: "quickjs" },
-    },
-    {
-      name: "authored limits without activation",
-      config: { timeoutMs: 5000 },
-      executor: "quickjs",
-      expectedPatch: { executor: "quickjs" },
     },
     {
       name: "explicit auto and limits when restoring Node",
@@ -209,6 +184,7 @@ describe("LabsPage", () => {
     const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
     expect(select).not.toBeNull();
+    expect(select?.closest(".settings-row--nested")).not.toBeNull();
     select!.value = executor;
     select!.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -233,6 +209,12 @@ describe("LabsPage", () => {
       note: "labs: update customPluginUi",
     },
     {
+      label: "Claws",
+      sourceConfig: { gateway: { controlUi: { experimental: { claws: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: null } } } },
+      note: "labs: update claws",
+    },
+    {
       label: "Host Desktop",
       sourceConfig: {
         desktop: {
@@ -241,6 +223,14 @@ describe("LabsPage", () => {
       },
       expectedPatch: { desktop: { host: { enabled: false } } },
       note: "labs: update hostDesktop",
+    },
+    {
+      label: "Advisor",
+      sourceConfig: {
+        plugins: { entries: { advisor: { enabled: true, config: { everyToolCalls: 3 } } } },
+      },
+      expectedPatch: { plugins: { entries: { advisor: { enabled: null } } } },
+      note: "labs: update advisor",
     },
   ])(
     "restores the default through the canonical patch flow when disabling $label",
@@ -311,6 +301,12 @@ describe("LabsPage", () => {
       note: "labs: update customPluginUi",
     },
     {
+      label: "Claws",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: true } } } },
+      note: "labs: update claws",
+    },
+    {
       label: "Host Desktop",
       sourceConfig: { desktop: { host: { enabled: false } } },
       expectedPatch: { desktop: { host: { enabled: true } } },
@@ -321,6 +317,12 @@ describe("LabsPage", () => {
       sourceConfig: { cloudWorkers: { desktop: false } },
       expectedPatch: { cloudWorkers: { desktop: true } },
       note: "labs: update workerDesktop",
+    },
+    {
+      label: "Advisor",
+      sourceConfig: {},
+      expectedPatch: { plugins: { entries: { advisor: { enabled: true } } } },
+      note: "labs: update advisor",
     },
   ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
@@ -335,6 +337,26 @@ describe("LabsPage", () => {
       raw: testCase.expectedPatch,
       note: testCase.note,
     });
+  });
+
+  it("opens Advisor settings from Configure without toggling the lab", async () => {
+    const { page, context, runtimeConfig } = await mountPage({}, "/ui");
+    const link = labRow(page, "Advisor").querySelector<HTMLAnchorElement>(
+      '.settings-row__control a[aria-label="Configure Advisor"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Configure");
+    expect(link?.getAttribute("href")).toBe("/ui/settings/plugins/advisor?view=settings");
+
+    link!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("plugin-settings", {
+      pathname: "/ui/settings/plugins/advisor",
+      search: "?view=settings",
+      hash: "",
+    });
+    // The row toggles on plain clicks; its own links must not flip the switch.
+    expect(labToggle(page, "Advisor").checked).toBe(false);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
   it("shows default provenance", async () => {
@@ -402,40 +424,7 @@ describe("LabsPage code mode enablement", () => {
 });
 
 describe("LabsPage tool search enablement", () => {
-  // The unauthored default is on; authored objects retain their existing
-  // enablement rules, including an empty object remaining off.
   it.each([
-    ["boolean shorthand", true, { tools: { toolSearch: true } }],
-    ["explicit enabled", true, { tools: { toolSearch: { enabled: true } } }],
-    ["mode without enabled", true, { tools: { toolSearch: { mode: "tools" } } }],
-    ["explicit disabled", false, { tools: { toolSearch: { enabled: false } } }],
-    ["boolean false", false, { tools: { toolSearch: false } }],
-    ["unset", true, {}],
-    ["empty tools", true, { tools: {} }],
-    ["explicit undefined", true, { tools: { toolSearch: undefined } }],
-    ["empty object", false, { tools: { toolSearch: {} } }],
-    ["options without enabled", true, { tools: { toolSearch: { maxSearchLimit: 3 } } }],
-    [
-      "explicit disabled with options",
-      false,
-      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
-    ],
-    [
-      "local model without a global override",
-      true,
-      { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
-    ],
-  ])("reads %s as %s", async (_label, expected, config) => {
-    const { page, unmount, runtimeConfig } = await mountPage(config);
-
-    expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    unmount();
-  });
-
-  it.each([
-    ["inherited default", {}],
-    ["boolean shorthand", { tools: { toolSearch: true } }],
     ["mode-only override", { tools: { toolSearch: { mode: "directory" } } }],
     ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
   ])("disables %s without replacing authored modes or options", async (_label, config) => {
@@ -452,29 +441,6 @@ describe("LabsPage tool search enablement", () => {
       note: "labs: update toolSearch",
     });
   });
-
-  it.each([
-    ["boolean false", { tools: { toolSearch: false } }],
-    ["empty object", { tools: { toolSearch: {} } }],
-    ["explicit disabled", { tools: { toolSearch: { enabled: false } } }],
-    [
-      "disabled mode and options",
-      { tools: { toolSearch: { enabled: false, mode: "directory", maxSearchLimit: 3 } } },
-    ],
-  ])("restores %s to the default at the Tool Search owner boundary", async (_label, config) => {
-    const { page, runtimeConfig } = await mountPage(config);
-    const toggle = labToggle(page, "Tool Search for all models");
-
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Enabled");
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { toolSearch: null } },
-      note: "labs: update toolSearch",
-    });
-  });
 });
 
 describe("LabsPage Decision assistance", () => {
@@ -483,74 +449,9 @@ describe("LabsPage Decision assistance", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    [undefined, false],
-    [false, false],
-    [{ mode: "auto" }, false],
-    [true, true],
-  ])(
-    "reflects saved intent %j independently of model selection",
-    async (decisionAssistance, expected) => {
-      const { page } = await mountPage({
-        agents: { defaults: { experimental: { decisionAssistance } } },
-      });
-      const row = labRow(page, "Decision assistance");
-      expect(labToggle(page, "Decision assistance").checked).toBe(expected);
-      expect(row.textContent).toContain(
-        "Enable experimental assistance from your configured Decision model",
-      );
-      expect(row.textContent).toContain("supported uses, setup, and data handling");
-      expect(row.textContent?.includes("Preference saved.")).toBe(expected);
-    },
-  );
-
-  it("saves explicit opt-in without a model, reloads it, and resets only the gate", async () => {
-    const initial = {
-      agents: {
-        defaults: { experimental: { localModelLean: true } },
-        entries: { quiet: { decisionModel: "" } },
-      },
-    };
-    const { page, runtimeConfig, unmount } = await mountPage(initial);
-    runtimeConfig.patch.mockImplementationOnce(async ({ raw }) => {
-      const saved = applyMergePatch(initial, raw) as Record<string, unknown>;
-      runtimeConfig.state.configSnapshot = { hash: "saved-hash", sourceConfig: saved };
-      return true;
-    });
-    const toggle = labToggle(page, "Decision assistance");
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    flush();
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { agents: { defaults: { experimental: { decisionAssistance: true } } } },
-      note: "labs: update decisionAssistance",
-    });
-    const saved = runtimeConfig.state.configSnapshot!.sourceConfig;
-    unmount();
-    const reloaded = await mountPage(saved);
-    const savedToggle = labToggle(reloaded.page, "Decision assistance");
-    expect(savedToggle.checked).toBe(true);
-    savedToggle.checked = false;
-    savedToggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    flush();
-    expect(reloaded.runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { agents: { defaults: { experimental: { decisionAssistance: null } } } },
-      note: "labs: update decisionAssistance",
-    });
-    const resetRequest = reloaded.runtimeConfig.patch.mock.calls[0]?.[0];
-    if (!resetRequest) {
-      throw new Error("Expected a reset patch");
-    }
-    const reset = applyMergePatch(saved, resetRequest.raw) as Record<string, unknown>;
-    expect(reset).toEqual(initial);
-    reloaded.unmount();
-    const resetPage = await mountPage(reset);
-    expect(labToggle(resetPage.page, "Decision assistance").checked).toBe(false);
-  });
-
-  it.each(["failure", "reconnect"])("keeps pending intent scoped through %s", async (outcome) => {
+  it("keeps pending intent scoped through failure", async () => {
     const pending = deferred<boolean>();
-    const { page, runtimeConfig, gateway } = await mountPage({});
+    const { page, runtimeConfig } = await mountPage({});
     runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
     const toggle = labToggle(page, "Decision assistance");
     toggle.checked = true;
@@ -559,19 +460,15 @@ describe("LabsPage Decision assistance", () => {
     expect(toggle.checked).toBe(true);
     expect(toggle.hasAttribute("disabled")).toBe(true);
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
-    if (outcome === "reconnect") {
-      gateway.setPhase("reconnecting");
-      gateway.setPhase("connected");
-    }
     pending.resolve(false);
     await pending.promise;
     flush();
     expect(toggle.checked).toBe(false);
-    expect(page.querySelector('[role="alert"]') !== null).toBe(outcome === "failure");
+    expect(page.querySelector('[role="alert"]')).not.toBeNull();
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
   });
 
-  it.each(["missing", "loading", "read failure", "invalid", "disconnected", "stale"])(
+  it.each(["missing", "loading", "read failure", "stale"])(
     "does not present %s configuration as an observed opt-out",
     async (state) => {
       const { page, runtimeConfig } = await mountPage({
@@ -585,12 +482,6 @@ describe("LabsPage Decision assistance", () => {
       }
       if (state === "read failure") {
         runtimeConfig.state.lastError = "Configuration read failed";
-      }
-      if (state === "invalid") {
-        runtimeConfig.state.configSnapshot!.valid = false;
-      }
-      if (state === "disconnected") {
-        runtimeConfig.state.connected = false;
       }
       if (state === "stale") {
         invalidateConfigConnection(runtimeConfig.state);

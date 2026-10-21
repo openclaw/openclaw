@@ -13,7 +13,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
@@ -48,8 +48,6 @@ type XaiOAuthFetchOptions = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 };
-
-type XaiDeviceCodeResponse = Awaited<ReturnType<typeof requestXaiDeviceCode>>;
 
 type XaiOAuthResponseBody = Awaited<ReturnType<typeof readResponseBody>>;
 
@@ -135,22 +133,6 @@ async function fetchXaiOAuthDiscoveryDocument(
   return asOptionalRecord(await readJsonResponse(response, "xAI OAuth discovery")) ?? {};
 }
 
-async function fetchXaiDeviceCodeDiscovery(options: XaiOAuthFetchOptions = {}) {
-  const json = await fetchXaiOAuthDiscoveryDocument(options);
-  const deviceAuthorizationEndpoint = json.device_authorization_endpoint;
-  const tokenEndpoint = json.token_endpoint;
-  if (typeof deviceAuthorizationEndpoint !== "string" || typeof tokenEndpoint !== "string") {
-    throw new Error("xAI OAuth discovery response is missing device code endpoints");
-  }
-  return {
-    deviceAuthorizationEndpoint: requireTrustedXaiOAuthEndpoint(
-      deviceAuthorizationEndpoint,
-      "device authorization endpoint",
-    ),
-    tokenEndpoint: requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint"),
-  };
-}
-
 function parseXaiOAuthTokenResponse(
   value: unknown,
   options: { requireRefreshToken?: boolean } = {},
@@ -189,48 +171,6 @@ function formatXaiOAuthError(params: { context: string; status: number; body: un
   return error ? `${prefix}: ${error}${description ? ` (${description})` : ""}` : prefix;
 }
 
-function isLikelyXaiCloudflareChallenge(params: { response: Response; bodyText: string }): boolean {
-  const contentType = params.response.headers.get("content-type") ?? "";
-  return (
-    params.response.headers.get("cf-mitigated") === "challenge" ||
-    /text\/html/i.test(contentType) ||
-    /<!doctype html|<html\b/i.test(params.bodyText) ||
-    /\b(?:cloudflare|attention required|just a moment|enable javascript and cookies|challenge-platform)\b/i.test(
-      params.bodyText,
-    )
-  );
-}
-
-function formatXaiOAuthCloudflareChallengeError(params: {
-  context: string;
-  status: number;
-}): string {
-  return (
-    `${params.context} failed (${params.status}): xAI returned an HTML/Cloudflare challenge ` +
-    "instead of OAuth JSON. xAI may be blocking the automated token refresh; try again later " +
-    "or re-run xAI OAuth login."
-  );
-}
-
-function describeXaiOAuthTokenFailure(params: {
-  context: string;
-  response: Response;
-  body: XaiOAuthResponseBody;
-}): { message: string; retryable: boolean } {
-  const { context, response, body } = params;
-  const status = response.status;
-  // Structured OAuth errors are final; only intermediary HTML challenges are retryable.
-  const hasStructuredError = Boolean(readStringValue(asOptionalRecord(body.json)?.error));
-  const isCloudflareChallenge =
-    !hasStructuredError && isLikelyXaiCloudflareChallenge({ response, bodyText: body.text });
-  return {
-    message: isCloudflareChallenge
-      ? formatXaiOAuthCloudflareChallengeError({ context, status })
-      : formatXaiOAuthError({ context, status, body: body.json }),
-    retryable: isCloudflareChallenge,
-  };
-}
-
 async function requestXaiOAuthRefresh(
   tokenEndpoint: string,
   refreshToken: string,
@@ -264,59 +204,34 @@ async function requestXaiOAuthRefresh(
       return parseXaiOAuthTokenResponse(body.json);
     }
 
-    const failure = describeXaiOAuthTokenFailure({ context, response, body });
-    if (attempt >= XAI_OAUTH_REFRESH_MAX_ATTEMPTS || !failure.retryable) {
-      throw new Error(failure.message);
+    const status = response.status;
+    // Structured OAuth errors are final; only intermediary HTML challenges are retryable.
+    const hasStructuredError = Boolean(readStringValue(asOptionalRecord(body.json)?.error));
+    let isCloudflareChallenge = false;
+    if (!hasStructuredError) {
+      const contentType = response.headers.get("content-type") ?? "";
+      isCloudflareChallenge =
+        response.headers.get("cf-mitigated") === "challenge" ||
+        /text\/html/i.test(contentType) ||
+        /<!doctype html|<html\b/i.test(body.text) ||
+        /\b(?:cloudflare|attention required|just a moment|enable javascript and cookies|challenge-platform)\b/i.test(
+          body.text,
+        );
+    }
+    const message = isCloudflareChallenge
+      ? `${context} failed (${status}): xAI returned an HTML/Cloudflare challenge ` +
+        "instead of OAuth JSON. xAI may be blocking the automated token refresh; try again later " +
+        "or re-run xAI OAuth login."
+      : formatXaiOAuthError({ context, status, body: body.json });
+    if (attempt >= XAI_OAUTH_REFRESH_MAX_ATTEMPTS || !isCloudflareChallenge) {
+      throw new Error(message);
     }
     await sleep(XAI_OAUTH_REFRESH_RETRY_DELAY_MS);
   }
 }
 
-async function requestXaiDeviceCode(
-  params: {
-    deviceAuthorizationEndpoint: string;
-  } & XaiOAuthFetchOptions,
-) {
-  const response = await fetchXaiOAuth(
-    requireTrustedXaiOAuthEndpoint(
-      params.deviceAuthorizationEndpoint,
-      "device authorization endpoint",
-    ),
-    params,
-    { client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE },
-  );
-  const json = asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
-  const deviceCode = readNonBlankString(json.device_code);
-  const userCode = readNonBlankString(json.user_code);
-  const verificationUri = readNonBlankString(json.verification_uri);
-  const verificationUriComplete = readNonBlankString(json.verification_uri_complete);
-  if (!deviceCode || !userCode || !verificationUri) {
-    throw new Error(
-      "xAI device code response is missing device_code, user_code, or verification_uri",
-    );
-  }
-  const trustedVerificationUri = requireTrustedXaiOAuthEndpoint(
-    verificationUri,
-    "device verification URI",
-  );
-  const trustedVerificationUriComplete = verificationUriComplete
-    ? requireTrustedXaiOAuthEndpoint(verificationUriComplete, "complete device verification URI")
-    : undefined;
-  return {
-    deviceCode,
-    userCode,
-    verificationUri: trustedVerificationUri,
-    ...(trustedVerificationUriComplete
-      ? { verificationUriComplete: trustedVerificationUriComplete }
-      : {}),
-    expiresInMs: positiveSecondsToSafeMilliseconds(json.expires_in) ?? XAI_OAUTH_TIMEOUT_MS,
-    intervalMs:
-      positiveSecondsToSafeMilliseconds(json.interval) ?? XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS,
-  };
-}
-
 function resolveNextXaiDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  const remainingMs = Math.max(0, deadlineMs - performance.now());
   return Math.min(Math.max(intervalMs, XAI_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
@@ -328,10 +243,10 @@ async function pollXaiDeviceCodeToken(
     intervalMs: number;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const deadlineMs = Date.now() + params.expiresInMs;
+  const deadlineMs = performance.now() + params.expiresInMs;
   let intervalMs = params.intervalMs;
 
-  while (Date.now() < deadlineMs) {
+  while (performance.now() < deadlineMs) {
     const result = await fetchXaiOAuth(
       requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
       params,
@@ -385,26 +300,14 @@ async function pollXaiDeviceCodeToken(
 }
 
 async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
+  try {
+    await sleepWithAbort(delayMs, signal);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled");
     }
-  });
+    throw error;
+  }
 }
 
 function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
@@ -454,53 +357,81 @@ async function resolveXaiOAuthRefreshTokenEndpoint(credential: OAuthCredential):
   return cachedEndpoint;
 }
 
-async function noteXaiDeviceCode(
-  ctx: ProviderAuthContext,
-  deviceCode: XaiDeviceCodeResponse,
-): Promise<void> {
-  const expiresInMinutes = Math.max(1, Math.round(deviceCode.expiresInMs / 60_000));
-  if (ctx.prompter.deviceCode) {
-    await ctx.prompter.deviceCode({
-      title: "xAI OAuth",
-      code: deviceCode.userCode,
-      expiresInMinutes,
-      message: "Enter this one-time code on the sign-in page.",
-    });
-    return;
-  }
-  await ctx.prompter.note(
-    [
-      ctx.isRemote
-        ? "Open this URL in your LOCAL browser and enter the code below."
-        : "Open this URL in your browser and enter the code below.",
-      `URL: <${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}>`,
-      `Code: ${deviceCode.userCode}`,
-      `Code expires in ${expiresInMinutes} minutes. Never share it.`,
-    ].join("\n"),
-    "xAI OAuth",
-  );
-}
-
 export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting xAI OAuth...");
   const requestOptions = { signal: ctx.signal, assertCurrent: ctx.assertCurrent };
   try {
-    const discovery = await fetchXaiDeviceCodeDiscovery(requestOptions);
+    const discovery = await fetchXaiOAuthDiscoveryDocument(requestOptions);
+    const rawDeviceAuthorizationEndpoint = discovery.device_authorization_endpoint;
+    const rawTokenEndpoint = discovery.token_endpoint;
+    if (
+      typeof rawDeviceAuthorizationEndpoint !== "string" ||
+      typeof rawTokenEndpoint !== "string"
+    ) {
+      throw new Error("xAI OAuth discovery response is missing device code endpoints");
+    }
+    const deviceAuthorizationEndpoint = requireTrustedXaiOAuthEndpoint(
+      rawDeviceAuthorizationEndpoint,
+      "device authorization endpoint",
+    );
+    const tokenEndpoint = requireTrustedXaiOAuthEndpoint(rawTokenEndpoint, "token endpoint");
     progress.update("Requesting xAI OAuth device code...");
-    const deviceCode = await requestXaiDeviceCode({
-      deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
-      ...requestOptions,
-    });
-    const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
+    const response = await fetchXaiOAuth(
+      requireTrustedXaiOAuthEndpoint(deviceAuthorizationEndpoint, "device authorization endpoint"),
+      requestOptions,
+      { client_id: XAI_OAUTH_CLIENT_ID, scope: XAI_OAUTH_SCOPE },
+    );
+    const json =
+      asOptionalRecord(await readJsonResponse(response, "xAI device code request")) ?? {};
+    const deviceCode = readNonBlankString(json.device_code);
+    const userCode = readNonBlankString(json.user_code);
+    const verificationUri = readNonBlankString(json.verification_uri);
+    const verificationUriComplete = readNonBlankString(json.verification_uri_complete);
+    if (!deviceCode || !userCode || !verificationUri) {
+      throw new Error(
+        "xAI device code response is missing device_code, user_code, or verification_uri",
+      );
+    }
+    const trustedVerificationUri = requireTrustedXaiOAuthEndpoint(
+      verificationUri,
+      "device verification URI",
+    );
+    const trustedVerificationUriComplete = verificationUriComplete
+      ? requireTrustedXaiOAuthEndpoint(verificationUriComplete, "complete device verification URI")
+      : undefined;
+    const expiresInMs = positiveSecondsToSafeMilliseconds(json.expires_in) ?? XAI_OAUTH_TIMEOUT_MS;
+    const intervalMs =
+      positiveSecondsToSafeMilliseconds(json.interval) ?? XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS;
+    const browserUrl = trustedVerificationUriComplete ?? trustedVerificationUri;
     let openedBrowser = false;
     try {
       await ctx.openUrl(browserUrl);
       openedBrowser = true;
     } catch {
-      ctx.runtime.log(`Open manually: ${deviceCode.verificationUri}`);
+      ctx.runtime.log(`Open manually: ${trustedVerificationUri}`);
     }
-    await noteXaiDeviceCode(ctx, deviceCode);
-    const logUrl = deviceCode.verificationUri;
+    const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+    if (ctx.prompter.deviceCode) {
+      await ctx.prompter.deviceCode({
+        title: "xAI OAuth",
+        code: userCode,
+        expiresInMinutes,
+        message: "Enter this one-time code on the sign-in page.",
+      });
+    } else {
+      await ctx.prompter.note(
+        [
+          ctx.isRemote
+            ? "Open this URL in your LOCAL browser and enter the code below."
+            : "Open this URL in your browser and enter the code below.",
+          `URL: <${trustedVerificationUriComplete ?? trustedVerificationUri}>`,
+          `Code: ${userCode}`,
+          `Code expires in ${expiresInMinutes} minutes. Never share it.`,
+        ].join("\n"),
+        "xAI OAuth",
+      );
+    }
+    const logUrl = trustedVerificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);
     } else if (openedBrowser) {
@@ -509,10 +440,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
 
     progress.update("Waiting for xAI device authorization...");
     const tokens = await pollXaiDeviceCodeToken({
-      tokenEndpoint: discovery.tokenEndpoint,
-      deviceCode: deviceCode.deviceCode,
-      expiresInMs: deviceCode.expiresInMs,
-      intervalMs: deviceCode.intervalMs,
+      tokenEndpoint,
+      deviceCode,
+      expiresInMs,
+      intervalMs,
       ...requestOptions,
     });
     const identity = resolveXaiOAuthIdentity(tokens);
@@ -536,8 +467,8 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       profileName: identity.email ?? identity.accountId,
       configPatch: applyXaiOAuthConfig(ctx.credentialOnly ? {} : ctx.config, provider),
       credentialExtra: {
-        tokenEndpoint: discovery.tokenEndpoint,
-        deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
+        tokenEndpoint,
+        deviceAuthorizationEndpoint,
         issuer: XAI_OAUTH_ISSUER,
         authFlow: "device-code",
         ...(tokens.idToken ? { idToken: tokens.idToken } : {}),

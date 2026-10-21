@@ -1,3 +1,4 @@
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type { SessionReactionWrite } from "../config/sessions/session-reaction-store.types.js";
 import type {
@@ -17,11 +18,13 @@ export type CurrentPromptReaction = (params: {
 export type UserTurnPromptReactionSource = Readonly<{
   agentId: string;
   sessionKey: string;
+  prepare?: () => Promise<void>;
   assertCurrent: () => void;
   createReaction: (recorder: UserTurnTranscriptRecorder) => CurrentPromptReaction;
 }>;
 
 type AdmissionOwner = {
+  requesterOrigin: () => RequesterOrigin | undefined;
   promptReactionSource?: UserTurnPromptReactionSource;
   pendingInput: () => SessionPendingInputReceipt | undefined;
   withdrawnInputId: () => string | undefined;
@@ -49,6 +52,12 @@ export function getUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
 ): AdmissionOwner | undefined {
   return admissionOwners.get(recorder);
+}
+
+/** Preserve prepared producer facts; accepted input takes precedence after durable custody. */
+export function readUserTurnRequesterOrigin(recorder: UserTurnTranscriptRecorder | undefined) {
+  const owner = recorder && admissionOwners.get(recorder);
+  return owner?.requesterOrigin();
 }
 
 export function bindUserTurnPromptReactionSource(
@@ -95,6 +104,9 @@ export function inheritUserTurnPromptReactionSource(
   }
   bindUserTurnPromptReactionSource(recorder, {
     ...latest,
+    prepare: async () => {
+      await Promise.all(inherited.flatMap((source) => (source.prepare ? [source.prepare()] : [])));
+    },
     assertCurrent: () => inherited.forEach((source) => source.assertCurrent()),
   });
 }

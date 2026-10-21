@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDefaultProactiveJob } from "../../cron/default-proactive-job.js";
+import { saveProactiveJobsForTest } from "../../cron/proactive-job.test-support.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -52,11 +54,14 @@ it.each([
 );
 
 it("reports a scoped Telegram owner's heartbeat ready in the Gateway status summary", async () => {
-  await withOpenClawTestState({ prefix: "heartbeat-owner-status-" }, async () => {
+  await withOpenClawTestState({ prefix: "heartbeat-owner-status-" }, async (state) => {
     const cfg: OpenClawConfig = {
       commands: { ownerAllowFrom: ["telegram:1234567890"] },
       channels: { telegram: { botToken: "test-token" } },
     };
+    await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
+      createDefaultProactiveJob(cfg, "main", Date.now()),
+    ]);
     setActivePluginRegistry(createTestRegistry());
     await withPluginRuntimeRegistryScope(telegramRegistry, async () => {
       const summary = await getStatusSummary({ config: cfg, includeChannelSummary: false });

@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { resolvePluginOwnedProviderAuth } from "../plugins/provider-runtime.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -20,11 +22,7 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
-import {
-  CUSTOM_LOCAL_AUTH_MARKER,
-  isNonSecretApiKeyMarker,
-  isSecretRefHeaderValueMarker,
-} from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
 import { isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import {
@@ -44,7 +42,22 @@ const log = createSubsystemLogger("model-auth");
 
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-/** @deprecated Use resolveModelAuthModeAsync. Removed at the next Plugin SDK major. */
+function resolvePluginOwnedAuthMode(
+  provider: string,
+  cfg?: OpenClawConfig,
+  workspaceDir?: string,
+): ModelAuthMode | null {
+  if (resolveProviderAuthScope({ provider, config: cfg, workspaceDir }) !== "plugin") {
+    return null;
+  }
+  try {
+    return resolvePluginOwnedProviderAuth({ provider, config: cfg, workspaceDir }).mode;
+  } catch {
+    return "unknown";
+  }
+}
+
+/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -54,6 +67,10 @@ export function resolveModelAuthMode(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, resolved);
@@ -86,6 +103,10 @@ export async function resolveModelAuthModeAsync(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+  const pluginAuthMode = resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
+  if (pluginAuthMode !== null) {
+    return pluginAuthMode;
   }
   if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
     return "aws-sdk";
@@ -146,10 +167,23 @@ export async function hasAvailableAuthForProvider(params: {
   modelBaseUrl?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
+  if (
+    resolveProviderAuthScope({ provider, config: cfg, workspaceDir: params.workspaceDir }) ===
+    "plugin"
+  ) {
+    try {
+      return Boolean((await resolveApiKeyForProviderCore(params)).apiKey);
+    } catch {
+      return false;
+    }
+  }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
+  }
+  if (authOverride === "none") {
+    return authConfig.hasSyntheticLocalProviderAuthConfig({ ...params, cfg });
   }
   const store =
     params.store ??
@@ -261,54 +295,25 @@ export async function getApiKeyForModelCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   lockedProfile?: boolean;
+  forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  const { model, ...authParams } = params;
   return resolveApiKeyForProviderCore({
-    provider: params.model.provider,
-    cfg: params.cfg,
-    profileId: params.profileId,
-    preferredProfile: params.preferredProfile,
-    store: params.store,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    lockedProfile: params.lockedProfile,
-    credentialPrecedence: params.credentialPrecedence,
-    allowAuthProfileFallback: params.allowAuthProfileFallback,
-    skipSetupProviderFallback: params.skipSetupProviderFallback,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    modelBaseUrl: params.model.baseUrl,
-    secretSentinels: params.secretSentinels,
+    ...authParams,
+    provider: model.provider,
+    modelId: model.id,
+    modelApi: model.api,
+    modelBaseUrl: model.baseUrl,
   });
 }
 
-/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
-export function applyLocalNoAuthHeaderOverride<T extends Model>(
-  model: T,
-  auth: ResolvedProviderAuth | null | undefined,
-): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
-    return model;
-  }
+export { applyLocalNoAuthHeaderOverride } from "./model-auth-markers.js";
 
-  // OpenAI's SDK always generates Authorization from apiKey. Keep the non-secret
-  // placeholder so construction succeeds, then clear the header at request build
-  // time for local servers that intentionally do not require auth.
-  const headers = {
-    ...model.headers,
-    Authorization: null,
-  } as unknown as Record<string, string>;
-
-  return {
-    ...model,
-    headers,
-  };
-}
-
-export function applySecretRefHeaderSentinels<T extends Model>(
+export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   cfg: OpenClawConfig | undefined,
 ): T {

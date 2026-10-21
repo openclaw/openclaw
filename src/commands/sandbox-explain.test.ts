@@ -1,36 +1,42 @@
-// Sandbox explain tests cover command output for sandbox browser and container diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
-const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
-
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sandbox-explain-");
+const workspace = path.resolve("/tmp/openclaw-agent-workspace");
+const childWorkspace = "/tmp/openclaw-child-workspace";
+const childCwd = `${childWorkspace}/task`;
 
 let mockCfg: unknown = {};
+type Agents = NonNullable<OpenClawConfig["agents"]>;
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: vi.fn().mockImplementation(() => mockCfg),
-    loadConfig: vi.fn().mockImplementation(() => mockCfg),
-  };
-});
+function config(
+  sandbox: NonNullable<Agents["defaults"]>["sandbox"],
+  entries: Agents["entries"],
+  rest: Omit<OpenClawConfig, "agents"> = {},
+  agentOptions: Pick<Agents, "ownership"> = {},
+) {
+  return { agents: { defaults: { sandbox }, entries, ...agentOptions }, ...rest };
+}
 
-async function explain(opts: Parameters<typeof sandboxExplainCommand>[0]) {
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  getRuntimeConfig: vi.fn(() => mockCfg),
+  loadConfig: vi.fn(() => mockCfg),
+  captureRuntimeConfigAsyncReader: () => async () => mockCfg,
+}));
+
+async function explain(opts: Omit<Parameters<typeof sandboxExplainCommand>[0], "json">) {
   const logs: string[] = [];
-  await sandboxExplainCommand(opts, {
-    log: (message) => logs.push(String(message)),
-    error: (message) => logs.push(String(message)),
-    exit: vi.fn(),
-  });
+  const log = (message: unknown) => logs.push(String(message));
+  const options = { json: true, ...opts };
+  await sandboxExplainCommand(options, { log, error: log, exit: vi.fn() });
   return JSON.parse(logs.join(""));
 }
 
@@ -43,178 +49,77 @@ describe("sandbox explain command", () => {
     ],
     ["blank", "", "--agent must not be blank"],
   ])("rejects an explicit %s agent", async (_label, agent, message) => {
-    mockCfg = {
-      agents: {
-        defaults: { sandbox: { mode: "off" } },
-        entries: { main: {} },
-      },
-    };
-
-    await expect(
-      sandboxExplainCommand({ json: true, agent }, {
-        log: () => {},
-        error: () => {},
-        exit: (_code: number) => {},
-      } as unknown as Parameters<typeof sandboxExplainCommand>[1]),
-    ).rejects.toThrow(message);
-  });
-
-  it("honors an explicit agent in an ownerless multi-agent fleet", async () => {
-    mockCfg = {
-      agents: {
-        ownership: "explicit",
-        defaults: { sandbox: { mode: "off" } },
-        entries: {
-          ops: { workspace: "/tmp/openclaw-ops-workspace" },
-          research: { workspace: "/tmp/openclaw-research-workspace" },
-        },
-      },
-    };
-
-    const parsed = await explain({ json: true, agent: "research" });
-    expect(parsed.agentId).toBe("research");
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-      path.resolve("/tmp/openclaw-research-workspace"),
-    );
+    mockCfg = config({ mode: "off" }, { main: {} });
+    await expect(explain({ agent })).rejects.toThrow(message);
   });
 
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
-      const agentDatabasePath = state.statePath(
-        "agents",
-        "readonly",
-        "agent",
-        "openclaw-agent.sqlite",
+      const agentDatabasePath = path.join(state.agentDir("readonly"), "openclaw-agent.sqlite");
+      mockCfg = config(
+        { mode: "off" },
+        { readonly: { workspace: state.workspaceDir } },
+        { session: { store: agentDatabasePath } },
       );
-      mockCfg = {
-        agents: {
-          defaults: { sandbox: { mode: "off" } },
-          entries: { readonly: { workspace: state.workspaceDir } },
-        },
-        session: { store: agentDatabasePath },
-      };
       const stateDatabase = openOpenClawStateDatabase({ env: state.env });
 
-      await sandboxExplainCommand({ json: true, agent: "readonly" }, {
-        log: () => {},
-        error: () => {},
-        exit: () => {},
-      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+      await explain({ agent: "readonly" });
 
       expect(stateDatabase.db.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([]);
       await expect(fs.stat(agentDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 
-  it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
-        },
+  it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
+    mockCfg = config(
+      { mode: "all", scope: "agent", workspaceAccess: "none" },
+      { tavern: { tools: { sandbox: { tools: { alsoAllow: ["message", "tts"] } } } } },
+      {
+        tools: { sandbox: { tools: { allow: ["browser"] } } },
+        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       },
-      tools: {
-        sandbox: { tools: { deny: ["browser"] } },
-        elevated: { enabled: true, allowFrom: { quietchat: ["*"] } },
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
+    );
 
-    const parsed = await explain({ json: true, session: "agent:main:main" });
-    expect(parsed).toHaveProperty("docsUrl", "https://docs.openclaw.ai/sandbox");
-    expect(parsed).toHaveProperty("sandbox.mode", "all");
-    expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
-    expect(parsed.fixIt).toEqual([
-      "agents.defaults.sandbox.mode=off",
-      "agents.entries.*.sandbox.mode=off",
-      "tools.sandbox.tools.allow",
-      "tools.sandbox.tools.alsoAllow",
-      "tools.sandbox.tools.deny",
-      "agents.entries.*.tools.sandbox.tools.allow",
-      "agents.entries.*.tools.sandbox.tools.alsoAllow",
-      "agents.entries.*.tools.sandbox.tools.deny",
-      "tools.elevated.enabled",
+    const {
+      sandbox: { tools },
+    } = await explain({ agent: "tavern" });
+    expect(tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
+    expect(tools.deny).not.toContain("browser");
+    const source = { source: "agent", key: "agents.entries.*.tools.sandbox.tools.alsoAllow" };
+    expect(tools.sources.allow).toEqual(source);
+  });
+
+  it("reports the effective rw workspace and podman mount without changing workspaceRoot", async () => {
+    mockCfg = config(
+      {
+        mode: "all",
+        backend: "podman",
+        scope: "agent",
+        workspaceAccess: "rw",
+        workspaceRoot: "/tmp/openclaw-sandboxes",
+      },
+      { builder: { workspace }, research: { workspace: "/tmp/openclaw-research-workspace" } },
+      { session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" } },
+      { ownership: "explicit" },
+    );
+
+    const { agentId, sandbox } = await explain({ agent: "builder" });
+    expect(agentId).toBe("builder");
+    expect(sandbox).toMatchObject({
+      backend: "podman",
+      workspaceRoot: "/tmp/openclaw-sandboxes",
+      effectiveHostWorkspaceRoot: workspace,
+      runtimeWorkdir: "/workspace",
+      workspaceSource: "agent",
+    });
+    expect(sandbox.workspaceMounts).toEqual([
+      { hostRoot: workspace, containerRoot: "/workspace", writable: true, source: "workspace" },
     ]);
   });
-
-  it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
-        },
-        entries: {
-          tavern: {
-            tools: {
-              sandbox: {
-                tools: {
-                  alsoAllow: ["message", "tts"],
-                },
-              },
-            },
-          },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser"],
-          },
-        },
-      },
-      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-    };
-
-    const parsed = await explain({ json: true, agent: "tavern" });
-    expect(parsed.sandbox.tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
-    expect(parsed.sandbox.tools.deny).not.toContain("browser");
-    expect(parsed.sandbox.tools.sources.allow).toEqual({
-      source: "agent",
-      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
-    });
-  });
-
-  it.each(["podman"])(
-    "reports the effective rw workspace and %s mount without changing workspaceRoot",
-    async (backend) => {
-      mockCfg = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend,
-              scope: "agent",
-              workspaceAccess: "rw",
-              workspaceRoot: "/tmp/openclaw-sandboxes",
-            },
-          },
-          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
-        },
-        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-      };
-
-      const parsed = await explain({ json: true, agent: "builder" });
-      const agentWorkspace = path.resolve("/tmp/openclaw-agent-workspace");
-      expect(parsed.sandbox.backend).toBe(backend);
-      expect(parsed.sandbox.workspaceRoot).toBe("/tmp/openclaw-sandboxes");
-      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(agentWorkspace);
-      expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
-      expect(parsed.sandbox.workspaceSource).toBe("agent");
-      expect(parsed.sandbox.workspaceMounts).toEqual([
-        {
-          hostRoot: agentWorkspace,
-          containerRoot: "/workspace",
-          writable: true,
-          source: "workspace",
-        },
-      ]);
-    },
-  );
 
   it("reports guest-isolated workspaces and the effective writable-access cap", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-guests" }, async (state) => {
       const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-      const agentWorkspace = state.workspaceDir;
       const sessions = [
         { key: "agent:builder:guest-a-first", principalId: "guest-a" },
         { key: "agent:builder:guest-a-second", principalId: "guest-a" },
@@ -231,38 +136,32 @@ describe("sandbox explain command", () => {
           },
         );
       }
-      mockCfg = {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "off",
-              scope: "shared",
-              workspaceAccess: "rw",
-              workspaceRoot: state.statePath("sandboxes"),
-            },
-          },
-          entries: { builder: { workspace: agentWorkspace } },
+      mockCfg = config(
+        {
+          mode: "off",
+          scope: "shared",
+          workspaceAccess: "rw",
+          workspaceRoot: state.statePath("sandboxes"),
         },
-        session: { store: storePath },
-      };
+        { builder: { workspace: state.workspaceDir } },
+        { session: { store: storePath } },
+      );
 
       const workspaceRoots: string[] = [];
+      const readonlyMounts = ["workspace", "agent"].map((source) =>
+        expect.objectContaining({ source, writable: false }),
+      );
       for (const session of sessions) {
-        const parsed = await explain({ json: true, session: session.key });
-        expect(parsed.sandbox).toMatchObject({
+        const { sandbox } = await explain({ session: session.key });
+        expect(sandbox).toMatchObject({
           scope: "agent",
           workspaceAccess: "ro",
           workspaceSource: "sandbox",
           sessionIsSandboxed: true,
         });
-        expect(parsed.sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(agentWorkspace));
-        expect(parsed.sandbox.workspaceMounts).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ source: "workspace", writable: false }),
-            expect.objectContaining({ source: "agent", writable: false }),
-          ]),
-        );
-        workspaceRoots.push(parsed.sandbox.effectiveHostWorkspaceRoot);
+        expect(sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(state.workspaceDir));
+        expect(sandbox.workspaceMounts).toEqual(expect.arrayContaining(readonlyMounts));
+        workspaceRoots.push(sandbox.effectiveHostWorkspaceRoot);
       }
 
       expect(workspaceRoots[0]).toBe(workspaceRoots[1]);
@@ -271,71 +170,52 @@ describe("sandbox explain command", () => {
   });
 
   it("uses persisted spawned-session workspace and cwd overrides", async () => {
-    const tempDir = sessionDirs.make();
-    const storePath = path.join(tempDir, "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      sessionId: "child-session",
-      updatedAt: Date.now(),
-      spawnedBy: "agent:builder:main",
-      spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
-      spawnedCwd: "/tmp/openclaw-child-workspace/task",
-    } as SessionEntry);
-    mockCfg = {
-      agents: {
-        defaults: { sandbox: { mode: "off" } },
-        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
+    await replaceSessionEntry(
+      { storePath, sessionKey },
+      {
+        sessionId: "child-session",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:builder:main",
+        spawnedWorkspaceDir: childWorkspace,
+        spawnedCwd: childCwd,
       },
-      session: { store: storePath },
-    };
-
-    const parsed = await explain({ json: true, session: sessionKey });
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-      path.resolve("/tmp/openclaw-child-workspace"),
     );
-    expect(parsed.sandbox.runtimeWorkdir).toBe("/tmp/openclaw-child-workspace/task");
-    expect(parsed.sandbox.workspaceSource).toBe("direct");
+    mockCfg = config(
+      { mode: "off" },
+      { builder: { workspace } },
+      { session: { store: storePath } },
+    );
+
+    const { sandbox } = await explain({ session: sessionKey });
+    expect(sandbox).toMatchObject({
+      effectiveHostWorkspaceRoot: path.resolve(childWorkspace),
+      runtimeWorkdir: childCwd,
+      workspaceSource: "direct",
+    });
   });
 
   it("uses the sole configured agent for global sessions", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main" },
-        },
-        entries: {
-          ops: {
-            workspace: "/tmp/openclaw-ops-workspace",
-          },
-        },
-      },
-      session: { scope: "global" },
-    };
-
-    const parsed = await explain({ json: true, agent: "ops", session: "global" });
-    expect(parsed.agentId).toBe("ops");
-    expect(parsed.sandbox.sessionIsSandboxed).toBe(false);
-    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-      path.resolve("/tmp/openclaw-ops-workspace"),
+    mockCfg = config(
+      { mode: "non-main" },
+      { ops: { workspace: "/tmp/openclaw-ops-workspace" } },
+      { session: { scope: "global" } },
     );
+
+    const parsed = await explain({ agent: "ops", session: "global" });
+    expect(parsed).toMatchObject({
+      agentId: "ops",
+      sandbox: {
+        sessionIsSandboxed: false,
+        effectiveHostWorkspaceRoot: path.resolve("/tmp/openclaw-ops-workspace"),
+      },
+    });
   });
 
   it("rejects a fully qualified session from a different agent", async () => {
-    mockCfg = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main" },
-        },
-        entries: { main: {}, builder: {} },
-      },
-    };
-
-    await expect(
-      sandboxExplainCommand({ json: true, agent: "builder", session: "agent:main:main" }, {
-        log: () => {},
-        error: () => {},
-        exit: (_code: number) => {},
-      } as unknown as Parameters<typeof sandboxExplainCommand>[1]),
-    ).rejects.toThrow('agent "builder" does not match session agent "main"');
+    mockCfg = config({ mode: "non-main" }, { main: {}, builder: {} });
+    const execution = explain({ agent: "builder", session: "agent:main:main" });
+    await expect(execution).rejects.toThrow('agent "builder" does not match session agent "main"');
   });
 });

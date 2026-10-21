@@ -1,4 +1,12 @@
-import { createAssistantToolCallMessage } from "../subagent-test-fixtures.test-helpers.js";
+export const textContent = <T>(text: T) => [{ type: "text", text }];
+
+export function toolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
+function toolCallMessage(content: unknown[]) {
+  return { role: "assistant", content, stopReason: "toolUse" };
+}
 
 export function makeUserMessage(content = "do the thing", overrides: Record<string, unknown> = {}) {
   return { role: "user", content, ...overrides };
@@ -14,7 +22,7 @@ export function makeToolResultMessage(
 export function makeAssistantTextMessage(text: string, overrides: Record<string, unknown> = {}) {
   return {
     role: "assistant",
-    content: [{ type: "text", text }],
+    content: textContent(text),
     ...overrides,
   };
 }
@@ -24,12 +32,9 @@ export function makeMessageToolCall(
   message = "delivered answer",
   overrides: Record<string, unknown> = {},
 ) {
-  return createAssistantToolCallMessage([
+  return toolCallMessage([
     {
-      type: "toolCall",
-      id: toolCallId,
-      name: "message",
-      arguments: { action: "send", message },
+      ...toolCall(toolCallId, "message", { action: "send", message }),
       ...overrides,
     },
   ]);
@@ -81,26 +86,10 @@ export function codeModeCheckpointMessage(
   return {
     role: "toolResult",
     toolName,
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(checkpoint),
-      },
-    ],
+    content: textContent(JSON.stringify(checkpoint)),
   };
 }
 
-export function codeModeWaitCallMessage() {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        id: "call-wait-1",
-        name: "wait",
-        arguments: { runId: "cm_interrupted" },
-      },
-    ],
-    stopReason: "toolUse",
-  };
+export function codeModeWaitCallMessage(runId = "cm_interrupted", id = "call-wait-1") {
+  return toolCallMessage([toolCall(id, "wait", { runId })]);
 }

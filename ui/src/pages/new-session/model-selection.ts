@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { FastMode, GatewayAgentRow } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
@@ -82,7 +83,18 @@ export abstract class NewSessionModelSelection {
   thinkingLevel = "";
   fastMode: FastMode | undefined;
 
-  constructor(private readonly onSelectionChange: ModelSelectionChange) {}
+  private readonly listeners = createChangeListeners();
+  protected readonly notify = () => {
+    this.listeners.publish();
+    this.changed();
+  };
+
+  readonly subscribe = this.listeners.subscribe;
+
+  constructor(
+    private readonly onSelectionChange: ModelSelectionChange,
+    private readonly changed: () => void,
+  ) {}
 
   protected resetSelection(model = "") {
     this.selected = model;
@@ -95,10 +107,16 @@ export abstract class NewSessionModelSelection {
   }
 
   protected applyModelSelection(selection: ReturnType<typeof reconcileDraftModelSelection>) {
+    const changed =
+      this.selected !== selection.model ||
+      this.agentRuntime !== selection.agentRuntime ||
+      this.thinkingLevel !== selection.thinkingLevel ||
+      this.fastMode !== selection.fastMode;
     this.selected = selection.model;
     this.agentRuntime = selection.agentRuntime;
     this.thinkingLevel = selection.thinkingLevel;
     this.fastMode = selection.fastMode;
+    return changed;
   }
 
   draftSelection(agentId: string): DurableDraftModelSelection | undefined {
@@ -189,7 +207,7 @@ export abstract class NewSessionModelSelection {
     persistRepair: boolean,
   ) {
     if (!preference) {
-      return;
+      return false;
     }
     const selection = reconcileDraftModelSelection({
       model: preference.model ?? "",
@@ -198,10 +216,11 @@ export abstract class NewSessionModelSelection {
       fastMode: preference.fastMode,
       ...options,
     });
-    this.applyModelSelection(selection);
+    const changed = this.applyModelSelection(selection);
     if (selection.repaired && persistRepair) {
       this.persistSelection(preference.agentRuntime ? (this.agentRuntime ?? "") : undefined);
     }
+    return changed;
   }
 
   protected selectModelIntent(

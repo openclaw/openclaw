@@ -1,291 +1,246 @@
-import { For, createEffect, createMemo } from "solid-js";
-import type { ChatFollowUpMode } from "../../../app/settings.ts";
+import type { JSX } from "@solidjs/web";
+import { Show, createMemo, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
+import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
-import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { ComposerDictationController } from "../composer-dictation.ts";
-import type { ComposerTalkCapabilityStatus } from "../composer-microphone-picker.ts";
-import {
-  realtimeTalkDeviceIssueMessage,
-  type RealtimeTalkDeviceIssue,
-  type RealtimeTalkInputDevice,
-} from "../talk/input.ts";
-import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
-import type { RealtimeTalkStatus } from "../talk/session.ts";
-import { solidTemplate, renderComposerSendTooltip } from "./chat-composer-controls.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
-import {
-  renderChatVoiceStatus,
-  renderMicrophoneActivity,
-  voiceStatusLabel,
-} from "./chat-voice-activity.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
+import { realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
+import { ComposerContent } from "./chat-composer-content.tsx";
+import type { createChatComposerContext } from "./chat-composer-frame.ts";
+import { MicrophoneActivity, voiceStatusLabel } from "./chat-voice-activity.tsx";
 
-export type ChatRunControlsProps = Omit<ComposerVoiceButtonProps, "idleLabel"> & {
-  canAbort: boolean;
-  canSend: boolean;
-  sending: boolean;
-  isBusy: boolean;
-  submitPending?: boolean;
-  draft: string;
-  hasAttachments?: boolean;
-  preparingAttachments?: boolean;
-  followUpMode?: ControlUiFollowUpMode;
-  alternateFollowUpMode?: ChatFollowUpMode;
-  suggestionComposer?: boolean;
-  submissionLabel?: string;
-  voiceActive?: boolean;
-  voiceStatus?: RealtimeTalkStatus;
-  voiceDetail?: string | null;
-  voiceInputLevel?: RealtimeTalkLevelSignal;
-  voiceVideoCapable?: boolean;
-  voiceVideoEnabled?: boolean;
-  voiceVideoPending?: boolean;
-  onPrimaryActionPointerDown?: (event: PointerEvent) => void;
-  onAbort?: () => void;
-  onSend: (submissionAction?: Event) => void;
-  onToggleCamera?: () => void;
-};
+type ChatRunControlsProps = ReturnType<typeof createChatComposerContext>["runControlsProps"];
 
-type MicrophonePickerProps = {
-  devices: RealtimeTalkInputDevice[];
-  loading: boolean;
-  open: boolean;
-  selectedDeviceId: string;
-  voiceActive: boolean;
-  issue: RealtimeTalkDeviceIssue | null;
-  holdToDictate?: boolean;
-  showRealtimeCapability?: boolean;
-  realtimeStatus: ComposerTalkCapabilityStatus;
-  dictationStatus: ComposerTalkCapabilityStatus;
-  onOpen: () => void;
-  onClose: () => void;
-  onSelect: (deviceId: string) => void;
-  onHoldToDictateChange?: (enabled: boolean) => void;
-  onOpenTalkSettings?: () => void;
-  onOpenDictationSettings?: () => void;
-};
-
-// Pointer selection must blur after the dropdown restores focus, or this
-// hover-revealed trigger keeps the microphone expanded. Preserve keyboard focus.
-function releaseMicrophonePickerFocus(dropdown: EventTarget | null, item: HTMLElement): void {
-  if (item.matches(":focus-visible")) {
-    return;
-  }
-  if (!(dropdown instanceof HTMLElement)) {
-    return;
-  }
-  queueMicrotask(() => {
-    const trigger = dropdown.querySelector<HTMLElement>(".chat-talk-input-picker__trigger");
-    if (trigger && document.activeElement === trigger) {
-      trigger.blur();
-    }
-  });
-}
-
-function renderMicrophoneNotice(className: string, message: string, role?: "status" | "alert") {
-  return (
-    <wa-dropdown-item class="chat-talk-input-picker__notice" disabled>
-      <div class={className} role={role}>
-        {message}
-      </div>
-    </wa-dropdown-item>
-  );
-}
-
-function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
-  // Without an available capture route, a checked "System default" would claim
-  // a selection that cannot exist. Show the discovery issue alone.
-  const unavailable = createMemo(() =>
-    !props.loading && props.devices.length === 0 ? props.issue : null,
-  );
-  // System default renders even while discovery runs: the dropdown's one-time
-  // focus step needs at least one item or keyboard users never enter the menu.
-  const options = createMemo(() =>
-    unavailable()
-      ? []
-      : [
+export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
+  const menuId = createUniqueId();
+  let handle: MenuHandle | undefined;
+  let host!: HTMLDivElement;
+  let pointerDeviceSelection = false;
+  const label = () => t("chat.composer.microphoneInput");
+  const items = createMemo(
+    () => {
+      const capabilities = [
+        {
+          key: "realtime",
+          label: t("chat.composer.realtimeTalkCapability"),
+          status: props.realtimeStatus,
+          unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
+          onOpenSettings: props.onOpenTalkSettings,
+        },
+        {
+          key: "dictation",
+          label: t("chat.composer.dictationCapability"),
+          status: props.dictationStatus,
+          unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
+          onOpenSettings: props.onOpenDictationSettings,
+        },
+      ].filter(
+        (capability) =>
+          capability.status !== "ready" &&
+          (capability.key !== "realtime" || props.showRealtimeCapability !== false),
+      );
+      const entries: MenuEntry[] = [
+        {
+          kind: "content",
+          id: "heading",
+          content: <div class="chat-talk-input-picker__heading">{label()}</div>,
+        },
+      ];
+      const notice = (id: string, className: string, message: string, role?: "status" | "alert") =>
+        entries.push({
+          id,
+          label: message,
+          disabled: true,
+          class: "chat-talk-input-picker__notice",
+          content: (
+            <div class={className} role={role}>
+              {message}
+            </div>
+          ),
+        });
+      const issue = !props.loading && props.devices.length === 0 ? props.issue : null;
+      if (issue) {
+        const fault = issue !== "none-found" && issue !== "list-unsupported";
+        notice(
+          "unavailable",
+          `chat-talk-input-picker__empty${fault ? " chat-talk-input-picker__empty--fault" : ""}`,
+          realtimeTalkDeviceIssueMessage(issue, "audioinput"),
+          "status",
+        );
+      } else {
+        for (const option of [
           { deviceId: "", label: t("chat.composer.systemDefaultMicrophone") },
           ...(props.loading ? [] : props.devices),
-        ],
-  );
-  // A machine without a microphone and a browser that cannot enumerate are
-  // facts, not faults; only the recoverable reasons earn the warn tone.
-  const unavailableIsFault = createMemo(
-    () =>
-      unavailable() !== null &&
-      unavailable() !== "none-found" &&
-      unavailable() !== "list-unsupported",
-  );
-  const label = createMemo(() => t("chat.composer.microphoneInput"));
-  const unavailableCapabilities = createMemo(() =>
-    [
-      {
-        key: "realtime",
-        label: t("chat.composer.realtimeTalkCapability"),
-        status: props.realtimeStatus,
-        unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-        onOpenSettings: props.onOpenTalkSettings,
-      },
-      {
-        key: "dictation",
-        label: t("chat.composer.dictationCapability"),
-        status: props.dictationStatus,
-        unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
-        onOpenSettings: props.onOpenDictationSettings,
-      },
-    ].filter(
-      (capability) =>
-        capability.status !== "ready" &&
-        (capability.key !== "realtime" || props.showRealtimeCapability !== false),
-    ),
-  );
-  return (
-    <wa-dropdown
-      class="chat-talk-input-picker"
-      placement="top-end"
-      aria-label={label()}
-      prop:open={props.open}
-      onWa-show={() => props.onOpen()}
-      onWa-hide={() => props.onClose()}
-      onWa-select={(event: CustomEvent<{ item: HTMLElement & { value?: string } }>) => {
-        const item = event.detail.item;
-        if (item.hasAttribute("data-chat-talk-device")) {
-          props.onSelect(item.value ?? "");
-          releaseMicrophonePickerFocus(event.currentTarget, item);
-          return;
+        ]) {
+          entries.push({
+            id: `device:${option.deviceId}`,
+            label: option.label,
+            type: "radio",
+            checked: option.deviceId === props.selectedDeviceId,
+            class: "chat-talk-input-picker__item",
+            attributes: {
+              "data-chat-talk-device": "",
+              value: option.deviceId,
+              onClick: (event) => {
+                pointerDeviceSelection = event.detail > 0;
+              },
+            },
+            icon: (
+              <span class="chat-talk-input-picker__option-icon" aria-hidden="true">
+                <Icon name="mic" />
+              </span>
+            ),
+            content: <span class="chat-talk-input-picker__label">{option.label}</span>,
+            details: (
+              <span class="chat-talk-input-picker__check" aria-hidden="true">
+                {option.deviceId === props.selectedDeviceId ? <Icon name="check" /> : null}
+              </span>
+            ),
+          });
         }
-        event.preventDefault();
-        if (item.dataset.chatTalkPreference === "hold-to-dictate") {
-          props.onHoldToDictateChange?.(props.holdToDictate === false);
-          return;
+        if (props.loading) {
+          notice("loading", "chat-talk-input-picker__note", t("common.loading"), "status");
         }
-        unavailableCapabilities()
-          .find((capability) => capability.key === item.dataset.chatTalkCapability)
-          ?.onOpenSettings?.();
-      }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="chat-talk-input-picker__trigger"
-        aria-label={label()}
-        aria-haspopup="menu"
-        aria-expanded={props.open ? "true" : "false"}
-      >
-        <Icon name="chevronDown" />
-      </button>
-      <div class="chat-talk-input-picker__heading">{label()}</div>
-      {unavailable() ? (
-        renderMicrophoneNotice(
-          `chat-talk-input-picker__empty${unavailableIsFault() ? " chat-talk-input-picker__empty--fault" : ""}`,
-          realtimeTalkDeviceIssueMessage(unavailable()!, "audioinput"),
-          "status",
-        )
-      ) : (
-        <>
-          <For each={options()} keyed={(option) => option.deviceId}>
-            {(option) => {
-              const selected = createMemo(() => option().deviceId === props.selectedDeviceId);
-              let element: HTMLElement | undefined;
-              createEffect(selected, (value) => syncDropdownItemRadio(element, value));
-              // Checkbox items toggle their own check before the stored device
-              // changes; these radio rows render only the committed selection.
-              return (
-                <wa-dropdown-item
-                  class="chat-talk-input-picker__item"
-                  data-chat-talk-device
-                  value={option().deviceId}
-                  role="menuitemradio"
-                  aria-checked={selected() ? "true" : "false"}
-                  ref={(node) => {
-                    element = node;
-                  }}
-                >
-                  <span slot="icon" class="chat-talk-input-picker__option-icon" aria-hidden="true">
-                    <Icon name="mic" />
-                  </span>
-                  <span class="chat-talk-input-picker__label">{option().label}</span>
-                  <span slot="details" class="chat-talk-input-picker__check" aria-hidden="true">
-                    {selected() ? <Icon name="check" /> : null}
-                  </span>
-                </wa-dropdown-item>
-              );
-            }}
-          </For>
-          {props.loading
-            ? renderMicrophoneNotice("chat-talk-input-picker__note", t("common.loading"), "status")
-            : null}
-          {props.issue
-            ? renderMicrophoneNotice(
-                "chat-talk-input-picker__warning",
-                realtimeTalkDeviceIssueMessage(props.issue, "audioinput"),
-                "alert",
-              )
-            : null}
-          {props.voiceActive
-            ? renderMicrophoneNotice(
-                "chat-talk-input-picker__hint",
-                t("chat.composer.microphoneAppliesNextSession"),
-              )
-            : null}
-        </>
-      )}
-      <For each={unavailableCapabilities()} keyed={(capability) => capability.key}>
-        {(capability) => (
-          <wa-dropdown-item
-            class="chat-talk-input-picker__capability"
-            data-chat-talk-capability={capability().key}
-            data-status={capability().status}
-            disabled={!capability().onOpenSettings}
-          >
+        if (props.issue) {
+          notice(
+            "issue",
+            "chat-talk-input-picker__warning",
+            realtimeTalkDeviceIssueMessage(props.issue, "audioinput"),
+            "alert",
+          );
+        }
+        if (props.voiceActive) {
+          notice(
+            "active-hint",
+            "chat-talk-input-picker__hint",
+            t("chat.composer.microphoneAppliesNextSession"),
+          );
+        }
+      }
+      for (const capability of capabilities) {
+        const detail =
+          capability.status === "checking"
+            ? t("chat.composer.talkCapabilityChecking")
+            : capability.status === "unknown"
+              ? t("chat.composer.talkCapabilityUnknown")
+              : capability.unavailableReason;
+        entries.push({
+          id: `capability:${capability.key}`,
+          label: [
+            capability.label,
+            detail,
+            capability.onOpenSettings ? t("chat.composer.configureCapability") : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
+          disabled: !capability.onOpenSettings,
+          class: "chat-talk-input-picker__capability",
+          attributes: {
+            "data-chat-talk-capability": capability.key,
+            "data-status": capability.status,
+          },
+          closeOnSelect: false,
+          content: (
             <span class="chat-talk-input-picker__capability-copy" role="status">
               <strong>
-                {capability().status === "unavailable" ? (
+                {capability.status === "unavailable" ? (
                   <span class="chat-talk-input-picker__capability-alert" aria-hidden="true">
                     <Icon name="alertTriangle" />
                   </span>
                 ) : null}
-                <span>{capability().label}</span>
+                <span>{capability.label}</span>
               </strong>
-              <span>
-                {capability().status === "checking"
-                  ? t("chat.composer.talkCapabilityChecking")
-                  : capability().status === "unknown"
-                    ? t("chat.composer.talkCapabilityUnknown")
-                    : capability().unavailableReason}
-              </span>
+              <span>{detail}</span>
             </span>
-            {capability().onOpenSettings ? (
-              <span slot="details" class="chat-talk-input-picker__settings">
-                <span aria-hidden="true">
-                  <Icon name="settings" />
-                </span>
-                <span>{t("chat.composer.configureCapability")}</span>
+          ),
+          details: capability.onOpenSettings ? (
+            <span class="chat-talk-input-picker__settings">
+              <span aria-hidden="true">
+                <Icon name="settings" />
               </span>
-            ) : null}
-          </wa-dropdown-item>
-        )}
-      </For>
-      {props.onHoldToDictateChange ? (
-        <wa-dropdown-item
-          class="chat-talk-input-picker__preference"
-          data-chat-talk-preference="hold-to-dictate"
-          type="checkbox"
-          prop:checked={props.holdToDictate !== false}
-        >
-          <span>{t("chat.composer.holdToDictate")}</span>
-          <span
-            slot="details"
-            class={`chat-controls__speed-toggle ${props.holdToDictate !== false ? "chat-controls__speed-toggle--active" : ""}`}
-            aria-hidden="true"
-          >
-            <span class="chat-controls__speed-toggle-thumb" />
-          </span>
-        </wa-dropdown-item>
-      ) : null}
-    </wa-dropdown>
+              <span>{t("chat.composer.configureCapability")}</span>
+            </span>
+          ) : undefined,
+        });
+      }
+      if (props.onHoldToDictateChange) {
+        entries.push({
+          id: "hold-to-dictate",
+          label: t("chat.composer.holdToDictate"),
+          type: "checkbox",
+          checked: props.holdToDictate !== false,
+          class: "chat-talk-input-picker__preference",
+          attributes: { "data-chat-talk-preference": "hold-to-dictate" },
+          closeOnSelect: false,
+          details: (
+            <span
+              class={[
+                "chat-controls__speed-toggle",
+                { "chat-controls__speed-toggle--active": props.holdToDictate !== false },
+              ]}
+              aria-hidden="true"
+            >
+              <span class="chat-controls__speed-toggle-thumb" />
+            </span>
+          ),
+        });
+      }
+      return entries;
+    },
+    { lazy: true },
+  );
+  return (
+    <div
+      ref={(element) => {
+        host = element;
+      }}
+      class="chat-talk-input-picker"
+    >
+      <Menu
+        id={`chat-microphone-${menuId}`}
+        lazy
+        panelClass="chat-talk-input-picker__menu"
+        placement="top-end"
+        pointerFocus="trigger"
+        label={label()}
+        open={props.open}
+        triggerClass="chat-talk-input-picker__trigger"
+        trigger={<Icon name="chevronDown" />}
+        items={items()}
+        ref={(next) => {
+          handle = next;
+        }}
+        onOpenChange={(open) => {
+          host.toggleAttribute("open", open);
+          if (open) {
+            props.onOpen();
+          } else {
+            props.onClose();
+          }
+        }}
+        onSelect={(item) => {
+          if (item.id.startsWith("device:")) {
+            const pointer = pointerDeviceSelection;
+            pointerDeviceSelection = false;
+            props.onSelect(item.id.slice("device:".length));
+            // Pointer selection should not leave the hover-revealed microphone expanded.
+            if (pointer) {
+              queueMicrotask(() => handle?.overlay.trigger?.blur());
+            }
+          } else if (item.id === "hold-to-dictate") {
+            props.onHoldToDictateChange?.(props.holdToDictate === false);
+          } else if (item.id === "capability:realtime") {
+            props.onOpenTalkSettings?.();
+          } else if (item.id === "capability:dictation") {
+            props.onOpenDictationSettings?.();
+          }
+        }}
+      />
+    </div>
   );
 }
 
@@ -294,8 +249,8 @@ type ComposerVoiceButtonProps = {
   connected: boolean;
   disabled?: boolean;
   submitDisabledReason?: string | null;
-  readDictation?: () => ComposerDictationController;
-  microphonePicker?: unknown;
+  readDictation?: () => ComposerDictationOwner;
+  microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
   idleLabel?: string;
   onDictationPointerDown?: (event: PointerEvent) => void;
@@ -303,39 +258,44 @@ type ComposerVoiceButtonProps = {
   onToggleVoice?: () => void;
 };
 
-function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
+export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
   const active = () => props.readDictation?.()?.active === true;
   const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;
   const holding = () => props.readDictation?.()?.locksComposer === true;
-  const startsDictationDirectly = createMemo(
-    () => props.readDictation !== undefined && props.onToggleVoice === undefined,
-  );
-  const label = createMemo(() =>
+  const startsDictationDirectly = () =>
+    props.readDictation !== undefined && props.onToggleVoice === undefined;
+  const label = () =>
     active()
       ? t("chat.composer.dictationStopAndKeep")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput")),
-  );
-  const tooltip = createMemo(() =>
+      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
+  const tooltip = () =>
     props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
       ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
           .filter(Boolean)
           .join(" · ")
       : active()
         ? label()
-        : (props.submitDisabledReason ?? label()),
-  );
+        : (props.submitDisabledReason ?? label());
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
-    <span class={`chat-talk-control${holding() ? " chat-talk-control--holding" : ""}`}>
+    <span class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}>
       <openclaw-tooltip prop:content={tooltip()}>
         <button
-          class={
+          class={[
+            "chat-send-btn",
             active()
-              ? "chat-send-btn chat-send-btn--dictating"
-              : `chat-send-btn chat-send-btn--voice${props.readDictation && !startsDictationDirectly() ? " chat-send-btn--hold-enabled" : ""}${arming() ? " chat-send-btn--dictation-arming" : ""}`
-          }
+              ? "chat-send-btn--dictating"
+              : [
+                  "chat-send-btn--voice",
+                  {
+                    "chat-send-btn--hold-enabled":
+                      props.readDictation && !startsDictationDirectly(),
+                    "chat-send-btn--dictation-arming": arming(),
+                  },
+                ],
+          ]}
           type="button"
           onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           onClick={(event: MouseEvent) => {
@@ -380,19 +340,18 @@ function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
           )}
         </button>
       </openclaw-tooltip>
-      <LitContent value={props.microphonePicker} />
+      <ComposerContent>{props.microphonePicker}</ComposerContent>
     </span>
   );
 }
 
 function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | undefined) {
   // Preserve input focus before native tooltip listeners run at the target.
-  return (button: HTMLButtonElement) =>
-    button.addEventListener("pointerdown", (event) => read()?.(event), true);
+  return nativeListener("pointerdown", (event) => read()?.(event), true);
 }
 
-function ComposerDictationSendAction(props: {
-  readDictation: () => ComposerDictationController;
+export function ComposerDictationSendAction(props: {
+  readDictation: () => ComposerDictationOwner;
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
 }) {
@@ -407,62 +366,27 @@ function ComposerDictationSendAction(props: {
     send(event);
   };
   return (
-    <>
-      {props.readDictation().active ? (
-        <>
-          {props.readDictation().connecting ? null : (
-            <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-              {props.readDictation().finalizing
-                ? t("chat.composer.dictationFinalizing")
-                : t("chat.composer.dictationListening")}
-            </span>
-          )}
-          <openclaw-tooltip prop:content={t("chat.runControls.send")}>
-            <button
-              class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
-              type="button"
-              ref={primaryPointerDownRef(() => props.onPointerDown)}
-              onClick={(event: MouseEvent) => void finishAndSend(event)}
-              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-              aria-label={t("chat.runControls.send")}
-            >
-              <Icon name="arrowUp" />
-            </button>
-          </openclaw-tooltip>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-export function renderComposerDictationStatusSolid(dictation?: ComposerDictationController) {
-  if (!dictation?.active) {
-    return null;
-  }
-  if (dictation.connecting) {
-    return (
-      <LitContent
-        value={renderChatVoiceStatus({
-          status: "connecting",
-          detail: t("chat.composer.microphoneAccessPending"),
-        })}
-      />
-    );
-  }
-  return (
-    <div class="agent-chat__composer-status-stack">
-      <div
-        class={`agent-chat__dictation-status${dictation.finalizing ? " agent-chat__dictation-status--finalizing" : ""}`}
-      >
-        <span
-          class={`agent-chat__dictation-phase${!dictation.finalizing ? " agent-chat__dictation-phase--listening" : ""}`}
-        >
-          {dictation.finalizing
+    <Show when={props.readDictation().active}>
+      {props.readDictation().connecting ? null : (
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {props.readDictation().finalizing
             ? t("chat.composer.dictationFinalizing")
             : t("chat.composer.dictationListening")}
         </span>
-      </div>
-    </div>
+      )}
+      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
+        <button
+          class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+          type="button"
+          ref={primaryPointerDownRef(() => props.onPointerDown)}
+          onClick={(event: MouseEvent) => void finishAndSend(event)}
+          aria-disabled={props.readDictation().finalizing ? "true" : "false"}
+          aria-label={t("chat.runControls.send")}
+        >
+          <Icon name="arrowUp" />
+        </button>
+      </openclaw-tooltip>
+    </Show>
   );
 }
 
@@ -489,30 +413,25 @@ export function renderChatAbortActionSolid(
 }
 
 export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
-  const hasComposedContent = createMemo(() => Boolean(props.draft.trim() || props.hasAttachments));
-  const labels = createMemo(() =>
+  const MicrophonePicker = renderMicrophonePickerSolid;
+  const microphonePicker = (
+    <Show when={props.microphonePicker}>{(picker) => <MicrophonePicker {...picker()} />}</Show>
+  );
+  const hasComposedContent = () => Boolean(props.draft.trim() || props.hasAttachments);
+  const labels = () =>
     props.suggestionComposer
       ? (["chat.sessionSuggestions.suggest", "chat.sessionSuggestions.suggestMessage"] as const)
       : !props.canAbort || props.followUpMode === undefined || props.followUpMode === "interrupt"
         ? (["chat.runControls.send", "chat.runControls.sendMessage"] as const)
         : props.followUpMode === "steer"
           ? (["chat.queue.steer", "chat.followUpModeSteer"] as const)
-          : (["chat.runControls.queue", "chat.runControls.queueMessage"] as const),
-  );
+          : (["chat.runControls.queue", "chat.runControls.queueMessage"] as const);
   const label = () => props.submissionLabel ?? t(labels()[0]);
   const description = () => props.submissionLabel ?? t(labels()[1]);
   const alternateLabel = () =>
     t(props.alternateFollowUpMode === "queue" ? "chat.runControls.queue" : "chat.queue.steer");
   const alternateAvailable = () =>
     props.alternateFollowUpMode && props.canSend && hasComposedContent();
-  const tooltip = () =>
-    alternateAvailable()
-      ? `${label()} ⏎ · ${alternateLabel()} ${t("chat.sendShortcutModifierEnter")}`
-      : label();
-  const tooltipTemplate = () =>
-    alternateAvailable()
-      ? renderComposerSendTooltip(label(), alternateLabel(), t("chat.sendShortcutModifierEnter"))
-      : undefined;
   const voiceErrored = () => props.voiceStatus === "error";
   const cameraLabel = () =>
     t(props.voiceVideoEnabled ? "chat.composer.turnCameraOff" : "chat.composer.turnCameraOn");
@@ -526,22 +445,29 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       : hasComposedContent()
         ? null
         : t("chat.composer.emptyHint"));
-  const hasSendableContent = createMemo(
-    () => hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason(),
-  );
+  const hasSendableContent = () =>
+    hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
+  const showShortcutTooltip = () =>
+    !props.preparingAttachments && sendStatus() == null && alternateAvailable();
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
         props.preparingAttachments
           ? t("chat.composer.preparingAttachments")
-          : (sendStatus() ?? tooltip())
-      }
-      prop:contentTemplate={
-        !props.preparingAttachments && sendStatus() == null ? tooltipTemplate() : undefined
+          : showShortcutTooltip()
+            ? ""
+            : (sendStatus() ?? label())
       }
     >
+      <Show when={showShortcutTooltip()}>
+        <span slot="content">
+          {label()} <Kbd keys="⏎" inline />
+          {" · "}
+          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+        </span>
+      </Show>
       <button
-        class={`chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}`}
+        class={["chat-send-btn chat-send-btn--send", { "chat-send-btn--sending": props.sending }]}
         ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
         onClick={(event) => props.onSend(event)}
         disabled={!hasSendableContent()}
@@ -555,7 +481,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   );
   const TalkAction = (action: { camera?: boolean }) => (
     <openclaw-tooltip
-      class={action.camera ? undefined : "chat-mobile-talk-action"}
+      class={{ "chat-mobile-talk-action": !action.camera }}
       prop:content={
         action.camera
           ? cameraLabel()
@@ -563,7 +489,10 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       }
     >
       <button
-        class={`chat-send-btn chat-send-btn--${action.camera ? "voice" : "talk-mode"}`}
+        class={[
+          "chat-send-btn",
+          action.camera ? "chat-send-btn--voice" : "chat-send-btn--talk-mode",
+        ]}
         type={action.camera ? undefined : "button"}
         ref={primaryPointerDownRef(() =>
           action.camera ? undefined : props.onPrimaryActionPointerDown,
@@ -627,16 +556,17 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           <span class="chat-talk-control chat-talk-control--active">
             <openclaw-tooltip prop:content={t("chat.composer.stopVoiceInput")}>
               <button
-                class={`chat-send-btn chat-send-btn--voice-live${voiceErrored() ? " chat-send-btn--voice-error" : ""}`}
+                class={[
+                  "chat-send-btn chat-send-btn--voice-live",
+                  { "chat-send-btn--voice-error": voiceErrored() },
+                ]}
                 onClick={() => props.onToggleVoice?.()}
                 aria-label={t("chat.composer.stopVoiceInput")}
               >
                 {voiceErrored() ? null : (
-                  <LitContent
-                    value={renderMicrophoneActivity({
-                      status: props.voiceStatus,
-                      inputLevel: props.voiceInputLevel,
-                    })}
+                  <MicrophoneActivity
+                    status={props.voiceStatus}
+                    inputLevel={props.voiceInputLevel}
                   />
                 )}
                 <span class="chat-send-btn__voice-stop-glyph">
@@ -644,7 +574,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 </span>
               </button>
             </openclaw-tooltip>
-            <LitContent value={props.microphonePicker} />
+            <ComposerContent>{microphonePicker}</ComposerContent>
           </span>
           {voiceErrored() || props.voiceStatus === "connecting" ? null : (
             <span
@@ -666,6 +596,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           {props.readDictation || props.onToggleVoice ? (
             <VoiceButton
               {...props}
+              microphonePicker={microphonePicker}
               disabled={!props.readDictation && (props.sending || props.isBusy)}
             />
           ) : null}
@@ -700,36 +631,4 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       )}
     </>
   );
-}
-
-export function renderMicrophonePicker(props: MicrophonePickerProps) {
-  return solidTemplate(renderMicrophonePickerSolid, props);
-}
-
-export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
-  return solidTemplate(renderComposerVoiceButtonSolid, props);
-}
-
-export function renderComposerDictationSendAction(
-  dictation: ComposerDictationController,
-  onSend: (submissionAction?: Event) => void,
-  onPointerDown?: (event: PointerEvent) => void,
-) {
-  return solidTemplate(ComposerDictationSendAction, {
-    readDictation: () => dictation,
-    onSend,
-    onPointerDown,
-  });
-}
-
-function RenderComposerDictationStatusAdapter(props: {
-  readDictation?: () => ComposerDictationController;
-}) {
-  return <>{renderComposerDictationStatusSolid(props.readDictation?.())}</>;
-}
-
-export function renderComposerDictationStatus(dictation?: ComposerDictationController) {
-  return solidTemplate(RenderComposerDictationStatusAdapter, {
-    readDictation: dictation ? () => dictation : undefined,
-  });
 }

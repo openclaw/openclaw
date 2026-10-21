@@ -1,4 +1,3 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   createScopedDmSecurityResolver,
   createTopLevelChannelConfigAdapter,
@@ -8,11 +7,15 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  buildChannelConfigSchema,
   DEFAULT_ACCOUNT_ID,
   formatPairingApproveHint,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-plugin-common";
+import {
+  buildChannelOutboundSessionRoute,
+  stripChannelTargetPrefix,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/core";
 import {
   buildPassiveChannelStatusSummary,
   buildTrafficStatusSummary,
@@ -23,8 +26,8 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { nostrSetupPlugin } from "./channel.setup.js";
 import type { NostrProfile } from "./config-schema.js";
-import { NostrConfigSchema } from "./config-schema.js";
 import {
   getActiveNostrBuses,
   nostrOutboundAdapter,
@@ -33,7 +36,6 @@ import {
 } from "./gateway.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
-import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
@@ -65,6 +67,30 @@ function inferNostrTargetChatType(target: string): "direct" | undefined {
   } catch {
     return undefined;
   }
+}
+
+function resolveNostrOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+  const rawTarget = stripChannelTargetPrefix(params.target, "nostr");
+  let target: string;
+  try {
+    target = normalizePubkey(rawTarget);
+  } catch {
+    return null;
+  }
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "nostr",
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: {
+      kind: "direct",
+      id: target,
+    },
+    chatType: "direct",
+    from: `nostr:${target}`,
+    to: `nostr:${target}`,
+  });
 }
 
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
@@ -125,35 +151,12 @@ const nostrPluginOutboundAdapter: ChannelOutboundAdapter = {
 
 export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChannelPlugin({
   base: {
-    id: "nostr",
-    meta: {
-      id: "nostr",
-      label: "Nostr",
-      selectionLabel: "Nostr",
-      docsPath: "/channels/nostr",
-      docsLabel: "nostr",
-      blurb: "Decentralized DMs via Nostr relays (NIP-04)",
-      order: 100,
-    },
-    capabilities: {
-      chatTypes: ["direct"],
-      media: false,
-    },
-    reload: { configPrefixes: ["channels.nostr"] },
-    configSchema: buildChannelConfigSchema(NostrConfigSchema),
+    ...nostrSetupPlugin,
     setupContract: nostrSetupContract,
     setupWizard: nostrSetupWizard,
     config: {
+      ...nostrSetupPlugin.config,
       ...nostrConfigAdapter,
-      isConfigured: (account) => account.configured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: account.configured,
-          extra: {
-            publicKey: account.publicKey,
-          },
-        }),
     },
     messaging: {
       targetPrefixes: ["nostr"],

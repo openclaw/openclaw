@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../../../../src/auto-reply/templating.js";
-import type { OpenClawConfig } from "../../../../src/config/types.js";
+import type {
+  MediaUnderstandingAttachmentsConfig,
+  MediaUnderstandingModelConfig,
+} from "../../../../src/config/types.tools.js";
 import { applyMediaUnderstanding } from "../../../../src/media-understanding/apply.js";
 import { MIN_AUDIO_FILE_BYTES } from "../../../../src/media-understanding/defaults.constants.js";
 import type { MediaUnderstandingProvider } from "../../../../src/media-understanding/types.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { audioConfig } from "./media-understanding.test-support.js";
 
 vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: () => [],
@@ -14,120 +18,100 @@ vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function writeAudioFixture(dir: string, name: string, fill: number): Promise<string> {
+async function writeAudioFixture(dir: string, name: string): Promise<string> {
   const filePath = path.join(dir, name);
-  await fs.writeFile(filePath, Buffer.alloc(MIN_AUDIO_FILE_BYTES + 1, fill));
+  await fs.writeFile(filePath, Buffer.alloc(MIN_AUDIO_FILE_BYTES + 1, 0x11));
   return filePath;
 }
 
 function createSelectionConfig(
-  attachments: NonNullable<
-    NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]
-  >["attachments"],
-): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        "qa-stt": {
-          apiKey: "qa-test-key", // pragma: allowlist secret
-          baseUrl: "https://qa.invalid",
-          models: [],
-        },
-      },
+  attachments: MediaUnderstandingAttachmentsConfig | undefined,
+  fallbackModels: MediaUnderstandingModelConfig[] = [],
+) {
+  return audioConfig(
+    "qa-stt",
+    "fixture-stt",
+    {
+      apiKey: "qa-test-key", // pragma: allowlist secret
+      baseUrl: "https://qa.invalid",
+      models: [],
     },
-    tools: {
-      media: {
-        models: [{ provider: "qa-stt", model: "fixture-stt", capabilities: ["audio"] }],
-        audio: {
-          enabled: true,
-          attachments,
-        },
-      },
-    },
-  };
+    { attachments },
+    fallbackModels,
+  );
 }
 
-function createAudioProvider(seenFileNames: string[]): MediaUnderstandingProvider {
+function audioAttempt(type: "cli" | "provider", provider: string, model: string) {
+  return { type, provider, model, outcome: "success" };
+}
+
+function createAudioProvider(seenFileNames: string[], fail = false): MediaUnderstandingProvider {
   return {
     id: "qa-stt",
     capabilities: ["audio"],
     resolveAuth: () => ({ kind: "none" as const, source: "qa-product-fixture" }),
     transcribeAudio: async (request: { fileName: string }) => {
       seenFileNames.push(request.fileName);
+      if (fail) {
+        throw new Error("intentional provider failure");
+      }
       return { text: `transcript:${request.fileName}`, model: "fixture-stt" };
     },
   };
 }
 
-async function writePortableTranscriber(dir: string): Promise<{
-  command: string;
-  markerPath: string;
-}> {
+async function writePortableTranscriber(dir: string) {
   const markerPath = path.join(dir, "cli-ran.txt");
   const scriptPath = path.join(dir, "qa-transcriber.cjs");
   await fs.writeFile(
     scriptPath,
-    [
-      "#!/usr/bin/env node",
-      'const fs = require("node:fs");',
-      'const path = require("node:path");',
-      "const [markerPath, mediaPath] = process.argv.slice(2);",
-      "if (!markerPath || !mediaPath) process.exit(2);",
-      "fs.writeFileSync(markerPath, mediaPath);",
-      "process.stdout.write(`cli transcript:${path.basename(mediaPath)}\\n`);",
-      "",
-    ].join("\n"),
-    { mode: 0o755 },
+    `const fs = require("node:fs");
+const path = require("node:path");
+const [markerPath, mediaPath] = process.argv.slice(2);
+if (!markerPath || !mediaPath) process.exit(2);
+fs.writeFileSync(markerPath, mediaPath);
+process.stdout.write(\`cli transcript:\${path.basename(mediaPath)}\\n\`);
+`,
   );
-  if (process.platform !== "win32") {
-    return { command: scriptPath, markerPath };
-  }
-
-  const command = path.join(dir, "qa-transcriber.cmd");
-  await fs.writeFile(command, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
-  return { command, markerPath };
+  return { command: process.execPath, args: [scriptPath, markerPath, "{{MediaPath}}"], markerPath };
 }
 
 describe("QA media audio selection product proof", () => {
   it("applies mixed-attachment preference, mode, caps, and transcript ordering", async () => {
     const dir = tempDirs.make("openclaw-qa-media-audio-selection-");
-    const firstAudio = await writeAudioFixture(dir, "first.ogg", 0x11);
-    const secondAudio = await writeAudioFixture(dir, "second.ogg", 0x22);
-    const thirdAudio = await writeAudioFixture(dir, "third.ogg", 0x33);
-    const preflightAudio = await writeAudioFixture(dir, "preflight.ogg", 0x44);
+    const audio = async (name: string) => ({
+      path: await writeAudioFixture(dir, name),
+      contentType: "audio/ogg",
+    });
     const imagePath = path.join(dir, "ignored.png");
     await fs.writeFile(imagePath, Buffer.from("not-an-audio-attachment"));
     const media = [
-      { path: firstAudio, contentType: "audio/ogg" },
+      await audio("first.ogg"),
       { path: imagePath, contentType: "image/png" },
-      { path: secondAudio, contentType: "audio/ogg" },
-      { path: thirdAudio, contentType: "audio/ogg" },
-      { path: preflightAudio, contentType: "audio/ogg", transcribed: true },
+      await audio("second.ogg"),
+      await audio("third.ogg"),
+      { ...(await audio("preflight.ogg")), transcribed: true },
     ];
 
-    const firstModeCalls: string[] = [];
-    const firstModeCtx: MsgContext = { Body: "", media };
-    await applyMediaUnderstanding({
-      ctx: firstModeCtx,
-      cfg: createSelectionConfig({ mode: "first", prefer: "last", maxAttachments: 3 }),
-      providers: { "qa-stt": createAudioProvider(firstModeCalls) },
-      processingMode: "audio-only",
-      workspaceDir: dir,
-    });
+    const select = async (mode: "first" | "all", maxAttachments: number) => {
+      const calls: string[] = [];
+      const ctx: MsgContext = { Body: "", media };
+      await applyMediaUnderstanding({
+        ctx,
+        cfg: createSelectionConfig({ mode, prefer: "last", maxAttachments }),
+        providers: { "qa-stt": createAudioProvider(calls) },
+        processingMode: "audio-only",
+        workspaceDir: dir,
+      });
+      return { calls, ctx };
+    };
+    const { calls: firstModeCalls, ctx: firstModeCtx } = await select("first", 3);
 
     expect(firstModeCalls).toEqual(["third.ogg"]);
     expect(firstModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3]);
     expect(firstModeCtx.Transcript).toBe("transcript:third.ogg");
 
-    const allModeCalls: string[] = [];
-    const allModeCtx: MsgContext = { Body: "", media };
-    await applyMediaUnderstanding({
-      ctx: allModeCtx,
-      cfg: createSelectionConfig({ mode: "all", prefer: "last", maxAttachments: 2 }),
-      providers: { "qa-stt": createAudioProvider(allModeCalls) },
-      processingMode: "audio-only",
-      workspaceDir: dir,
-    });
+    const { calls: allModeCalls, ctx: allModeCtx } = await select("all", 2);
 
     expect(allModeCalls).toEqual(["third.ogg", "second.ogg"]);
     expect(allModeCtx.MediaUnderstanding?.map((output) => output.attachmentIndex)).toEqual([3, 2]);
@@ -156,70 +140,45 @@ describe("QA media audio selection product proof", () => {
 
   it("falls through from a failed provider to an actual temporary CLI executable", async () => {
     const dir = tempDirs.make("openclaw-qa-media-audio-fallback-");
-    const audioPath = await writeAudioFixture(dir, "fallback.wav", 0x55);
+    const audioPath = await writeAudioFixture(dir, "fallback.wav");
     const executable = await writePortableTranscriber(dir);
-    let providerAttempts = 0;
+    const providerAttempts: string[] = [];
     const ctx: MsgContext = {
       Body: "",
       media: [{ path: audioPath, contentType: "audio/wav" }],
     };
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "qa-stt": {
-            apiKey: "qa-test-key", // pragma: allowlist secret
-            baseUrl: "https://qa.invalid",
-            models: [],
-          },
-        },
+    const cfg = createSelectionConfig(undefined, [
+      {
+        type: "cli",
+        command: executable.command,
+        args: executable.args,
+        capabilities: ["audio"],
       },
-      tools: {
-        media: {
-          models: [
-            { provider: "qa-stt", model: "fixture-stt", capabilities: ["audio"] },
-            {
-              type: "cli",
-              command: executable.command,
-              args: [executable.markerPath, "{{MediaPath}}"],
-              capabilities: ["audio"],
-            },
-          ],
-          audio: { enabled: true },
-        },
-      },
-    };
+    ]);
 
     await applyMediaUnderstanding({
       ctx,
       cfg,
-      providers: {
-        "qa-stt": {
-          id: "qa-stt",
-          capabilities: ["audio"],
-          resolveAuth: () => ({ kind: "none", source: "qa-product-fixture" }),
-          transcribeAudio: async () => {
-            providerAttempts += 1;
-            throw new Error("intentional provider failure");
-          },
-        },
-      },
+      providers: { "qa-stt": createAudioProvider(providerAttempts, true) },
       processingMode: "audio-only",
       workspaceDir: dir,
     });
 
-    expect(providerAttempts).toBe(1);
+    expect(providerAttempts).toEqual(["fallback.wav"]);
     expect(await fs.readFile(executable.markerPath, "utf8")).toBe(await fs.realpath(audioPath));
-    expect(ctx.Transcript).toBe("cli transcript:fallback.wav");
     const cliProvider = path.parse(executable.command).name;
-    expect(ctx.MediaUnderstanding).toEqual([
-      expect.objectContaining({
-        attachmentIndex: 0,
-        kind: "audio.transcription",
-        provider: cliProvider,
-        model: executable.command,
-        text: "cli transcript:fallback.wav",
-      }),
-    ]);
+    expect(ctx).toMatchObject({
+      Transcript: "cli transcript:fallback.wav",
+      MediaUnderstanding: [
+        {
+          attachmentIndex: 0,
+          kind: "audio.transcription",
+          provider: cliProvider,
+          model: executable.command,
+          text: "cli transcript:fallback.wav",
+        },
+      ],
+    });
     expect(
       ctx.MediaUnderstandingDecisions?.find((decision) => decision.capability === "audio"),
     ).toMatchObject({
@@ -229,25 +188,13 @@ describe("QA media audio selection product proof", () => {
           attachmentIndex: 0,
           attempts: [
             {
-              type: "provider",
-              provider: "qa-stt",
-              model: "fixture-stt",
+              ...audioAttempt("provider", "qa-stt", "fixture-stt"),
               outcome: "failed",
               reason: expect.stringContaining("intentional provider failure"),
             },
-            {
-              type: "cli",
-              provider: cliProvider,
-              model: executable.command,
-              outcome: "success",
-            },
+            audioAttempt("cli", cliProvider, executable.command),
           ],
-          chosen: {
-            type: "cli",
-            provider: cliProvider,
-            model: executable.command,
-            outcome: "success",
-          },
+          chosen: audioAttempt("cli", cliProvider, executable.command),
         },
       ],
     });

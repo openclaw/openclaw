@@ -14,6 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   createCallerModeSnapshot,
@@ -802,13 +803,15 @@ module.exports = { stateMigrations: [{
       },
     }) as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expectBlockedTailInPlanOrder({
       plan,
@@ -826,7 +829,7 @@ module.exports = { stateMigrations: [{
     expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
     expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
     expect(result.stepReceipts[1]).toMatchObject({
-      id: "plugin-install-index",
+      id: "retired-core-state",
       outcome: "skipped",
     });
     expect(result.stepReceipts[2]).toMatchObject({

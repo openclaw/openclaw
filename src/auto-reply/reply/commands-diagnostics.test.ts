@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type {
   LegacyInteractiveReply,
   MessagePresentationAction,
@@ -504,7 +504,7 @@ describe("diagnostics command", () => {
         sessionStore: { [sessionKey]: current },
         storePath,
       });
-      const reads = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      const reads = vi.spyOn(sessionReads, "readSessionEntrySummariesInWorker");
       try {
         await handleDiagnosticsCommand(
           { ...params, command: { ...params.command, senderIsOwner: false } },

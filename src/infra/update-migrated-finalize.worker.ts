@@ -62,6 +62,7 @@ import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
+import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
@@ -217,7 +218,6 @@ async function finalizeMigratedUpdate(): Promise<void> {
       ? { restartRunId: terminal.runId }
       : { terminalRunId: terminal.runId }),
     executorDelegation: "pid-start-v1",
-    automaticTriage: finalized.automaticTriage,
   };
   // Private response publication follows executor settlement and terminal history.
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
@@ -340,6 +340,7 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         },
         {
           repair: input.repair,
+          fullIntegrityCheck: input.fullIntegrityCheck,
           nonInteractive: true,
           ...(input.yes !== undefined ? { yes: input.yes } : {}),
           ...(input.workspaceSuggestions !== undefined
@@ -356,6 +357,9 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
             ref: input.originalRecoveryCapture,
           },
           ...(input.databaseGenerations ? { databaseGenerations: input.databaseGenerations } : {}),
+          ...(input.databasePluginOwners
+            ? { databasePluginOwners: input.databasePluginOwners }
+            : {}),
           ...(input.postCoreSchemaRepair === true
             ? { postCoreSchemaRepair: { runId: input.runId, assertCurrent } }
             : {}),
@@ -493,7 +497,6 @@ async function finalizeInput(
   let result;
   let exitCode = 0;
   let candidateStartAttempted = false;
-  let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
     // This worker already loaded the candidate; the local flag conveys no authority.
     result = await finishUpdate(
@@ -507,6 +510,7 @@ async function finalizeInput(
       },
       {
         candidateRuntime: true,
+        adoptedFinalization: true,
         onGatewayStartAttempted: () => {
           candidateStartAttempted = true;
         },
@@ -518,7 +522,6 @@ async function finalizeInput(
     }
     result = error.result;
     exitCode = error.exitCode;
-    automaticTriage = error.automaticTriage;
   } finally {
     await windowsRecovery?.complete(
       result?.status === "ok" ||
@@ -526,7 +529,7 @@ async function finalizeInput(
     );
   }
   executorFence.assertCurrent();
-  return { run, result, exitCode, automaticTriage, candidateStartAttempted };
+  return { run, result, exitCode, candidateStartAttempted };
 }
 
 void (async () => {
@@ -535,6 +538,7 @@ void (async () => {
     finalizeMigratedUpdate,
     finalizeActiveDebugProxyCaptures,
     closeOpenClawStateDatabaseAsync,
+    closeDefaultRetainedNativeWorkerSource,
   ]) {
     try {
       await finalize();

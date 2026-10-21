@@ -3,7 +3,6 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import {
   CHAT_SNAPSHOT_DB_NAME,
   SIDEBAR_SNAPSHOT_STORE_NAME,
@@ -71,7 +70,7 @@ async function observeShape(sidebar: Locator) {
         ].map((row) => row.textContent?.trim() ?? ""),
         avatarText: [
           ...element.querySelectorAll(
-            "[data-agent-group] .sidebar-agent-roster__row .sidebar-agent-roster__avatar",
+            "[data-agent-group] .sidebar-agent-roster__header .sidebar-agent-roster__avatar",
           ),
         ].map((row) => row.querySelector("[data-avatar]")?.getAttribute("data-avatar") ?? ""),
         brand: element.querySelector(".sidebar-workspace-header__main")?.textContent?.trim() ?? "",
@@ -158,16 +157,11 @@ async function waitForSavedSidebar(page: Page, view: "sessions" | "pages") {
       .toBe(true);
   } catch (error) {
     const diagnosis = await page.evaluate(() => {
-      const host = document.querySelector<
-        AppSidebarSessionNavigationElement & {
-          captureSidebarSnapshot(): unknown;
-          sidebarSnapshotSettled(): boolean;
-        }
-      >("openclaw-app-sidebar");
+      const sidebar = document.querySelector<HTMLElement>("aside.sidebar");
       return {
-        settled: host?.sidebarSnapshotSettled(),
-        model: host?.captureSidebarSnapshot(),
-        state: document.querySelector<HTMLElement>("aside.sidebar")?.dataset.snapshotState,
+        state: sidebar?.dataset.snapshotState,
+        saved: sidebar?.dataset.snapshotSaved,
+        text: sidebar?.textContent,
       };
     });
     await writeFile(
@@ -355,7 +349,13 @@ suite.define(() => {
               .locator(`.sidebar-pages [data-session-key="${sessions[9]!.key}"]`)
               .waitFor();
           } else {
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await expect
+              .poll(() =>
+                sidebar
+                  .locator("[data-agent-group]")
+                  .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-agent-group"))),
+              )
+              .toEqual(["main", "forge", "scout"]);
           }
           if (!baselineMode) {
             await waitForSavedSidebar(page, view);
@@ -386,9 +386,7 @@ suite.define(() => {
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
             view === "pages" ? 12 : 1,
           );
-          expect(settled.sessions).toEqual(
-            view === "pages" ? [] : sessions.slice(0, 10).map((row) => row.key),
-          );
+          expect(settled.sessions).toEqual([]);
           expect(settled.rail).toEqual(railPins);
           expect(settled.view).toBe(view);
           expect(settled.agents).toEqual(view === "pages" ? [] : ["main", "forge", "scout"]);
@@ -408,7 +406,7 @@ suite.define(() => {
             await capture(page, sidebar, "sidebar-old-before-hello.png");
             await gateway.resolveDeferred("connect");
             await sidebar.locator('[data-sidebar-entry="plugin:reports/overview"]').waitFor();
-            await sidebar.locator(`[data-session-key="${sessions[9]!.key}"]`).waitFor();
+            await sidebar.locator('[data-agent-group="scout"]').waitFor();
             await expect
               .poll(() =>
                 sidebar.locator("[data-agent-group] .sidebar-agent-roster__copy").allTextContents(),
@@ -500,28 +498,32 @@ suite.define(() => {
             await page.reload();
             await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
             await gateway.waitForRequest("connect");
-            await gateway.deferNext("sessions.list", { hasBoard: true });
+            // A queued refresh must not recover before the failed-catalog snapshot check.
+            await gateway.setMethodResponse("sessions.list", {
+              cases: [
+                {
+                  match: { hasBoard: true },
+                  response: {
+                    __mockError: {
+                      code: "UNAVAILABLE",
+                      message: "Synthetic dashboard catalog unavailable",
+                    },
+                  },
+                },
+                {
+                  match: {},
+                  response: { ...sessionsListResponse(rosterSessions), ownerSessionCounts },
+                },
+              ],
+            });
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("sessions.list", { match: { hasBoard: true } });
-            await gateway.rejectDeferred("sessions.list", {
-              code: "UNAVAILABLE",
-              message: "Synthetic dashboard catalog unavailable",
-            });
             await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
             await sidebar
               .getByRole("alert")
               .filter({ hasText: "Synthetic dashboard catalog unavailable" })
               .waitFor();
-            expect(
-              await page.evaluate(() => {
-                const host = document.querySelector<
-                  AppSidebarSessionNavigationElement & {
-                    captureSidebarSnapshot(): unknown;
-                  }
-                >("openclaw-app-sidebar");
-                return host?.captureSidebarSnapshot();
-              }),
-            ).toBeNull();
+            await expect.poll(() => sidebar.getAttribute("data-snapshot-saved")).toBe("false");
             return;
           }
           await page.reload();
@@ -536,7 +538,7 @@ suite.define(() => {
           });
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
           await sidebar
-            .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
             .waitFor();
           const pluginPin = sidebar.locator(
             '.sidebar-rail [data-sidebar-entry="plugin:reports/overview"]',
@@ -548,16 +550,7 @@ suite.define(() => {
             diagnostics: [],
             plugins: [],
           });
-          await page.evaluate(async () => {
-            const context =
-              document.querySelector<AppSidebarSessionNavigationElement>(
-                "openclaw-app-sidebar",
-              )?.sessionDataContext;
-            if (!context) {
-              throw new Error("Expected sidebar application context");
-            }
-            await context.plugins.refresh();
-          });
+          await gateway.emitGatewayEvent("plugins.controlUi.changed", { revision: "empty" });
           await expect.poll(() => pluginPin.count()).toBe(0);
           const savedPins = await page.evaluate((settingsKey) => {
             const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}");
@@ -578,7 +571,7 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
           await sidebar
-            .locator(".sidebar-session-toolbar button.sidebar-new-session:enabled")
+            .locator('.sidebar-rail a.sidebar-new-session[href]:not([aria-disabled="true"])')
             .waitFor();
           expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
         },

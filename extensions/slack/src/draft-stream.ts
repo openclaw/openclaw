@@ -2,9 +2,12 @@ import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { deleteSlackMessage, editSlackMessage } from "./actions.js";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveDefaultSlackAccountId } from "./accounts.js";
+import { deleteSlackMessage, editSlackMessage, editSlackRenderedMessage } from "./actions.js";
 import { trackSlackDraftMessage } from "./draft-message-boundaries.js";
 import { formatSlackError } from "./errors.js";
+import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
 import type { SlackSendIdentity } from "./send.js";
@@ -16,11 +19,19 @@ type SlackDraftStreamUpdate =
   | string
   | {
       text: string;
+      // Compact progress can mix rendered commentary with raw legacy Markdown.
+      escapeMentions?: true;
       blocks?: (Block | KnownBlock)[];
       // Partial preambles can edit a visible draft, but must never create a
       // fresh Slack notification after an intervening human reply rotates it.
       allowNewMessage?: boolean;
     };
+
+type SlackVisibleDraftUpdate = {
+  text: string;
+  blocks?: (Block | KnownBlock)[];
+  textIsSlackMrkdwn?: true;
+};
 
 type SlackDraftMessage = {
   channelId: string;
@@ -34,24 +45,16 @@ export function createSlackDraftStream(params: {
   cfg: OpenClawConfig;
   token: string;
   accountId?: string;
-  conversationChannelId?: string;
   eventScope?: SlackEventScope;
   identity?: SlackSendIdentity;
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
   metadata?: MessageMetadata;
-  log?: (message: string) => void;
   warn?: (message: string) => void;
-  send?: typeof sendMessageSlack;
-  edit?: typeof editSlackMessage;
-  remove?: typeof deleteSlackMessage;
 }) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
-  const send = params.send ?? sendMessageSlack;
-  const edit = params.edit ?? editSlackMessage;
-  const remove = params.remove ?? deleteSlackMessage;
 
   let streamMessage: SlackDraftMessage | undefined;
   let untrackConversationBoundary: (() => void) | undefined;
@@ -65,14 +68,19 @@ export function createSlackDraftStream(params: {
     streamMessage = undefined;
     lastSentKey = "";
   };
-  const editPreview = (message: SlackDraftMessage, text: string, blocks?: (Block | KnownBlock)[]) =>
-    edit(message.channelId, message.messageId, text, {
-      cfg: params.cfg,
-      token: params.token,
-      accountId: params.accountId,
-      ...(params.eventScope ? { client: params.eventScope.client } : {}),
-      ...(blocks ? { blocks } : {}),
-    });
+  const editPreview = (message: SlackDraftMessage, update: SlackVisibleDraftUpdate) =>
+    (update.textIsSlackMrkdwn ? editSlackRenderedMessage : editSlackMessage)(
+      message.channelId,
+      message.messageId,
+      update.text,
+      {
+        cfg: params.cfg,
+        token: params.token,
+        accountId: params.accountId,
+        ...(params.eventScope ? { client: params.eventScope.client } : {}),
+        ...(update.blocks ? { blocks: update.blocks } : {}),
+      },
+    );
 
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
     const update = normalizeUpdate(pending);
@@ -88,15 +96,30 @@ export function createSlackDraftStream(params: {
       params.warn?.(`slack stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return;
     }
-    const blocks = update.blocks;
-    const sentKey = `${trimmed}\n${blocks ? JSON.stringify(blocks) : ""}`;
+    // Preserve the no-ping policy through the final Markdown conversion while
+    // keeping URLs and ordinary partial drafts on their existing render paths.
+    const visibleUpdate: SlackVisibleDraftUpdate = {
+      text: update.escapeMentions
+        ? normalizeSlackOutboundText(trimmed, {
+            mentions: "escape-controls",
+            tableMode: resolveMarkdownTableMode({
+              cfg: params.cfg,
+              channel: "slack",
+              accountId: params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+            }),
+          })
+        : trimmed,
+      ...(update.blocks ? { blocks: update.blocks } : {}),
+      ...(update.escapeMentions ? { textIsSlackMrkdwn: true as const } : {}),
+    };
+    const sentKey = JSON.stringify(visibleUpdate);
     if (sentKey === lastSentKey) {
       return;
     }
     lastSentKey = sentKey;
     try {
       if (streamMessage) {
-        await editPreview(streamMessage, trimmed, blocks);
+        await editPreview(streamMessage, visibleUpdate);
         return;
       }
       const threadTs = params.resolveThreadTs?.();
@@ -111,15 +134,16 @@ export function createSlackDraftStream(params: {
         });
       await lifecycle.createMessage(
         async () => {
-          const sent = await send(params.target, trimmed, {
+          const sent = await sendMessageSlack(params.target, visibleUpdate.text, {
             cfg: params.cfg,
             token: params.token,
             accountId: params.accountId,
             threadTs,
             identity: params.identity,
             eventScope: params.eventScope,
+            ...(visibleUpdate.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
             ...(params.metadata ? { metadata: params.metadata } : {}),
-            ...(blocks ? { blocks } : {}),
+            ...(visibleUpdate.blocks ? { blocks: visibleUpdate.blocks } : {}),
           });
           return sent.channelId && sent.messageId
             ? { channelId: sent.channelId, messageId: sent.messageId }
@@ -159,7 +183,7 @@ export function createSlackDraftStream(params: {
       typeof value === "object" && value !== null,
     deleteMessage: async (message) => {
       if (!message.retained && !(preserveHumanReplies && message.detachedByHuman)) {
-        await remove(message.channelId, message.messageId, {
+        await deleteSlackMessage(message.channelId, message.messageId, {
           token: params.token,
           accountId: params.accountId,
           ...(params.eventScope ? { client: params.eventScope.client } : {}),
@@ -227,8 +251,6 @@ export function createSlackDraftStream(params: {
     stopTrackingConversationBoundary();
     return true;
   };
-
-  params.log?.(`slack stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,

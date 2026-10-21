@@ -31,7 +31,18 @@ it exists, OpenClaw manages the process. Without it, `baseUrl` identifies an
 existing endpoint. Switching choices rewrites ownership-specific state on the
 same provider. It never creates another provider namespace.
 
+Managed llama.cpp uses the plugin's non-secret authentication marker. An older
+`apiKey` SecretRef stays in your configuration but is inactive for this managed
+transport. Explicit headers and request credentials still resolve normally.
+Other managed providers retain their own authentication rules; `localService`
+alone does not make an authored API key optional.
+
 ## Managed local server
+
+The managed loopback server does not need an API key. Fresh setup leaves `apiKey`
+unset; the provider supplies its non-secret authentication marker at runtime.
+Existing configured credentials are preserved for Doctor and explicit secret
+migration, and external servers retain their own authentication requirements.
 
 Choose **Managed local server** when OpenClaw should install, start, and stop
 the server. Setup reads the **Gateway host's** hardware and recommends a model
@@ -141,6 +152,13 @@ four positions for tokenizer overhead and the server's context boundary. These d
 GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
 embedding output buffer to one input; the context bound avoids reserving a custom
 model's full training context for short memory chunks.
+
+`memory.search.outputDimensionality` truncates local embedding vectors before
+L2 normalization, preserving the requested size in the index identity. Use a
+GGUF model that supports dimensionality reduction. Without this setting, vectors
+retain their native size; requesting a larger size than the model returns fails.
+If an existing index contains native-size vectors despite a smaller configured
+size, rebuild it with `openclaw memory index --force --agent <id>`.
 
 Existing context, batch, and slot settings in the embedding section, `[*]`, or
 the managed service's arguments or environment remain authoritative. OpenClaw adds
@@ -461,6 +479,31 @@ for older llama-server builds.
 
 Local memory embeddings require managed mode:
 
+For automated embedding-only setup, configure local memory and explicitly consent
+to downloading the embedding model and verified llama.cpp runtime:
+
+This unattended option is not available in v2026.10.5. If your installation
+rejects `--llama-cpp-embedding-only`, use the [interactive embedding-only
+setup](/plugins/llama-cpp#set-up-only-local-embeddings) instead.
+
+```bash
+openclaw config set memory.search.provider local
+openclaw onboard --non-interactive --accept-risk \
+  --auth-choice llama-cpp --llama-cpp-embedding-only
+openclaw memory index --force
+openclaw memory status --deep
+```
+
+`--llama-cpp-embedding-only` installs only the embedding model (about 0.3 GB by
+default) and server runtime. It uses the same setup path as interactive
+embedding-only setup and preserves your chat model. It honors an enabled agent's
+configured embedding model; agents using local memory must agree on that model.
+An existing external server or managed chat route cannot be replaced by this
+embedding-only path. Without the consent flag, non-interactive managed setup fails
+before downloading anything.
+
+To choose the embedding model explicitly:
+
 ```json5
 {
   memory: {
@@ -497,6 +540,10 @@ model.
   not selected as the default. Retry after reviewing its tool support or choose
   another model.
 - Platforms without a verified managed build should use an existing server.
+- Managed embedding server keeps exiting or is OOM-killed: serve embeddings
+  from an external [llmman](/providers/llmman#advanced-configuration) daemon
+  instead. It relaunches a dead backend on the next request, and the Gateway
+  manages no child process.
 
 OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 

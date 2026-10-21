@@ -20,6 +20,8 @@ import {
   readWorkspaceText,
   renameWorkspacePath,
 } from "./memory-workspace-files.js";
+import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
+import { pruneArchivedShortTermRecallEntries } from "./short-term-promotion-artifacts.js";
 
 export type { DreamingArtifactsAuditSummary, RepairDreamingArtifactsResult };
 
@@ -205,26 +207,36 @@ export async function repairDreamingArtifacts(params: {
   let archiveDir: string | undefined;
   let archivedDreamsDiary = false;
 
-  const archivePathIfPresent = async (targetPath: string): Promise<boolean> => {
-    try {
-      archiveDir ??= path.join(
-        workspaceDir,
-        REPAIR_ARCHIVE_RELATIVE_DIR,
-        (params.now ?? new Date()).toISOString().replace(/[:.]/g, "-"),
-      );
-      if (!(await ensureArchivablePath(workspaceDir, targetPath))) {
+  const archivePathIfPresent = (targetPath: string): Promise<boolean> =>
+    withMemoryWorkspaceLock(workspaceDir, async () => {
+      try {
+        archiveDir ??= path.join(
+          workspaceDir,
+          REPAIR_ARCHIVE_RELATIVE_DIR,
+          (params.now ?? new Date()).toISOString().replace(/[:.]/g, "-"),
+        );
+        if (!(await ensureArchivablePath(workspaceDir, targetPath))) {
+          return false;
+        }
+        await makeWorkspaceDirectory(workspaceDir, archiveDir);
+        const destination = path.join(archiveDir, `${path.basename(targetPath)}.${randomUUID()}`);
+        await renameWorkspacePath(workspaceDir, targetPath, destination);
+        archivedPaths.push(destination);
+      } catch (err) {
+        warnings.push(err instanceof Error ? err.message : String(err));
         return false;
       }
-      await makeWorkspaceDirectory(workspaceDir, archiveDir);
-      const destination = path.join(archiveDir, `${path.basename(targetPath)}.${randomUUID()}`);
-      await renameWorkspacePath(workspaceDir, targetPath, destination);
-      archivedPaths.push(destination);
+      try {
+        await pruneArchivedShortTermRecallEntries(workspaceDir, targetPath);
+      } catch (err) {
+        warnings.push(
+          `Archive completed but recall cleanup failed; run openclaw memory status --fix or wait for the next nightly recall repair: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
       return true;
-    } catch (err) {
-      warnings.push(err instanceof Error ? err.message : String(err));
-      return false;
-    }
-  };
+    });
 
   const archivedSessionCorpus = await archivePathIfPresent(
     path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR),

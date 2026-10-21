@@ -3,8 +3,12 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
+import {
+  replayChatDisplay,
+  type ChatDisplayFrame,
+} from "../../test/helpers/gateway/chat-display-replay.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -92,7 +96,7 @@ it(
   {
     timeout: 180_000,
   },
-  async () => {
+  async ({ signal }) => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -125,6 +129,8 @@ it(
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
+    const displayFrames: ChatDisplayFrame[] = [];
+    const terminalEvents = new Map<string, (event: ChatEvent) => void>();
     const publishedMessages = new Map<string, unknown[]>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
@@ -293,7 +299,13 @@ it(
         token: "xai-fallback-test",
         onEvent: (event) => {
           if (event.event === "chat") {
-            events.push(event.payload as ChatEvent);
+            const chatEvent = event.payload as ChatEvent;
+            events.push(chatEvent);
+            displayFrames.push({ event: "chat", payload: chatEvent });
+            terminalEvents.get(chatEvent.runId)?.(chatEvent);
+          }
+          if (event.event === "session.message") {
+            displayFrames.push({ event: "session.message", payload: event.payload });
           }
           if (
             event.event === "session.message" &&
@@ -333,8 +345,28 @@ it(
           deliver: false,
           idempotencyKey: `xai-${scenario}`,
         });
+        const terminalReceived = createDeferred();
+        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
+        const receiveTerminal = (event: ChatEvent) => {
+          if (
+            event.sessionKey === sessionKey &&
+            (expectsSuccess
+              ? event.state === "final" && event.stopReason === "stop"
+              : event.state === "error")
+          ) {
+            terminalReceived.resolve();
+          }
+        };
+        terminalEvents.set(started.runId, receiveTerminal);
+        // The expected terminal may arrive before chat.send acknowledges its run ID.
+        for (const event of events) {
+          if (event.runId === started.runId) {
+            receiveTerminal(event);
+          }
+        }
         const completed = await gateway.client.request<{
           status: string;
+          error?: string;
           terminalReply?: { text?: string };
         }>(
           "agent.wait",
@@ -345,18 +377,38 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
+        // Status-notice finals do not settle the transcript-gated successful reply.
+        await withinTest(terminalReceived.promise, signal);
+        terminalEvents.delete(started.runId);
         const history = await gateway.client.request<{
           messages: Array<{ role: string; content: unknown; stopReason?: string }>;
         }>("chat.history", { sessionKey, limit: 20 });
         const assistant = history.messages.findLast((message) => message.role === "assistant");
-        expect.soft(requests[0], scenario).toBe(primaryModel);
+        const runEvents = events.filter((event) => event.runId === started.runId);
+        expect
+          .soft(
+            requests[0],
+            requests[0] === primaryModel
+              ? scenario
+              : JSON.stringify({
+                  scenario,
+                  completedError: completed.error?.slice(0, 1000),
+                  chatErrors: runEvents
+                    .filter((event) => event.state === "error")
+                    .slice(-3)
+                    .map((event) => ({
+                      errorKind: event.errorKind,
+                      errorMessage: event.errorMessage?.slice(0, 1000),
+                    })),
+                }),
+          )
+          .toBe(primaryModel);
         expect
           .soft(
             requests.filter((requested) => requested === primaryModel),
             scenario,
           )
           .toHaveLength(rejection && rejection.reason !== "rate_limit" ? 1 : 2);
-        const runEvents = events.filter((event) => event.runId === started.runId);
         const terminal = runEvents
           .filter((event) => event.state === "final")
           .filter((event) => event.stopReason === "stop");
@@ -398,13 +450,21 @@ it(
           expect
             .soft(messageText(publishedMessages.get(sessionKey)?.at(-1)), scenario)
             .toBe(prefix);
-          const deltas = runEvents.filter((event) => event.state === "delta");
-          const liveMessage = deltas.reduce<unknown>(
-            (previous, event) => mergeChatStreamMessage(previous, event),
-            undefined,
-          );
-          // Saved assistant content belongs to canonical publication, not the unsaved live tail.
-          expect.soft(messageText(liveMessage), scenario).toBe("");
+          const display = replayChatDisplay(displayFrames, sessionKey, started.runId);
+          expect.soft(display.chatRunId, scenario).toBeNull();
+          expect.soft(display.chatStream, scenario).toBeNull();
+          expect.soft(display.chatStreamSegments, scenario).toEqual([]);
+          expect
+            .soft(
+              display.chatMessages
+                .filter(isRecord)
+                .filter((message) => message.role === "assistant")
+                .map(messageText),
+              scenario,
+            )
+            .toEqual(
+              history.messages.filter((message) => message.role === "assistant").map(messageText),
+            );
           if (scenario === "no-fallback") {
             expect.soft(requests, scenario).not.toContain(fallbackModel);
           } else {

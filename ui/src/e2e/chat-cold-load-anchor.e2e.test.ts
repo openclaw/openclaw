@@ -2,14 +2,17 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { installColdLoadTitleTrace } from "./cold-load-title.test-support.ts";
 
 type ColdLoadFrame = {
+  title?: string | null;
   top: number;
   max: number;
   duration: boolean;
@@ -17,8 +20,6 @@ type ColdLoadFrame = {
   progress: boolean;
   threadTop: number;
   threadHeight: number;
-  cardTop: number | null;
-  cardHeight: number | null;
 };
 declare global {
   interface Window {
@@ -48,7 +49,13 @@ suite.define(() => {
           cases: [
             {
               match: { sessionKey },
-              response: { messages: historyMessages, sessionId: "uncached" },
+              response: {
+                messages: historyMessages,
+                sessionId: "uncached",
+                hasMore: true,
+                nextOffset: 40,
+                totalMessages: 2040,
+              },
             },
             {
               match: { sessionKey: sourceKey },
@@ -59,7 +66,7 @@ suite.define(() => {
             },
           ],
         };
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           sessionKey: navigation === "direct" ? sessionKey : sourceKey,
           methodResponses: {
             "chat.history": responses,
@@ -101,8 +108,6 @@ suite.define(() => {
                 progress: false,
                 threadTop: 0,
                 threadHeight: thread.clientHeight,
-                cardTop: null,
-                cardHeight: null,
               });
             }
             if (window.coldLoadSamples!.length < 24) {
@@ -125,6 +130,7 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         }
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 24);
+        expect(await gateway.getRequests("chat.history", { offset: 40 })).toHaveLength(0);
         const frames = await page.evaluate(() => window.coldLoadSamples!);
         await writeFile(
           path.join(suite.artifactDir, "uncached-load-" + navigation + "-frames.json"),
@@ -139,7 +145,7 @@ suite.define(() => {
     },
   );
 
-  it("paints the cached tail, reply metadata, and progress before hello and reconciles in place", async () => {
+  it("paints the cached tail, title, reply metadata, and progress before hello and reconciles in place", async () => {
     await suite.withPage(
       {
         viewport: { width: 1200, height: 900 },
@@ -218,140 +224,216 @@ suite.define(() => {
           sessions: [session],
           sessionInfo: session,
           historyMessages,
-          methodResponses: { "progressCard.get": { card: progressCard } },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
-        await page
-          .getByText("Synthetic final reply: the report is ready.", { exact: true })
-          .waitFor();
-        await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
-        await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
-        await page
-          .locator('[data-progress-card-placement="details"]')
-          .filter({ hasText: "Review final report" })
-          .waitFor({ state: "attached" });
-        await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
-          const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
-          if (!pane.sessionSnapshotStore) {
-            throw new Error("Missing transcript snapshot owner");
-          }
-          await pane.sessionSnapshotStore.flush();
-        });
-        await page.addInitScript(() => {
-          const samples: ColdLoadFrame[] = [];
-          const read = (): ColdLoadFrame | null => {
-            const pane = document.querySelector(".chat-pane-cache__pane--active");
-            const thread = pane?.querySelector<HTMLElement>(".chat-thread");
-            if (
-              !thread?.querySelector(".chat-virtual-row") ||
-              thread.clientHeight === 0 ||
-              getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility === "hidden"
-            ) {
-              return null;
-            }
-            const card = pane?.querySelector('[data-progress-card-placement="details"]');
-            const cardRect = card?.getBoundingClientRect();
-            const threadRect = thread.getBoundingClientRect();
-            return {
-              top: thread.scrollTop,
-              max: thread.scrollHeight - thread.clientHeight,
-              duration: thread.textContent.includes("Worked for 3 minutes"),
-              reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
-                (element) => element.textContent?.trim() === "Avery",
+          methodResponses: {
+            "sessions.list": {
+              ...chatSessionListResponse(
+                Array.from({ length: 200 }, (_, index) => ({
+                  key: `agent:main:recent-${index}`,
+                  kind: "direct",
+                  label: `Recent conversation ${index}`,
+                  updatedAt: session.updatedAt + index + 1,
+                })),
               ),
-              progress: card?.textContent?.includes("Review final report") === true,
-              threadTop: threadRect.top,
-              threadHeight: threadRect.height,
-              cardTop: cardRect?.top ?? null,
-              cardHeight: cardRect?.height ?? null,
-            };
-          };
-          Object.assign(window, {
-            coldLoadSamples: samples,
-            coldLoadRecording: true,
+              count: 300,
+            },
+            "progressCard.get": { card: progressCard },
+          },
+        });
+        await page.addInitScript(installColdLoadTitleTrace, {
+          sessionKey,
+          expectedTitle: session.label,
+        });
+        try {
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await gateway.waitForRequest("connect");
+          await gateway.resolveDeferred("connect");
+          await page
+            .getByText("Synthetic final reply: the report is ready.", { exact: true })
+            .waitFor();
+          await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
+          await page
+            .locator(".chat-reply-attribution__name")
+            .filter({ hasText: "Avery" })
+            .waitFor();
+          const progress = await openChatTaskProgress(page);
+          await progress
+            .locator(".task-progress-details__plan")
+            .getByText("Review final report", { exact: true })
+            .waitFor();
+          await page.locator(".chat-pane-cache__pane--active").evaluate(async (element) => {
+            const pane = element as HTMLElement & { sessionSnapshotStore?: SessionSnapshotStore };
+            if (!pane.sessionSnapshotStore) {
+              throw new Error("Missing transcript snapshot owner");
+            }
+            await pane.sessionSnapshotStore.flush();
           });
-          const sample = () => {
-            if (!window.coldLoadRecording) {
-              return;
-            }
-            const frame = read();
-            if (frame) {
-              samples.push(frame);
-            }
-            requestAnimationFrame(sample);
-          };
-          requestAnimationFrame(sample);
-        });
-        await page.reload();
-        await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 20);
-        const samples = await page.evaluate(() => {
-          if (!window.coldLoadSamples) {
-            throw new Error("Missing cold-load frame recorder");
-          }
-          window.coldLoadCard = document.querySelector('[data-progress-card-placement="details"]');
-          return window.coldLoadSamples.slice(0, 20);
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "cold-load-cached-frames.json"),
-          JSON.stringify(samples),
-        );
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-cached.png") });
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
-        expect(samples).toHaveLength(20);
-        for (const frame of samples) {
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
-          expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
-        }
-        await gateway.waitForRequest("connect");
-        await page.evaluate(() => {
-          window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
-        });
-        await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("chat.startup");
-        await gateway.waitForRequest("progressCard.get");
-        await page.waitForFunction(() => {
-          const pane = document.querySelector(".chat-pane-cache__pane--active") as
-            | (HTMLElement & { state?: { connected: boolean; chatLoading: boolean } })
-            | null;
-          return pane?.state?.connected && !pane.state.chatLoading;
-        });
-        const reconciled = await page.evaluate(async () => {
-          for (let index = 0; index < 20; index += 1) {
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
+          await page.addInitScript(() => {
+            const samples: ColdLoadFrame[] = [];
+            const read = (): ColdLoadFrame | null => {
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const thread = pane?.querySelector<HTMLElement>(".chat-thread");
+              if (
+                !thread?.querySelector(".chat-virtual-row") ||
+                thread.clientHeight === 0 ||
+                getComputedStyle(thread.querySelector(".chat-thread-inner")!).visibility ===
+                  "hidden"
+              ) {
+                return null;
+              }
+              const card = pane?.querySelector('[data-progress-card-placement="details"]');
+              const threadRect = thread.getBoundingClientRect();
+              return {
+                title:
+                  pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ??
+                  null,
+                top: thread.scrollTop,
+                max: thread.scrollHeight - thread.clientHeight,
+                duration: thread.textContent.includes("Worked for 3 minutes"),
+                reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
+                  (element) => element.textContent?.trim() === "Avery",
+                ),
+                progress: card?.textContent?.includes("Review final report") === true,
+                threadTop: threadRect.top,
+                threadHeight: threadRect.height,
+              };
+            };
+            Object.assign(window, {
+              coldLoadSamples: samples,
+              coldLoadRecording: true,
             });
+            const sample = () => {
+              if (!window.coldLoadRecording) {
+                return;
+              }
+              const frame = read();
+              if (frame) {
+                samples.push(frame);
+              }
+              requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          });
+          await page.addInitScript(() => window.coldLoadTitleTrace?.holdCacheRead());
+          await page.reload();
+          await page.waitForFunction(() => window.coldLoadTitleTrace?.cacheReadPending);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "cold-load-cache-pending.png"),
+          });
+          const pendingTitles = await page.evaluate(async () => {
+            const titles: string[] = [];
+            for (let index = 0; index < 3; index++) {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+              titles.push(
+                document.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? "",
+              );
+            }
+            return titles;
+          });
+          expect(pendingTitles).toEqual(["", "", ""]);
+          await page.evaluate(() => window.coldLoadTitleTrace?.releaseCacheRead());
+          await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 20);
+          const firstFrames = await page.evaluate(() => window.coldLoadSamples!.slice(0, 20));
+          for (const frame of firstFrames) {
+            expect(frame.title).toBe(session.label);
+            expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
+            expect(frame).toMatchObject({ duration: true, reply: true });
           }
-          window.coldLoadRecording = false;
-          return {
-            frames: window.coldLoadSamples?.slice(window.coldLoadReconcileStart ?? 0) ?? [],
-            retainedCard:
-              window.coldLoadCard ===
-              document.querySelector('[data-progress-card-placement="details"]'),
-          };
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "cold-load-frames.json"),
-          JSON.stringify({ cached: samples, live: reconciled.frames }),
-        );
-        await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-live.png") });
-        expect(reconciled.retainedCard).toBe(true);
-        expect(reconciled.frames.length).toBeGreaterThanOrEqual(20);
-        const cached = samples[0]!;
-        for (const frame of [...samples, ...reconciled.frames]) {
-          expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
-          expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
-          for (const key of [
-            "top",
-            "threadTop",
-            "threadHeight",
-            "cardTop",
-            "cardHeight",
-          ] as const) {
-            expect(frame[key]).not.toBeNull();
-            expect(Math.abs(frame[key]! - cached[key]!)).toBeLessThanOrEqual(1);
+          // Details mounts on demand; its saved progress must still be readable before hello.
+          await openChatTaskProgress(page);
+          await progress
+            .locator(".task-progress-details__plan")
+            .getByText("Review final report", { exact: true })
+            .waitFor();
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "cold-load-cached-progress.png"),
+          });
+          // Compare the same closed-inspector scene across authentication and roster hydration.
+          await closeChatDetails(page);
+          const closedStart = await page.evaluate(() => window.coldLoadSamples!.length);
+          await page.waitForFunction(
+            (start) => (window.coldLoadSamples?.length ?? 0) >= start + 20,
+            closedStart,
+          );
+          const samples = await page.evaluate(() => {
+            if (!window.coldLoadSamples) {
+              throw new Error("Missing cold-load frame recorder");
+            }
+            window.coldLoadCard = document.querySelector(
+              '[data-progress-card-placement="details"]',
+            );
+            return window.coldLoadSamples.slice(-20);
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "cold-load-cached-frames.json"),
+            JSON.stringify(samples),
+          );
+          await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-cached.png") });
+          expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+          expect(samples).toHaveLength(20);
+          const titleWrites = await page.evaluate(() =>
+            window.coldLoadTitleTrace
+              ?.read()
+              .events.filter((event) => event.kind === "title-write" && event.title !== "absent"),
+          );
+          expect(titleWrites?.[0]?.title).toBe("expected-title");
+          expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
+          for (const frame of samples) {
+            expect(frame.title).toBe(session.label);
+            expect(Math.abs(frame.max - frame.top), JSON.stringify(samples)).toBeLessThanOrEqual(1);
+            expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
           }
+          await gateway.waitForRequest("connect");
+          await page.evaluate(() => {
+            window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
+            window.coldLoadTitleTrace?.mark("reconcile");
+          });
+          await gateway.resolveDeferred("connect");
+          await gateway.waitForRequest("chat.startup");
+          await gateway.waitForRequest("progressCard.get");
+          await page.waitForFunction(() => {
+            const pane = document.querySelector(".chat-pane-cache__pane--active") as
+              | (HTMLElement & { transcriptReady: boolean })
+              | null;
+            return pane?.transcriptReady;
+          });
+          const reconciled = await page.evaluate(async () => {
+            for (let index = 0; index < 20; index += 1) {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+            }
+            window.coldLoadRecording = false;
+            return {
+              frames: window.coldLoadSamples?.slice(window.coldLoadReconcileStart ?? 0) ?? [],
+              retainedCard:
+                window.coldLoadCard ===
+                document.querySelector('[data-progress-card-placement="details"]'),
+            };
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "cold-load-frames.json"),
+            JSON.stringify({ firstFrames, cached: samples, live: reconciled.frames }),
+          );
+          await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-live.png") });
+          expect(reconciled.retainedCard).toBe(true);
+          expect(reconciled.frames.length).toBeGreaterThanOrEqual(20);
+          const cached = samples[0]!;
+          for (const frame of [...samples, ...reconciled.frames]) {
+            expect(frame.title).toBe(session.label);
+            expect(frame).toMatchObject({ duration: true, reply: true, progress: true });
+            expect(Math.abs(frame.max - frame.top)).toBeLessThanOrEqual(1);
+            for (const key of ["top", "threadTop", "threadHeight"] as const) {
+              expect(Math.abs(frame[key] - cached[key])).toBeLessThanOrEqual(1);
+            }
+          }
+        } catch (error) {
+          const trace = await page
+            .evaluate(() => window.coldLoadTitleTrace?.read())
+            .catch(() => ({ unavailable: true }));
+          console.error("cold-load-title-failure", JSON.stringify(trace));
+          throw error;
         }
       },
     );

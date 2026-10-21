@@ -28,10 +28,6 @@ type SkillsListOptions = {
   verbose?: boolean;
 };
 
-type SkillInfoOptions = {
-  json?: boolean;
-};
-
 type SkillsCheckOptions = {
   json?: boolean;
   agent?: string;
@@ -90,12 +86,6 @@ function formatSkillsJson(value: unknown): string {
     2,
   );
 }
-function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = normalizeSkillEmoji(skill.emoji);
-  const name = theme.command(sanitizeForLog(skill.name));
-  return emoji ? `${emoji} ${name}` : name;
-}
-
 const SKILL_REQUIREMENT_GROUPS = [
   ["bins", "Binaries"],
   ["anyBins", "Any binaries"],
@@ -171,13 +161,18 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       nameColumn: { key: "Skill", header: "Skill", minWidth: 22 },
       sourceColumn: { key: "Source", header: "Source", minWidth: 10 },
       verbose: opts.verbose,
-      rows: skills.map((skill) => ({
-        Status: formatSkillStatus(skill),
-        Skill: formatSkillName(skill),
-        Description: theme.muted(skill.description),
-        Source: skill.source,
-        Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
-      })),
+      rows: skills.map((skill) => {
+        const status = formatSkillStatus(skill);
+        const emoji = normalizeSkillEmoji(skill.emoji);
+        const name = theme.command(sanitizeForLog(skill.name));
+        return {
+          Status: status,
+          Skill: emoji ? `${emoji} ${name}` : name,
+          Description: theme.muted(skill.description),
+          Source: skill.source,
+          Missing: opts.verbose ? theme.warn(formatSkillMissingSummary(skill)) : "",
+        };
+      }),
     }),
   );
 }
@@ -185,7 +180,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 export function formatSkillInfo(
   report: SkillStatusReport,
   skillName: string,
-  opts: SkillInfoOptions,
+  opts: { json?: boolean },
 ): string {
   const requestedName = skillName.trim();
   const skill = resolveSkillStatusEntry(report.skills, requestedName);

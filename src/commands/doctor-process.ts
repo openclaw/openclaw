@@ -34,7 +34,7 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
     try {
       output[stream].write(text);
     } catch (error) {
-      // A failed output consumer must not interrupt Doctor's admitted migrations.
+      // A failed output consumer must not interrupt Doctor's private-state cleanup.
       outputFailure = { error };
     }
   };
@@ -47,8 +47,8 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
       state.pending = state.pending.slice(newline + 1);
     }
   };
-  // Noninteractive Doctor can migrate state. Cancellation stops admission, but
-  // accepted work and its cleanup must settle before the caller releases custody.
+  // Cancellation stops admission, but accepted inspection and its private-state
+  // cleanup must settle before the caller releases custody.
   const worker = trackAsyncWork(() =>
     runOutsideCommandProcessScope(() =>
       runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
@@ -97,7 +97,7 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
     signal?.throwIfAborted();
     if (truncated) {
       runtime.error(
-        "Doctor output was truncated after 1 MiB. Run `openclaw doctor --non-interactive` on this host for the complete report.",
+        "Doctor output was truncated after 1 MiB. Run `openclaw doctor --lint` on this host for the complete report.",
       );
     }
     if (result.outputErrorStream) {

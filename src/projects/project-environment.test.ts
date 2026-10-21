@@ -1,8 +1,10 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
+  read: vi.fn(),
   checkout: vi.fn(),
   lease: vi.fn(),
   resolveCheckout: vi.fn(),
@@ -49,6 +51,10 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 }));
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
+}));
+// mock-isolation: Capture Windows environment routing without opening SQLite or touching disk.
+vi.mock("../state/openclaw-state-db-readonly.js", () => ({
+  executeExistingOpenClawStateRead: mocks.read,
 }));
 vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
@@ -102,17 +108,14 @@ import { registerProjectRegistry, removeProjectRegistry } from "./project-regist
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
-type ProjectCommandName =
-  | "projects.list"
-  | "projects.insert"
-  | "projects.remove"
-  | "projects.resolveRefreshOwner";
+type ProjectCommandName = "projects.insert" | "projects.remove" | "projects.resolveRefreshOwner";
 type ProjectCommand = {
   [Name in ProjectCommandName]: { type: Name; input: OpenClawStateWorkerOperations[Name]["input"] };
 }[ProjectCommandName];
 
 const root = path.resolve("/synthetic-project-state");
 const databasePath = path.join(root, "state", "openclaw.sqlite");
+const environmentSnapshot = { OPENCLAW_STATE_DIR: root, OPENCLAW_SUPERVISOR_MODE: "external" };
 const originUrl = "https://github.com/example/project.git";
 const project: ProjectRegistryRecord = {
   id: "fixture-project",
@@ -132,10 +135,6 @@ it.each(
     await withMockedPlatform("win32", async () => {
       vi.clearAllMocks();
       const supplied: NodeJS.ProcessEnv = {
-        HOME: path.resolve("/synthetic-home"),
-        USERPROFILE: path.resolve("/synthetic-home"),
-        NODE_ENV: "test",
-        OPENCLAW_TEST_FAST: "1",
         OpenClaw_State_Dir: root,
         OpenClaw_Supervisor_Mode: "external",
       };
@@ -171,11 +170,10 @@ it.each(
       });
       mocks.clone.mockResolvedValue(undefined);
       mocks.refresh.mockResolvedValue(undefined);
+      mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
       mocks.execute.mockImplementation(
         async (_context: OpenClawStateWorkerContext, command: ProjectCommand) => {
           switch (command.type) {
-            case "projects.list":
-              return [];
             case "projects.insert":
               return { id: project.id, ...command.input.project };
             case "projects.remove":
@@ -195,17 +193,9 @@ it.each(
         refresh: () => refreshProjectClone(project, options),
       };
       const pending = start[operation]();
-      const joined = pending.then(
-        () => undefined,
-        () => undefined,
-      );
+      const joined = pending.catch(() => {});
       try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Project operation completed before its awaited boundary");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(entered.promise, pending, "Project boundary was bypassed");
         caller.OpenClaw_State_Dir = path.resolve("/mutated-project-state");
         caller.OpenClaw_Supervisor_Mode = "internal";
         options.env = { ...caller, OpenClaw_State_Dir: path.resolve("/replaced-project-state") };
@@ -213,16 +203,15 @@ it.each(
         const result = await pending;
         expect(mocks.execute).toHaveBeenCalled();
         for (const [context] of mocks.execute.mock.calls) {
-          expect(context.environment).toEqual({
-            OPENCLAW_STATE_DIR: root,
-            OPENCLAW_SUPERVISOR_MODE: "external",
-          });
+          expect(context.environment).toEqual(environmentSnapshot);
           expect(context.admission.databasePath).toBe(databasePath);
         }
+        for (const [readOptions, , { context }] of mocks.read.mock.calls) {
+          expect(readOptions.path).toBe(databasePath);
+          expect(context.environment).toEqual(environmentSnapshot);
+        }
         for (const [, captured] of mocks.checkout.mock.calls) {
-          expect(captured.path).toBe(databasePath);
-          expect(captured.env.OPENCLAW_STATE_DIR).toBe(root);
-          expect(captured.env.OPENCLAW_SUPERVISOR_MODE).toBe("external");
+          expect(captured).toMatchObject({ path: databasePath, env: environmentSnapshot });
           expect(captured.env).not.toBe(caller);
         }
         if (operation === "materialize") {

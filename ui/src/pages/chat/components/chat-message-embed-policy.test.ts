@@ -1,14 +1,64 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildMessageItems } from "../chat-thread-items.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderMessageGroup, renderMessageGroupContent } from "./chat-message-group.ts";
-import { prepareChatMessageRender } from "./chat-message-markdown.ts";
-import { StreamGroupParts } from "./chat-message-stream-view.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { MessageGroup, MessageGroupContent } from "./chat-message-group-view.tsx";
+import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
+import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
+import { createCanvasPreview } from "./chat-message.test-support.ts";
+
+function createEmbedHarness(container: HTMLElement, surface: "persisted" | "streaming") {
+  type Props = {
+    text: string;
+    options: Pick<
+      Parameters<typeof GroupedMessage>[0]["options"],
+      "allowExternalEmbedUrls" | "embedSandboxMode" | "sessionKey"
+    >;
+  };
+  const Content = (props: Props) =>
+    surface === "streaming"
+      ? createComponent(StreamGroupParts, {
+          get parts(): StreamGroupPart[] {
+            return [
+              { kind: "stream", key: "message", text: props.text, startedAt: 1, isStreaming: true },
+            ];
+          },
+          get options() {
+            return props.options;
+          },
+          presentation: "standalone",
+        })
+      : createComponent(GroupedMessage, {
+          get preparation() {
+            return prepareChatMessageRender({
+              role: "assistant",
+              content: [{ type: "text", text: props.text }],
+            });
+          },
+          messageKey: "message",
+          get options() {
+            return { ...props.options, isStreaming: false, showReasoning: false };
+          },
+        });
+  let root: ReturnType<typeof mountSolid<Props>> | undefined;
+  return {
+    render(text: string, options: Props["options"]) {
+      const next = { text, options };
+      if (root) {
+        root.update(next);
+      } else {
+        root = mountSolid(Content, next, container);
+      }
+    },
+    unmount() {
+      root?.dispose();
+    },
+  };
+}
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
@@ -23,8 +73,9 @@ describe("assistant message embed policy", () => {
       );
       const host = document.createElement("div");
       document.body.append(host);
+      const preview = createEmbedHarness(host, surface);
       onTestFinished(() => {
-        render(null, host);
+        preview.unmount();
         host.remove();
         vi.unstubAllGlobals();
       });
@@ -35,33 +86,20 @@ describe("assistant message embed policy", () => {
       ) => {
         const text = `[embed url="${url}" title="Synthetic video" /]`;
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
-        render(
-          surface === "streaming"
-            ? solidContent(StreamGroupParts, {
-                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
-                options,
-                presentation: "standalone",
-              })
-            : renderGroupedMessage(
-                prepareChatMessageRender({ role: "assistant", content: [{ type: "text", text }] }),
-                "message",
-                { ...options, isStreaming: false, showReasoning: false },
-              ),
-          host,
-        );
+        preview.render(text, options);
         await vi.dynamicImportSettled();
-        const card = host.querySelector("openclaw-youtube-video");
+        const card = host.querySelector<HTMLElement>("openclaw-youtube-video");
         expect(card).not.toBeNull();
-        await card!.updateComplete;
+        flush();
         return card!;
       };
-      const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
+      const play = async (card: HTMLElement) => {
         const button = card.querySelector<HTMLButtonElement>(
           'button[aria-label="Play Synthetic video"]',
         );
         expect(button).not.toBeNull();
         button!.click();
-        await card.updateComplete;
+        flush();
         const frame = card.querySelector("iframe");
         expect(frame).toBeInstanceOf(HTMLIFrameElement);
         return frame!;
@@ -104,24 +142,12 @@ describe("assistant message embed policy", () => {
       const host = document.createElement("div");
       const url = "https://example.test/widget";
       const text = `[embed url="${url}" title="Widget" /]\nRead the widget.`;
-      const message = { role: "assistant", content: [{ type: "text", text }] };
+      const preview = createEmbedHarness(host, surface);
+      onTestFinished(() => preview.unmount());
 
       for (const allowed of [false, true, false]) {
         const options = { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" as const };
-        render(
-          surface === "streaming"
-            ? solidContent(StreamGroupParts, {
-                parts: [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
-                options,
-                presentation: "standalone",
-              })
-            : renderGroupedMessage(prepareChatMessageRender(message), "message", {
-                ...options,
-                isStreaming: false,
-                showReasoning: false,
-              }),
-          host,
-        );
+        preview.render(text, options);
 
         const frame = host.querySelector("iframe");
         expect(frame).not.toBeNull();
@@ -132,13 +158,15 @@ describe("assistant message embed policy", () => {
     },
   );
   it.each([
-    { label: "grouped messages", renderGroup: renderMessageGroup },
-    { label: "run-frame message contents", renderGroup: renderMessageGroupContent },
+    { label: "grouped messages", renderGroup: MessageGroup },
+    { label: "run-frame message contents", renderGroup: MessageGroupContent },
   ])("updates the authenticated widget's script policy when $label rerender", ({ renderGroup }) => {
     const container = document.createElement("div");
+    type GroupProps = Parameters<typeof MessageGroup>[0];
+    let root: ReturnType<typeof mountSolid<GroupProps>> | undefined;
     onTestFinished(async () => {
       await vi.dynamicImportSettled();
-      render(null, container);
+      root?.dispose();
     });
     let timestamp = 1000;
     const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
@@ -150,15 +178,11 @@ describe("assistant message embed policy", () => {
           { type: "text", text: "Inline canvas result." },
           {
             type: "canvas",
-            preview: {
-              kind: "canvas",
-              surface: "assistant_message",
-              render: "url",
+            preview: createCanvasPreview({
               viewId: "cv_inline_sandbox-change",
-              title: "Inline demo",
-              url: "/__openclaw__/canvas/documents/cv_inline_sandbox-change/index.html",
-              preferredHeight: 360,
-            },
+              title: "Scoped preview",
+              preferredHeight: 320,
+            }),
           },
         ],
       };
@@ -171,7 +195,20 @@ describe("assistant message embed policy", () => {
       if (group?.kind !== "group") {
         throw new Error("expected a prepared assistant message group");
       }
-      render(renderGroup(group, { showReasoning: true, embedSandboxMode }), container);
+      const next = {
+        group,
+        options: {
+          showReasoning: true,
+          embedSandboxMode,
+          sessionKey: "agent:main:canvas",
+          canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
+        },
+      };
+      if (root) {
+        root.update(next);
+      } else {
+        root = mountSolid(renderGroup, next, container);
+      }
     };
 
     renderCanvas("strict");
@@ -180,30 +217,26 @@ describe("assistant message embed policy", () => {
     expect(widget).toBeInstanceOf(HTMLElement);
     expect(widget).toMatchObject({
       docId: "cv_inline_sandbox-change",
-      title: "Inline demo",
+      title: "Scoped preview",
+      preferredHeight: 320,
+      sessionKey: "agent:main:canvas",
       allowScripts: false,
     });
     expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
 
-    renderCanvas("scripts");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: true });
-
-    renderCanvas("strict");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-
-    renderCanvas("scripts", true);
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: true });
-    expect(
-      [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
-    ).toEqual(["Earlier reply.", "Inline canvas result."]);
-
-    renderCanvas("strict");
-    expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: false });
-    expect(container.querySelectorAll(".chat-text")).toHaveLength(1);
+    for (const [mode, prepend] of [
+      ["scripts", false],
+      ["strict", false],
+      ["scripts", true],
+      ["strict", false],
+    ] as const) {
+      renderCanvas(mode, prepend);
+      expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
+      expect(widget).toMatchObject({ allowScripts: mode === "scripts" });
+      expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
+      expect(
+        [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),
+      ).toEqual(prepend ? ["Earlier reply.", "Inline canvas result."] : ["Inline canvas result."]);
+    }
   });
 });

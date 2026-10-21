@@ -144,21 +144,21 @@ function collectConfiguredTargetRefPaths(params: {
   return configuredTargetRefPaths;
 }
 
-function classifyConfiguredTargetRefs(params: {
+async function classifyConfiguredTargetRefs(params: {
   config: OpenClawConfig;
   configuredTargetRefPaths: Set<string>;
   agentId?: string;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
-}): {
+}): Promise<{
   needsResolution: boolean;
   diagnostics: string[];
-} {
+}> {
   const context = createResolverContext({
     sourceConfig: params.config,
     env: process.env,
   });
-  collectConfigAssignments({
+  await collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -332,7 +332,7 @@ async function resolveCommandSecretRefsLocally(
   const runtimeWebTargets = discoveredTargets.filter((target) =>
     targetsRuntimeWebPath(target.path),
   );
-  collectConfigAssignments({
+  await collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -569,7 +569,7 @@ export async function resolveCommandSecretRefsViaGateway(
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths(params);
   const preflight =
     configuredTargetRefPaths.size > 0
-      ? classifyConfiguredTargetRefs({ ...params, configuredTargetRefPaths })
+      ? await classifyConfiguredTargetRefs({ ...params, configuredTargetRefPaths })
       : { needsResolution: false, diagnostics: [] };
   if (!preflight.needsResolution) {
     return {

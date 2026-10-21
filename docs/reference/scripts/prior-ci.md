@@ -23,10 +23,21 @@ Policy and grants are rechecked after CI/security inspection and retained with
 the existing outcome. Scoped land authority includes this inherited-failure
 exception; the confirmed-operator flag records that scope without asserting that
 the bot is an administrator. No grant changes or alternate credentials occur.
-The existing authoritative classic-protection absence gate remains mandatory:
-generic REST 404s and permission-projected GraphQL nulls do not prove absence.
-Missing policy-read capability is an external authority blocker, not an
-implicit fallback or permission to elevate the writer.
+Classic branch-protection discovery is not a prerequisite for landing. The
+helper does not request `/branches/main/protection`, infer its absence from a
+404, or require administrator access merely to inspect it. Applicable rules
+supply required-check, review, and delegated CI-bypass evidence. The admin route
+also pages GitHub's native per-PR required-check markers, bound to the prepared
+head on every page. Requirements absent from the ruleset inventory use the
+existing latest-run and publisher checks; failed, pending, or missing results
+remain blocking. Optional failures and superseded runs do not become required.
+These observations do not attest that an unreported classic requirement is absent.
+GitHub evaluates the writer's actual permissions and applicable enforcement at
+the exact-head merge request. A provider refusal is retained and investigated
+under normal recovery, never retried through another writer or treated as
+permission to change credentials.
+Repository write access, organization membership, CI bypass, release environment
+approval, and production deployment authority remain separate capabilities.
 The original conflict-resolution route permits only
 pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure`
 attribution instead binds the current failed attempt, effective gate check-run,
@@ -71,3 +82,35 @@ its baseline/prior head and tested merge objects. Exact PR/policy facts and the
 landing-parent audit still apply; active prior-CI admission may accept verified
 forward-main movement under the [merge admission contract](/reference/scripts/merge-admission). See the [landing workflow](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#explicit-prior-ci-admin-landing)
 for the evidence fields and supported policy limits.
+
+## Requalification on a busy main
+
+An admin attempt requalifies verified fast-forward main movement for up to 15
+minutes and 32 rounds, reporting each round's elapsed time. A round must finish
+before that deadline. Persistent mergeability recalculation has a separate
+60-second settle window from the first UNKNOWN projection, with 2-second,
+4-second, then 8-second backoff. Exhausting
+either bound stops before retaining intent or dispatching a merge. In-flight
+reads may finish after the deadline, but cannot admit a merge or start another
+round.
+
+Every round refreshes required checks and suites, review and security authority,
+writer membership and bypass, and main. Independent GitHub reads run concurrently
+with at most four child requests in flight. A REST qualification shares its one
+complete check inventory between observation and verification; it is discarded
+before the next round. Cancelled-root check-runs and annotations also stay fresh.
+Completed historical attempt job data, tested-merge and source
+object equality, the prepared-head delta, and operator evidence may be reused
+only within the uninterrupted, lock-owning invocation and their pinned identities.
+
+Historical proof precedes the shared check inventory and final main read.
+Current review and security authority are verified afterward. Effective policy
+is reread after that work, before the final writer check, so a CI-only grant
+cannot waive newly tightened requirements. Local-only
+verification proves main's ancestry and merge tree, checks overlap and
+critical-path drift, and compares the Security Review publisher's protected
+sources against that exact tip. Missing
+objects require discarding live authority, materializing the exact tip, and
+starting a fresh round. Approval revocation, new failing suites, changed publisher
+sources, or non-fast-forward main movement still refuse admission. The reviewed
+head, operation lock, and retained-outcome contract are unchanged.

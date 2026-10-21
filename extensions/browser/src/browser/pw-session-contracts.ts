@@ -81,8 +81,9 @@ export type ArmedDialogResponse = {
 
 export type ConnectedBrowser = {
   browser: Browser;
-  cdpUrl: string;
   engine?: BrowserEngineId;
+  /** Read from the browser's launch command line; headless contexts refuse modal passkey requests. */
+  headless?: boolean;
   onDisconnected?: () => void;
 };
 
@@ -90,7 +91,6 @@ export type ActionDownloadCapture = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
   lastEventAtMs?: number;
   pending: Array<Promise<BrowserDownloadResult>>;
-  validations: Array<Promise<void>>;
   waiters: Array<() => void>;
 };
 

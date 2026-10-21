@@ -18,6 +18,8 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
+import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { HealthCheckContext, HealthFinding } from "../flows/health-checks.js";
@@ -26,6 +28,10 @@ import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/conf
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import { getMissingLocalMemoryEmbeddingProviderMessage } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
+  OPENAI_COMPATIBLE_MODEL_APIS,
+} from "../plugins/embedding-provider-config.js";
 import { resolveManifestOwnerBasePolicyBlock } from "../plugins/manifest-owner-policy.js";
 import {
   getActiveMemoryProviderCore,
@@ -60,8 +66,6 @@ const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
   ["mistral", "mistral"],
   ["bedrock", "amazon-bedrock"],
 ]);
-const OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER = "openai-compatible";
-const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
@@ -78,7 +82,7 @@ function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfi
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
   const normalizedProviderId = normalizeProviderId(providerId);
-  if (normalizedProviderId === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER) {
+  if (normalizedProviderId === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID) {
     return true;
   }
   if (MEMORY_EMBEDDING_PROVIDER_AUTH_IDS.has(normalizedProviderId)) {
@@ -89,10 +93,7 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
     return false;
   }
   const api = normalizeProviderId(providerConfig.api ?? "");
-  if (
-    api === OPENAI_COMPATIBLE_MEMORY_EMBEDDING_PROVIDER ||
-    OPENAI_COMPATIBLE_MODEL_APIS.has(api)
-  ) {
+  if (api === OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID || OPENAI_COMPATIBLE_MODEL_APIS.has(api)) {
     return true;
   }
   return !api && Boolean(normalizeOptionalString(providerConfig.baseUrl));
@@ -185,6 +186,7 @@ type MemorySearchHealthOptions = {
   gatewayMemoryProbe?: Pick<GatewayMemoryProbe, "checked" | "ready"> & Partial<GatewayMemoryProbe>;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
+  allowExecSecretRefs?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -205,6 +207,7 @@ export async function collectMemorySearchHealthFindings(
       env: ctx.env,
       includeWorkspaceMemoryHealth: false,
       skipAuthProfileResolution: true,
+      allowExecSecretRefs: ctx.allowExecSecretRefs === true,
       gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
     },
     ({ finding }) => {
@@ -322,8 +325,19 @@ async function inspectMemorySearchHealthForAgent(
     let status = "unavailable";
     let detail = "provider unavailable";
     try {
+      const { resolvedConfig, diagnostics, hadUnresolvedTargets } =
+        await resolveCommandSecretRefsViaGateway({
+          config: cfg,
+          commandName: "doctor",
+          targetIds: getMemoryEmbeddingCommandSecretTargetIds(cfg),
+          mode: "read_only_status",
+          allowLocalExecSecretRefs: opts.allowExecSecretRefs === true,
+        });
+      if (hadUnresolvedTargets) {
+        throw new Error(diagnostics.join("\n"));
+      }
       const acquired = await getActiveMemoryProviderCore({
-        cfg,
+        cfg: resolvedConfig,
         agentId,
         purpose: "status",
         context: {
@@ -559,15 +573,15 @@ async function inspectMemorySearchHealthForAgent(
   report(
     [
       `Memory search provider is set to "${provider}" but no API key was found.`,
-      `Semantic recall will not work without a valid API key.`,
+      "Without working primary or fallback embeddings, memory sync stops for explicitly configured providers or existing vector indexes; new and changed memory files are not indexed.",
       gatewayProbeWarning ? gatewayProbeWarning : null,
       "",
       "Fix (pick one):",
       `- Set ${envVar} in your environment`,
       `- Configure credentials: ${formatCliCommand("openclaw configure --section model")}`,
-      `- To disable: ${formatCliCommand("openclaw config set memory.search.enabled false")}`,
+      `- For keyword-only recall without a key, set memory.search.provider to "none" for this agent (including any agent override), then run ${formatCliCommand(`openclaw memory index --force --agent ${agentId}`)}`,
       "",
-      `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      `Then rerun: ${formatCliCommand("openclaw doctor")}`,
     ].join("\n"),
   );
 }

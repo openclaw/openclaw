@@ -2,11 +2,9 @@ import {
   estimateStringChars,
   estimateTokensFromChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -23,6 +21,7 @@ export type SessionTranscriptUsageSnapshot = {
   cacheRead?: number;
   cacheWrite?: number;
   contextUsage?: ContextUsage;
+  usageReport?: UsageLike["usageReport"];
   totalTokens?: number;
   totalTokensFresh?: boolean;
   costUsd?: number;
@@ -49,33 +48,34 @@ function extractTranscriptUsageSnapshot(
   const api =
     source === "artifact" && typeof record.api === "string" ? record.api.trim() : record.api;
   const legacyCliUsage = api === "cli" && usageRaw && usageRaw.contextUsage === undefined;
-  const derivedTotalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
-  const totalTokens =
-    source === "artifact" ? asPositiveFiniteNumber(derivedTotalTokens) : derivedTotalTokens;
+  const totalTokens = legacyCliUsage ? undefined : deriveSessionTotalTokens({ usage });
   const modelProvider = typeof record.provider === "string" ? record.provider.trim() : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : undefined;
   const costUsd =
-    source === "artifact"
-      ? asNonNegativeFiniteNumber(usageRaw?.cost?.total)
-      : typeof usageRaw?.cost?.total === "number" && Number.isFinite(usageRaw.cost.total)
-        ? usageRaw.cost.total
-        : usageRaw?.costUsd;
+    usage?.usageReport?.state === "unavailable"
+      ? undefined
+      : source === "artifact"
+        ? asNonNegativeFiniteNumber(usageRaw?.cost?.total)
+        : typeof usageRaw?.cost?.total === "number" && Number.isFinite(usageRaw.cost.total)
+          ? usageRaw.cost.total
+          : usageRaw?.costUsd;
   const hasMeaningfulUsage =
     hasNonzeroUsage(usage) ||
     typeof totalTokens === "number" ||
     (typeof costUsd === "number" &&
       Number.isFinite(costUsd) &&
       (source === "artifact" || costUsd > 0));
-  const isDeliveryMirror = modelProvider === "openclaw" && model === "delivery-mirror";
+  const isTranscriptArtifact = isTranscriptArtifactProvider(modelProvider);
   if (!hasMeaningfulUsage && !modelProvider && !model) {
     return null;
   }
-  if (isDeliveryMirror && !hasMeaningfulUsage) {
+  if (isTranscriptArtifact && !hasMeaningfulUsage) {
     return null;
   }
   return {
-    ...(!isDeliveryMirror && modelProvider ? { modelProvider } : {}),
-    ...(!isDeliveryMirror && model ? { model } : {}),
+    ...(usage?.usageReport ? { usageReport: usage.usageReport } : {}),
+    ...(!isTranscriptArtifact && modelProvider ? { modelProvider } : {}),
+    ...(!isTranscriptArtifact && model ? { model } : {}),
     ...(typeof normalizedUsage.input === "number" ? { inputTokens: normalizedUsage.input } : {}),
     ...(typeof normalizedUsage.output === "number" ? { outputTokens: normalizedUsage.output } : {}),
     ...(typeof normalizedUsage.cacheRead === "number"
@@ -156,6 +156,9 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
       return;
     }
     sawUsage = true;
+    if (aggregate.usageReport?.state !== "unavailable" && snapshot.usageReport) {
+      aggregate.usageReport = snapshot.usageReport;
+    }
     if (snapshot.modelProvider) {
       aggregate.modelProvider = snapshot.modelProvider;
     }

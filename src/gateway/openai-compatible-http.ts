@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.types.js";
 import { logWarn } from "../logger.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import {
@@ -57,8 +58,8 @@ export async function prepareOpenAiCompatibleHttpRequest<T extends z.ZodType>(
   if (!handled) {
     return handled;
   }
-  const client = { abortController: new AbortController(), onDisconnect: () => {} };
-  watchClientDisconnect(req, res, client.abortController, () => client.onDisconnect());
+  const client = { abortController: new AbortController() };
+  watchClientDisconnect(req, res, client.abortController);
   const modelAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelAuth.allowed) {
     sendMissingScopeForbidden(res, modelAuth.missingScope);
@@ -122,7 +123,10 @@ export function startOpenAiCompatibleStream(params: {
   writeDelta: (delta: string) => void;
   complete: (result: StreamResult) => void;
   fail: (error: StreamError, result?: unknown) => void;
-}): () => void {
+}): void {
+  if (params.signal.aborted) {
+    return;
+  }
   const { res, runId } = params;
   const chat = params.protocol === "chat";
   const textStream = createAssistantTextStream(Boolean(params.constraint));
@@ -138,6 +142,7 @@ export function startOpenAiCompatibleStream(params: {
   const close = () => {
     closed = true;
     unsubscribe();
+    params.signal.removeEventListener("abort", onAbort);
   };
   const finish = () => {
     writeDone(res);
@@ -190,12 +195,12 @@ export function startOpenAiCompatibleStream(params: {
       finish();
     });
   };
-  const unsubscribe = onAgentEventForRun(runId, (evt) => {
+  const unsubscribe = onAgentEventForRun(runId, (evt: AgentEventRuntimePayload) => {
     if (closed) {
       return;
     }
     if (evt.stream === "assistant") {
-      const { delta, replacement } = textStream.update(evt.data);
+      const { delta, replacement } = textStream.update(evt.data, evt.assistantProjection?.rawDelta);
       if (chat && replacement === "unrepresentable") {
         streamError ??= { message: REPLACEMENT_ERROR, type: "api_error" };
         return;
@@ -228,6 +233,11 @@ export function startOpenAiCompatibleStream(params: {
   // Agent cleanup and deferred wire delivery settle independently during shutdown.
   const releaseAgent = retainGatewayRootWorkAdmissionContinuation();
   const releaseStream = retainGatewayHttpResponseWork(res);
+  const onAbort = () => {
+    close();
+    releaseStream();
+  };
+  params.signal.addEventListener("abort", onAbort, { once: true });
   void (async () => {
     try {
       const result = await params.run();
@@ -257,7 +267,7 @@ export function startOpenAiCompatibleStream(params: {
       };
       requestFinalize();
     } catch (error) {
-      if (closed || params.signal.aborted) {
+      if (closed) {
         return;
       }
       terminalPhase = "error";
@@ -273,8 +283,4 @@ export function startOpenAiCompatibleStream(params: {
       }
     }
   })();
-  return () => {
-    close();
-    releaseStream();
-  };
 }

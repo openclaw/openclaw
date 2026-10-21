@@ -1,4 +1,3 @@
-import type { ApplicationThemeServerSelection } from "../../app/context.ts";
 import type { ImportedCustomTheme } from "../../app/custom-theme.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ThemeName } from "../../app/theme.ts";
@@ -10,15 +9,6 @@ type CustomThemeImportViewState = {
   busy: boolean;
   message: { kind: "success" | "error"; text: string } | null;
   expanded: boolean;
-  focusToken: number;
-};
-
-export const INITIAL_CUSTOM_THEME_IMPORT_STATE: CustomThemeImportViewState = {
-  url: "",
-  busy: false,
-  message: null,
-  expanded: false,
-  focusToken: 0,
 };
 
 type ImportMessages = {
@@ -26,13 +16,16 @@ type ImportMessages = {
   imported: (label: string) => string;
 };
 
-/** Owns every state transition that can supersede a delayed custom-theme import. */
+/** Keeps delayed imports scoped to their page and the latest import URL. */
 export class CustomThemeImportOwner {
   private currentImport: object | null = null;
-  private activationIntent: { theme: ThemeName | null } = { theme: null };
   private gatewayScope = "";
-  private serverSelectionRevision = 0;
-  private state = INITIAL_CUSTOM_THEME_IMPORT_STATE;
+  private state: CustomThemeImportViewState = {
+    url: "",
+    busy: false,
+    message: null,
+    expanded: false,
+  };
 
   constructor(private readonly publish: (state: CustomThemeImportViewState) => void) {}
 
@@ -40,48 +33,26 @@ export class CustomThemeImportOwner {
     return this.state;
   }
 
-  connect(scope: string, serverSelection: ApplicationThemeServerSelection | null): void {
+  connect(scope: string): void {
     this.gatewayScope = scope;
-    this.serverSelectionRevision = this.selectionForScope(scope, serverSelection)?.revision ?? 0;
   }
 
-  synchronizeScope(scope: string, serverSelection: ApplicationThemeServerSelection | null): void {
+  synchronizeScope(scope: string): void {
     if (this.gatewayScope && scope !== this.gatewayScope) {
       this.retireImport();
     }
-    this.connect(scope, serverSelection);
+    this.connect(scope);
   }
 
-  adoptSettings(
-    previous: UiSettings,
-    next: UiSettings,
-    serverSelection: ApplicationThemeServerSelection | null,
-  ): UiSettings {
-    const scopedSelection = this.selectionForScope(this.gatewayScope, serverSelection);
-    const serverSelectionChanged =
-      this.serverSelectionRevision !== (scopedSelection?.revision ?? 0);
-    this.serverSelectionRevision = scopedSelection?.revision ?? 0;
+  adoptSettings(previous: UiSettings, next: UiSettings): UiSettings {
     if (next.customTheme?.importedAt !== previous.customTheme?.importedAt) {
       this.retireImport();
-      return next;
-    }
-    // Record every newer selection edge. A later server Custom selection can
-    // deliberately re-authorize the palette supplied by an older pending import.
-    if (serverSelectionChanged) {
-      this.recordActivation(scopedSelection?.theme ?? null);
-    }
-    if (next.theme !== previous.theme) {
-      this.recordActivation(next.theme);
     }
     return next;
   }
 
-  recordActivation(theme: ThemeName | null): void {
-    this.activationIntent = { theme };
-  }
-
   open(): void {
-    this.update({ expanded: true, focusToken: this.state.focusToken + 1 });
+    this.update({ expanded: true });
   }
 
   setUrl(url: string): void {
@@ -105,6 +76,7 @@ export class CustomThemeImportOwner {
   async import(params: {
     config: RuntimeConfigState;
     hasCustomTheme: boolean;
+    readTheme: () => ThemeName;
     load: (url: string) => Promise<ImportedCustomTheme>;
     apply: (theme: ImportedCustomTheme, activate: boolean) => void;
     messages: ImportMessages;
@@ -118,7 +90,7 @@ export class CustomThemeImportOwner {
       return;
     }
     const ticket = {};
-    const activationIntent = this.activationIntent;
+    const startingTheme = params.readTheme();
     this.currentImport = ticket;
     const importUrl = this.state.url;
     this.update({ expanded: true, busy: true, message: null });
@@ -127,10 +99,11 @@ export class CustomThemeImportOwner {
       if (this.currentImport !== ticket) {
         return;
       }
+      // Equal-valued server selection edges are best effort; the displayed choice wins.
+      const currentTheme = params.readTheme();
       params.apply(
         theme,
-        !params.hasCustomTheme &&
-          (this.activationIntent === activationIntent || this.activationIntent.theme === "custom"),
+        !params.hasCustomTheme && (currentTheme === startingTheme || currentTheme === "custom"),
       );
       this.update({
         url: "",
@@ -181,12 +154,5 @@ export class CustomThemeImportOwner {
   private update(patch: Partial<CustomThemeImportViewState>): void {
     this.state = { ...this.state, ...patch };
     this.publish(this.state);
-  }
-
-  private selectionForScope(
-    scope: string,
-    serverSelection: ApplicationThemeServerSelection | null,
-  ): ApplicationThemeServerSelection | null {
-    return serverSelection?.scope === scope ? serverSelection : null;
   }
 }

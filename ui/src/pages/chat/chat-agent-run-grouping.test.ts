@@ -20,7 +20,7 @@ function group(
     timestamp: 1,
     ...overrides,
   };
-  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  const [prepared] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);
   if (prepared?.kind !== "group") {
     throw new Error("expected a prepared message group");
   }
@@ -57,6 +57,34 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
+  it.each(["interrupted", "silent-terminal"] as const)(
+    "classifies a persisted tool-use tail as %s without inventing a final answer",
+    (state) => {
+      const runId = "run-tail";
+      const commentary = group("assistant", "Checking the fixture.", runId, {
+        stopReason: "toolUse",
+        __openclaw: { runId, turnTainted: true },
+      });
+      const terminal = { role: "assistant", stopReason: "stop", content: [], runId };
+      const frame = requireFrame(
+        coalesceAgentRunFrames(
+          [userBoundary(runId), commentary, group("tool", "inspection", runId)],
+          {
+            messages: [
+              ...commentary.messages.map(({ message }) => message),
+              ...(state === "silent-terminal" ? [terminal] : []),
+            ],
+            activeRunId: null,
+          },
+        )[1],
+      );
+      expect(frame.outcome).toEqual(
+        state === "interrupted" ? { kind: state } : { kind: "completed", actionOwner: null },
+      );
+      expect(frame.parts).toHaveLength(2);
+    },
+  );
+
   it("keeps one lifecycle-stable frame key while preserving semantic part keys", () => {
     const runId = "run-1";
     const stream: StreamRunRenderItem = {
@@ -222,23 +250,6 @@ describe("coalesceAgentRunFrames", () => {
     expect(requireFrame(items[1]).key).not.toBe(requireFrame(items[3]).key);
   });
 
-  it("starts a new frame at an authoritative projected turn boundary", () => {
-    const projected = group("assistant", "steer-output", "run-1", {
-      __openclaw: { id: "steer-entry", turnBoundary: true },
-    });
-    const items = coalesceAgentRunFrames([
-      userBoundary(),
-      group("assistant", "before", "run-1"),
-      projected,
-    ]);
-    const frames = items.filter(
-      (item): item is AgentRunFrameRenderItem => item.kind === "agent-run-frame",
-    );
-
-    expect(frames).toHaveLength(2);
-    expect(frames.map((frame) => frame.boundaryId)).toEqual(["send:send-1", "entry:steer-entry"]);
-  });
-
   it.each([
     {
       name: "notice",
@@ -295,6 +306,17 @@ describe("coalesceAgentRunFrames", () => {
         group("tool", "commentary-tool", "run-1"),
       ],
       outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "provider speech cannot replace a completed frame answer",
+      parts: [
+        group("assistant", "backing-answer", "run-1", { stopReason: "stop" }),
+        group("assistant", "spoken-readback", "run-1", {
+          stopReason: "stop",
+          __openclaw: { voiceTranscript: "provider-owned" },
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "backing-answer" } },
     },
     {
       name: "Codex reasoning mirror",

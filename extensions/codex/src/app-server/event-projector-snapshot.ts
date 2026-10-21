@@ -64,7 +64,7 @@ export function buildCodexMessagesSnapshot(params: {
   const taint = { tainted: false };
   return messages.map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: params.runParams.trigger === "memory",
+      hidden: params.runParams.privateCompletion === true || params.runParams.trigger === "memory",
       inputProvenance: params.runParams.inputProvenance,
       message: applyCodexTranscriptTaint(message, taint),
     }),

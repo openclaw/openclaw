@@ -1,4 +1,3 @@
-// Policy plugin agent workspace evidence.
 import {
   asNonArrayRecord,
   normalizeOptionalString as readString,

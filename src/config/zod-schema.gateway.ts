@@ -207,8 +207,17 @@ export const GatewayConfigSchema = z
           .strictObject({
             /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
             customPlugins: z.boolean().optional(),
+            /** Show the official Claw catalog and Add flow in Control UI (default false). */
+            claws: z.boolean().optional(),
             /** Enable experimental speech bubbles in the Control UI (default false). */
             chatBubbles: z.boolean().optional(),
+            /** Optional, tool-free next-message suggestions (disabled by default). */
+            composerPredictions: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                model: z.enum(["utility", "conversation", "default"]).optional(),
+              })
+              .optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
@@ -220,7 +229,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
-        /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+        /** Show the dismissible Community card in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
         /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),

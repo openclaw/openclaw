@@ -300,12 +300,20 @@ export class CodexNativeProcessAuthority {
     }
     try {
       this.source?.assertCurrent();
-      if (this.cancelled || this.released) {
-        throw new Error("Codex native process source has ended");
-      }
     } catch (error) {
       this.onAbort();
       throw error;
+    }
+  }
+
+  static assertCleanup(
+    authority: CodexNativeProcessAuthority | undefined,
+    host: EmbeddedRunAttemptParamsV2["hostCapabilities"],
+  ): void {
+    if (authority?.source) {
+      authority.assertCurrent();
+    } else {
+      host.assertActive();
     }
   }
 

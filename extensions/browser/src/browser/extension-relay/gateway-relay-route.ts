@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   rejectWebSocketUpgrade,

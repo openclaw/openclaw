@@ -25,29 +25,27 @@ const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
 export function createSentMessageCache() {
-  const textCache = new Map<string, number>();
-  const textBackedByIdCache = new Map<string, number>();
-  const mediaCache = new Map<string, number>();
-  const mediaBackedByIdCache = new Map<string, number>();
+  type ContentEntry = { timestamp: number; idTimestamp?: number };
+  const textCache = new Map<string, ContentEntry>();
+  const mediaCache = new Map<string, ContentEntry>();
   const messageIdCache = new Map<string, number>();
 
   function remember(scope: string, lookup: SentMessageLookup): void {
-    const textKey = normalizeIMessageEchoText(lookup.text);
-    if (textKey) {
-      textCache.set(`${scope}:${textKey}`, Date.now());
-    }
-    const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
-    if (mediaKey) {
-      mediaCache.set(`${scope}:${mediaKey}`, Date.now());
-    }
+    const now = Date.now();
     const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     if (messageIdKey) {
-      messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
-      if (textKey) {
-        textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
-      }
-      if (mediaKey) {
-        mediaBackedByIdCache.set(`${scope}:${mediaKey}`, Date.now());
+      messageIdCache.set(`${scope}:${messageIdKey}`, now);
+    }
+    for (const [cache, value] of [
+      [textCache, normalizeIMessageEchoText(lookup.text)],
+      [mediaCache, resolveIMessageEchoMediaKey(lookup.media)],
+    ] as const) {
+      if (value) {
+        const key = `${scope}:${value}`;
+        cache.set(key, {
+          timestamp: now,
+          idTimestamp: messageIdKey ? now : cache.get(key)?.idTimestamp,
+        });
       }
     }
     cleanup();
@@ -56,71 +54,55 @@ export function createSentMessageCache() {
   async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: boolean | SentMessageLookupOptions = false,
+    options: SentMessageLookupOptions = {},
   ): Promise<boolean> {
-    cleanup();
-    const resolvedOptions =
-      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
       await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
-        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
-        includePendingText: resolvedOptions.includePendingText,
+        skipIdShortCircuit: options.skipIdShortCircuit,
+        includePendingText: options.includePendingText,
       })
     ) {
       return true;
     }
-    const matchesWithin = (cache: Map<string, number>, key: string | undefined, ttlMs: number) => {
-      const timestamp = key ? cache.get(`${scope}:${key}`) : undefined;
-      return Boolean(timestamp && Date.now() - timestamp <= ttlMs);
-    };
-    const hasContentOnlyMatch = (
-      cache: Map<string, number>,
-      backedById: Map<string, number>,
-      key: string | undefined,
-    ) => {
-      const timestamp = key ? cache.get(`${scope}:${key}`) : undefined;
-      const idTimestamp = key ? backedById.get(`${scope}:${key}`) : undefined;
-      return typeof timestamp === "number" && (!idTimestamp || timestamp > idTimestamp);
-    };
+    cleanup();
     const textKey = normalizeIMessageEchoText(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
+    const text = textKey ? textCache.get(`${scope}:${textKey}`) : undefined;
+    const media = mediaKey ? mediaCache.get(`${scope}:${mediaKey}`) : undefined;
+    const hasContentOnlyMatch = (entry: ContentEntry | undefined) =>
+      Boolean(entry && (!entry.idTimestamp || entry.timestamp > entry.idTimestamp));
     const messageIdKey = normalizeIMessageMessageId(lookup.messageId);
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
-      if (matchesWithin(messageIdCache, messageIdKey, SENT_MESSAGE_ID_TTL_MS)) {
+      if (messageIdCache.has(`${scope}:${messageIdKey}`)) {
         return true;
       }
-      const hasTextOnlyMatch = hasContentOnlyMatch(textCache, textBackedByIdCache, textKey);
-      const hasMediaOnlyMatch = hasContentOnlyMatch(mediaCache, mediaBackedByIdCache, mediaKey);
+      const hasTextOnlyMatch = hasContentOnlyMatch(text);
+      const hasMediaOnlyMatch = hasContentOnlyMatch(media);
       canUseMediaFallback = hasMediaOnlyMatch;
-      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
+      if (!options.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }
-    return (
-      matchesWithin(textCache, textKey, SENT_MESSAGE_TEXT_TTL_MS) ||
-      (canUseMediaFallback && matchesWithin(mediaCache, mediaKey, SENT_MESSAGE_TEXT_TTL_MS))
-    );
+    return Boolean(text || (canUseMediaFallback && media));
   }
 
   function cleanup(): void {
     const now = Date.now();
-    for (const cache of [
-      textCache,
-      textBackedByIdCache,
-      mediaCache,
-      mediaBackedByIdCache,
-      messageIdCache,
-    ]) {
-      const ttlMs = cache === messageIdCache ? SENT_MESSAGE_ID_TTL_MS : SENT_MESSAGE_TEXT_TTL_MS;
-      for (const [key, timestamp] of cache) {
-        if (now - timestamp > ttlMs) {
+    for (const cache of [textCache, mediaCache]) {
+      for (const [key, entry] of cache) {
+        if (now - entry.timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
           cache.delete(key);
         }
+      }
+    }
+    for (const [key, timestamp] of messageIdCache) {
+      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+        messageIdCache.delete(key);
       }
     }
   }

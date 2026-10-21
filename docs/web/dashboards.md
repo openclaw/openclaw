@@ -360,6 +360,10 @@ administrator browser path remains available under its existing rules.
 
 ## What widgets are allowed to do
 
+Revoking session access denies new dashboard writes. A write already in progress
+when access is revoked may still finish saving its widget or layout. Reading
+private content and using a widget's tools still require current access.
+
 Custom HTML and registered-source widgets that only render need no approval —
 they appear instantly, exactly like inline chat widgets, and their network access
 is fully disabled.
@@ -414,6 +418,14 @@ update-in-place behavior as HTML widgets. The renderer is loaded from the
 Gateway's `/__openclaw__/a2ui/` asset route, so the renderer bundle is not
 copied into each widget. The Canvas plugin and its hosted routes must be
 enabled; both are enabled by default.
+
+The v0.9 basic catalog supports bound form controls, lists, tabs, media, and
+dialogs. Text bodies render basic Markdown; raw HTML, links, and images in
+Markdown are not rendered. Use the catalog's Image component for images.
+
+If a component fails to render, it shows an error and a **Retry** button while
+neighboring components remain interactive. Corrected A2UI updates restore the
+affected component automatically.
 
 A2UI actions use the normal widget bridge. By default, clicks become quiet
 session notices that the agent sees on its next turn. If the widget declares

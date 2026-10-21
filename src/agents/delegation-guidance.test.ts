@@ -5,83 +5,48 @@ import {
   resolveMainSessionDelegationMode,
 } from "./delegation-guidance.js";
 
+function delegationConfig(
+  delegationMode: "prefer" | "suggest",
+  agentMode?: "prefer" | "suggest",
+  agentId = "main",
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { subagents: { delegationMode } },
+      ...(agentMode
+        ? { entries: { [agentId]: { subagents: { delegationMode: agentMode } } } }
+        : {}),
+    },
+  };
+}
+
 describe("resolveMainSessionDelegationMode", () => {
   it.each([
-    {
-      name: "canonical main session",
-      config: {},
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      expected: "prefer",
+    ["agent:main:main", "prefer"],
+    ["agent:main:slack:channel:C01234567", "suggest"],
+    ["agent:main:inbox", "prefer", { session: { mainKey: "inbox" } }],
+    ["global", "prefer", { session: { scope: "global" } }],
+    ["agent:main:dashboard:project", "prefer", delegationConfig("prefer")],
+    ["agent:main:main", "suggest", delegationConfig("suggest")],
+    [
+      "agent:coordinator:dashboard:project",
+      "prefer",
+      delegationConfig("suggest", "prefer", "coordinator"),
+      "coordinator",
+    ],
+    ["agent:main:main", "suggest", delegationConfig("prefer", "suggest")],
+  ] satisfies [string, "prefer" | "suggest", OpenClawConfig?, string?][])(
+    "resolves %s to %s",
+    (sessionKey, expected, config = {}, agentId = "main") => {
+      expect(
+        resolveMainSessionDelegationMode({
+          config,
+          agentId,
+          sessionKey,
+        }),
+      ).toBe(expected);
     },
-    {
-      name: "non-main session",
-      config: {},
-      agentId: "main",
-      sessionKey: "agent:main:slack:channel:C01234567",
-      expected: "suggest",
-    },
-    {
-      name: "custom main key",
-      config: { session: { mainKey: "inbox" } },
-      agentId: "main",
-      sessionKey: "agent:main:inbox",
-      expected: "prefer",
-    },
-    {
-      name: "global session scope",
-      config: { session: { scope: "global" } },
-      agentId: "main",
-      sessionKey: "global",
-      expected: "prefer",
-    },
-    {
-      name: "explicit default prefer outside main",
-      config: { agents: { defaults: { subagents: { delegationMode: "prefer" } } } },
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:project",
-      expected: "prefer",
-    },
-    {
-      name: "explicit default suggest in main",
-      config: { agents: { defaults: { subagents: { delegationMode: "suggest" } } } },
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      expected: "suggest",
-    },
-    {
-      name: "per-agent prefer overrides default suggest",
-      config: {
-        agents: {
-          defaults: { subagents: { delegationMode: "suggest" } },
-          entries: { coordinator: { subagents: { delegationMode: "prefer" } } },
-        },
-      },
-      agentId: "coordinator",
-      sessionKey: "agent:coordinator:dashboard:project",
-      expected: "prefer",
-    },
-    {
-      name: "per-agent suggest overrides default prefer",
-      config: {
-        agents: {
-          defaults: { subagents: { delegationMode: "prefer" } },
-          entries: { main: { subagents: { delegationMode: "suggest" } } },
-        },
-      },
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      expected: "suggest",
-    },
-  ] as const)("resolves $name", ({ config, agentId, sessionKey, expected }) => {
-    expect(
-      resolveMainSessionDelegationMode({
-        config: config as OpenClawConfig,
-        agentId,
-        sessionKey,
-      }),
-    ).toBe(expected);
-  });
+  );
 });
 
 describe("buildDelegationGuidanceSection", () => {
@@ -99,14 +64,10 @@ describe("buildDelegationGuidanceSection", () => {
       ...overrides,
     });
 
-  it.each([
-    { hiddenDelegationTool: "`sessions_spawn`", expected: "delegate via `sessions_spawn`" },
-    {
-      hiddenDelegationTool: "native `spawn_agent`",
-      expected: "delegate via native `spawn_agent`",
-    },
-  ])("injects $hiddenDelegationTool", ({ hiddenDelegationTool, expected }) => {
-    expect(buildSection({ hiddenDelegationTool }).join("\n")).toContain(expected);
+  it.each(["`sessions_spawn`", "native `spawn_agent`"])("injects %s", (hiddenDelegationTool) => {
+    expect(buildSection({ hiddenDelegationTool }).join("\n")).toContain(
+      `delegate via ${hiddenDelegationTool}`,
+    );
   });
 
   it.each([
@@ -120,8 +81,15 @@ describe("buildDelegationGuidanceSection", () => {
   });
 
   it.each([
-    { name: "minimal prompts", overrides: { isMinimal: true } },
-    { name: "suggest mode", overrides: { mode: "suggest" as const } },
+    {
+      name: "minimal prompts, even with session creation",
+      overrides: {
+        isMinimal: true,
+        sessionsCreateToolName: "sessions_create",
+        suggestTaskToolName: "suggest_task",
+      },
+    },
+    { name: "suggest mode without session routing tools", overrides: { mode: "suggest" as const } },
     {
       name: "no usable delegation tool",
       overrides: { hiddenDelegationTool: "", hasVisibleSessionSpawn: false },

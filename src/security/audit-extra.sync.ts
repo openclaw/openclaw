@@ -328,11 +328,13 @@ function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[
   return contexts;
 }
 
-function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
+function collectToolExposureContexts(cfg: OpenClawConfig): {
   riskyContexts: string[];
   hasRuntimeRisk: boolean;
+  controlPlaneContexts: string[];
 } {
   const riskyContexts: string[] = [];
+  const controlPlaneContexts: string[] = [];
   let hasRuntimeRisk = false;
   for (const context of listAuditAgentToolContexts(cfg)) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
@@ -342,6 +344,15 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
       sandboxMode,
       agentId: context.agentId ?? null,
     });
+    const controlPlaneTools = GATEWAY_CONTROL_PLANE_TOOLS.filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    if (controlPlaneTools.length > 0) {
+      const profile = context.tools?.profile ?? cfg.tools?.profile ?? "none";
+      controlPlaneContexts.push(
+        `${context.label} (profile=${profile}; controlPlane=[${controlPlaneTools.join(", ")}])`,
+      );
+    }
     const runtimeTools = ["exec", "process"].filter((tool) =>
       isToolAllowedByPolicies(tool, policies),
     );
@@ -364,31 +375,7 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
     );
   }
 
-  return { riskyContexts, hasRuntimeRisk };
-}
-
-function collectControlPlaneToolExposureContexts(cfg: OpenClawConfig): string[] {
-  const exposedContexts: string[] = [];
-  for (const context of listAuditAgentToolContexts(cfg)) {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
-    const policies = resolveConfiguredToolPolicies({
-      cfg,
-      agentTools: context.tools,
-      sandboxMode,
-      agentId: context.agentId ?? null,
-    });
-    const controlPlaneTools = GATEWAY_CONTROL_PLANE_TOOLS.filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    if (controlPlaneTools.length === 0) {
-      continue;
-    }
-    const profile = context.tools?.profile ?? cfg.tools?.profile ?? "none";
-    exposedContexts.push(
-      `${context.label} (profile=${profile}; controlPlane=[${controlPlaneTools.join(", ")}])`,
-    );
-  }
-  return exposedContexts;
+  return { riskyContexts, hasRuntimeRisk, controlPlaneContexts };
 }
 
 export function collectSyncedFolderFindings(params: {
@@ -482,8 +469,8 @@ export function collectHooksHardeningFindings(
       severity: "critical",
       title: `Hooks token reuses the Gateway ${password ? "password" : "token"}`,
       detail: password
-        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth."
-        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+        ? "hooks.token matches gateway.auth password; a stolen hooks token also grants Gateway password access."
+        : "hooks.token matches gateway.auth token; a stolen hooks token also grants Gateway API access.",
       remediation:
         reusedGatewayAuth.source === "override"
           ? "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env."
@@ -944,7 +931,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk, controlPlaneContexts } = collectToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
     findings.push({
@@ -960,7 +947,6 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
-  const controlPlaneContexts = collectControlPlaneToolExposureContexts(cfg);
   if (controlPlaneContexts.length > 0) {
     findings.push({
       checkId: "security.exposure.open_groups_with_control_plane_tools",
@@ -1009,7 +995,7 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
     return findings;
   }
 
-  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const { riskyContexts, hasRuntimeRisk } = collectToolExposureContexts(cfg);
   const impactLine = hasRuntimeRisk
     ? "Runtime/process tools are exposed without full sandboxing in at least one context."
     : "No unguarded runtime/process tools were detected by this heuristic.";

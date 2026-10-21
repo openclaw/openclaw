@@ -3,8 +3,7 @@
  * agents failover tree (which transitively pulls the sandbox module graph). */
 import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
-import type { CronEvent } from "./service/state.js";
-import type { CronRunErrorClassification } from "./types.js";
+import type { CronEvent, CronRunErrorClassification } from "./types.js";
 
 type CronFinishedEvent = CronEvent & { action: "finished" };
 

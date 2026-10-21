@@ -25,12 +25,14 @@ import {
   composeReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
+  isReleaseGhServerError,
   isSplitChangelogEvidenceDelta,
   classifyReleaseChangelogEvidenceComparison,
   SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY,
   MAX_RELEASE_ARTIFACT_BYTES,
   normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
+  readReleaseJobListing,
   releaseCompositeJobsSha256,
   releaseChildSpec,
   terminalPolicyPass,
@@ -197,7 +199,7 @@ export function runReleaseCiGh(args, params = {}) {
   }
 }
 
-async function ghAsync(args) {
+async function ghAsync(args, { smallerPageFallback = false } = {}) {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await execGhReadAsync(args, {
@@ -206,6 +208,9 @@ async function ghAsync(args) {
         timeout: GH_COMMAND_TIMEOUT_MS,
       });
     } catch (error) {
+      if (smallerPageFallback && isReleaseGhServerError(error)) {
+        throw error;
+      }
       await sleep(evidenceReadRetryDelay(args, error, attempt));
     }
   }
@@ -223,8 +228,8 @@ function githubRestJson(pathSuffix, repository = DEFAULT_REPO) {
   return jsonGh(githubRestArgs(pathSuffix, repository));
 }
 
-async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO) {
-  return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository)));
+async function githubRestJsonAsync(pathSuffix, repository = DEFAULT_REPO, options = {}) {
+  return JSON.parse(await ghAsync(githubRestArgs(pathSuffix, repository), options));
 }
 
 function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
@@ -525,7 +530,42 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   ) {
     throw new Error("publication original admission did not succeed; use a fresh parent");
   }
-  const sealers = jobs.filter((job) => job.name === "Seal release execution plan");
+  const expectedPlan = {
+    publicationAdmissionContract: "1",
+    sourceAdmissionContract: "1",
+    repository: request.repository,
+    parentRunId: request.runId,
+    sourceParentRunAttempt: 1,
+    targetSha: request.candidateSha,
+    targetContextRef: request.targetContextRef,
+    trustedWorkflowFullRef: request.tooling.ref,
+    trustedWorkflowSha: request.tooling.sha,
+    workflowRef: branch,
+    workflowSha: request.workflow.sha,
+    releaseProfile: request.coverage.release_profile,
+    rerunGroup: request.coverage.rerun_group,
+  };
+  const loadedEvidence =
+    cachedPlan === undefined ? evidenceClient.loadExecutionPlanEvidence(request.runId) : undefined;
+  if (
+    loadedEvidence?.artifact &&
+    (loadedEvidence.artifact.workflow_run?.head_sha !== original.head_sha ||
+      loadedEvidence.artifact.workflow_run?.head_branch !== original.head_branch)
+  ) {
+    throw new Error("publication original plan artifact producer mismatch");
+  }
+  const candidatePlan = validateReleaseExecutionPlanArtifact(
+    cachedPlan ?? loadedEvidence?.plan,
+    expectedPlan,
+  );
+  const sealAttempt = candidatePlan.sealParentRunAttempt ?? 1;
+  const sealJobs =
+    sealAttempt === 1
+      ? jobs
+      : await evidenceClient.getRunAttemptJobs(request.runId, sealAttempt, {
+          requireComplete: true,
+        });
+  const sealers = sealJobs.filter((job) => job.name === "Seal release execution plan");
   const sealer = sealers[0];
   const seals =
     sealer?.steps?.filter((step) => step.name === "Seal immutable release execution plan") ?? [];
@@ -541,7 +581,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   // checkpoint. The guarded successful upload, not overall job success, seals it.
   if (
     sealers.length !== 1 ||
-    sealer.run_attempt !== 1 ||
+    sealer.run_attempt !== sealAttempt ||
     sealer.status !== "completed" ||
     seals.length !== 1 ||
     seal.status !== "completed" ||
@@ -570,7 +610,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
   const retained =
     originalDigest && cachedPlan !== undefined
       ? { plan: cachedPlan }
-      : evidenceClient.loadExecutionPlanEvidence(request.runId);
+      : (loadedEvidence ?? evidenceClient.loadExecutionPlanEvidence(request.runId));
   if (
     !retained ||
     (retained.artifact &&
@@ -585,21 +625,7 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
       throw new Error("publication original plan artifact producer mismatch");
     }
   }
-  const plan = validateReleaseExecutionPlanArtifact(retained.plan, {
-    publicationAdmissionContract: "1",
-    sourceAdmissionContract: "1",
-    repository: request.repository,
-    parentRunId: request.runId,
-    sourceParentRunAttempt: 1,
-    targetSha: request.candidateSha,
-    targetContextRef: request.targetContextRef,
-    trustedWorkflowFullRef: request.tooling.ref,
-    trustedWorkflowSha: request.tooling.sha,
-    workflowRef: branch,
-    workflowSha: request.workflow.sha,
-    releaseProfile: request.coverage.release_profile,
-    rerunGroup: request.coverage.rerun_group,
-  });
+  const plan = validateReleaseExecutionPlanArtifact(retained.plan, expectedPlan);
   if (
     (originalDigest && plan.sha256 !== originalDigest) ||
     (cachedPlan !== undefined &&
@@ -804,38 +830,47 @@ function findExactChildRun(child, repository = DEFAULT_REPO) {
   return selectExactChildRunFromPages(runPages, child.displayTitle, child.headBranch);
 }
 
-async function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
-  const jobs = [];
-  let total;
-  for (let page = 1; page <= 10; page += 1) {
-    const query = new URLSearchParams({
-      page: String(page),
-      per_page: "100",
-    });
-    const response = await githubRestJsonAsync(`${path}${query.toString()}`, repository);
-    const pageJobs = response.jobs ?? [];
+// The listing keeps the 1,000-job inventory ceiling of ten 100-job pages, whatever page size
+// readReleaseJobListing selects.
+const MAX_RUN_JOBS = 1000;
+
+function findRunJobsAll(path, repository = DEFAULT_REPO, requireComplete = false) {
+  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+    const jobs = [];
+    let total;
+    for (let page = 1; jobs.length < MAX_RUN_JOBS; page += 1) {
+      const query = new URLSearchParams({
+        page: String(page),
+        per_page: String(perPage),
+      });
+      const response = await githubRestJsonAsync(`${path}${query.toString()}`, repository, {
+        smallerPageFallback,
+      });
+      const pageJobs = response.jobs ?? [];
+      if (
+        requireComplete &&
+        (!Array.isArray(response.jobs) ||
+          !Number.isSafeInteger(response.total_count) ||
+          response.total_count < 0 ||
+          (total !== undefined && total !== response.total_count))
+      ) {
+        throw new Error("publication original jobs enumeration is invalid");
+      }
+      total = response.total_count;
+      jobs.push(...pageJobs);
+      if (pageJobs.length < perPage) {
+        break;
+      }
+    }
+    jobs.splice(MAX_RUN_JOBS);
     if (
       requireComplete &&
-      (!Array.isArray(response.jobs) ||
-        !Number.isSafeInteger(response.total_count) ||
-        response.total_count < 0 ||
-        (total !== undefined && total !== response.total_count))
+      (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
     ) {
-      throw new Error("publication original jobs enumeration is invalid");
+      throw new Error("publication original jobs enumeration is incomplete or duplicated");
     }
-    total = response.total_count;
-    jobs.push(...pageJobs);
-    if (pageJobs.length < 100) {
-      break;
-    }
-  }
-  if (
-    requireComplete &&
-    (jobs.length !== total || new Set(jobs.map((job) => job.id)).size !== total)
-  ) {
-    throw new Error("publication original jobs enumeration is incomplete or duplicated");
-  }
-  return jobs;
+    return jobs;
+  });
 }
 
 function parentJobLogArgs(jobId, repository = DEFAULT_REPO, allowEscapeSequences = true) {
@@ -2428,6 +2463,56 @@ function qualificationReuseIdentity(admission) {
   };
 }
 
+function qualificationReusePolicyIdentity(admission) {
+  const identity = qualificationReuseIdentity(admission);
+  const inputs = { ...identity.inputs };
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  inputs.ref = "<candidate>";
+  inputs.expected_sha = "<candidate>";
+  inputs.trusted_workflow_json = JSON.stringify(
+    sortReleaseJsonValueKeys({
+      ...envelope,
+      trustedWorkflow: { sha: "<candidate>" },
+    }),
+  );
+  // A main-dispatched admission always runs at the main tip, so a changelog
+  // descendant is admitted by a newer P. The caller proves that P descends
+  // from the selected P; coverage, baselines and source digests stay exact.
+  const publisher =
+    identity.publisher.workflowFullRef === "refs/heads/main"
+      ? { ...identity.publisher, workflowSha: "<trusted-main-descendant>" }
+      : identity.publisher;
+  return {
+    ...identity,
+    candidateSha: "<candidate>",
+    qualificationSha: "<candidate>",
+    publisher,
+    inputs,
+  };
+}
+
+function isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission) {
+  const selected = selectedAdmission.producer;
+  const requested = requestedAdmission.producer;
+  if (selected.workflowSha === requested.workflowSha) {
+    return true;
+  }
+  if (
+    selected.workflowFullRef !== "refs/heads/main" ||
+    requested.workflowFullRef !== "refs/heads/main"
+  ) {
+    return false;
+  }
+  const comparison = evidenceClient.compareCommitLineage(
+    selected.workflowSha,
+    requested.workflowSha,
+  );
+  return (
+    String(comparison.status) === "ahead" &&
+    comparison.merge_base_commit?.sha === selected.workflowSha
+  );
+}
+
 /**
  * @param {{
  *   manifestPath?: string,
@@ -2500,6 +2585,7 @@ export async function validateReleaseRunEvidence(
     expectedSelectedRunId,
     expectedTargetSha,
   };
+  let requestedReuseDelta;
   if (reuseRequest !== undefined) {
     // Reject mismatched searches before fetching root/child evidence. Matching
     // metadata only admits a candidate to the full verifier below; it never passes it.
@@ -2528,6 +2614,7 @@ export async function validateReleaseRunEvidence(
           version:
             manifest.candidateBinding?.package?.version ?? manifest.validationInputs?.targetVersion,
         });
+    requestedReuseDelta = delta;
     validateRequestedEvidenceReuse(
       manifest,
       manifest,
@@ -2542,6 +2629,26 @@ export async function validateReleaseRunEvidence(
       },
       () => comparison,
     );
+  }
+  let validatedDirectRequestedReuse = false;
+  let expectedReuseDescendant = false;
+  if (
+    reuseRequest === undefined &&
+    hasRequestedEvidenceReuse(requestedReuse) &&
+    !currentEvidence.manifest.evidenceReuse
+  ) {
+    validateRequestedEvidenceReuse(
+      currentEvidence.manifest,
+      currentEvidence.manifest,
+      currentEvidence.manifest,
+      requestedReuse,
+      (base, head) => evidenceClient.compareCommits(base, head),
+    );
+    validatedDirectRequestedReuse = true;
+    expectedReuseDescendant =
+      expectedTargetSha !== currentEvidence.manifest.targetSha &&
+      expectedEvidenceSha === currentEvidence.manifest.targetSha &&
+      expectedEvidencePolicy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY;
   }
   /** @type {Map<string, import("./release-qualification-admission.mjs").QualificationAdmission>} */
   const qualificationAdmissions = new Map();
@@ -2633,6 +2740,25 @@ export async function validateReleaseRunEvidence(
       ...qualificationReuse,
       repository: normalizedRepository,
     });
+    const exactQualification =
+      currentEvidence.manifest.targetSha === requestedAdmission.request.candidateSha &&
+      isDeepStrictEqual(
+        qualificationReuseIdentity(selectedAdmission),
+        qualificationReuseIdentity(requestedAdmission),
+      );
+    const admittedChangelogDescendant =
+      ((reuseRequest !== undefined &&
+        requestedReuseDelta !== undefined &&
+        requestedReuseDelta.policy !== EXACT_TARGET_EVIDENCE_REUSE_POLICY &&
+        reuseRequest.targetSha === requestedAdmission.request.candidateSha) ||
+        (expectedReuseDescendant &&
+          expectedTargetSha === requestedAdmission.request.candidateSha)) &&
+      currentEvidence.manifest.targetSha === selectedAdmission.request.candidateSha &&
+      isDeepStrictEqual(
+        qualificationReusePolicyIdentity(selectedAdmission),
+        qualificationReusePolicyIdentity(requestedAdmission),
+      ) &&
+      isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission);
     if (
       (reuseRequest !== undefined &&
         reuseRequest.targetSha !== requestedAdmission.request.candidateSha) ||
@@ -2641,10 +2767,7 @@ export async function validateReleaseRunEvidence(
       requestedAdmission.producer.workflowSha !== verifier.sourceSha ||
       requestedAdmission.producer.workflowHeadBranch !== normalizedTrustedWorkflowRef ||
       requestedAdmission.producer.workflowFullRef !== trustedIdentity.fullRef ||
-      !isDeepStrictEqual(
-        qualificationReuseIdentity(selectedAdmission),
-        qualificationReuseIdentity(requestedAdmission),
-      )
+      (!exactQualification && !admittedChangelogDescendant)
     ) {
       throw new Error("Qualification reuse requires exact admitted C/Q/P, coverage and inputs");
     }
@@ -2676,7 +2799,7 @@ export async function validateReleaseRunEvidence(
       (base, head) => evidenceClient.compareCommits(base, head),
     );
   }
-  if (hasRequestedEvidenceReuse(requestedReuse)) {
+  if (hasRequestedEvidenceReuse(requestedReuse) && !validatedDirectRequestedReuse) {
     validateRequestedEvidenceReuse(
       currentEvidence.manifest,
       selectedEvidence.manifest,

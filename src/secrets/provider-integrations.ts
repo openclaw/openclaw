@@ -18,7 +18,7 @@ import type { PluginManifestSecretProviderIntegration } from "../plugins/manifes
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
 /** Secret provider preset exposed by an active trusted plugin integration. */
-export type SecretProviderIntegrationPreset = {
+type SecretProviderIntegrationPreset = {
   id: string;
   pluginId: string;
   providerAlias: string;

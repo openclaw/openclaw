@@ -4,7 +4,10 @@ import { isMainThread, Worker } from "node:worker_threads";
 import type { Static } from "typebox";
 import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
 import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
-import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
@@ -24,6 +27,7 @@ const PERSISTENT_DEGRADATION_WARN_AFTER_MS = 60_000;
 // Load counters can spike during frequent short async wakeups; delay is the blocking signal.
 const LOAD_DEGRADATION_DELAY_COEVIDENCE_MS = 25;
 const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
+const IDLE_SAMPLE_INTERVAL_MS = 10_000;
 // A native request can wait on a blocked worker. It must not delay the sampler.
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
 const log = createSubsystemLogger("gateway/event-loop");
@@ -43,13 +47,9 @@ type GatewayEventLoopHealthMonitor = {
   stop: () => void;
 };
 
-type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
-
 type GatewayEventLoopHealthMonitorDeps = {
   scheduler: GatewayScheduler;
-  now?: () => number;
-  cpuUsage?: typeof process.cpuUsage;
-  eventLoopUtilization?: EventLoopUtilizationReader;
+  isIdle?: () => boolean;
 };
 
 type GatewayEventLoopHealthMetrics = Pick<
@@ -96,14 +96,7 @@ function cpuUsageDelta(
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
   try {
     const times = cpus().map((cpu) => cpu.times);
-    return times.length &&
-      times.every((cpu) =>
-        [cpu.user, cpu.nice, cpu.sys, cpu.idle, cpu.irq].every(
-          (value) => Number.isFinite(value) && value >= 0,
-        ),
-      )
-      ? times
-      : undefined;
+    return times.length ? times : undefined;
   } catch {
     return undefined;
   }
@@ -171,14 +164,15 @@ export function createGatewayEventLoopHealthMonitor(
   deps: GatewayEventLoopHealthMonitorDeps,
 ): GatewayEventLoopHealthMonitor {
   const { scheduler } = deps;
-  const nowMs = deps.now ?? performance.now.bind(performance);
-  const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
-  const readEventLoopUtilization =
-    deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
-  const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
+  const nowMs = performance.now.bind(performance);
+  const readCpuUsage = process.cpuUsage.bind(process);
+  const readEventLoopUtilization = performance.eventLoopUtilization.bind(performance);
+  const flightRecorder = createStallFlightRecorder((message) => log.warn(message));
   const stalls = createMainThreadStallMonitor(nowMs);
   let unattributedDelayMs = 0;
   let histogram: ELDHistogram | null = null;
+  let histogramEnabled = true;
+  let sampleDueAt = 0;
   let lastWallAt = nowMs();
   let lastCpuUsage = readCpuUsage();
   let lastMainThreadCpuUsage = readMainThreadCpuUsage();
@@ -252,13 +246,7 @@ export function createGatewayEventLoopHealthMonitor(
     cancelWorkerCpuSample = () => {
       active = false;
     };
-    const readings = workers.map(async (worker) => {
-      try {
-        return await worker.cpuUsage();
-      } catch {
-        return undefined;
-      }
-    });
+    const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;
@@ -287,7 +275,28 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
-    const delayMaxMs = Math.max(nanosecondsToMilliseconds(histogram.max), attributed.delayMaxMs);
+    if (
+      attributed.stalls.length > 0 &&
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({
+          type: "gateway.main_thread.stall",
+          stalls: attributed.stalls.map((stall) => ({
+            task: stall.task,
+            durationMs: stall.elapsedMs,
+          })),
+          dropped: attributed.dropped,
+        }),
+      );
+    }
+    // Idle windows retain callback attribution and overdue-deadline detection without
+    // the native histogram's 20 ms wakeup. Full resolution returns with active work.
+    const delayMaxMs = Math.max(
+      histogramEnabled ? nanosecondsToMilliseconds(histogram.max) : Math.max(0, now - sampleDueAt),
+      attributed.delayMaxMs,
+    );
     let longestStallMs = attributed.stalls.length === 0 ? unattributedDelayMs : 0;
     for (const stall of attributed.stalls) {
       longestStallMs = Math.max(longestStallMs, stall.elapsedMs);
@@ -319,7 +328,7 @@ export function createGatewayEventLoopHealthMonitor(
       samplingJob = scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS - intervalMs);
       return;
     }
-    const delayP99Ms = nanosecondsToMilliseconds(histogram.percentile(99));
+    const delayP99Ms = histogramEnabled ? nanosecondsToMilliseconds(histogram.percentile(99)) : 0;
 
     const cpuUsage = readCpuUsage(lastCpuUsage);
     const currentEventLoopUtilization = readEventLoopUtilization();
@@ -383,20 +392,47 @@ export function createGatewayEventLoopHealthMonitor(
         emitInternalDiagnosticEvent({ type: "gateway.event_loop.sample", intervalMs, delayMaxMs }),
       );
     }
+    samplingJob = scheduleSample(
+      !degraded &&
+        deps.isIdle?.() &&
+        !hasInternalDiagnosticEventInterest("gateway.event_loop.sample")
+        ? IDLE_SAMPLE_INTERVAL_MS
+        : SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
+    );
   };
 
-  const scheduleSample = (delayMs: number) =>
-    scheduler.schedule({
+  const scheduleSample = (delayMs: number) => {
+    const enableHistogram = delayMs !== IDLE_SAMPLE_INTERVAL_MS;
+    if (histogram && histogramEnabled !== enableHistogram) {
+      histogramEnabled = enableHistogram;
+      if (enableHistogram) {
+        histogram.reset();
+        histogram.enable();
+      } else {
+        histogram.disable();
+      }
+    }
+    const job = scheduler.schedule({
       id: "event-loop-health",
       delayMs,
-      everyMs: SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS,
-      // Let the blocking callback's after hook publish its stall before resetting the window.
+      phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
+      // Let the blocking task scope publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
+    sampleDueAt = nowMs() + (job.atMs - scheduler.now());
+    return job;
+  };
   let samplingJob = histogram ? scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS) : undefined;
   if (histogram) {
     captureWorkerCpu(lastWallAt);
   }
+  const unsubscribeInterest = onInternalDiagnosticEventInterest("gateway.event_loop.sample", () => {
+    const now = nowMs();
+    const nextSampleAt = Math.max(now, lastWallAt + SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
+    if (histogram && nextSampleAt < sampleDueAt) {
+      samplingJob = scheduleSample(nextSampleAt - now);
+    }
+  });
 
   const reset = () => {
     stalls.reset();
@@ -413,6 +449,7 @@ export function createGatewayEventLoopHealthMonitor(
     lastWorkerCpuWindow = undefined;
     if (histogram) {
       captureWorkerCpu(lastWallAt);
+      samplingJob = scheduleSample(SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS);
     }
   };
 
@@ -428,6 +465,7 @@ export function createGatewayEventLoopHealthMonitor(
     },
     reset,
     stop: () => {
+      unsubscribeInterest();
       flightRecorder.stop();
       stalls.stop();
       samplingJob?.cancel();

@@ -1,5 +1,5 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { For, createRenderEffect, createSignal, onCleanup } from "solid-js";
+import { For, createSignal, onCleanup } from "solid-js";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
@@ -7,18 +7,20 @@ import {
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
+  ApprovalCountdown,
   approvalRemainingLabel,
   approvalTitle,
   ExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card-solid.tsx";
-import { OpenClawModalDialog } from "./modal-dialog.ts";
+import "./modal-dialog.ts";
 
 export type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
@@ -49,11 +51,11 @@ function renderApprovalQueueList(params: {
             >
               <span class="exec-approval-list__agent">{agent}</span>
               <span class="exec-approval-list__command mono">{command}</span>
-              <openclaw-approval-countdown
+              <ApprovalCountdown
                 class="exec-approval-list__expiry"
                 aria-hidden="true"
-                prop:expiresAtMs={entry.expiresAtMs}
-                prop:compact={true}
+                expiresAtMs={entry.expiresAtMs}
+                compact={true}
               />
             </button>
           );
@@ -109,7 +111,6 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       (previous) => queue().length > 0 && (previous ?? false),
     );
     const active = () => queue().find((entry) => entry.id === selectedApprovalId()) ?? queue()[0];
-    let dialog: OpenClawModalDialog | undefined;
     controls.set(host, {
       show() {
         if (!queue().length) {
@@ -123,18 +124,17 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       get: () => explicitlyOpen() && queue().length > 0,
     });
     onCleanup(() => controls.delete(host));
-    createRenderEffect(
-      () => explicitlyOpen() && queue().length > 0,
-      (open) => {
-        if (open) {
-          void host.updateComplete.then(() => dialog?.show());
-        }
-      },
-    );
     const handleKeydown = (event: KeyboardEvent) => {
       const props = bridgeProps.props;
       const request = active();
-      if (!request || event.defaultPrevented || event.repeat || props?.busy || !props?.canGrant) {
+      if (
+        !request ||
+        event.defaultPrevented ||
+        event.repeat ||
+        props?.busy ||
+        !props?.connected ||
+        !props?.canGrant
+      ) {
         return;
       }
       const decision = shortcutDecision(event);
@@ -156,11 +156,6 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       <>
         {explicitlyOpen() && active() && bridgeProps.props ? (
           <openclaw-modal-dialog
-            ref={(element) => {
-              if (element instanceof OpenClawModalDialog) {
-                dialog = element;
-              }
-            }}
             label={approvalTitle(active()!)}
             description={approvalRemainingLabel(active()!.expiresAtMs, Date.now())}
             onKeyDown={handleKeydown}
@@ -171,18 +166,20 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
                 props={{
                   approval: active()!,
                   busy: bridgeProps.props!.busy,
+                  connected: bridgeProps.props!.connected,
                   canGrant: bridgeProps.props!.canGrant,
                   error: bridgeProps.props!.errors.get(active()!.id) ?? null,
                   variant: "modal",
                   queueCount: queue().length,
+                  renderPendingQueue: () =>
+                    renderApprovalQueueList({
+                      queue: queue(),
+                      activeId: active()!.id,
+                      onSelect: selectApproval,
+                    }),
                   onDecision: bridgeProps.props!.onDecision,
                 }}
               />
-              {renderApprovalQueueList({
-                queue: queue(),
-                activeId: active()!.id,
-                onSelect: selectApproval,
-              })}
             </div>
           </openclaw-modal-dialog>
         ) : undefined}

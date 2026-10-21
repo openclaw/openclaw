@@ -69,7 +69,10 @@ function createApi() {
     provider: "crabbox",
     settings: { ...SETTINGS, ...settings },
   });
-  const setup = { setup: "true", setupEnv: ["SYNTHETIC_SETUP_INPUT"] };
+  const setup = {
+    setup: "true",
+    setupSecrets: { SYNTHETIC_SETUP_INPUT: { source: "store", provider: "default", id: "SETUP" } },
+  };
   const api = createTestPluginApi({
     runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
     id: "crabbox",
@@ -295,7 +298,7 @@ describe("Crabbox snapshots Gateway methods", () => {
     expect(Object.keys(image.allocations)).toHaveLength(21);
   });
 
-  it("uses current configured defaults without reading setup environment or including other providers", async () => {
+  it("uses current configured defaults without resolving secrets or including other providers", async () => {
     const api = createApi();
     const respond = vi.fn();
     await listCrabboxImages(api, { params: {}, respond });
@@ -304,7 +307,7 @@ describe("Crabbox snapshots Gateway methods", () => {
         [
           ["classless", undefined, "linux", "off", "machine class"],
           ["disabled", "standard", "linux", "off", "Disabled"],
-          ["environment", "standard", "linux", "off", "environment"],
+          ["environment", "standard", "linux", "on", "default"],
           ["explicit", "standard", "linux", "on", "Explicitly"],
           ["linux", "standard", "linux", "on", "default"],
           ["mac", "standard", "macos", "off", "Linux"],

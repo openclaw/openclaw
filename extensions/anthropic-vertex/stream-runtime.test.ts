@@ -56,13 +56,18 @@ function makeModel(params: {
 }): Model<"anthropic-messages"> {
   return {
     id: params.id,
+    name: params.id,
     api: "anthropic-messages",
     provider: "anthropic-vertex",
+    baseUrl: "https://us-east5-aiplatform.googleapis.com",
     reasoning: params.reasoning ?? true,
-    ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
+    maxTokens: params.maxTokens ?? 128_000,
+    contextWindow: 1_000_000,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...(params.params ? { params: params.params } : {}),
     ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
-  } as Model<"anthropic-messages">;
+  };
 }
 
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
@@ -134,13 +139,7 @@ async function capturePayload(
   const onPayload = vi.fn((_payload: unknown) => {
     throw new Error("stop before network");
   });
-  const model: Model<"anthropic-messages"> = {
-    ...makeModel(modelOptions),
-    name: modelOptions.id,
-    input: ["text"],
-    contextWindow: 1_000_000,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
+  const model = makeModel(modelOptions);
   const stream = await streamFn(
     model,
     { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -295,29 +294,25 @@ describe("createAnthropicVertexStreamFn", () => {
   it.each([
     ["defaults to the model limit instead of the old 32000 cap", 128000, undefined, 128000],
     ["clamps requests to the model limit", 128000, 999999, 128000],
-    ["omits nonfinite limits", undefined, Number.NaN, undefined],
+    ["floors fractional requested limits", 128000, 4096.75, 4096],
   ] as const)("maxTokens %s", (_name, limit, requested, expected) => {
     const options = captureOptions(makeModel({ id: "claude-sonnet-4-6", maxTokens: limit }), {
       maxTokens: requested,
     });
-    if (expected === undefined) {
-      expect(options).not.toHaveProperty("maxTokens");
-    } else {
-      expect(options.maxTokens).toBe(expected);
-    }
+    expect(options.maxTokens).toBe(expected);
   });
 
-  it("omits unsupported temperature without adaptive thinking", () => {
-    const options = captureOptions(makeModel({ id: "claude-opus-4-8" }), { temperature: 0.7 });
-    expect(options).not.toHaveProperty("temperature");
+  it("omits unsupported temperature without adaptive thinking", async () => {
+    const payload = await capturePayload({ id: "claude-opus-4-8" }, { temperature: 0.7 });
+    expect(payload).not.toHaveProperty("temperature");
   });
 
-  it("preserves temperature for Vertex models that support custom sampling", () => {
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
-
-    const transportOptions = captureOptions(model, { temperature: 0.7 });
-
-    expect(transportOptions.temperature).toBe(0.7);
+  it("preserves temperature for Vertex models that support custom sampling", async () => {
+    const payload = await capturePayload(
+      { id: "claude-sonnet-4-6", maxTokens: 128000 },
+      { temperature: 0.7 },
+    );
+    expect(payload).toHaveProperty("temperature", 0.7);
   });
 
   it.each([
@@ -346,35 +341,59 @@ describe("createAnthropicVertexStreamFn", () => {
     { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
   ])(
     "supports Sonnet 5 reasoning=$reasoning on Vertex",
-    ({ reasoning, thinkingEnabled, effort }) => {
-      const model = makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 });
-
-      const options = captureOptions(model, { reasoning, temperature: 0.7 });
-      expect(options).toMatchObject({ thinkingEnabled, maxTokens: 128_000 });
-      expect(options).not.toHaveProperty("temperature");
+    async ({ reasoning, thinkingEnabled, effort }) => {
+      const payload = await capturePayload(
+        { id: "claude-sonnet-5", maxTokens: 128_000 },
+        { reasoning, temperature: 0.7 },
+      );
+      expect(payload).toMatchObject({
+        thinking: { type: thinkingEnabled ? "adaptive" : "disabled" },
+        max_tokens: 128_000,
+      });
+      expect(payload).not.toHaveProperty("temperature");
       if (effort) {
-        expect(options.effort).toBe(effort);
+        expect(payload).toHaveProperty("output_config.effort", effort);
       } else {
-        expect(options).not.toHaveProperty("effort");
+        expect(payload).not.toHaveProperty("output_config");
       }
     },
   );
 
-  it("uses canonical Claude policy for Vertex deployment aliases", () => {
-    const model = makeModel({
-      id: "production-claude",
-      maxTokens: 128000,
-      params: { canonicalModelId: "claude-opus-4-8" },
+  it("uses canonical Claude policy for Vertex deployment aliases", async () => {
+    const payload = await capturePayload(
+      {
+        id: "production-claude",
+        maxTokens: 128000,
+        params: { canonicalModelId: "claude-opus-4-8" },
+      },
+      { reasoning: "xhigh", temperature: 0.7 },
+    );
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
     });
-
-    const transportOptions = captureOptions(model, { reasoning: "xhigh", temperature: 0.7 });
-
-    expect(transportOptions).toMatchObject({
-      thinkingEnabled: true,
-      effort: "xhigh",
-    });
-    expect(transportOptions).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("temperature");
   });
+
+  it.each([undefined, "off", "high"] as const)(
+    "keeps Vertex Haiku 5.5 reasoning=%s distinct from direct-API defaults",
+    async (reasoning) => {
+      const payload = await capturePayload(
+        { id: "claude-haiku-5-5", maxTokens: 128_000 },
+        { reasoning, temperature: 0.7 },
+      );
+      expect(payload).toMatchObject({
+        max_tokens: 128_000,
+        thinking: { type: reasoning === "high" ? "adaptive" : "disabled" },
+      });
+      if (reasoning === "high") {
+        expect(payload).toHaveProperty("output_config.effort", "high");
+      } else {
+        expect(payload).not.toHaveProperty("output_config");
+      }
+      expect(payload).not.toHaveProperty("temperature");
+    },
+  );
 
   it.each([
     {
@@ -406,17 +425,42 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(payload).toMatchObject({ thinking, max_tokens: maxTokens });
   });
 
-  it("honors explicit max opt-outs for Vertex aliases", () => {
-    const model = makeModel({
-      id: "production-claude",
-      params: { canonicalModelId: "claude-sonnet-4-6" },
-      reasoning: false,
-      thinkingLevelMap: { xhigh: null, max: null },
+  it("keeps max manual thinking independent from a custom high budget", async () => {
+    const payload = await capturePayload(
+      { id: "claude-haiku-4-5", maxTokens: 64_000 },
+      { reasoning: "max", maxTokens: 1024, thinkingBudgets: { high: 512 } },
+    );
+    expect(payload).toMatchObject({
+      thinking: { type: "enabled", budget_tokens: 32_768 },
+      max_tokens: 33_792,
     });
+  });
 
-    const transportOptions = captureOptions(model, { reasoning: "max", temperature: 0.2 });
-    expect(transportOptions.effort).toBe("high");
-    expect(transportOptions).not.toHaveProperty("temperature");
+  it("keeps listed capability overrides authoritative for Vertex manual thinking", async () => {
+    const payload = await capturePayload(
+      {
+        id: "claude-sonnet-5",
+        maxTokens: 128_000,
+        params: { claudeCapabilities: { adaptiveThinking: false } },
+      },
+      { reasoning: "high" },
+    );
+    expect(payload).toMatchObject({ thinking: { type: "enabled", budget_tokens: 16_384 } });
+    expect(payload).not.toHaveProperty("output_config");
+  });
+
+  it("honors explicit max opt-outs for Vertex aliases", async () => {
+    const payload = await capturePayload(
+      {
+        id: "production-claude",
+        params: { canonicalModelId: "claude-sonnet-4-6" },
+        reasoning: false,
+        thinkingLevelMap: { xhigh: null, max: null },
+      },
+      { reasoning: "max", temperature: 0.2 },
+    );
+    expect(payload).toHaveProperty("output_config.effort", "high");
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it("forwards the private acceptance observer to the shared Anthropic transport", async () => {

@@ -5,14 +5,21 @@ function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-async function fetchAdminUsage(params: {
-  apiKey: string;
-  projectId?: string;
-  fetchFn: typeof fetch;
-}) {
+function usagePage(results: Record<string, unknown>[]) {
+  return Response.json({
+    data: [{ start_time: 1_783_296_000, end_time: 1_783_382_400, results }],
+    has_more: false,
+  });
+}
+
+async function fetchAdminUsage(
+  fetchFn: typeof fetch,
+  projectId?: string,
+  apiKey = "sk-admin-test",
+) {
   const auth = await resolveOpenAIUsageAuth({
     config: {},
-    env: { OPENAI_ADMIN_KEY: params.apiKey },
+    env: { OPENAI_ADMIN_KEY: apiKey },
     provider: "openai",
     resolveApiKeyFromConfigAndStore: () => undefined,
     resolveOAuthToken: async () => null,
@@ -22,11 +29,11 @@ async function fetchAdminUsage(params: {
   }
   return await fetchOpenAIUsage({
     config: {},
-    env: params.projectId ? { OPENAI_PROJECT_ID: params.projectId } : {},
+    env: projectId ? { OPENAI_PROJECT_ID: projectId } : {},
     provider: "openai",
     token: auth.token,
     timeoutMs: 5_000,
-    fetchFn: params.fetchFn,
+    fetchFn,
   });
 }
 
@@ -50,49 +57,29 @@ describe("OpenAI provider usage", () => {
     const fetchFn = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = requestUrl(input);
       if (url.pathname.endsWith("/organization/costs")) {
-        return new Response(
-          JSON.stringify({
-            data: [
-              {
-                start_time: 1_783_296_000,
-                end_time: 1_783_382_400,
-                results: [{ amount: { value: "12.34", currency: "usd" }, line_item: "Responses" }],
-              },
-            ],
-            has_more: false,
-          }),
-          { status: 200 },
-        );
+        return usagePage([{ amount: { value: "12.34", currency: "usd" }, line_item: "Responses" }]);
       }
-      return new Response(
-        JSON.stringify({
-          data: [
-            {
-              start_time: 1_783_296_000,
-              end_time: 1_783_382_400,
-              results: [
-                {
-                  input_tokens: 1_000,
-                  input_cached_tokens: 400,
-                  output_tokens: 250,
-                  num_model_requests: 8,
-                  model: "gpt-5.5",
-                },
-              ],
-            },
-          ],
-          has_more: false,
-        }),
-        { status: 200 },
-      );
+      return usagePage([
+        {
+          input_tokens: 1_000,
+          input_cached_tokens: 400,
+          output_tokens: 250,
+          num_model_requests: 8,
+          model: "gpt-5.5",
+        },
+      ]);
     });
 
-    const result = await fetchAdminUsage({
-      apiKey: "sk-admin-test",
-      projectId: "proj_test",
-      fetchFn: fetchFn as typeof fetch,
-    });
+    const result = await fetchAdminUsage(fetchFn, "proj_test");
 
+    const tokens = {
+      requests: 8,
+      inputTokens: 600,
+      cacheReadTokens: 400,
+      cacheWriteTokens: 0,
+      outputTokens: 250,
+      totalTokens: 1_250,
+    };
     expect(result).toEqual({
       provider: "openai",
       displayName: "OpenAI",
@@ -111,29 +98,8 @@ describe("OpenAI provider usage", () => {
         unit: "USD",
         periodDays: 30,
         scope: "Project proj_test",
-        daily: [
-          {
-            date: "2026-07-06",
-            amount: 12.34,
-            requests: 8,
-            inputTokens: 600,
-            cacheReadTokens: 400,
-            cacheWriteTokens: 0,
-            outputTokens: 250,
-            totalTokens: 1_250,
-          },
-        ],
-        models: [
-          {
-            name: "gpt-5.5",
-            requests: 8,
-            inputTokens: 600,
-            cacheReadTokens: 400,
-            cacheWriteTokens: 0,
-            outputTokens: 250,
-            totalTokens: 1_250,
-          },
-        ],
+        daily: [{ date: "2026-07-06", amount: 12.34, ...tokens }],
+        models: [{ name: "gpt-5.5", ...tokens }],
         categories: [{ name: "Responses", amount: 12.34 }],
       },
       summary: "8 requests · 1,250 tokens",
@@ -149,11 +115,73 @@ describe("OpenAI provider usage", () => {
     }
   });
 
+  it.each([
+    {
+      name: "the documented mixed-modality and cache-write response",
+      // https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions
+      usage: {
+        input_tokens: 1_000,
+        input_cached_tokens: 400,
+        input_cache_write_tokens: 75,
+        input_cache_write_12h_tokens: 25,
+        input_uncached_tokens: 500,
+        output_tokens: 500,
+        input_text_tokens: 400,
+        output_text_tokens: 400,
+        input_cached_text_tokens: 300,
+        input_audio_tokens: 50,
+        input_cached_audio_tokens: 50,
+        output_audio_tokens: 50,
+        input_image_tokens: 50,
+        input_cached_image_tokens: 50,
+        output_image_tokens: 50,
+      },
+      expected: {
+        inputTokens: 500,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 100,
+        outputTokens: 500,
+        totalTokens: 1_500,
+      },
+      summary: "5 requests · 1,500 tokens",
+    },
+    {
+      name: "audio totals without optional text or cache breakdowns",
+      usage: {
+        input_tokens: 200,
+        input_audio_tokens: 200,
+        output_tokens: 300,
+        output_audio_tokens: 300,
+      },
+      expected: {
+        inputTokens: 200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        outputTokens: 300,
+        totalTokens: 500,
+      },
+      summary: "5 requests · 500 tokens",
+    },
+  ])("counts each token once for $name", async ({ usage, expected, summary }) => {
+    const result = await fetchAdminUsage(async (input) =>
+      requestUrl(input).pathname.endsWith("/organization/costs")
+        ? Response.json({ data: [], has_more: false })
+        : usagePage([{ ...usage, num_model_requests: 5, model: "test-model" }]),
+    );
+
+    expect(result.costHistory?.daily).toEqual([
+      { date: "2026-07-06", amount: 0, requests: 5, ...expected },
+    ]);
+    expect(result.costHistory?.models).toEqual([{ name: "test-model", requests: 5, ...expected }]);
+    expect(result.summary).toBe(summary);
+  });
+
   it("reports when organization usage rejects a non-admin key", async () => {
-    const result = await fetchAdminUsage({
-      apiKey: "sk-proj-test",
-      fetchFn: vi.fn(async () => new Response("", { status: 403 })) as typeof fetch,
-    });
+    const result = await fetchAdminUsage(
+      async () => new Response("", { status: 403 }),
+      undefined,
+      "sk-proj-test",
+    );
     expect(result.error).toBe("Admin API key required");
   });
 
@@ -186,23 +214,17 @@ describe("OpenAI provider usage", () => {
       "utf8",
     ).toString("base64url");
     const accessToken = ["fake-header", claims, "fake-sig"].join(".");
-    const fetchFn = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            plan_type: "pro",
-            rate_limit: { primary_window: { limit_window_seconds: 18_000, used_percent: 12 } },
-          }),
-          { status: 200 },
-        ),
-    ) as typeof fetch;
     const snapshot = await fetchOpenAIUsage({
       config: {},
       env: {},
       provider: "openai",
       token: accessToken,
       timeoutMs: 5_000,
-      fetchFn,
+      fetchFn: async () =>
+        Response.json({
+          plan_type: "pro",
+          rate_limit: { primary_window: { limit_window_seconds: 18_000, used_percent: 12 } },
+        }),
     });
     expect(snapshot.accountEmail).toBe("codex@example.com");
     expect(snapshot.windows.length).toBeGreaterThan(0);

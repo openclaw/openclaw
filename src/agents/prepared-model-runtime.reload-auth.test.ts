@@ -4,28 +4,53 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   beginPreparedModelRuntimePluginDrain,
   acquireAgentRunPreparedModelRuntime,
-  loadPublishedGatewayReplyDispatchRuntime,
+  loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeCatalog,
   registerPreparedModelRuntimePublicationListener,
-  refreshPreparedModelRuntimeSnapshots,
+  refreshPreparedModelRuntimeSnapshots as refreshRuntime,
 } from "./prepared-model-runtime.js";
 import { PreparedReplyDispatchPublicationOwner } from "./prepared-reply-dispatch-runtime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
+type Dispatch = ReturnType<typeof loadDispatch>;
+type Refresh = ReturnType<typeof refreshRuntime>;
+const buildResult = (agentId = "default") => ({
+  agentDir: fixture.state.agentDir(agentId),
+  wrote: false as const,
+});
+const build = () => createDeferred<ReturnType<typeof buildResult>>();
+const refresh = (config: OpenClawConfig = {}) => refreshRuntime(config, { gatewayLifecycle: true });
+const mutate = (agentId = "default") =>
+  mocks.mutationListener?.({
+    agentDir: fixture.state.agentDir(agentId),
+    affectsInheritedStores: false,
+  });
+const expectPending = (promise: Promise<unknown>) =>
+  expect(Promise.race([promise.then(() => "settled"), Promise.resolve("pending")])).resolves.toBe(
+    "pending",
+  );
+function observePhases() {
+  const events: string[] = [];
+  const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) =>
+    events.push(phase),
+  );
+  return { events, unregister };
+}
 
 describe("prepared model runtime reload auth adoption", () => {
   it("does not record an obsolete catalog attempt after its owner is superseded", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, {
+    await refreshRuntime(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
@@ -43,16 +68,17 @@ describe("prepared model runtime reload auth adoption", () => {
       return result.promise;
     });
     const failure = new Error("obsolete catalog attempt failed");
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) =>
-      events.push(event.phase),
-    );
-    const load = snapshot.loadFullModelCatalog({ refresh: true });
+    const { events, unregister } = observePhases();
+    // Observe worker settlement even after the foreground catalog deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const load = snapshot.loadFullModelCatalog({ refresh: true, wait: true });
     const rejected = expect(load).rejects.toBe(failure);
-    let replacement: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    void rejected.catch(() => undefined);
+    let replacement: Refresh | undefined;
     try {
       await started.promise;
-      replacement = refreshPreparedModelRuntimeSnapshots(
+      await vi.advanceTimersByTimeAsync(5_000);
+      replacement = refreshRuntime(
         { logging: { level: "debug" } },
         { gatewayLifecycle: true, catalogMode: "static" },
       );
@@ -66,13 +92,14 @@ describe("prepared model runtime reload auth adoption", () => {
       result.reject(failure);
       await Promise.allSettled([load, replacement]);
       unregister();
+      vi.useRealTimers();
     }
   });
 
   it("does not refresh a catalog snapshot that is not owned by the runtime", async () => {
     mocks.configuredAgentIds = ["default"];
     const input = fixture.agentInput("default", {});
-    await refreshPreparedModelRuntimeSnapshots(input.config, {
+    await refreshRuntime(input.config, {
       gatewayLifecycle: true,
       catalogMode: "static",
     });
@@ -88,9 +115,9 @@ describe("prepared model runtime reload auth adoption", () => {
     mocks.configuredAgentIds = ["default", "worker"];
     const initialConfig = {};
     const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const configBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const authBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(initialConfig);
+    const configBuild = build();
+    const authBuild = build();
     const order: string[] = [];
     const events: string[] = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
@@ -113,41 +140,30 @@ describe("prepared model runtime reload auth adoption", () => {
       return await authBuild.promise;
     });
 
-    let publication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    let affectedRead: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let siblingRead: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let publication: Refresh | undefined;
+    let affectedRead: Dispatch | undefined;
+    let siblingRead: Dispatch | undefined;
     try {
-      publication = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-        gatewayLifecycle: true,
-      });
+      publication = refresh(replacementConfig);
       void publication.catch(() => undefined);
       await vi.waitFor(() => expect(order).toContain("config-build-start"));
       order.push("auth-mutation");
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("default"),
-        affectsInheritedStores: false,
+      mutate("default");
+      affectedRead = loadDispatch({ agentId: "default" }).then((runtime) => {
+        order.push("affected-dispatch-resolved");
+        return runtime;
       });
-      affectedRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }).then(
-        (runtime) => {
-          order.push("affected-dispatch-resolved");
-          return runtime;
-        },
-      );
-      siblingRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+      siblingRead = loadDispatch({ agentId: "worker" });
       void affectedRead.catch(() => undefined);
       void siblingRead.catch(() => undefined);
       order.push("config-build-finish");
-      configBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      configBuild.resolve(buildResult());
       await vi.waitFor(() => expect(order).toContain("auth-drain-start"));
-      await expect(
-        Promise.race([publication.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
-      await expect(
-        Promise.race([affectedRead.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      await expectPending(publication);
+      await expectPending(affectedRead);
 
       order.push("auth-drain-finish");
-      authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      authBuild.resolve(buildResult());
       await expect(publication).resolves.toBeUndefined();
       const [affectedRuntime, siblingRuntime] = await Promise.all([affectedRead, siblingRead]);
       unregister();
@@ -179,8 +195,8 @@ describe("prepared model runtime reload auth adoption", () => {
       expect(lease.snapshot.config).toBe(replacementConfig);
       await lease[Symbol.asyncDispose]();
     } finally {
-      configBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
-      authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      configBuild.resolve(buildResult());
+      authBuild.resolve(buildResult());
       await Promise.allSettled([publication, affectedRead, siblingRead]);
       unregister();
     }
@@ -190,41 +206,36 @@ describe("prepared model runtime reload auth adoption", () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const authBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(initialConfig);
+    const authBuild = build();
     const reloadError = new Error("replacement config failed");
     mocks.ensureOpenClawModelsJson
       .mockImplementationOnce(async () => await authBuild.promise)
       .mockRejectedValueOnce(reloadError);
 
-    let authWaiter: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let reload: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let authWaiter: Dispatch | undefined;
+    let reload: Refresh | undefined;
     try {
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("default"),
-        affectsInheritedStores: false,
-      });
+      mutate("default");
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      authWaiter = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      authWaiter = loadDispatch({ agentId: "default" });
       void authWaiter.catch(() => undefined);
-      reload = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-        gatewayLifecycle: true,
-      });
+      reload = refresh(replacementConfig);
       void reload.catch(() => undefined);
-      authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      authBuild.resolve(buildResult());
 
       await expect(reload).rejects.toBe(reloadError);
       await expect(authWaiter).rejects.toBe(reloadError);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).rejects.toThrow("prepared reply dispatch runtime owner was not published for default");
+      await expect(loadDispatch({ agentId: "default" })).rejects.toThrow(
+        "prepared reply dispatch runtime owner was not published for default",
+      );
 
-      await refreshPreparedModelRuntimeSnapshots(replacementConfig, { gatewayLifecycle: true });
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({ config: replacementConfig });
+      await refresh(replacementConfig);
+      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
+        config: replacementConfig,
+      });
     } finally {
-      authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      authBuild.resolve(buildResult());
       await Promise.allSettled([authWaiter, reload]);
     }
   });
@@ -233,49 +244,47 @@ describe("prepared model runtime reload auth adoption", () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     const agentDir = fixture.state.agentDir("default");
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const firstBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const secondBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(config);
+    const firstBuild = build();
+    const secondBuild = build();
     const firstError = new Error("superseded auth build failed");
     mocks.ensureOpenClawModelsJson
       .mockImplementationOnce(async () => await firstBuild.promise)
       .mockImplementationOnce(async () => await secondBuild.promise);
 
-    let dispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let dispatch: Dispatch | undefined;
     try {
       mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      dispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      dispatch = loadDispatch({ agentId: "default" });
       void dispatch.catch(() => undefined);
       mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
       firstBuild.reject(firstError);
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(
-        Promise.race([dispatch.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      await expectPending(dispatch);
 
       secondBuild.resolve({ agentDir, wrote: false });
       await expect(dispatch).resolves.toMatchObject({ agentId: "default", agentDir });
       expect(mocks.warn).not.toHaveBeenCalled();
     } finally {
-      firstBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
-      secondBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      firstBuild.resolve(buildResult());
+      secondBuild.resolve(buildResult());
       await Promise.allSettled([dispatch]);
     }
   });
 
   it("keeps transitively overlapping inherited auth mutations atomic", async () => {
     mocks.configuredAgentIds = ["default", "worker", "research"];
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await refresh({});
     const agentDirs = {
       default: fixture.state.agentDir("default"),
       research: fixture.state.agentDir("research"),
       worker: fixture.state.agentDir("worker"),
     } as const;
     const builds = {
-      default: createDeferred<{ agentDir: string; wrote: false }>(),
-      research: createDeferred<{ agentDir: string; wrote: false }>(),
-      worker: createDeferred<{ agentDir: string; wrote: false }>(),
+      default: build(),
+      research: build(),
+      worker: build(),
     };
     const refreshError = new Error("inherited research auth build failed");
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
@@ -287,22 +296,14 @@ describe("prepared model runtime reload auth adoption", () => {
         : { agentDir: String(agentDir), wrote: false };
     });
 
-    let dispatches:
-      | Record<keyof typeof builds, ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>>
-      | undefined;
+    let dispatches: Record<keyof typeof builds, Dispatch> | undefined;
     try {
       mocks.mutationListener?.({ agentDir: agentDirs.worker, affectsInheritedStores: false });
       mocks.mutationListener?.({ agentDir: agentDirs.research, affectsInheritedStores: false });
       mocks.mutationListener?.({ affectsInheritedStores: true });
       dispatches = Object.fromEntries(
-        Object.keys(agentDirs).map((agentId) => [
-          agentId,
-          loadPublishedGatewayReplyDispatchRuntime({ agentId }),
-        ]),
-      ) as Record<
-        keyof typeof agentDirs,
-        ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>
-      >;
+        Object.keys(agentDirs).map((agentId) => [agentId, loadDispatch({ agentId })]),
+      ) as Record<keyof typeof agentDirs, Dispatch>;
       for (const dispatch of Object.values(dispatches)) {
         void dispatch.catch(() => undefined);
       }
@@ -329,14 +330,11 @@ describe("prepared model runtime reload auth adoption", () => {
   it("commits a successful owner when the final independent owner fails", async () => {
     mocks.configuredAgentIds = ["default", "worker", "research"];
     const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const workerBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const researchBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(config);
+    const workerBuild = build();
+    const researchBuild = build();
     const researchError = new Error("final research auth build failed");
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-    });
+    const { events, unregister } = observePhases();
     mocks.ensureOpenClawModelsJson.mockImplementation(async (_config, agentDir) => {
       if (agentDir === fixture.state.agentDir("worker")) {
         return await workerBuild.promise;
@@ -347,49 +345,36 @@ describe("prepared model runtime reload auth adoption", () => {
       return { agentDir: String(agentDir), wrote: false };
     });
 
-    let workerDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let researchDispatch: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+    let workerDispatch: Dispatch | undefined;
+    let researchDispatch: Dispatch | undefined;
     try {
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("worker"),
-        affectsInheritedStores: false,
-      });
+      mutate("worker");
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
-      workerDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+      workerDispatch = loadDispatch({ agentId: "worker" });
       void workerDispatch.catch(() => undefined);
-      let workerSettled = false;
-      void workerDispatch.then(
-        () => {
-          workerSettled = true;
-        },
-        () => undefined,
-      );
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("research"),
-        affectsInheritedStores: false,
-      });
-      researchDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "research" });
+      const workerSettled = vi.fn();
+      void workerDispatch.then(workerSettled, () => undefined);
+      mutate("research");
+      researchDispatch = loadDispatch({ agentId: "research" });
       void researchDispatch.catch(() => undefined);
-      workerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
+      workerBuild.resolve(buildResult("worker"));
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5));
-      await vi.waitFor(() => expect(workerSettled).toBe(true));
-      await expect(
-        Promise.race([researchDispatch.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      await vi.waitFor(() => expect(workerSettled).toHaveBeenCalledOnce());
+      await expectPending(researchDispatch);
       expect(events).not.toContain("published");
       researchBuild.reject(researchError);
 
       await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
       await expect(researchDispatch).rejects.toBe(researchError);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "research" }),
-      ).rejects.toThrow("prepared reply dispatch runtime owner was not published for research");
+      await expect(loadDispatch({ agentId: "research" })).rejects.toThrow(
+        "prepared reply dispatch runtime owner was not published for research",
+      );
       expect(events).not.toContain("published");
       expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
       unregister();
     } finally {
-      workerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
-      researchBuild.resolve({ agentDir: fixture.state.agentDir("research"), wrote: false });
+      workerBuild.resolve(buildResult("worker"));
+      researchBuild.resolve(buildResult("research"));
       await Promise.allSettled([workerDispatch, researchDispatch]);
       unregister();
     }
@@ -398,28 +383,19 @@ describe("prepared model runtime reload auth adoption", () => {
   it("isolates reply projection replacement failure to its component", async () => {
     mocks.configuredAgentIds = ["default", "worker", "research"];
     const config = {};
-    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    await refresh(config);
     const projectionError = new Error("reply projection replacement failed");
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-    });
+    const { events, unregister } = observePhases();
     const replaceSpy = vi
       .spyOn(PreparedReplyDispatchPublicationOwner.prototype, "replace")
       .mockImplementationOnce(() => {
         throw projectionError;
       });
 
-    mocks.mutationListener?.({
-      agentDir: fixture.state.agentDir("worker"),
-      affectsInheritedStores: false,
-    });
-    mocks.mutationListener?.({
-      agentDir: fixture.state.agentDir("research"),
-      affectsInheritedStores: false,
-    });
-    const workerDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
-    const researchDispatch = loadPublishedGatewayReplyDispatchRuntime({ agentId: "research" });
+    mutate("worker");
+    mutate("research");
+    const workerDispatch = loadDispatch({ agentId: "worker" });
+    const researchDispatch = loadDispatch({ agentId: "research" });
     void workerDispatch.catch(() => undefined);
     void researchDispatch.catch(() => undefined);
 
@@ -428,7 +404,7 @@ describe("prepared model runtime reload auth adoption", () => {
       agentId: "research",
       agentDir: fixture.state.agentDir("research"),
     });
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
+    await expect(loadDispatch({ agentId: "worker" })).rejects.toThrow(
       "prepared reply dispatch runtime owner was not published for worker",
     );
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
@@ -440,41 +416,34 @@ describe("prepared model runtime reload auth adoption", () => {
     mocks.configuredAgentIds = ["default"];
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const authBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const configBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(initialConfig);
+    const authBuild = build();
+    const configBuild = build();
     const obsoleteAuthError = new Error("obsolete auth build failed");
     mocks.ensureOpenClawModelsJson
       .mockImplementationOnce(async () => await authBuild.promise)
       .mockImplementationOnce(async () => await configBuild.promise);
 
-    let authWaiter: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let reload: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let authWaiter: Dispatch | undefined;
+    let reload: Refresh | undefined;
     try {
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("default"),
-        affectsInheritedStores: false,
-      });
+      mutate("default");
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      authWaiter = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      authWaiter = loadDispatch({ agentId: "default" });
       void authWaiter.catch(() => undefined);
-      reload = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-        gatewayLifecycle: true,
-      });
+      reload = refresh(replacementConfig);
       void reload.catch(() => undefined);
       authBuild.reject(obsoleteAuthError);
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(
-        Promise.race([authWaiter.then(() => "settled"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      await expectPending(authWaiter);
 
-      configBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      configBuild.resolve(buildResult());
       await expect(reload).resolves.toBeUndefined();
       await expect(authWaiter).resolves.toMatchObject({ config: replacementConfig });
       expect(mocks.warn).not.toHaveBeenCalled();
     } finally {
-      authBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
-      configBuild.resolve({ agentDir: fixture.state.agentDir("default"), wrote: false });
+      authBuild.resolve(buildResult());
+      configBuild.resolve(buildResult());
       await Promise.allSettled([authWaiter, reload]);
     }
   });
@@ -485,7 +454,7 @@ describe("prepared model runtime reload auth adoption", () => {
       mocks.configuredAgentIds = ["default"];
       const initialConfig = {};
       const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-      await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+      await refreshRuntime(initialConfig, options);
       const input = fixture.agentInput("default", initialConfig);
       const original = await prepareModelRuntimeSnapshot(input);
       const drain = beginPreparedModelRuntimePluginDrain();
@@ -501,23 +470,16 @@ describe("prepared model runtime reload auth adoption", () => {
       try {
         mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
         expect(original.isCurrent()).toBe(false);
-        let readSettled = false;
         read = prepareModelRuntimeSnapshot(input, { readPublished: true });
-        void read.then(
-          () => {
-            readSettled = true;
-          },
-          () => {
-            readSettled = true;
-          },
-        );
+        const readSettled = vi.fn();
+        void read.then(readSettled, readSettled);
         await vi.advanceTimersByTimeAsync(0);
         expect(mocks.prepareStaticCatalog).not.toHaveBeenCalled();
-        expect(readSettled).toBe(false);
+        expect(readSettled).not.toHaveBeenCalled();
         draining = false;
         drain.release();
         if (outcome === "replacement") {
-          publication = refreshPreparedModelRuntimeSnapshots({ plugins: {} }, options);
+          publication = refreshRuntime({ plugins: {} }, options);
           await publication;
         }
         const refreshed = await read;
@@ -552,7 +514,7 @@ describe("prepared model runtime reload auth adoption", () => {
       auth: { profiles: { "fixture:manual": { provider: "fixture", mode: "api_key" as const } } },
     };
     const options = { gatewayLifecycle: true, catalogMode: "static" as const };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+    await refreshRuntime(initialConfig, options);
     const original = await prepareModelRuntimeSnapshot({
       agentId: "default",
       agentDir: fixture.state.agentDir("default"),
@@ -578,10 +540,10 @@ describe("prepared model runtime reload auth adoption", () => {
     const catalog = original.loadFullModelCatalog({ refresh: true });
     const obsoleteCatalog = expect(catalog).rejects.toThrow("superseded");
     void obsoleteCatalog.catch(() => undefined);
-    let reload: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let reload: Refresh | undefined;
     try {
       await catalogStarted.promise;
-      reload = refreshPreparedModelRuntimeSnapshots(replacementConfig, options);
+      reload = refreshRuntime(replacementConfig, options);
       void reload.catch(() => undefined);
       await credentialsStarted.promise;
       expect(original.isCurrent()).toBe(false);
@@ -592,10 +554,10 @@ describe("prepared model runtime reload auth adoption", () => {
       credentialsFinished.reject(failure);
       await expect(reload).rejects.toBe(failure);
       expect(cache.get(cacheKey)).toBeUndefined();
-      await refreshPreparedModelRuntimeSnapshots(replacementConfig, options);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({ config: replacementConfig });
+      await refreshRuntime(replacementConfig, options);
+      await expect(loadDispatch({ agentId: "default" })).resolves.toMatchObject({
+        config: replacementConfig,
+      });
       expect(original.isCurrent()).toBe(false);
     } finally {
       catalogFinished.resolve({ entries: [], routeVariants: [] });
@@ -608,17 +570,14 @@ describe("prepared model runtime reload auth adoption", () => {
     mocks.configuredAgentIds = ["default", "worker", "research"];
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const workerAuthBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const researchAuthBuild = createDeferred<{ agentDir: string; wrote: false }>();
-    const replacementWorkerBuild = createDeferred<{ agentDir: string; wrote: false }>();
+    await refresh(initialConfig);
+    const workerAuthBuild = build();
+    const researchAuthBuild = build();
+    const replacementWorkerBuild = build();
     const workerAuthStarted = createDeferred();
     const researchAuthStarted = createDeferred();
     const replacementWorkerStarted = createDeferred();
-    const events: string[] = [];
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      events.push(event.phase);
-    });
+    const { events, unregister } = observePhases();
     mocks.ensureOpenClawModelsJson.mockImplementation(async (config, agentDir) => {
       if (
         isDeepStrictEqual(config, initialConfig) &&
@@ -644,44 +603,31 @@ describe("prepared model runtime reload auth adoption", () => {
       return { agentDir: String(agentDir), wrote: false };
     });
 
-    let firstWorkerRead: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let adoptedWorkerRead: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
-    let reload: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+    let firstWorkerRead: Dispatch | undefined;
+    let adoptedWorkerRead: Dispatch | undefined;
+    let reload: Refresh | undefined;
     try {
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("worker"),
-        affectsInheritedStores: false,
-      });
+      mutate("worker");
       await workerAuthStarted.promise;
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
-      firstWorkerRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("research"),
-        affectsInheritedStores: false,
-      });
-      workerAuthBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
+      firstWorkerRead = loadDispatch({ agentId: "worker" });
+      mutate("research");
+      workerAuthBuild.resolve(buildResult("worker"));
       await researchAuthStarted.promise;
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
       await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
 
-      reload = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-        gatewayLifecycle: true,
-      });
-      adoptedWorkerRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
-      let adoptedWorkerSettled = false;
-      void adoptedWorkerRead.then(
-        () => {
-          adoptedWorkerSettled = true;
-        },
-        () => undefined,
-      );
+      reload = refresh(replacementConfig);
+      adoptedWorkerRead = loadDispatch({ agentId: "worker" });
+      const adoptedWorkerSettled = vi.fn();
+      void adoptedWorkerRead.then(adoptedWorkerSettled, () => undefined);
       await Promise.resolve();
-      expect(adoptedWorkerSettled).toBe(false);
+      expect(adoptedWorkerSettled).not.toHaveBeenCalled();
 
-      researchAuthBuild.resolve({ agentDir: fixture.state.agentDir("research"), wrote: false });
+      researchAuthBuild.resolve(buildResult("research"));
       await replacementWorkerStarted.promise;
-      expect(adoptedWorkerSettled).toBe(false);
-      replacementWorkerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
+      expect(adoptedWorkerSettled).not.toHaveBeenCalled();
+      replacementWorkerBuild.resolve(buildResult("worker"));
       await expect(reload).resolves.toBeUndefined();
       await expect(adoptedWorkerRead).resolves.toMatchObject({ config: replacementConfig });
       unregister();
@@ -689,9 +635,9 @@ describe("prepared model runtime reload auth adoption", () => {
       expect(events.filter((phase) => phase === "published")).toHaveLength(1);
       expect(events).not.toContain("failed");
     } finally {
-      workerAuthBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
-      researchAuthBuild.resolve({ agentDir: fixture.state.agentDir("research"), wrote: false });
-      replacementWorkerBuild.resolve({ agentDir: fixture.state.agentDir("worker"), wrote: false });
+      workerAuthBuild.resolve(buildResult("worker"));
+      researchAuthBuild.resolve(buildResult("research"));
+      replacementWorkerBuild.resolve(buildResult("worker"));
       await Promise.allSettled([firstWorkerRead, adoptedWorkerRead, reload]);
       unregister();
     }

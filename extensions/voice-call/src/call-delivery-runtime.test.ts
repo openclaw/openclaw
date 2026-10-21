@@ -18,7 +18,7 @@ import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-run
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
@@ -101,7 +101,7 @@ describe("call delivery runtime", () => {
       },
       session: { store: requester.storePath },
     } satisfies OpenClawConfig;
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       reports: { enabled: true, summaryModel: "provider/summary" },
       ...(options.webchat ? { live: { transcript: true } } : {}),
     });
@@ -297,7 +297,7 @@ describe("call delivery runtime", () => {
       callId: call.callId,
       timestamp: Date.now(),
       type: "call.speech",
-      transcript: "Friday 09:00. " + "Full transcript. ".repeat(600),
+      transcript: "Friday 09:00. " + "  Full\ttranscript 🦞 e\u0301.\r\n".repeat(600),
       isFinal: true,
     });
     await actor.run("ending-caller", () =>
@@ -446,7 +446,7 @@ describe("call delivery runtime", () => {
       },
     });
     await writeCallsToStore(storePath, [pendingCall]);
-    const config = VoiceCallConfigSchema.parse({
+    const config = normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

@@ -70,6 +70,8 @@ async function setup(label: string) {
     session: { store: storePath },
   } as OpenClawConfig);
   await state.writeConfig(cfg);
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot(cfg);
   const runAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (p) => ({
     payloads: [{ text: "HEARTBEAT_OK" }],
     meta: {
@@ -126,7 +128,6 @@ it("gives a heartbeat delivered to Telegram the delivering account's contract on
     sessionKey,
     source: "cron",
     reason: "cron:status",
-    deps: { getReplyFromConfig },
   });
   expect(result.status).toBe("ran");
   expectContractOnce(lastPrompt(), "markdown_telegram_rich");

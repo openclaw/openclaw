@@ -10,7 +10,6 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals-core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentEntryBaseSchema } from "./zod-schema.agent-entry-base.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
@@ -25,6 +24,10 @@ import {
   TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
+import {
+  AgentGitHubToolIdentitySchema,
+  GitHubToolIdentitySchema,
+} from "./zod-schema.github-identity.js";
 import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import {
   SandboxBrowserSchema,
@@ -597,22 +600,6 @@ const MessageToolConfigSchema = z
   })
   .optional();
 
-const GitHubToolIdentitySchema = z
-  .strictObject({
-    /** Opaque generated directory version for atomic credential rotation. */
-    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
-    /** OAuth generations retain a separate rotating refresh credential. */
-    kind: z.literal("oauth").optional(),
-    /** Optional process-local author identity for commits made by local tools. */
-    gitAuthor: z
-      .strictObject({
-        name: z.string().trim().min(1).optional(),
-        email: z.string().trim().min(1).optional(),
-      })
-      .optional(),
-  })
-  .optional();
-
 const AgentToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
@@ -624,12 +611,7 @@ const AgentToolsSchema = z
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
-    github: GitHubToolIdentitySchema.unwrap()
-      .extend({
-        /** Explicitly expose this agent's managed identity inside its own sandbox (default: false). */
-        allowInSandbox: z.boolean().optional(),
-      })
-      .optional(),
+    github: AgentGitHubToolIdentitySchema,
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
@@ -651,6 +633,7 @@ const AgentToolsSchema = z
   .optional();
 
 export const AgentEntrySchema = AgentEntryBaseSchema.extend({
+  nativeRuntimeConsent: z.array(z.string().trim().min(1)).optional(),
   memory: z
     .strictObject({
       search: MemorySearchSchema,
@@ -661,16 +644,30 @@ export const AgentEntrySchema = AgentEntryBaseSchema.extend({
   tts: AgentTtsConfigSchema,
   skillsLimits: AgentSkillsLimitsSchema,
   contextLimits: AgentContextLimitsSchema,
-  heartbeat: HeartbeatSchema,
   identity: IdentitySchema,
   groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
   sandbox: AgentSandboxSchema,
   tools: AgentToolsSchema,
 }).strict();
 
+const GatewayToolPolicyNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.:/-]*$/, "Use a concrete tool or action identity")
+  .refine((value) => !value.toLowerCase().startsWith("group:"), "Tool groups are not permitted");
+
+const GatewayToolPolicySchema = z.strictObject({
+  /** Required ceiling on model-visible Gateway tools. Empty means no tools. */
+  allow: z.array(GatewayToolPolicyNameSchema),
+  /** Action-bearing tools require an explicit list, including tools with a default action. */
+  actions: z.record(GatewayToolPolicyNameSchema, z.array(GatewayToolPolicyNameSchema)).optional(),
+});
+
 export const ToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
+    gatewayPolicy: GatewayToolPolicySchema.optional(),
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
     github: GitHubToolIdentitySchema,
@@ -691,6 +688,8 @@ export const ToolsSchema = z
          * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
          */
         visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        /** Allow sessions_send to target thread/topic sessions (default: false). */
+        allowThreadTargets: z.boolean().optional(),
       })
       .optional(),
     loopDetection: ToolLoopDetectionSchema,

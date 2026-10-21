@@ -1,18 +1,22 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
-import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { canonicalSessionValidationSchemaSql } from "./openclaw-agent-canonical-validation-schema.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -29,6 +33,14 @@ import { tableHasColumn, tableExists } from "./openclaw-state-db-schema-helpers.
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-input-schema-");
 
 describe("pending input additive schema", () => {
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
+  });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
   it("leaves old stores table-free on reads and preserves accepted input through older-reader use and reopen", async () => {
     const options = {
       agentId: "main",
@@ -145,16 +157,15 @@ describe("pending input additive schema", () => {
       const metadata = old.prepare("SELECT * FROM schema_meta").all();
       const original = old.prepare("SELECT message_json FROM session_pending_inputs").get();
       old.close();
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        total: 1,
-        items: [{ state: "interrupted", message: receipt!.message }],
-      });
+      await expect(listSessionPendingInputs(scope)).rejects.toThrow(
+        "requires writable startup admission before session reads",
+      );
       if (path === "open") {
         openOpenClawAgentDatabase(options);
         await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
       } else {
-        const current = new DatabaseSync(filename);
+        const current = openNodeSqliteDatabase(filename);
         if (path === "doctor") {
           ensureOpenClawAgentDatabaseSchema(current, options);
         } else {
@@ -162,6 +173,10 @@ describe("pending input additive schema", () => {
         }
         current.close();
       }
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [{ state: "interrupted", message: receipt!.message }],
+      });
       const reopened = new DatabaseSync(filename, { readOnly: true });
       try {
         expect(reopened.prepare("PRAGMA user_version").get()).toEqual(version);
@@ -192,7 +207,7 @@ describe("pending input additive schema", () => {
           : new DatabaseSync(":memory:");
       try {
         database.exec(
-          withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
+          OPENCLAW_AGENT_SCHEMA_SQL.replace(canonicalSessionValidationSchemaSql(), "").replace(
             "  consumed_event_id TEXT,\n",
             "",
           ),

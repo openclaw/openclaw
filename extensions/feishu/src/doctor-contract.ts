@@ -165,7 +165,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "feishu"],
     message:
-      'channels.feishu[.accounts.<id>].webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix".',
+      'channels.feishu[.accounts.<id>].webhookPath must be a normalized HTTP request path; run "openclaw doctor --fix".',
     match: (value) => {
       const entry = asObjectRecord(value);
       return (

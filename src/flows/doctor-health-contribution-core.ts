@@ -7,7 +7,6 @@ import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
-import { copyHealthChecks } from "./health-check-adapter.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import { isHealthCheckEnabledByDefault, type HealthFinding } from "./health-checks.js";
 
@@ -54,18 +53,17 @@ export async function runStructuredHealthRepairs(
     cwd: workspaceDir,
     env: ctx.env,
   });
-  const checks = copyHealthChecks(
-    listExtensionHealthChecksForDoctor(await resolveCoreChecks(), availabilityFindings).filter(
-      isHealthCheckEnabledByDefault,
-    ),
-  );
+  const checks = listExtensionHealthChecksForDoctor(
+    await resolveCoreChecks(),
+    availabilityFindings,
+  ).filter(isHealthCheckEnabledByDefault);
   const result = await runDoctorHealthRepairs(
     createDoctorHealthCheckContext(ctx, {
       mode: "fix" as const,
       env: ctx.env,
       cwd: workspaceDir,
     }),
-    { checks },
+    { checks, progress: ctx.options.json !== true },
   );
   reportDoctorRepairResult(
     ctx,
@@ -99,7 +97,7 @@ export async function runCoreContributionHealth(
       cwd: workspaceDir,
       dryRun,
     }),
-    { checks, dryRun },
+    { checks, dryRun, progress: ctx.options.json !== true },
   );
   reportDoctorRepairResult(ctx, result, dryRun ? result.findings : result.remainingFindings, note);
 }

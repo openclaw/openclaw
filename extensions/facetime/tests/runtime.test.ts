@@ -7,7 +7,6 @@ import {
   completeSharedAction,
   createRuntime,
   createTalkDriver,
-  FaceTimeHelperActionError,
   incomingCall,
   mocks,
   pendingDialCancellationResult,
@@ -542,7 +541,7 @@ describe("FaceTime runtime call sequencing", () => {
       mocks.helper.inspectCall.mockRejectedValue(new Error("helper inspection unavailable"));
       mocks.carrierProcessAlive = true;
 
-      await expect(runtime.stop()).rejects.toThrow("fail-closed carrier termination failed");
+      await expect(runtime.stop()).rejects.toThrow("safety shutdown failed");
       expect(mocks.systemRun).toHaveBeenCalledWith(["/bin/kill", "-KILL", "4321"], {
         timeoutMs: 500,
       });
@@ -699,7 +698,7 @@ describe("FaceTime runtime call sequencing", () => {
     { settlement: "reply", error: undefined, expected: "cancelled before helper acknowledgement" },
     {
       settlement: "helper rejection",
-      error: new FaceTimeHelperActionError("late helper rejection"),
+      error: new Error("late helper rejection"),
       expected: "late helper rejection",
     },
   ])(

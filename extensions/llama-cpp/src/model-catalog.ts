@@ -184,8 +184,6 @@ type LlamaCppRecommendation =
       kind: "recommended";
       recipe: LlamaCppModelRecipe;
       reason: string;
-      memoryBudgetBytes: number;
-      requiredDiskBytes: number;
     };
 
 export function resolveLlamaCppMemoryBudget(
@@ -271,7 +269,7 @@ export function recommendLlamaCppModel(
   if (disk.kind === "unavailable") {
     return disk;
   }
-  const { modelDiskBudget, runtimeDiskBytes } = disk;
+  const { modelDiskBudget } = disk;
   const { recipes: candidates, memoryBudgetBytes } = resolveLlamaCppModelCandidates(
     hardware,
     backend,
@@ -293,8 +291,6 @@ export function recommendLlamaCppModel(
     return {
       kind: "recommended",
       recipe,
-      memoryBudgetBytes,
-      requiredDiskBytes: modelDiskBytes + runtimeDiskBytes,
       reason: `${recipe.model.name} fits the ${formatLlamaCppMemory(memoryBudgetBytes)} ${placement} budget with a 64K context. Runtime verification checks the actual model before activation.`,
     };
   }

@@ -1,4 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
@@ -73,7 +74,6 @@ interface TunnelConfig {
 export interface TunnelResult {
   publicUrl: string;
   stop: () => Promise<void>;
-  provider: string;
 }
 
 /** Start an ngrok CLI tunnel and retain its child until the tunnel is stopped. */
@@ -136,7 +136,6 @@ async function startNgrokTunnel(config: TunnelConfig): Promise<TunnelResult> {
         console.log(`[voice-call] ngrok tunnel active: ${publicUrl}`);
         resolve({
           publicUrl,
-          provider: "ngrok",
           stop: () => terminateNgrokProcess(proc, () => childClosed),
         });
       } catch {
@@ -218,7 +217,6 @@ export async function startTunnel(config: TunnelConfig): Promise<TunnelResult | 
 
       return {
         publicUrl,
-        provider: `tailscale-${mode}`,
         stop: async () => {
           for (const route of routes) {
             await cleanupTailscaleExposureRoute({

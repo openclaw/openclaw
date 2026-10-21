@@ -31,7 +31,7 @@ import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import { writeCronJobScratch } from "../cron/scratch-store.js";
-import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { resolveCronJobsStorePathFromConfigAsync } from "../cron/store.js";
 import {
   isDeliveryRecoveryOwnedRetry,
   resolveDeliveryNotSentRetryability,
@@ -39,7 +39,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { readExecRequestOwners } from "./exec-request-context.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
-import { isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
+import { isCronSystemEvent, isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
@@ -67,6 +67,7 @@ import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
+  adoptSelectedSystemEventEntries,
   consumeSelectedSystemEventEntries,
   holdSystemEventDelivery,
   peekDeliverableSystemEventEntries,
@@ -166,6 +167,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatToolResponse: response,
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
+      replyCompletion: runState.replyCompletion,
     },
     useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
@@ -189,7 +191,7 @@ async function prepareHeartbeatDispatchReply(
         const owner = runState.agentTurnOwner;
         const written = await writeCronJobScratch(
           {
-            storePath: resolveCronJobsStorePathFromConfig(cfg),
+            storePath: await resolveCronJobsStorePathFromConfigAsync(cfg),
             jobId: preflight.scratchJobId,
             content: scratch,
             expectedRevision: preflight.scratchRevision ?? 0,
@@ -250,6 +252,14 @@ async function prepareHeartbeatDispatchReply(
       }
     }
     if (consume && settleEvents && preflight.shouldInspectPendingEvents) {
+      if (prepared.hasCronEvents && !prepared.hasExecCompletion && outcome.kind !== "failure") {
+        // Only the reminders included in this completed turn were adopted. Noise and
+        // reminders deferred behind an exec prompt must not acknowledge Cron receipts.
+        adoptSelectedSystemEventEntries(
+          queueKey,
+          prepared.inspectedSystemEventsToConsume.filter(isCronSystemEvent),
+        );
+      }
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
         ...prepared.deferredGenericEvents,
@@ -492,7 +502,10 @@ async function prepareHeartbeatDispatchReply(
   // Receipt identity uses the producer answer, not transport prefix decoration.
   policy.publicationSourceText = outcome.replyPayload?.text;
   const deliveryText =
-    !failed && delivery.implicitDefaultRoute && stateEntry?.lastHeartbeatSentAt === undefined
+    text &&
+    !failed &&
+    delivery.implicitDefaultRoute &&
+    stateEntry?.lastHeartbeatSentAt === undefined
       ? `${FIRST_HEARTBEAT_ALERT_PREAMBLE}\n${text}`
       : text;
   const payload = copyReplyPayloadMetadata(selected ?? {}, {
@@ -563,7 +576,7 @@ export async function deliverHeartbeatDispatch(
   const { delivery, runSessionKey, storePath, outboundPolicySessionKey, internalProjection } =
     policy.prepared;
   const onDeliveredPayload = policy.projectTarget
-    ? prepareHeartbeatTargetAwareness({
+    ? await prepareHeartbeatTargetAwareness({
         agentId,
         storePath,
         runSessionKey,

@@ -17,7 +17,7 @@ export type TestModelSetupPage = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-export const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
+const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
 export const customIconUrl = "https://cdn.example.com/acme.png";
 
 export const detection: SystemAgentSetupDetectResult = {

@@ -264,7 +264,7 @@ process.kill(process.pid, "SIGKILL");
 );
 
 it.runIf(process.platform !== "win32")(
-  "stops gateway watch when a compile-cache respawn child dies from a signal",
+  "preserves gateway watch signal loss across compile-cache process replacement",
   async ({ signal }) => {
     const nodeArgs = resolveVitestNodeArgs();
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
@@ -276,11 +276,13 @@ it.runIf(process.platform !== "win32")(
       const releasePath = path.join(fixtureRoot, "release");
       for (const filename of [
         "openclaw.mjs",
+        "cli-invocation.mjs",
         "node-host-launcher.mjs",
         "node-compile-cache.mjs",
         "node-version.mjs",
         "node-runtime-update.mjs",
         "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
         "node-runtime-env.mjs",
         "cli-root-options.mjs",
         "gateway-run-argv.mjs",
@@ -409,7 +411,7 @@ else process.exit(outcome);
             signal,
             "Gateway watch exited before the compile-cache child was ready",
           );
-          expect(childPid, "the launcher must respawn before the signal is sent").not.toBe(
+          expect(childPid, "process replacement preserves the supervised Gateway PID").toBe(
             launcherPid,
           );
           expect(
@@ -453,6 +455,7 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
     mkdirSync(path.join(checkout, "src"), { recursive: true });
+    mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
     writeFileSync(
       path.join(root, "receipts.mjs"),
@@ -548,6 +551,7 @@ it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
   async (stopSignal, { signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+      mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const childPath = path.join(fixtureRoot, "resistant-child.mjs");

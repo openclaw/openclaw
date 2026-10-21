@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
@@ -79,6 +80,8 @@ export function resolveNodePreparedWorkspaceIdentity(
 }
 
 export type NodeWorkerManagedWorkspaceRequest = {
+  /** Required for device folders; managed paths already carry their gateway namespace. */
+  gatewayNamespace?: string;
   workspaceDir: string;
   environmentId: string;
   sessionId: string;
@@ -220,6 +223,24 @@ export function resolveNodeManagedWorkspaceIdentity(
   };
 }
 
+export function ensureNodeWorkerWorkspaceSessionRoot(
+  root: string,
+  gatewayNamespace: string,
+  environmentId: string,
+  sessionId: string,
+) {
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: invalid node workspace gateway namespace");
+  }
+  const gatewayRoot = ensureContainedDirectory(root, gatewayNamespace);
+  const workspacesRoot = ensureContainedDirectory(gatewayRoot, "workspaces");
+  const environmentRoot = ensureContainedDirectory(
+    workspacesRoot,
+    hashNodeWorkerWorkspaceComponent(environmentId, 16),
+  );
+  return ensureContainedDirectory(environmentRoot, hashNodeWorkerWorkspaceComponent(sessionId, 32));
+}
+
 export function ensureContainedDirectory(parent: string, name: string): string {
   const candidate = path.join(parent, name);
   fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
@@ -243,12 +264,11 @@ function resolveArgumentPath(workspaceDir: string, arg: string): string | undefi
 }
 
 export function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
-  // This private transport owns cwd and direct path operands; it is not the user-facing
-  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
+  // This private transport owns cwd and direct path operands, separate from system.run policy.
+  const { sourceIndices } = resolveRuntimeScriptPosition(argv);
   for (const [index, arg] of argv.entries()) {
-    // Canonical workspace helpers travel as the source operand to `node -e`.
-    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
-    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+    // Runtime eval source can contain slashes without representing a host path.
+    if (sourceIndices.includes(index)) {
       continue;
     }
     const candidate = resolveArgumentPath(workspaceDir, arg);
@@ -341,3 +361,10 @@ export function buildNodeWorkerWorkspaceRetainSnapshot(input: NodeWorkerWorkspac
     manifestsBySession,
   };
 }
+
+export type NodeWorkerWorkspaceAcquisition = {
+  workspaceDir: string;
+  homeDir?: string;
+  assertCurrent?: () => void;
+  release: () => void;
+};

@@ -15,13 +15,17 @@ export {
   resolveExistingSqliteFileUri,
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
-export { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
 export type { SqlConnection } from "../infra/sql-connection.js";
+export { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 export {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabasePendingWriteToken,
+  readSqliteDatabaseScopedWriteToken,
+  readSqliteDatabaseWriteRevision,
   readSqliteDatabaseWriteTokenForPath,
+  withSqliteDatabaseWriteScope,
   type SqliteDatabaseAdmissionKey,
 } from "../infra/sqlite-database-admission.js";
 export { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -39,7 +43,8 @@ export type {
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
 export { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+export { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 export { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-export { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+export { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export { stageOpenClawAgentDatabaseSchemaExtension } from "../state/openclaw-agent-db-schema-extension.worker.js";

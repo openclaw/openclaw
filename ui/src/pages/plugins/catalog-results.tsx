@@ -1,50 +1,33 @@
 import type { JSX } from "@solidjs/web";
-import { For, onSettled } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type {
-  PluginDiscoveryCategory,
-  PluginDiscoveryEntry,
-  PluginDiscoveryResult,
-  PluginInstallRequest,
-} from "../../lib/plugins/index.ts";
+import type { PluginDiscoveryEntry, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginAuthor,
-  renderPluginCardSummary,
+  PluginCardSummary,
   renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.tsx";
+import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { resolvePluginCatalogIconUrl } from "./presentation.ts";
 
-export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" | "featured";
-
-export type PluginCatalogResultsProps = {
+export type PluginCatalogResultsProps = PluginDiscoveryState & {
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
+  registerIcon?: (readId: () => string) => () => void;
   connected: boolean;
-  loading: boolean;
-  result: PluginDiscoveryResult | null;
-  error: string | null;
-  remoteError: string | null;
-  categories: readonly PluginDiscoveryCategory[];
-  categoriesLoading: boolean;
-  categoriesError: string | null;
   onRetryCategories: () => void;
-  featured: readonly PluginDiscoveryEntry[];
-  trending: readonly PluginDiscoveryEntry[];
-  loadingMore: boolean;
-  loadMoreError: string | null;
-  intent: PluginDiscoveryIntent;
-  category: string | null;
-  query: string;
   iconUrls: Readonly<Record<string, string>>;
   pluginIconUrls: Readonly<Record<string, string>>;
   iconLoading?: (url: string) => boolean;
@@ -74,19 +57,7 @@ const PROMOTED_SECTIONS = [
 ] as const;
 
 function CategoryStrokeIcon(props: { children: JSX.Element }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      {" "}
-      {props.children}
-    </svg>
-  );
+  return <StrokeIcon> {props.children}</StrokeIcon>;
 }
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
@@ -198,34 +169,27 @@ function CatalogIcon(props: {
   plugin: PluginDiscoveryEntry;
   state: PluginCatalogResultsProps;
 }): JSX.Element {
-  const iconUrl = () =>
+  const iconUrl = createMemo(() =>
     resolvePluginCatalogIconUrl(
       {
         pluginId: props.plugin.local.pluginId,
         imageUrl: props.plugin.catalog.imageUrl,
       },
       props.state,
-    );
+    ),
+  );
   return (
     <PluginArtTile
+      registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}
-      options={{
-        get iconUrl() {
-          return iconUrl() ?? undefined;
-        },
-        get whiteBackground() {
-          return props.plugin.catalog.official && Boolean(iconUrl());
-        },
-        get loading() {
-          return Boolean(
-            (props.plugin.local.pluginId &&
-              props.state.pluginIconLoading?.(props.plugin.local.pluginId)) ||
-            (props.plugin.catalog.imageUrl &&
-              props.state.iconLoading?.(props.plugin.catalog.imageUrl)),
-          );
-        },
-      }}
+      iconUrl={iconUrl() ?? undefined}
+      whiteBackground={props.plugin.catalog.official && Boolean(iconUrl())}
+      loading={Boolean(
+        (props.plugin.local.pluginId &&
+          props.state.pluginIconLoading?.(props.plugin.local.pluginId)) ||
+        (props.plugin.catalog.imageUrl && props.state.iconLoading?.(props.plugin.catalog.imageUrl)),
+      )}
     />
   );
 }
@@ -234,9 +198,10 @@ export function formatCompactCount(value: number): string {
   if (value < 1_000) {
     return new Intl.NumberFormat().format(value);
   }
-  const scale = value < 1_000_000 ? 1_000 : 1_000_000;
+  const scale = value >= 999_500_000 ? 1_000_000_000 : value >= 999_500 ? 1_000_000 : 1_000;
   const count = value / scale;
-  return `${count >= 100 ? Math.round(count) : Number(count.toFixed(1))}${scale === 1_000 ? "k" : "m"}`;
+  const suffix = scale === 1_000 ? "k" : scale === 1_000_000 ? "m" : "b";
+  return `${count >= 100 ? Math.round(count) : Number(count.toFixed(1))}${suffix}`;
 }
 
 function CatalogCard(props: {
@@ -286,7 +251,7 @@ function CatalogCard(props: {
               <h3>{props.plugin.catalog.name}</h3>
               {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
             </div>
-            {renderPluginAuthor(props.plugin.catalog.author, { linked: true })}
+            {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
         </div>
         <div class="plugin-catalog-card__action">
@@ -294,6 +259,7 @@ function CatalogCard(props: {
             renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
           ) : (
             <PluginInstallAction
+              registerInstallAction={props.state.registerInstallAction}
               buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
               pluginName={props.plugin.catalog.name}
               busy={busy()}
@@ -304,7 +270,9 @@ function CatalogCard(props: {
           )}
         </div>
       </div>
-      {renderPluginCardSummary(props.plugin.catalog.summary || t("pluginsPage.optionalCapability"))}
+      <PluginCardSummary
+        summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
+      />
       {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
         busy: busy(),
         onContinue:
@@ -319,7 +287,12 @@ function CatalogCard(props: {
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
     <div
-      class={warning ? "callout warning oc-banner" : "callout danger oc-banner oc-banner-error"}
+      class={[
+        "callout",
+        warning ? "warning" : "danger",
+        "oc-banner",
+        { "oc-banner-error": !warning },
+      ]}
       role={warning ? "status" : "alert"}
     >
       <span>{formatUiExternalText(error)}</span>
@@ -358,7 +331,7 @@ function CatalogSection(params: {
               <button
                 type="button"
                 class="btn btn--sm plugin-catalog-section__view-all oc-action oc-action-ghost"
-                onClick={params.onViewAll}
+                onClick={() => params.onViewAll?.()}
               >
                 {t("pluginsPage.viewAllInstalledPlugins")}
               </button>
@@ -383,6 +356,12 @@ function CatalogSection(params: {
 }
 
 function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
+  const sourceCategories = createMemo(() => props.categories);
+  const categories = createMemo(() =>
+    sourceCategories()
+      .filter((category) => category.slug !== "other")
+      .toSorted((left, right) => left.order - right.order),
+  );
   return (
     <div class="plugin-catalog-chips" role="group" aria-label={t("pluginsPage.categoriesLabel")}>
       <For each={[["all", "pluginsPage.intentAll", "layoutGrid"], ...PROMOTED_SECTIONS] as const}>
@@ -420,12 +399,7 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
           ))}
         </>
       ) : undefined}
-      <For
-        each={props.categories
-          .filter((category) => category.slug !== "other")
-          .toSorted((left, right) => left.order - right.order)}
-        keyed={(item) => item.slug}
-      >
+      <For each={categories()} keyed={(item) => item.slug}>
         {(item) => (
           <button
             type="button"
@@ -453,9 +427,9 @@ function renderCatalogEmptyState(): JSX.Element {
 }
 
 function RawResults(props: PluginCatalogResultsProps): JSX.Element {
-  const items = () => props.result?.items ?? [];
-  const official = () => items().filter((plugin) => plugin.catalog.official);
-  const community = () => items().filter((plugin) => !plugin.catalog.official);
+  const items = createMemo(() => props.result?.items ?? []);
+  const official = createMemo(() => items().filter((plugin) => plugin.catalog.official));
+  const community = createMemo(() => items().filter((plugin) => !plugin.catalog.official));
   return (
     <>
       {props.loading ? (
@@ -497,7 +471,7 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
                 type="button"
                 class="btn btn--sm oc-action oc-action-secondary"
                 disabled={props.loadingMore}
-                onClick={props.onLoadMore}
+                onClick={() => props.onLoadMore()}
               >
                 {t(props.loadingMore ? "pluginsPage.loadingMore" : "pluginsPage.loadMore")}
               </button>
@@ -510,17 +484,20 @@ function RawResults(props: PluginCatalogResultsProps): JSX.Element {
 }
 
 function GroupedCatalog(props: PluginCatalogResultsProps): JSX.Element {
-  const items = () => props.result?.items ?? [];
-  const categories = () =>
-    props.categories
+  const items = createMemo(() => props.result?.items ?? []);
+  const sourceCategories = createMemo(() => props.categories);
+  const categories = createMemo(() =>
+    sourceCategories()
       .filter((category) => category.slug !== "other")
-      .toSorted((left, right) => left.order - right.order);
-  const hasAnySection = () =>
-    props.featured.length > 0 ||
-    props.trending.length > 0 ||
+      .toSorted((left, right) => left.order - right.order),
+  );
+  const hasCategoryItems = createMemo(() =>
     items().some((plugin) =>
       categories().some((category) => plugin.catalog.categories.includes(category.slug)),
-    );
+    ),
+  );
+  const hasAnySection = () =>
+    props.featured.length > 0 || props.trending.length > 0 || hasCategoryItems();
   return (
     <>
       {!hasAnySection() && !props.loading && !props.error && !props.remoteError ? (

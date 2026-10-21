@@ -8,7 +8,8 @@ title: "Menu bar"
 **Open Dashboard** and Gateway window actions use the **Web** experience by
 default. Enable **Native experience (Experimental)** under **Dashboard → Settings
 → This Mac → App** to use native chat windows. The preference applies to the menu
-bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Cmd-N).
+bar, Dock, main **Gateways** menu, and **File → New Gateway Window…** (Shift-Cmd-N).
+Cmd-N opens a new session in the selected experience.
 Settings always opens the web Dashboard settings page. See
 [WebChat](/platforms/mac/webchat) for switching behavior and native chat features.
 
@@ -33,7 +34,7 @@ Gateway status dots follow each open Dashboard’s live connection, including sa
 
 Gateway health checks run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its checks and disconnects saved Gateways used for those checks with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
-The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
+The Devices and Automations summaries refresh when the menu opens. While it stays open, Automations follows Cron events with a ten-minute safety refresh for missed updates. Closing the menu stops both summaries' subscriptions and polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.
 
 The Automations summary shows the full enabled-job count and previews up to eight jobs, ordered by next run.
 

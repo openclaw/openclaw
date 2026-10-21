@@ -71,11 +71,11 @@ export function scheduleVoiceCaptureFinalize(params: {
   state: VoiceCaptureState;
   userId: string;
   delayMs: number;
-}): boolean {
+}): void {
   const { state, userId, delayMs } = params;
   const capture = state.get(userId);
   if (!capture) {
-    return false;
+    return;
   }
   clearVoiceCaptureFinalizeTimer(capture);
   capture.finalizeTimer = setTimeout(() => {
@@ -84,5 +84,4 @@ export function scheduleVoiceCaptureFinalize(params: {
     }
     capture.stream?.destroy();
   }, delayMs);
-  return true;
 }

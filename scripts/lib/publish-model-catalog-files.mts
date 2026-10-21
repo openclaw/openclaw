@@ -48,9 +48,9 @@ function saveRecoveryFile(recovery: Recovery, name: string, content: string | Bu
   }
 }
 
-/** Local artifact publication, not a transaction across two filesystem names. */
+/** Local artifact publication, not a transaction across filesystem names. */
 export async function publishModelCatalogPair(
-  outputs: [Output, Output],
+  outputs: readonly Output[],
   warn: (message: string) => void,
 ): Promise<void> {
   // Resolve output links before preparing sibling temps, leaving the links intact.
@@ -90,14 +90,14 @@ export async function publishModelCatalogPair(
             ? `previous.json holds original bytes; mode ${previous.mode.toString(8)}.`
             : "The output was absent before this attempt.",
           "next.json holds the validated candidate bytes.",
-          "Stop writers and inspect BOTH outputs before restoring or completing the pair.",
+          "Stop writers and inspect ALL outputs before restoring or completing the pair.",
           "Do not blindly overwrite a replacement or rerun publication to recover.",
           "Retained artifacts are never automatically replayed or removed by a later run.",
           "",
         ].join("\n"),
       );
     }
-    // The documented single publisher owns both outputs during this operation.
+    // The documented single publisher owns all outputs during this operation.
     publicationStarted = true;
     for (const output of recoveries) {
       const mode = output.previous?.mode;
@@ -120,16 +120,16 @@ export async function publishModelCatalogPair(
   } catch (cause) {
     if (publicationStarted) {
       // A failed rename/verification can already have published. Never roll back
-      // over a foreign replacement; retain both old/new sets for reconciliation.
+      // over a foreign replacement; retain all old/new sets for reconciliation.
       throw new Error(
-        `Catalog pair publication incomplete; inspect both outputs. Recovery retained: ${recoveries.map((entry) => entry.dir).join(", ")}. Cause: ${String(cause)}`,
+        `Catalog pair publication incomplete; inspect all outputs. Recovery retained: ${recoveries.map((entry) => entry.dir).join(", ")}. Cause: ${String(cause)}`,
         { cause },
       );
     }
     throw cause;
   } finally {
     // Cleanup failure cannot undo a visible pair. Interrupted publication keeps
-    // both recovery sets; failures before publication only need owned cleanup.
+    // all recovery sets; failures before publication only need owned cleanup.
     if (!publicationStarted || published) {
       for (const recovery of recoveries) {
         try {

@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
-import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
+import {
+  installControlUiE2ePageDiagnosticRing,
+  recordControlUiE2eFailureFacts,
+} from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -18,8 +22,35 @@ import {
   waitForControlUiRoute,
 } from "./control-ui-e2e.ts";
 
+const readJson = (root: string, name: string) =>
+  JSON.parse(readFileSync(path.join(root, `failure.${name}.json`), "utf8"));
+const readFiles = (root: string) =>
+  readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]);
+
+// This is the same minimal Page boundary for each capture; cases override only their failing I/O.
+function pageFixture(overrides: object) {
+  return {
+    frames: () => [],
+    context: () => ({ browser: () => ({ isConnected: () => true }) }),
+    isClosed: () => false,
+    url: () => "http://fixture.invalid/chat",
+    ...overrides,
+  } as unknown as Page;
+}
+
 describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  function diagnosticFixture(blocked = false) {
+    vi.useFakeTimers();
+    const parent = tempDirs.make("control-ui-diagnostics-");
+    const diagnosticParent = blocked ? path.join(parent, "blocked") : parent;
+    if (blocked) {
+      writeFileSync(diagnosticParent, "not a directory");
+    }
+    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", diagnosticParent);
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    return { parent, diagnosticParent, logs };
+  }
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -36,16 +67,12 @@ describe("shared proof capture", () => {
   ])(
     "preserves the original failure when diagnostic $stage stalls then $late arrives late",
     async ({ stage, late }) => {
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-stalled-proof-");
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent } = diagnosticFixture();
       const pending = createDeferredCore<Buffer>();
       const screenshot = vi.fn(() =>
         stage === "screenshot" ? pending.promise : Promise.resolve(Buffer.from("proof")),
       );
-      // SAFETY: deferred browser replies model an unavailable renderer at the Page boundary.
-      const page = {
+      const page = pageFixture({
         evaluate: () =>
           stage === "evaluation"
             ? pending.promise
@@ -54,13 +81,10 @@ describe("shared proof capture", () => {
                 setTimeout(() => resolve({ failureSummary: { available: true } }), 4_000);
               }),
         screenshot,
-        frames: () => [],
-        context: () => ({ browser: () => ({ isConnected: () => true }) }),
-        isClosed: () => false,
-        url: () => "http://fixture.invalid/chat",
-      } as unknown as Page;
+      });
       const original = new Error("original request failure");
       original.name = "TimeoutError";
+      recordControlUiE2eFailureFacts(page, { avatarPresent: false, avatarRequests: 1 });
       let observed: unknown;
       const failedAction = (async () => {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -78,24 +102,19 @@ describe("shared proof capture", () => {
         const directories = readdirSync(parent);
         expect(directories).toHaveLength(1);
         const root = path.join(parent, directories[0]!);
-        const before = readdirSync(root).map((name) => [
-          name,
-          readFileSync(path.join(root, name), "utf8"),
-        ]);
-        const report = JSON.parse(readFileSync(path.join(root, "failure.private.json"), "utf8"));
-        expect(
-          JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8")),
-        ).toMatchObject({
+        const before = readFiles(root);
+        const report = readJson(root, "private");
+        expect(readJson(root, "public")).toMatchObject({
           hostBeforeRead: { pageClosed: false, browserConnected: true },
           lifecycle: null,
           rendererRead: stage === "evaluation" ? "deadline" : "completed",
+          scenarioFacts: { avatarPresent: false, avatarRequests: 1 },
         });
-        expect(report.failure).toMatchObject({
-          name: "TimeoutError",
-          message: original.message,
+        expect(report).toMatchObject({
+          failure: { name: "TimeoutError", message: original.message },
+          screenshot: null,
+          captureErrors: [expect.stringContaining("timed out")],
         });
-        expect(report.screenshot).toBeNull();
-        expect(report.captureErrors).toEqual([expect.stringContaining("timed out")]);
         if (stage === "evaluation") {
           expect(screenshot).not.toHaveBeenCalled();
         }
@@ -106,9 +125,7 @@ describe("shared proof capture", () => {
         }
         await vi.runAllTimersAsync();
         await failedAction;
-        expect(
-          readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]),
-        ).toEqual(before);
+        expect(readFiles(root)).toEqual(before);
       } finally {
         pending.resolve(Buffer.from("cleanup"));
         await failedAction;
@@ -117,100 +134,110 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { stall: "script", paused: true },
-    { stall: "native", paused: false },
-  ])("publishes $stall renderer stall evidence without page origins", async ({ paused }) => {
-    vi.useFakeTimers();
-    const parent = tempDirs.make("control-ui-renderer-stall-");
-    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const sent: string[] = [];
-    let samples = 0;
-    const session = Object.assign(new EventEmitter(), {
-      send: async (method: string) => {
-        sent.push(method);
-        if (method === "Performance.getMetrics") {
-          samples += 1;
-          const elapsed = samples === 1 ? 0 : 0.5;
-          return {
-            metrics: [
-              { name: "TaskDuration", value: 10 + elapsed },
-              { name: "ScriptDuration", value: 4 + elapsed },
-              { name: "LayoutDuration", value: 1 },
-            ],
-          };
-        }
-        if (method === "Debugger.pause" && paused) {
-          queueMicrotask(() =>
-            session.emit("Debugger.paused", {
-              callFrames: [
+    { stall: "script", paused: true, metrics: true },
+    { stall: "native", paused: false, metrics: true },
+    { stall: "unavailable metrics", paused: true, metrics: false },
+  ])(
+    "publishes $stall renderer stall evidence without page origins",
+    async ({ paused, metrics }) => {
+      const { parent } = diagnosticFixture();
+      const sent: string[] = [];
+      let samples = 0;
+      const session = Object.assign(new EventEmitter(), {
+        send: async (method: string) => {
+          sent.push(method);
+          if (method === "Debugger.enable") {
+            for (const [scriptId, url] of [
+              ["bundle", "http://127.0.0.1:4173/assets/index-private.js?token=private"],
+              ["blob", "blob:https://private.invalid/id"],
+              ["private-path", "https://private.invalid/private-session/report.js?token=private"],
+            ]) {
+              session.emit("Debugger.scriptParsed", { scriptId, url });
+            }
+          }
+          if (method === "Performance.getMetrics") {
+            if (!metrics) {
+              return new Promise(() => {});
+            }
+            samples += 1;
+            const elapsed = samples === 1 ? 0 : 0.5;
+            return {
+              metrics: [
+                { name: "TaskDuration", value: 10 + elapsed },
+                { name: "ScriptDuration", value: 4 + elapsed },
+                { name: "LayoutDuration", value: 1 },
+              ],
+            };
+          }
+          if (method === "Debugger.pause" && paused) {
+            queueMicrotask(() =>
+              session.emit("Debugger.paused", {
+                callFrames: (
+                  [
+                    ["layoutPins", "bundle", "", 9, 3],
+                    ["", "blob", "blob:https://private.invalid/id", 0, 0],
+                    ["privatePath", "private-path", "", 0, 0],
+                  ] as const
+                ).map(([functionName, scriptId, url, lineNumber, columnNumber]) => ({
+                  functionName,
+                  url,
+                  location: { scriptId, lineNumber, columnNumber },
+                })),
+              }),
+            );
+          }
+          return {};
+        },
+        detach: async () => {
+          sent.push("detach");
+        },
+      });
+      const stalled = createDeferredCore<unknown>();
+      const page = pageFixture({
+        addInitScript: async () => {},
+        evaluate: () => stalled.promise,
+        screenshot: async () => Buffer.from("proof"),
+        context: () => ({
+          browser: () => ({ isConnected: () => true }),
+          newCDPSession: async () => session,
+        }),
+      });
+      await installControlUiE2eRendererStallProbe(page);
+      const capture = captureControlUiE2eFailureDiagnostics(page, {
+        error: new Error("click timed out"),
+        label: "comment pin",
+      });
+      await vi.advanceTimersByTimeAsync(5_000 + 3_000);
+      await capture;
+      const root = path.join(parent, readdirSync(parent)[0]!);
+      const report = readJson(root, "public");
+      expect(report).toMatchObject({
+        rendererRead: "deadline",
+        rendererStall: {
+          busyMs: metrics ? { task: 500, script: 500, layout: 0, style: 0 } : null,
+          sampleMs: metrics ? 500 : 0,
+          stack: paused
+            ? [
                 {
                   functionName: "layoutPins",
-                  url: "http://127.0.0.1:4173/assets/index-private.js?token=private",
-                  location: { lineNumber: 9, columnNumber: 3 },
+                  script: "/assets/index-private.js",
+                  line: 10,
+                  column: 4,
                 },
-                {
-                  functionName: "",
-                  url: "blob:https://private.invalid/id",
-                  location: { lineNumber: 0, columnNumber: 0 },
-                },
-              ],
-            }),
-          );
-        }
-        return {};
-      },
-      detach: async () => {
-        sent.push("detach");
-      },
-    });
-    const stalled = createDeferredCore<unknown>();
-    // SAFETY: a never-settling read models a renderer whose main thread stays busy.
-    const page = {
-      addInitScript: async () => {},
-      evaluate: () => stalled.promise,
-      screenshot: async () => Buffer.from("proof"),
-      frames: () => [],
-      context: () => ({
-        browser: () => ({ isConnected: () => true }),
-        newCDPSession: async () => session,
-      }),
-      isClosed: () => false,
-      url: () => "http://127.0.0.1:4173/chat",
-    } as unknown as Page;
-    await installControlUiE2eRendererStallProbe(page);
-    const capture = captureControlUiE2eFailureDiagnostics(page, {
-      error: new Error("click timed out"),
-      label: "comment pin",
-    });
-    await vi.advanceTimersByTimeAsync(5_000 + 3_000);
-    await capture;
-    const root = path.join(parent, readdirSync(parent)[0]!);
-    const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
-    expect(report).toMatchObject({
-      rendererRead: "deadline",
-      rendererStall: {
-        busyMs: { task: 500, script: 500, layout: 0, style: 0 },
-        sampleMs: 500,
-        stack: paused
-          ? [
-              {
-                functionName: "layoutPins",
-                script: "/assets/index-private.js",
-                line: 10,
-                column: 4,
-              },
-              { functionName: "(anonymous)", script: "", line: 1, column: 1 },
-            ]
-          : null,
-      },
-    });
-    expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid/u);
-    expect(sent).toContain("Debugger.pause");
-    expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
-    expect(vi.getTimerCount()).toBe(0);
-    stalled.resolve(null);
-  });
+                { functionName: "(anonymous)", script: "", line: 1, column: 1 },
+                { functionName: "privatePath", script: "", line: 1, column: 1 },
+              ]
+            : null,
+        },
+      });
+      expect(JSON.stringify(report)).not.toMatch(/token=private|private\.invalid|private-session/u);
+      expect(sent).toContain("Debugger.pause");
+      expect(sent.slice(-2)).toEqual(["Debugger.resume", "detach"]);
+      expect(session.listenerCount("Debugger.scriptParsed")).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      stalled.resolve(null);
+    },
+  );
 
   it.each([
     { observed: true, closed: false, connected: true },
@@ -223,10 +250,7 @@ describe("shared proof capture", () => {
     async ({ observed, closed: initiallyClosed, connected: initiallyConnected }) => {
       let closed = initiallyClosed;
       let connected = initiallyConnected;
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-lifecycle-proof-");
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent, logs } = diagnosticFixture();
       const browserEvents = new EventEmitter();
       const reads: string[] = [];
       const browser = Object.assign(browserEvents, {
@@ -303,7 +327,7 @@ describe("shared proof capture", () => {
         label: "test",
       });
       const root = path.join(parent, readdirSync(parent)[0]!);
-      const report = JSON.parse(readFileSync(path.join(root, "failure.public.json"), "utf8"));
+      const report = readJson(root, "public");
       expect(report).toMatchObject({
         hostBeforeRead: { pageClosed: closed, browserConnected: connected },
         lifecycle,
@@ -320,41 +344,31 @@ describe("shared proof capture", () => {
   );
 
   it.each([
-    { shardIndex: "5", shardCount: "6", failure: "none", sendLabel: "Send message" },
-    { shardIndex: undefined, shardCount: undefined, failure: "none", sendLabel: "Loading chat" },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "evaluation",
-      sendLabel: "Send message",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "screenshot",
-      sendLabel: "private-label",
-    },
-    {
-      shardIndex: undefined,
-      shardCount: undefined,
-      failure: "storage",
-      sendLabel: "Sending message...",
-    },
-  ])(
-    "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
-    async ({ shardIndex, shardCount, failure, sendLabel }) => {
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-failure-proof-");
-      const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
-      if (failure === "storage") {
-        writeFileSync(diagnosticParent, "not a directory");
-      }
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", diagnosticParent);
-      const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    ["none", "Send message", "snapshot", "5", "6"],
+    ["none", "Loading chat", "none", undefined, undefined],
+    ["evaluation", "Send message", "list", undefined, undefined],
+    ["screenshot", "private-label", "list", undefined, undefined],
+    ["storage", "Sending message...", "list", undefined, undefined],
+  ] as const)(
+    "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
+    async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
+      const { parent, diagnosticParent, logs } = diagnosticFixture(failure === "storage");
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
-      const app = document.createElement("openclaw-app");
       vi.stubGlobal("openclawControlUi", {
+        snapshot: (): ReturnType<ControlUiReadiness["hook"]["snapshot"]> => ({
+          generation: 7,
+          booted: true,
+          gatewayPhase: "connected",
+          routeReady: true,
+          rosterReady: false,
+          ready: false,
+          basePath: "/private-base",
+          sessionKey: "private-session",
+          route: null,
+          terminalActivationReady: false,
+        }),
         diagnostics: () => ({
+          settlementError: failure === "storage" ? "private-settlement-error" : null,
           gateway: {
             phase: failure === "storage" ? "private-phase" : "connected",
             hello: {
@@ -383,103 +397,82 @@ describe("shared proof capture", () => {
           },
         }),
       });
-      const composer = document.createElement("div");
-      composer.className = "agent-chat__composer-combobox";
-      const textarea = document.createElement("textarea");
-      textarea.value = failure === "storage" ? "" : "private-draft";
-      textarea.disabled = failure === "storage";
-      composer.append(textarea);
-      const send = document.createElement("button");
-      send.className = "chat-send-btn--send";
-      send.setAttribute("aria-label", sendLabel);
-      send.setAttribute("aria-busy", failure === "storage" ? "true" : "false");
-      send.disabled = failure !== "none" || sendLabel === "Loading chat";
-      const providerHead = document.createElement("div");
-      providerHead.className = "model-providers__head";
-      const badge = document.createElement("span");
-      badge.className = "settings-status";
-      badge.textContent = failure === "none" ? "Ready" : "private-badge";
-      providerHead.append(badge);
-      const agentPage = document.createElement("openclaw-agents-page");
-      Object.assign(agentPage, {
+      const storageFailed = failure === "storage";
+      const screenshotFailed = failure === "screenshot";
+      const sendDisabled = failure !== "none" || sendLabel === "Loading chat";
+      const badgeText = failure === "none" ? "Ready" : "private-badge";
+      const fileText = "private-file-content";
+      const dom = document.createElement("div");
+      dom.innerHTML = `
+        <openclaw-app></openclaw-app>
+        <div class="agent-chat__composer-combobox"><textarea ${storageFailed ? "disabled" : ""}>${storageFailed ? "" : "private-draft"}</textarea></div>
+        <button class="chat-send-btn--send" aria-label="${sendLabel}" aria-busy="${storageFailed}" ${sendDisabled ? "disabled" : ""}></button>
+        <div class="agent-chat__input"><button class="chat-send-btn--stop" aria-label="private-stop">private-stop-text</button></div>
+        <openclaw-tooltip open content="private-open-tooltip">private-open-content</openclaw-tooltip>
+        <openclaw-tooltip content="private-closed-tooltip">private-closed-content</openclaw-tooltip>
+        <div class="model-providers__head"><span class="settings-status">${badgeText}</span></div>
+        <openclaw-agents-page>${screenshotFailed ? "" : `<textarea class="agent-file-textarea" ${storageFailed ? "disabled" : ""}>${fileText}</textarea>`}</openclaw-agents-page>
+        <openclaw-canvas-widget-view doc-id="private-document"><div class="skeleton">private-widget-content</div></openclaw-canvas-widget-view>
+        <openclaw-canvas-widget-view doc-id="private-document"><div role="alert">private-widget-content</div></openclaw-canvas-widget-view>
+        <openclaw-canvas-widget-view doc-id="private-document"><iframe class="chat-tool-card__preview-frame" title="private-widget-title">private-widget-content</iframe></openclaw-canvas-widget-view>`;
+      Object.assign(dom.querySelector("openclaw-agents-page")!, {
         agentsSelectedId: "private-agent",
         agentsPanel: "files",
         agentFileActive: failure === "none" ? "AGENTS.md" : "private-file",
         agentFilesLoading: false,
         agentFilesList: { agentId: "private-agent", workspace: "private-path" },
       });
-      const fileEditor = document.createElement("textarea");
-      fileEditor.className = "agent-file-textarea";
-      fileEditor.value = "private-file-content";
-      fileEditor.disabled = failure === "storage";
-      if (failure !== "screenshot") {
-        agentPage.append(fileEditor);
-      }
-      const canvasWidgets = ["loading", "error", "frame"].map((stage) => {
-        const widget = document.createElement("openclaw-canvas-widget-view");
-        widget.setAttribute("doc-id", "private-document");
-        const content = document.createElement(stage === "frame" ? "iframe" : "div");
-        content.textContent = "private-widget-content";
-        if (stage === "loading") {
-          content.className = "skeleton";
-        } else if (stage === "error") {
-          content.setAttribute("role", "alert");
-        } else {
-          content.className = "chat-tool-card__preview-frame";
-          content.setAttribute("title", "private-widget-title");
-        }
-        widget.append(content);
-        return widget;
-      });
-      document.body.append(app, composer, send, providerHead, agentPage, ...canvasWidgets);
+      document.body.append(...dom.childNodes);
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop")!;
+      Object.assign(document.querySelector("openclaw-tooltip[open]")!, { anchor: stop });
+      stop.focus();
+      await vi.runOnlyPendingTimersAsync();
+      const snapshot =
+        catalogSource === "snapshot"
+          ? {
+              event: "models.snapshot",
+              payload: {
+                scope: { agentId: "private-agent" },
+                catalog: {
+                  models: [{ id: "private-model", available: true }],
+                  pendingProviders: ["private-provider"],
+                  providerOutcomes: [{ provider: "private-provider", status: "ready" }],
+                },
+              },
+            }
+          : undefined;
+      const unlessEmpty = <T>(items: T[]) => (failure === "screenshot" ? [] : items);
       const modelResponses =
-        failure === "none"
-          ? {}
+        catalogSource !== "list"
+          ? { snapshot }
           : {
               list: {
                 ok: true,
                 payload: {
-                  models:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          { id: "private-model", available: true },
-                          { available: false, unavailableReason: "private-reason" },
-                          { available: "private-availability" },
-                        ],
+                  models: unlessEmpty([
+                    { id: "private-model", available: true },
+                    { available: false, unavailableReason: "private-reason" },
+                    { available: "private-availability" },
+                  ]),
                   pendingProviders: [],
-                  providerOutcomes:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          {
-                            provider: "private-provider",
-                            profileId: "private-profile",
-                            status: "ready",
-                          },
-                          { status: "private-outcome" },
-                        ],
+                  providerOutcomes: unlessEmpty([
+                    { provider: "private-provider", profileId: "private-profile", status: "ready" },
+                    { status: "private-outcome" },
+                  ]),
                 },
               },
               authStatus: {
                 ok: true,
                 payload: {
-                  providers:
-                    failure === "screenshot"
-                      ? []
-                      : [
-                          {
-                            profiles: [
-                              {
-                                profileId: "private-profile",
-                                status: "ok",
-                                token: "private-token",
-                              },
-                              { status: "expired" },
-                              { status: "private-health" },
-                            ],
-                          },
-                        ],
+                  providers: unlessEmpty([
+                    {
+                      profiles: [
+                        { profileId: "private-profile", status: "ok", token: "private-token" },
+                        { status: "expired" },
+                        { status: "private-health" },
+                      ],
+                    },
+                  ]),
                 },
               },
             };
@@ -490,14 +483,12 @@ describe("shared proof capture", () => {
       vi.stubEnv("GITHUB_RUN_ID", "123456");
       vi.stubEnv("GITHUB_RUN_ATTEMPT", "2");
       writeFileSync(path.join(parent, "prior.png"), "prior-proof");
-      // SAFETY: this fixture implements the Page boundary used by failure diagnostics.
       const pageEvents = new EventEmitter();
       const rootFrame = { parentFrame: () => null };
       const outerFrame = { parentFrame: () => rootFrame };
       const innerFrame = { parentFrame: () => outerFrame };
-      const page = {
+      const page = pageFixture({
         on: pageEvents.on.bind(pageEvents),
-        context: () => ({ browser: () => ({ isConnected: () => true }) }),
         frames: () => [rootFrame, outerFrame, innerFrame],
         evaluate: async (read: () => unknown) => {
           if (failure === "evaluation") {
@@ -505,8 +496,6 @@ describe("shared proof capture", () => {
           }
           return read();
         },
-        isClosed: () => false,
-        url: () => "http://127.0.0.1/chat",
         screenshot: async () => {
           expect(
             logs.mock.calls.some(([message]) => message === "[control-ui-e2e] failure state"),
@@ -521,50 +510,36 @@ describe("shared proof capture", () => {
           }
           return Buffer.from("failure-proof");
         },
-      } as unknown as Page;
+      });
       installControlUiRpcDiagnostics(page);
       const socket = new EventEmitter();
       pageEvents.emit("websocket", socket);
       const sendFrame = (direction: string, frame: unknown) =>
         socket.emit(direction, { payload: JSON.stringify(frame) });
-      sendFrame("framesent", {
-        type: "req",
-        id: "private-auth-id",
-        method: "connect",
-        params: { token: "private-token" },
-      });
-      sendFrame("framereceived", {
-        type: "res",
-        id: "private-auth-id",
-        ok: true,
-        payload: { token: "private-token" },
-      });
-      sendFrame("framesent", {
-        type: "req",
-        id: "private-file-id",
-        method: "agents.files.get",
-        params: { agentId: "private-agent" },
-      });
-      sendFrame("framereceived", {
-        type: "res",
-        id: "private-file-id",
-        ok: false,
-        error: { message: "private-error" },
-      });
+      const rpc = (method: string, params: unknown, response: object) => {
+        const id = `private-${method}`;
+        sendFrame("framesent", { type: "req", id, method, params });
+        sendFrame("framereceived", { type: "res", id, ...response });
+      };
+      rpc("connect", { token: "private-token" }, { ok: true, payload: { token: "private-token" } });
+      rpc(
+        "agents.files.get",
+        { agentId: "private-agent" },
+        {
+          ok: false,
+          error: { message: "private-error" },
+        },
+      );
       for (const ok of [true, false]) {
-        sendFrame("framesent", {
-          type: "req",
-          id: "private-canvas-id",
-          method: "canvas.document.view",
-          params: { docId: "private-document" },
-        });
-        sendFrame("framereceived", {
-          type: "res",
-          id: "private-canvas-id",
-          ok,
-          payload: { html: "private-html", sandboxUrl: "https://private-host/?private-token" },
-          error: { message: "private-canvas-error" },
-        });
+        rpc(
+          "canvas.document.view",
+          { docId: "private-document" },
+          {
+            ok,
+            payload: { html: "private-html", sandboxUrl: "https://private-host/?private-token" },
+            error: { message: "private-canvas-error" },
+          },
+        );
       }
       const frameEvent = {
         at: "2026-09-01T00:00:00.000Z",
@@ -574,20 +549,12 @@ describe("shared proof capture", () => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const original = new Error("private-original-error");
         original.name = attempt === 0 ? "TimeoutError" : "private-error-name";
-        const failedAction = async () => {
-          try {
-            throw original;
-          } catch (error) {
-            await captureControlUiE2eFailureDiagnostics(page, {
-              error: original,
-              label: "private-capture-label",
-              modelResponses,
-              pageEvents: [frameEvent],
-            });
-            throw error;
-          }
-        };
-        await expect(failedAction()).rejects.toBe(original);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: original,
+          label: "private-capture-label",
+          modelResponses,
+          pageEvents: [frameEvent],
+        });
         expect(vi.getTimerCount()).toBe(0);
       }
       const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
@@ -630,6 +597,15 @@ describe("shared proof capture", () => {
             failure === "evaluation"
               ? { available: false }
               : {
+                  readiness: {
+                    generation: 7,
+                    booted: true,
+                    gatewayPhase: "connected",
+                    routeReady: true,
+                    rosterReady: false,
+                    ready: false,
+                    settlementFailed: failure === "storage",
+                  },
                   gatewayPhase: failure === "storage" ? "unknown" : "connected",
                   connected: true,
                   canvasWidgets: [
@@ -652,20 +628,21 @@ describe("shared proof capture", () => {
                     activeFile: failure === "none" ? "AGENTS.md" : "unknown",
                     loading: false,
                     editorPresent: failure !== "screenshot",
-                    editorLength: failure === "screenshot" ? null : fileEditor.value.length,
-                    editorDisabled: failure === "screenshot" ? null : fileEditor.disabled,
+                    editorLength: screenshotFailed ? null : fileText.length,
+                    editorDisabled: screenshotFailed ? null : storageFailed,
                   },
                   documentReadyState: expect.stringMatching(/^(?:loading|interactive|complete)$/u),
                   providerStatuses: [
                     {
                       status: failure === "none" ? "Ready" : "unknown",
-                      length: badge.textContent.length,
+                      length: badgeText.length,
                     },
                   ],
                   composer: {
                     draftLength: failure === "storage" ? 0 : 13,
                     nonempty: failure !== "storage",
                     disabled: failure === "storage",
+                    stop: { visible: true, disabled: false, focused: true },
                     send: {
                       label: sendLabel === "private-label" ? "unknown" : sendLabel,
                       labelLength: sendLabel.length,
@@ -673,10 +650,42 @@ describe("shared proof capture", () => {
                       busy: failure === "storage",
                     },
                   },
+                  activeElement: {
+                    kind: "button",
+                    inComposer: true,
+                    isStop: true,
+                    isSend: false,
+                  },
+                  tooltips: {
+                    openCount: 1,
+                    entries: [
+                      {
+                        trigger: {
+                          kind: "button",
+                          inComposer: true,
+                          isStop: true,
+                          isSend: false,
+                        },
+                        hovered: false,
+                        containsFocus: true,
+                      },
+                    ],
+                  },
                 },
           models: {
             listSeen: failure !== "none",
             listOk: failure === "none" ? null : true,
+            snapshot: {
+              seen: snapshot !== undefined,
+              models: snapshot ? 1 : null,
+              available: snapshot ? 1 : null,
+              unavailable: snapshot ? 0 : null,
+              unknownAvailability: snapshot ? 0 : null,
+              pendingProviders: snapshot ? 1 : null,
+              providerOutcomes: snapshot
+                ? { ready: 1, "auth-rejected": 0, unavailable: 0, unknown: 0 }
+                : null,
+            },
             models: failure === "none" ? null : failure === "screenshot" ? 0 : 3,
             available: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
             unavailable: failure === "none" ? null : failure === "screenshot" ? 0 : 1,
@@ -796,6 +805,29 @@ describe("resolvePlaywrightChromiumExecutablePath", () => {
       ).toBe(expected);
     },
   );
+
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("prefers the newest installed Chromium revision over system browsers", () => {
+    const browsersRoot = tempDirs.make("control-ui-playwright-browsers-");
+    const installed = [
+      path.join(browsersRoot, "chromium-1100", "chrome-linux", "chrome"),
+      path.join(browsersRoot, "chromium-1194", "chrome-linux", "chrome"),
+    ];
+    for (const executable of installed) {
+      mkdirSync(path.dirname(executable), { recursive: true });
+      writeFileSync(executable, "");
+    }
+
+    expect(
+      resolvePlaywrightChromiumExecutablePath(
+        path.join(browsersRoot, "chromium-1243", "chrome-linux64", "chrome"),
+        {},
+        (candidate) =>
+          existsSync(candidate) || candidate === systemChromiumExecutableCandidates.at(-1),
+      ),
+    ).toBe(installed[1]);
+  });
 });
 
 describe("waitForControlUiRoute", () => {

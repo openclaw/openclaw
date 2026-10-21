@@ -155,7 +155,7 @@ write_review_transition_journal() {
 
 validate_prep_baseline_transition() {
   local command="$1" pr="$2" source="$3" target="$4" branch="$5"
-  local root observation incoming head_ref helper
+  local root observation archive helper
   helper="$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs"
   root=$(repo_root) || return 1
   # Replay once before observing live authority. The private facts stay in this
@@ -164,9 +164,8 @@ validate_prep_baseline_transition() {
     "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   observation=$(cat .local/pr-meta.json) || return 1
-  incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
-  head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
-  revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+  archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
+  revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
   if [ "$command" = install-transition ]; then
     PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
       "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
@@ -186,6 +185,13 @@ recover_review_transition() {
   local pr="$1"
   local journal=.local/review-transition.json
   [ -e "$journal" ] || return 0
+
+  # A correction continuation retires metadata only. It must not enter the
+  # baseline transition's source/index restoration or branch movement path.
+  if [ "$(jq -r .mode "$journal")" = correction ]; then
+    recover_correction_continuation "$pr"
+    return $?
+  fi
 
   local fields source target mode branch PREP_TRANSITION_FACTS
   fields=$(jq -er --argjson pr "$pr" '
@@ -317,7 +323,7 @@ fetch_pr_head() {
     return 1
   fi
   case "$destination" in
-    ""|"refs/heads/pr-$pr"|"refs/heads/pr-$pr-verify") ;;
+    ""|"refs/heads/pr-$pr") ;;
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 
@@ -572,7 +578,23 @@ pr_meta_json() {
 write_pr_meta_files() {
   local json="$1"
 
-  printf '%s\n' "$json" > .local/pr-meta.json
+  # A fresh hosted review must not destroy the incoming identity still bound to
+  # a retained correction. Finish and verify the snapshot before either write.
+  local archive="" artifact
+  for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json .local/review.md; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+      echo "Cannot retain review identity at $artifact: expected a regular file." >&2
+      return 1
+    fi
+    if [ -z "$archive" ]; then
+      archive=$(mktemp -d .local/review-evidence.XXXXXX) || return 1
+    fi
+    cp -p "$artifact" "$archive/" || return 1
+    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+  done
+
+  printf '%s\n' "$json" > .local/pr-meta.json || return 1
 
   # Security: shell-escape all values with printf %q to prevent command injection
   # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.

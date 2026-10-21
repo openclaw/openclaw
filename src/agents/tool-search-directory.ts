@@ -1,11 +1,13 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
   isDirectVisibleCatalogTool,
   resolveCatalog,
+  toolSchemaDirectoryPromptCache,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
@@ -22,9 +24,6 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
-// Catalog entry arrays are immutable snapshots. Keying their rendered directory by
-// array identity preserves prompt-prefix bytes without retaining retired catalogs.
-const toolSchemaDirectoryPromptCache = new WeakMap<ToolSearchCatalogEntry[], Map<string, string>>();
 
 export function applyToolSchemaDirectoryCatalog(params: {
   tools: AnyAgentTool[];
@@ -56,7 +55,10 @@ export function applyToolSchemaDirectoryCatalog(params: {
 
 export function buildToolSchemaDirectoryPrompt(
   ctx: ToolSearchToolContext,
-  options?: CatalogVisibilityOptions & { contextTokenBudget?: number },
+  options?: CatalogVisibilityOptions & {
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  },
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const catalog = resolveCatalog(ctx);
@@ -70,7 +72,10 @@ export function buildToolSchemaDirectoryPrompt(
           Math.max(768, Math.floor(contextTokens / 10)),
         )
       : MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS;
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}`;
+  // Lean filtering must not buy longer descriptions for the remaining tools.
+  const descriptionMaxChars =
+    (options?.toolSearchDirectoryLean ?? isLocalModelLeanEnabled(ctx)) ? 0 : 180;
+  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
@@ -81,6 +86,7 @@ export function buildToolSchemaDirectoryPrompt(
     visibleCatalogEntries(catalog, options),
     config.mode,
     maxChars,
+    descriptionMaxChars,
   );
   if (options?.allowedIds) {
     return prompt;
@@ -109,7 +115,15 @@ export function resolveToolSearchCatalogTool(
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
-  const normalized = description.replace(/\s+/g, " ").trim();
+  // Collapsing whitespace only shrinks text, so a normalized raw window longer than the
+  // limit already proves truncation without normalizing the whole description.
+  const window = description.slice(0, maxChars * 4);
+  let normalized = window.replace(/\s+/g, " ").trimStart();
+  if (window.length === description.length) {
+    normalized = normalized.trimEnd();
+  } else if (normalized.length <= maxChars + 1) {
+    normalized = description.replace(/\s+/g, " ").trim();
+  }
   if (normalized.length <= maxChars) {
     return normalized;
   }
@@ -121,10 +135,9 @@ function formatToolDirectoryIdentifier(value: string | undefined): string | unde
   return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
 }
 
-function formatToolDirectoryEntry(
-  entry: ToolSearchCatalogEntry,
-  descriptionMaxChars: number,
-): string | undefined {
+type ToolDirectoryRow = { label: string; description: string };
+
+function prepareToolDirectoryRow(entry: ToolSearchCatalogEntry): ToolDirectoryRow | undefined {
   if (entry.source !== "openclaw") {
     return undefined;
   }
@@ -133,18 +146,25 @@ function formatToolDirectoryEntry(
     return undefined;
   }
   const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
-  const owner = ownerName ? ` (${ownerName})` : "";
+  return {
+    label: `- ${name}${ownerName ? ` (${ownerName})` : ""}`,
+    description: entry.description,
+  };
+}
+
+function formatToolDirectoryRow(row: ToolDirectoryRow, descriptionMaxChars: number): string {
   if (descriptionMaxChars === 0) {
-    return `- ${name}${owner}`;
+    return row.label;
   }
-  const description = compactDirectoryDescription(entry.description, descriptionMaxChars);
-  return `- ${name}${owner}: ${description || "No description."}`;
+  const description = compactDirectoryDescription(row.description, descriptionMaxChars);
+  return `${row.label}: ${description || "No description."}`;
 }
 
 function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
   maxChars: number,
+  initialDescriptionMaxChars: number,
 ): string {
   const deferredEntries = entries.filter((entry) => !entry.directVisible);
   if (deferredEntries.length === 0) {
@@ -162,11 +182,11 @@ function formatToolSearchCatalogDirectory(
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
-  let descriptionMaxChars = 180;
-  const renderRows = () =>
-    listedEntries
-      .map((entry) => formatToolDirectoryEntry(entry, descriptionMaxChars))
-      .filter((line): line is string => Boolean(line));
+  const rows = listedEntries
+    .map(prepareToolDirectoryRow)
+    .filter((row): row is ToolDirectoryRow => row !== undefined);
+  let descriptionMaxChars = initialDescriptionMaxChars;
+  const renderRows = () => rows.map((row) => formatToolDirectoryRow(row, descriptionMaxChars));
   let lines = renderRows();
   const heading = "Available deferred-schema tools:";
   const notice = "Policy-approved MCP and client tools may also be discoverable through search.";
@@ -182,10 +202,10 @@ function formatToolSearchCatalogDirectory(
         : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
-        " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+        " Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
     } else if (mode === "directory") {
       guidance +=
-        " Call a unique deferred tool name directly, or use tool_call with its id and args.";
+        " Call a unique deferred tool name directly, or use dispatch_action with its id and args.";
     }
     const footerChars =
       guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);

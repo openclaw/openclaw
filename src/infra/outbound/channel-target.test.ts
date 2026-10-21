@@ -61,6 +61,17 @@ describe("applyTargetToParams", () => {
     expect(() => applyTargetToParams(params)).toThrow(expectedMessage);
   });
 
+  it.each(["toString", "constructor", "__proto__"])(
+    "rejects inherited object property %s as an unknown action",
+    (action) => {
+      const args = { target: "channel:C1" };
+      expect(() => applyTargetToParams({ action, args })).toThrow(
+        `Action ${action} does not accept a target.`,
+      );
+      expect(args).toEqual({ target: "channel:C1" });
+    },
+  );
+
   it("does nothing when target is blank", () => {
     const params = {
       action: "send",

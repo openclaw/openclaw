@@ -1,10 +1,9 @@
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -45,28 +44,35 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, reason: "epoch-mismatch" };
     }
-    const memory = getSessionActorStorageBinding(params.sessionTarget);
-    const binding = memory ? undefined : captureIncognitoSessionBinding(params.sessionTarget);
-    const captured =
-      binding || memory
-        ? { ...params, sessionTarget: captureSessionTranscriptTargetBinding(params.sessionTarget) }
-        : params;
+    const authority = { assertCurrent: params.assertCurrent, authorize: params.assertCurrent };
+    const namespace = captureSessionActorStorageOwner(params.sessionTarget, authority);
+    const captured = namespace
+      ? { ...params, sessionTarget: captureSessionTranscriptTargetBinding(params.sessionTarget) }
+      : params;
     const execute = () =>
       sessionOperations.enqueue(sessionId, async () => {
         // Keep loading inside the queue, before authority checks or ledger reservations.
         const { commitWorkerTranscript } = await loadTranscriptCommitRuntime();
         return await commitWorkerTranscript(
           options,
-          memory ? undefined : (store ??= createWorkerTranscriptCommitStore()),
+          namespace ? undefined : (store ??= createWorkerTranscriptCommitStore()),
           sessionId,
           captured,
         );
       });
-    return await (memory
-      ? runWithSessionActorStorage(memory, execute)
-      : binding
-        ? binding.actor.sessions.withSharedState(execute)
-        : execute());
+    if (!namespace) {
+      return execute();
+    }
+    return (
+      (await withSessionActorStorage(
+        captured.sessionTarget,
+        {
+          authority,
+          lifetime: { assertCurrent: params.assertCurrent, assertReadable: params.assertCurrent },
+        },
+        execute,
+      )) ?? { ok: false, reason: "session-not-attached" }
+    );
   };
 
   return { commit };

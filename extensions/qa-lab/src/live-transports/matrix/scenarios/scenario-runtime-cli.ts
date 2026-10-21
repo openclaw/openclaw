@@ -115,7 +115,6 @@ export function startMatrixQaOpenClawCli(params: {
     child,
     settlementFailureMessage: `${formatMatrixQaCliCommand(params.args)} settlement failed`,
     forceKillAfterMs: MATRIX_QA_CLI_TIMEOUT_KILL_GRACE_MS,
-    initialSignal: "SIGTERM",
     ...(isWindows
       ? {
           windowsCleanup: {
@@ -148,9 +147,13 @@ export function startMatrixQaOpenClawCli(params: {
               })
             : primary.type === "timeout"
               ? new Error(formatMatrixQaCliFailure(result, `timed out after ${params.timeoutMs}ms`))
-              : result.exitCode !== 0 && params.allowNonZero !== true
-                ? new Error(formatMatrixQaCliFailure(result, `exited ${result.exitCode}`))
-                : undefined;
+              : primary.type !== "exit"
+                ? new Error(formatMatrixQaCliFailure(result, "was cancelled"))
+                : primary.exitCode === null
+                  ? new Error(formatMatrixQaCliFailure(result, `terminated by ${primary.signal}`))
+                  : result.exitCode !== 0 && params.allowNonZero !== true
+                    ? new Error(formatMatrixQaCliFailure(result, `exited ${result.exitCode}`))
+                    : undefined;
       finish(
         result,
         outcome.settlementFailure

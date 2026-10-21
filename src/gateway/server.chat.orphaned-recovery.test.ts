@@ -9,12 +9,33 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
 import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+
+it("preserves interrupted recovery custody when reusing a failed session", () => {
+  const entry = {
+    sessionId: "interrupted-session",
+    updatedAt: 1,
+    status: "failed" as const,
+    abortedLastRun: true,
+    mainRestartRecovery: { cycleId: "unfinished-cycle", revision: 7, chargedAttempts: 1 },
+    restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "previous-gateway" }],
+    restartRecoveryDeliveryRunId: "interrupted-run",
+    restartRecoveryDeliverySourceRunId: "accepted-input",
+  };
+
+  expect(recoverTerminalSessionEntryForVisibleTurn(entry)).toEqual(entry);
+});
 
 it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async () => {
   const token = "orphaned-recovery-chat-token";
@@ -37,15 +58,11 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   let responseCount = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const body = await readProviderBody(request);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const body = Buffer.concat(chunks).toString("utf8");
       if (body.includes(priorMessage)) {
         targetRequests.push(body);
       }
@@ -59,16 +76,8 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   const runProof = async () => {
-    await new Promise<void>((resolve, reject) => {
-      providerServer.once("error", reject);
-      providerServer.listen(0, "127.0.0.1", resolve);
-    });
-    const address = providerServer.address();
-    if (!address || typeof address === "string") {
-      throw new Error("recovery provider did not bind");
-    }
     const provider = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
+      await listenProvider(providerServer),
       "gpt-orphaned-recovery",
     );
     const cfg = {
@@ -119,6 +128,19 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         sessionKey,
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
       };
+      const send = (
+        idempotencyKey: string,
+        message: string,
+        overrides: Record<string, unknown> = {},
+      ) =>
+        client.request("chat.send", {
+          sessionKey,
+          sessionId,
+          message,
+          idempotencyKey,
+          deliver: false,
+          ...overrides,
+        });
       await replaceSessionEntry(target, {
         sessionId,
         displayName: "Interrupted chat",
@@ -153,15 +175,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       );
       const stranded = loadSessionEntry(target);
       if (retry) {
-        await expect(
-          client.request("chat.send", {
-            sessionKey,
-            sessionId,
-            message: nextMessage,
-            idempotencyKey: sourceRunId,
-            deliver: false,
-          }),
-        ).rejects.toThrow(/different input/);
+        await expect(send(sourceRunId, nextMessage)).rejects.toThrow(/different input/);
         expect(loadSessionEntry(target)).toEqual(stranded);
       }
       for (const [reason, stale] of [
@@ -169,28 +183,16 @@ it("chat.send recovers failed and statusless work for new messages and retained 
         ["permissions", { expectedPermissionMode: "guarded" }],
         ["tools", { expectedToolOverrides: { webSearch: false } }],
       ] as const) {
-        await expect(
-          client.request("chat.send", {
-            sessionKey,
-            sessionId,
-            message: nextMessage,
-            idempotencyKey: `stale-${caseId}-${reason}`,
-            deliver: false,
-            ...stale,
-          }),
-        ).rejects.toThrow(/changed/);
+        await expect(send(`stale-${caseId}-${reason}`, nextMessage, stale)).rejects.toThrow(
+          /changed/,
+        );
         expect(loadSessionEntry(target)).toEqual(stranded);
       }
       const runId = retry ? sourceRunId : `new-input-after-stranded-recovery-${caseId}`;
-      await expect(
-        client.request("chat.send", {
-          sessionKey,
-          sessionId,
-          message: retry ? priorMessage : nextMessage,
-          idempotencyKey: runId,
-          deliver: false,
-        }),
-      ).resolves.toMatchObject({ runId, status: retry ? "ok" : "started" });
+      await expect(send(runId, retry ? priorMessage : nextMessage)).resolves.toMatchObject({
+        runId,
+        status: retry ? "ok" : "started",
+      });
       if (!retry) {
         await vi.waitFor(
           async () => {
@@ -202,7 +204,8 @@ it("chat.send recovers failed and statusless work for new messages and retained 
       }
       await vi.waitFor(
         () => {
-          expect(loadSessionEntry(target)?.status).toBe("done");
+          const entry = loadSessionEntry(target);
+          expect(entry?.status).toBe("done");
         },
         { timeout: 30_000 },
       );
@@ -240,10 +243,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
     },
     async () => {
       if (providerServer.listening) {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeProvider(providerServer);
       }
     },
     () => state.cleanup(),

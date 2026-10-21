@@ -1,5 +1,6 @@
 import type { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
@@ -10,6 +11,7 @@ import * as catalog from "./session-transcript-catalog.js";
 
 it("reads catalog titles and cursor pages in workers and observes later transcript writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const target = {
       agentId: "main",
       sessionId: "catalog-worker",

@@ -26,7 +26,7 @@ export function withToolApprovalReviews(
   const record = asNullableRecord(details);
   return {
     ...(record ?? (details === undefined ? {} : { toolDetails: details })),
-    approvalReviews: [...reviews],
+    approvalReviews: reviews,
     ...(outcome ? { approvalReviewOutcome: outcome } : {}),
   };
 }

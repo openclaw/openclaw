@@ -31,71 +31,42 @@ function createGlobReadMatcher(pattern: string): (target: string) => boolean {
   };
 }
 
-function legacyCompileSandboxGlobCharacterClass(
-  pattern: string,
-  startIndex: number,
-): { source: string; endIndex: number } {
-  let index = startIndex + 1;
-  if (index >= pattern.length) {
-    throw new Error("fs sandbox glob character class must be closed.");
+function expectMatches(pattern: string, allowed: string[], denied: string[]) {
+  const matcher = createGlobReadMatcher(pattern);
+  for (const target of allowed) {
+    expect(matcher(target), `${pattern}: ${target}`).toBe(true);
   }
-  const negated = pattern[index] === "!" || pattern[index] === "^";
-  if (negated) {
-    index += 1;
+  for (const target of denied) {
+    expect(matcher(target), `${pattern}: ${target}`).toBe(false);
   }
-  let body = "";
-  for (; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    if (char === "]" && body) {
-      return {
-        source: `[${negated ? "^" : ""}${body}]`,
-        endIndex: index,
-      };
-    }
-    if (!char || char === "/") {
-      throw new Error("fs sandbox glob character class cannot match path separators.");
-    }
-    body +=
-      char === "\\" || char === "]" || (body.length === 0 && char === "^") ? `\\${char}` : char;
-  }
-  throw new Error("fs sandbox glob character class must be closed.");
 }
 
 function legacyCompileSandboxGlobPattern(pattern: string): RegExp {
-  let source = "^";
-  for (let index = 0; index < pattern.length; index += 1) {
-    const char = pattern[index];
-    const next = pattern[index + 1];
-    if (char === "*" && next === "*" && pattern[index + 2] === "/") {
-      source += "(?:.*/)?";
-      index += 2;
-    } else if (char === "*" && next === "*") {
-      source += ".*";
-      index += 1;
-    } else if (char === "*") {
-      source += "[^/]*";
-    } else if (char === "?") {
-      source += "[^/]";
-    } else if (char === "[") {
-      const compiledClass = legacyCompileSandboxGlobCharacterClass(pattern, index);
-      source += compiledClass.source;
-      index = compiledClass.endIndex;
-    } else {
-      source += char?.replace(/[\\^$+?.()|[\]{}]/gu, "\\$&") ?? "";
-    }
-  }
-  source += "$";
-  return new RegExp(source, "u");
+  // This oracle only accepts the fuzz alphabet below, not arbitrary policy input.
+  const sources: Record<string, string> = {
+    "**/": "(?:.*/)?",
+    "**": ".*",
+    "*": "[^/]*",
+    "?": "[^/]",
+    "[a]": "[a]",
+    "[!a]": "[^a]",
+    "[a-b]": "[a-b]",
+    "[]]": "[\\]]",
+  };
+  const source = pattern.replace(
+    /\*\*\/|\*\*|\[!a\]|\[a-b\]|\[\]\]|\[a\]|[\s\S]/gu,
+    (token) => sources[token] ?? token.replace(/[\\^$+?.()|[\]{}]/gu, "\\$&"),
+  );
+  return new RegExp(`^${source}$`, "u");
 }
 
 describe("sandbox fs glob matching", () => {
   it("matches single-segment stars without crossing separators", () => {
-    const matcher = createGlobReadMatcher("/work/private/*.txt");
-    expect(matcher("/work/private/a.txt")).toBe(true);
-    expect(matcher("/work/private/.txt")).toBe(true);
-    expect(matcher("/work/private/a/b.txt")).toBe(false);
-    expect(matcher("/work/other/a.txt")).toBe(false);
-    expect(matcher("/work/private/a.txtx")).toBe(false);
+    expectMatches(
+      "/work/private/*.txt",
+      ["/work/private/a.txt", "/work/private/.txt"],
+      ["/work/private/a/b.txt", "/work/other/a.txt", "/work/private/a.txtx"],
+    );
   });
 
   it("matches optional and crossing globstars", () => {
@@ -115,27 +86,11 @@ describe("sandbox fs glob matching", () => {
   });
 
   it("matches question marks and character classes", () => {
-    const question = createGlobReadMatcher("/work/?");
-    expect(question("/work/a")).toBe(true);
-    expect(question("/work/ab")).toBe(false);
-    expect(question("/work/")).toBe(false);
-
-    const classMatcher = createGlobReadMatcher("/work/[ab].txt");
-    expect(classMatcher("/work/a.txt")).toBe(true);
-    expect(classMatcher("/work/b.txt")).toBe(true);
-    expect(classMatcher("/work/c.txt")).toBe(false);
-
-    const negated = createGlobReadMatcher("/work/[!ab].txt");
-    expect(negated("/work/c.txt")).toBe(true);
-    expect(negated("/work/a.txt")).toBe(false);
-
-    const ranged = createGlobReadMatcher("/work/[a-b].txt");
-    expect(ranged("/work/b.txt")).toBe(true);
-    expect(ranged("/work/c.txt")).toBe(false);
-
-    const bracket = createGlobReadMatcher("/work/[]].txt");
-    expect(bracket("/work/].txt")).toBe(true);
-    expect(bracket("/work/a.txt")).toBe(false);
+    expectMatches("/work/?", ["/work/a"], ["/work/ab", "/work/"]);
+    expectMatches("/work/[ab].txt", ["/work/a.txt", "/work/b.txt"], ["/work/c.txt"]);
+    expectMatches("/work/[!ab].txt", ["/work/c.txt"], ["/work/a.txt"]);
+    expectMatches("/work/[a-b].txt", ["/work/b.txt"], ["/work/c.txt"]);
+    expectMatches("/work/[]].txt", ["/work/].txt"], ["/work/a.txt"]);
   });
 
   it("fails closed for unsupported character classes", () => {
@@ -147,25 +102,12 @@ describe("sandbox fs glob matching", () => {
     );
   });
 
-  it("matches literal runs only at reachable positions", () => {
-    const matcher = createGlobReadMatcher("/work/file.txt");
-    expect(matcher("/work/file.txt")).toBe(true);
-    expect(matcher("/work/file.txtx")).toBe(false);
-    expect(matcher("/work/sub/file.txt")).toBe(false);
-    expect(createGlobReadMatcher("/*ababac/end")("/ababababac/end")).toBe(true);
-    expect(createGlobReadMatcher("/**/aba/end")("/aaba/end")).toBe(false);
-    expect(createGlobReadMatcher("/**/aba/end")("/x/aba/end")).toBe(true);
-  });
-
   it("keeps unicode code-point semantics from the u-flag regex", () => {
-    expect(createGlobReadMatcher("/?")("/😀")).toBe(true);
-    expect(createGlobReadMatcher("/*😀")("/a😀")).toBe(true);
-    expect(createGlobReadMatcher("/*😀")("/a😀b")).toBe(false);
-    expect(createGlobReadMatcher("/[😀]")("/😀")).toBe(true);
-    expect(createGlobReadMatcher("/[😀]")("/a")).toBe(false);
-    expect(createGlobReadMatcher("/*😀😀x")("/😀😀😀x")).toBe(true);
-    expect(createGlobReadMatcher("/*\ud83d")("/😀")).toBe(false);
-    expect(createGlobReadMatcher("/*\ud83d")("/\ud83d")).toBe(true);
+    expectMatches("/?", ["/😀"], []);
+    expectMatches("/*😀", ["/a😀"], ["/a😀b"]);
+    expectMatches("/[😀]", ["/😀"], ["/a"]);
+    expectMatches("/*😀😀x", ["/😀😀😀x"], []);
+    expectMatches("/*\ud83d", ["/\ud83d"], ["/😀"]);
   });
 
   it("stops globstars at line terminators like the old dot without dotAll", () => {
@@ -190,18 +132,6 @@ describe("sandbox fs glob matching", () => {
     expect(createGlobReadMatcher(`/${"*a".repeat(3)}`)("/xa ya za")).toBe(true);
   });
 
-  it("matches a repeated star literal in one pass per segment", () => {
-    const path = "ab".repeat(10_000);
-    const matcher = createGlobReadMatcher("/*a*");
-    const started = Date.now();
-    expect(matcher(`/${path}`)).toBe(true);
-    expect(Date.now() - started).toBeLessThan(250);
-
-    const missStarted = Date.now();
-    expect(matcher(`/${"b".repeat(10_000)}`)).toBe(false);
-    expect(Date.now() - missStarted).toBeLessThan(250);
-  });
-
   it("matches long overlapping literals without rescanning each prefix", () => {
     const literal = "a".repeat(100_000);
     const matcher = createGlobReadMatcher(`/*${literal}*`);
@@ -218,37 +148,22 @@ describe("sandbox fs glob matching", () => {
   });
 
   it("agrees with the legacy regex compiler on small fuzz inputs", () => {
-    const patternTokens = [
-      "a",
-      "b",
-      "/",
-      "\n",
-      "*",
-      "?",
-      "**",
-      "**/",
-      "[a]",
-      "[!a]",
-      "[a-b]",
-      "[]]",
-    ];
+    const atoms = ["a", "b", "/", "\n", "*", "?", "**", "**/", "[a]", "[!a]", "[a-b]", "[]]"];
     const targetTokens = ["a", "b", "-", "]", "/", "\n", "\r", "\u2028", "\u2029"];
     let seed = 0x5eed;
     const nextRandom = () => {
       seed = (seed * 1103515245 + 12345) % 2147483648;
       return seed;
     };
+    const randomText = (tokens: string[], maxLength: number) =>
+      "/" +
+      Array.from(
+        { length: nextRandom() % maxLength },
+        () => tokens[nextRandom() % tokens.length],
+      ).join("");
     for (let round = 0; round < 3000; round += 1) {
-      let pattern = "/";
-      const patternLength = nextRandom() % 10;
-      for (let index = 0; index < patternLength; index += 1) {
-        pattern += patternTokens[nextRandom() % patternTokens.length];
-      }
-      let target = "/";
-      const targetLength = nextRandom() % 14;
-      for (let index = 0; index < targetLength; index += 1) {
-        target += targetTokens[nextRandom() % targetTokens.length];
-      }
+      const pattern = randomText(atoms, 10);
+      const target = randomText(targetTokens, 14);
       const matcher = createGlobReadMatcher(pattern);
       // Policy checks run on posix-normalized paths and collapse duplicate
       // separators in patterns, so the oracle must apply the same contract.

@@ -1,13 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { sql } from "kysely";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { TranscriptEntryAnchor, TranscriptTurnBoundary } from "./transcript-entry-anchor.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
@@ -78,50 +79,61 @@ function validateTerminalAncestry(params: {
   // Bound anchor IDs must not normalize lone surrogates into a different stored ID.
   const admissionIsSqlText = toUSVString(params.admissionEntryId) === params.admissionEntryId;
   const terminalIsSqlText = toUSVString(params.terminalEntryId) === params.terminalEntryId;
+  const postgres = isPostgresSqlConnection(params.database);
+  const ancestors = db.withRecursive("turn_ancestors", (query) =>
+    query
+      .selectFrom("transcript_event_identities")
+      .select(["event_id", "parent_id"])
+      .where("session_id", "=", params.sessionId)
+      .where("event_id", "=", params.terminalParentId)
+      // UNION deduplicates identities so cycles terminate within the existing depth budget.
+      .union(
+        query
+          .selectFrom("transcript_event_identities as identity")
+          .innerJoin("turn_ancestors as previous", "identity.event_id", "previous.parent_id")
+          .select(["identity.event_id", "identity.parent_id"])
+          .where("identity.session_id", "=", params.sessionId)
+          .$if(admissionIsSqlText, (parents) =>
+            parents.where("previous.parent_id", "!=", params.admissionEntryId),
+          )
+          .$if(terminalIsSqlText, (parents) =>
+            parents.where("identity.event_id", "!=", params.terminalEntryId),
+          ),
+      )
+      .$if(!postgres, (parents) =>
+        parents.limit(Number.isSafeInteger(depthLimit) ? depthLimit : -1),
+      ),
+  );
+  // PostgreSQL bounds recursive consumption through its caller, not inside the CTE.
+  const bounded = postgres
+    ? ancestors.selectFrom((eb) =>
+        eb
+          .selectFrom("turn_ancestors")
+          .selectAll()
+          .$if(Number.isSafeInteger(depthLimit), (parents) => parents.limit(depthLimit))
+          .as("turn_ancestors"),
+      )
+    : ancestors.selectFrom("turn_ancestors");
   const ancestry = executeSqliteQueryTakeFirstSync(
     params.database,
-    db
-      .withRecursive("turn_ancestors", (query) =>
-        query
-          .selectFrom("transcript_event_identities")
-          .select(["event_id", "parent_id"])
-          .where("session_id", "=", params.sessionId)
-          .where("event_id", "=", params.terminalParentId)
-          // UNION deduplicates identities so cycles terminate within the existing depth budget.
-          .union(
-            query
-              .selectFrom("transcript_event_identities as identity")
-              .innerJoin("turn_ancestors as previous", "identity.event_id", "previous.parent_id")
-              .select(["identity.event_id", "identity.parent_id"])
-              .where("identity.session_id", "=", params.sessionId)
-              .$if(admissionIsSqlText, (ancestors) =>
-                ancestors.where("previous.parent_id", "!=", params.admissionEntryId),
-              )
-              .$if(terminalIsSqlText, (ancestors) =>
-                ancestors.where("identity.event_id", "!=", params.terminalEntryId),
-              ),
-          )
-          .limit(Number.isSafeInteger(depthLimit) ? depthLimit : -1),
-      )
-      .selectFrom("turn_ancestors")
-      .select((eb) => [
-        eb.fn.countAll<number>().as("depth"),
-        eb.fn
-          .max(
-            eb
-              .case()
-              .when(
-                eb.and([
-                  eb.val(admissionIsSqlText ? 1 : 0),
-                  eb("parent_id", "=", params.admissionEntryId),
-                ]),
-              )
-              .then(1)
-              .else(0)
-              .end(),
-          )
-          .as("found"),
-      ]),
+    bounded.select((eb) => [
+      eb.fn.countAll<number>().as("depth"),
+      eb.fn
+        .max(
+          eb
+            .case()
+            .when(
+              eb.and([
+                postgres ? sql.lit(admissionIsSqlText) : eb.val(admissionIsSqlText ? 1 : 0),
+                eb("parent_id", "=", params.admissionEntryId),
+              ]),
+            )
+            .then(1)
+            .else(0)
+            .end(),
+        )
+        .as("found"),
+    ]),
   )!;
   // The original walk checks a fetched parent at the start of its next iteration.
   if (ancestry.depth >= depthLimit) {
@@ -132,7 +144,7 @@ function validateTerminalAncestry(params: {
 
 /** Reads a closed turn through the caller's connection, such as an agent database worker's. */
 export function readClosedTranscriptTurnInDatabase(
-  connection: DatabaseSync,
+  connection: EngineConnection,
   params: {
     boundary: TranscriptTurnBoundary;
     maxEvents: number;
@@ -143,7 +155,7 @@ export function readClosedTranscriptTurnInDatabase(
     return { kind: "session-rebound" };
   }
   const target = params.boundary.admission;
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     connection,
     () => {
       const db = getSessionKysely(connection);
@@ -206,7 +218,7 @@ export function readClosedTranscriptTurnInDatabase(
               "identity.parent_id",
               "active.message_position",
               "rewrite.generation",
-              transcriptEventNavigationSql("event").as("event_json"),
+              transcriptEventNavigationSql(connection, "event").as("event_json"),
             ])
             .where("identity.session_id", "=", target.sessionId)
             .where("identity.event_id", "=", anchor.entryId)

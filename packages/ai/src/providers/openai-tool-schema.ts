@@ -5,6 +5,7 @@ import {
 } from "./agent-tools-parameter-schema.js";
 import type { OpenAIToolProjection } from "./openai-tool-projection.js";
 import { findOpenAIStrictSchemaViolations } from "./openai-tool-schema-compat.js";
+import { getPublishedRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
@@ -15,10 +16,8 @@ type ToolSchemaCompatInput = {
   omitEmptyArrayItems?: unknown;
 };
 
-const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>(
-  MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-);
+const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>();
+const publishedStrictCompatibility = new WeakMap<object, boolean>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -91,10 +90,21 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return (
+  const published = getPublishedRuntimeToolInputSchema(schema);
+  const publishedSchema = published?.projection.schema;
+  const source =
+    publishedSchema && typeof publishedSchema === "object" ? publishedSchema : undefined;
+  const cached = source ? publishedStrictCompatibility.get(source) : undefined;
+  if (cached !== undefined) {
+    return cached;
+  }
+  const compatible =
     findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters")
-      .length === 0
-  );
+      .length === 0;
+  if (source) {
+    publishedStrictCompatibility.set(source, compatible);
+  }
+  return compatible;
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {

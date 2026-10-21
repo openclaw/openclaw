@@ -82,14 +82,7 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
         cfg: context.getRuntimeConfig(),
         assertCurrent,
         commitGuard: sessionMutationCommitGuard,
-        opts: {
-          agent: params.agent,
-          allAgents: params.allAgents,
-          enforce: params.enforce,
-          activeKey: params.activeKey,
-          fixMissing: params.fixMissing,
-          fixDmScope: params.fixDmScope,
-        },
+        opts: params,
       });
       const result = serializeSessionCleanupResult({
         mode,

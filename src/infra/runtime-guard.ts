@@ -12,6 +12,7 @@ import {
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
   isNodeVersionAtLeast,
+  MINIMUM_BUN_VERSION,
   parseNodeReleaseVersion,
   type NodeReleaseVersion,
 } from "../../node-version.mjs";
@@ -22,8 +23,6 @@ import { isSqliteWalResetSafeVersion } from "./sqlite-runtime-version.js";
 export { isSupportedOpenClawNodeVersion as isSupportedNodeVersion } from "../../node-version.mjs";
 
 type RuntimeKind = "bun" | "node" | "unknown";
-
-const MINIMUM_BUN_VERSION: NodeReleaseVersion = { major: 1, minor: 4, patch: 0 };
 
 const ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/i;
 
@@ -225,7 +224,7 @@ export async function assertSupportedRuntime(
   }
   const requirement =
     details.kind === "bun"
-      ? "openclaw requires Bun 1.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
+      ? "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release)."
       : (details.sqliteProbe && nodeRuntimeFailure(details.version, details.sqliteProbe)) ||
         "openclaw requires Node >=24.16.0 <25, or >=26.1.0.";
   const retryHint =

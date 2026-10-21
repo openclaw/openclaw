@@ -72,6 +72,7 @@ type CandidateState = ReturnType<typeof buildReleaseCandidateState>;
 type WorkflowArtifact = Awaited<ReturnType<typeof runArtifacts>>[number];
 type GithubFetch = (url: string, init?: RequestInit) => Promise<Response>;
 type GithubApiOptions = Partial<{
+  allowAnonymousFallback: boolean;
   fetchImpl: GithubFetch;
   maxBodyBytes: number;
   timeoutMs: number;
@@ -647,7 +648,7 @@ export async function githubApi(path: string, options: GithubApiOptions = {}): P
       (response.status === 403 || response.status === 429) &&
       (/API rate limit exceeded/iu.test(text) ||
         response.headers.get("x-ratelimit-remaining") === "0");
-    if (primaryRateLimitExhausted) {
+    if (primaryRateLimitExhausted && options.allowAnonymousFallback !== false) {
       // Public release evidence remains readable without auth when one maintainer
       // token is exhausted. Mutating gh commands keep their authenticated path.
       response = await Promise.race([request(""), timeoutPromise]);
@@ -1458,26 +1459,36 @@ type RunInfo = Awaited<ReturnType<typeof runInfo>>;
 
 async function pendingDeployments(repo: string, runId: string) {
   try {
-    return await githubApi(`repos/${repo}/actions/runs/${runId}/pending_deployments`);
+    // Approval capability belongs to this caller, unlike public release evidence.
+    return await githubApi(`repos/${repo}/actions/runs/${runId}/pending_deployments`, {
+      allowAnonymousFallback: false,
+    });
   } catch {
-    return [];
+    return null;
   }
 }
 
 function summarizePendingDeployments(repo: string, runId: string, deployments: unknown) {
-  if (!Array.isArray(deployments) || deployments.length === 0) {
+  if (!Array.isArray(deployments)) {
+    return `- environment approval status unavailable for the authenticated caller; this is not proof that no approval is pending. Inspect https://github.com/${repo}/actions/runs/${runId} with an eligible environment reviewer. Validation monitoring continues; repository or CI-bypass access does not establish approval or production deployment authority.`;
+  }
+  if (deployments.length === 0) {
     return "";
   }
-  return deployments
+  const summary = deployments
     .map((deploymentValue) => {
       const deployment = isRecord(deploymentValue) ? deploymentValue : {};
       const environment = isRecord(deployment.environment) ? deployment.environment : {};
+      const canApprove = deployment.current_user_can_approve;
       return [
-        `- pending approval: env=${formatJsonValue(environment.name ?? "<unknown>")} canApprove=${formatJsonValue(deployment.current_user_can_approve ?? "<unknown>")}`,
-        `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${formatJsonValue(environment.id ?? "<id>")}' -f state=approved -f comment='Approve release gate'`,
+        `- pending approval: env=${formatJsonValue(environment.name ?? "<unknown>")} canApprove=${formatJsonValue(canApprove ?? "<unknown>")}`,
+        canApprove === true
+          ? `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${formatJsonValue(environment.id ?? "<id>")}' -f state=approved -f comment='Approve release gate'`
+          : `  ${canApprove === false ? "The authenticated caller cannot approve this environment" : "Caller approval capability is unknown"}; ask an eligible environment reviewer to inspect https://github.com/${repo}/actions/runs/${runId}.`,
       ].join("\n");
     })
     .join("\n");
+  return `${summary}\nEnvironment approval is separate from repository write, organization membership, branch-policy read, CI bypass, and production deployment authority.`;
 }
 
 function summarizeFailedRun(info: RunInfo) {
@@ -2365,6 +2376,23 @@ async function main() {
     });
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
+      const reportPath = join(pluginSdkApiDir, "plugin-sdk-api-release-diff.md");
+      let report = "";
+      if (existsSync(reportPath)) {
+        const bytes = readFileSync(reportPath);
+        if (bytes.length > 2 * 1024 * 1024) {
+          throw new Error("Plugin SDK API diff report exceeds its byte limit", { cause: error });
+        }
+        report = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+        if (
+          !report.startsWith("# Plugin SDK API diff\n") ||
+          !report.includes(`Acknowledgement digest: \`${error.digest}\``)
+        ) {
+          throw new Error("Plugin SDK API diff report does not match its acknowledgement", {
+            cause: error,
+          });
+        }
+      }
       const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
       const end = argv.indexOf("--");
       const flag = "--plugin-sdk-api-acknowledgement";
@@ -2379,7 +2407,11 @@ async function main() {
         argv.unshift(flag, error.digest);
       }
       throw new Error(
-        `${error.message}\nReview the Plugin SDK API diff before rerunning.\n${["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" ")}`,
+        [
+          error.message,
+          report || "Review the Plugin SDK API diff artifact before rerunning.",
+          ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
+        ].join("\n\n"),
         { cause: error },
       );
     }

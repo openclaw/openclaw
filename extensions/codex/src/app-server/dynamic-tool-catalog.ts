@@ -40,6 +40,10 @@ const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
   // Native update_plan is disabled on every thread; its replacement must be
   // available in the initial context, including catalogs prepared at creation.
   "progress_card",
+  // Native Goals are disabled; core controls must not depend on model tool-search support.
+  "get_goal",
+  "create_goal",
+  "update_goal",
   "sessions_spawn",
   "sessions_yield",
 ]);
@@ -105,26 +109,7 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 } {
   const projectedTools: ProjectedCodexDynamicTool<T>[] = [];
   const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  let length: number;
-  try {
-    length = tools.length;
-  } catch {
-    return {
-      tools: [],
-      quarantinedTools: [{ tool: "tool[0]", violations: ["tool[0] is unreadable"] }],
-    };
-  }
-  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
-    let tool: T;
-    try {
-      tool = tools[toolIndex]!;
-    } catch {
-      quarantinedTools.push({
-        tool: `tool[${toolIndex}]`,
-        violations: [`tool[${toolIndex}] is unreadable`],
-      });
-      continue;
-    }
+  for (const [toolIndex, tool] of tools.entries()) {
     const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
     if ("diagnostic" in descriptor) {
       quarantinedTools.push(descriptor.diagnostic);

@@ -1,5 +1,6 @@
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { fetchLinkFaviconBlobUrl } from "../plugins/icon-loader.ts";
 import { readLinkFavicon, type LinkFaviconFetcher } from "./link-favicon-cache.ts";
 
@@ -53,6 +54,7 @@ export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFavicon
   if (!fetchFavicon) {
     return;
   }
+  // Markdown owns these image nodes; this hydrator supplies their one-shot load/error state.
   for (const image of root.querySelectorAll<HTMLImageElement>(
     "img.markdown-link-favicon[data-link-favicon-host]",
   )) {
@@ -77,22 +79,27 @@ export function hydrateLinkFavicons(root: ParentNode, fetchFavicon?: LinkFavicon
       if (!image.isConnected) {
         return;
       }
-      image.addEventListener(
+      const settled = new AbortController();
+      listen(
+        image,
         "load",
         () => {
+          settled.abort();
           if (image.naturalWidth > 0) {
             image.classList.add("is-loaded");
             image.dataset.linkFaviconState = "loaded";
           }
         },
-        { once: true },
+        { signal: settled.signal },
       );
-      image.addEventListener(
+      listen(
+        image,
         "error",
         () => {
+          settled.abort();
           image.dataset.linkFaviconState = "failed";
         },
-        { once: true },
+        { signal: settled.signal },
       );
       image.src = blobUrl;
     };

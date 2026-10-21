@@ -1,14 +1,14 @@
 import fs from "node:fs";
-import path from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { shouldUseDetachedVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { readCiWorkflow, type WorkflowStep } from "./ci-workflow.test-support.js";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { createWorkerArtifactTest, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const it = createWorkerArtifactTest();
 const root = process.cwd();
-// ci.yml's trusted frozen-target checkout is intentionally this lightweight closure.
 const checkout = Object.values(readCiWorkflow().jobs)
   .flatMap((job) => (job as { steps?: WorkflowStep[] }).steps ?? [])
   .find((step: WorkflowStep) => step.name === "Checkout trusted Node shard runner");
@@ -26,43 +26,39 @@ it.for([
   workerArtifacts.fixtureLifetime.run(async () => {
     const { node } = workerArtifacts.createFixtureCommands();
     const directory = workerArtifacts.fixtureDirectory();
+    const write = (file: string, source: string) =>
+      writeFixture(directory, `scripts/${file}`, source);
     const copiedRoot = mode.startsWith("frozen")
-      ? path.join(directory, ".ci-workflow")
+      ? join(directory, ".ci-workflow")
       : mode === "foreign"
-        ? path.join(directory, "foreign")
+        ? join(directory, "foreign")
         : directory;
     for (const file of sparseFiles) {
-      const target = path.join(copiedRoot, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.join(root, file), target);
+      const target = join(copiedRoot, file);
+      fs.mkdirSync(dirname(target), { recursive: true });
+      fs.copyFileSync(join(root, file), target);
     }
-    expect(fs.existsSync(path.join(copiedRoot, "scripts/lib/vitest-worker-run.mts"))).toBe(false);
-    writeFixture(
-      directory,
-      "scripts/test-projects.mjs",
+    expect(fs.existsSync(join(copiedRoot, "scripts/lib/vitest-worker-run.mts"))).toBe(false);
+    write(
+      "test-projects.mjs",
       "console.log('legacy transport ' + JSON.stringify(process.argv.slice(2)));\n",
     );
     if (mode === "frozen-with-own-runner") {
-      writeFixture(directory, "scripts/ci-run-node-test-shard.mts", "export {};\n");
+      write("ci-run-node-test-shard.mts", "export {};\n");
     }
     if (mode === "modern-corrupt" || mode === "modern-unshared") {
-      writeFixture(
-        directory,
-        "scripts/lib/vitest-worker-run.mts",
-        "throw new Error('fixture damaged worker owner');\n",
-      );
-      // Only the shared worker owner is damaged. The unshared row overrides
-      // group capability while retaining the real lifecycle exports.
+      write("lib/vitest-worker-run.mts", "throw new Error('fixture damaged worker owner');\n");
+      // Damage only the worker owner; retain real lifecycle exports.
       for (const file of [
-        "scripts/lib/vitest-process.mts",
-        "scripts/lib/vitest-process-env.mts",
-        "scripts/vitest-process-group.mts",
+        "lib/vitest-process.mts",
+        "lib/vitest-process-env.mts",
+        "vitest-process-group.mts",
       ]) {
-        writeFixture(
-          directory,
+        const source = JSON.stringify(pathToFileURL(join(root, "scripts", file)).href);
+        write(
           file,
-          `export * from ${JSON.stringify(pathToFileURL(path.join(root, file)).href)};\n${
-            mode === "modern-unshared" && file === "scripts/vitest-process-group.mts"
+          `export * from ${source};\n${
+            mode === "modern-unshared" && file === "vitest-process-group.mts"
               ? "export const shouldUseDetachedVitestProcessGroup = () => false;\n"
               : ""
           }`,
@@ -70,12 +66,10 @@ it.for([
       }
     }
     const result = await node(
-      ["--import", "tsx", path.join(copiedRoot, sparseFiles[0]!)],
+      ["--import", "tsx", join(copiedRoot, sparseFiles[0]!)],
       directory,
-      {
-        ...process.env,
-        // This sparse adapter exercises the historical Node contract, not the host CI policy.
-        // A prebuilt-dist CI shard must not make the copied runner prepare packages.
+      testRunnerFixtureEnv({
+        // Exercise historical Node transport without inheriting host dist preparation.
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
         OPENCLAW_E2E_USE_PREBUILT_DIST: "",
         OPENCLAW_NODE_TEST_ENV_JSON: "{}",
@@ -86,7 +80,7 @@ it.for([
         OPENCLAW_NODE_TEST_TARGETS_JSON: "[]",
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
         OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-      },
+      }),
     );
     const unshared =
       mode === "modern-unshared" ||
@@ -103,6 +97,6 @@ it.for([
       }
     }
     expect(result.stdout + result.stderr).not.toContain("[vitest-workers] prepared");
-    expect(fs.existsSync(path.join(copiedRoot, ".artifacts/vitest-workers"))).toBe(false);
+    expect(fs.existsSync(join(copiedRoot, ".artifacts/vitest-workers"))).toBe(false);
   }),
 );

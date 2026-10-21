@@ -39,7 +39,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Default: off, for client compatibility — some current Desktop, Web, Android, and third-party clients render accepted rich messages as unsupported. Keep this off unless every client used with the bot can render them. `/status` shows whether the current session has rich messages on or off.
 
-    Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text.
+    Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
   </Accordion>
 
@@ -135,6 +135,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     Mini App buttons only work in private chats between a user and the bot.
 
     Callback action values not claimed by a registered plugin interactive handler are passed to the agent as text: `callback_data: <value>`.
+
+    Agent messages created from button clicks use the time OpenClaw received the click, not the original card's send time. Queued or replayed clicks retain that receipt time.
 
     With durable ingress, OpenClaw sends the callback acknowledgement after storing the update, without waiting for earlier handlers in that chat's lane. Telegram clears its loading indicator when the acknowledgement succeeds; the button's action still follows normal authorization and ordered processing.
 

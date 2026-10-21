@@ -1,13 +1,8 @@
-import path from "node:path";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, assert, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
@@ -18,26 +13,19 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
-import type { MessageEndEvent, ToolResultEvent } from "./extensions/types.js";
+import type { ExtensionFactory, MessageEndEvent, ToolResultEvent } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
+import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-    }
-    cleanup();
-  }),
-);
 afterEach(resetSecretRedactionRegistryForTest);
 
-describe("session tool outcomes", () => {
-  it.each([false, true])(
-    "preserves tool outcomes through events, replay, and storage (recovery=%s)",
-    async (withRecovery) => {
+it.each([false, true])(
+  "preserves tool outcomes through events, replay, and storage (recovery=%s)",
+  async (withRecovery) => {
+    await withSessionState("tool-outcomes", async ({ state, scope: target }) => {
       const secret = "fixture-final-tool-outcome-credential";
       const image = {
         type: "image" as const,
@@ -64,27 +52,46 @@ describe("session tool outcomes", () => {
         },
         { name: "successful_tool", details: { status: "ok" }, isError: false },
       ];
-      const calls = [...outcomes, { name: "missing_tool", isError: true }].map((outcome) => ({
+      const allOutcomes = [...outcomes, { name: "missing_tool", isError: true }];
+      const calls = allOutcomes.map((outcome) => ({
         type: "toolCall" as const,
         id: `call_${outcome.name}`,
         name: outcome.name,
         arguments: {},
       }));
-      const expected = [...outcomes, { name: "missing_tool", isError: true }].map((outcome) => ({
-        toolName: outcome.name,
-        isError: outcome.isError,
-      }));
-      const agentDir = tempDirs.make("openclaw-sdk-tool-outcome-");
-      const target = {
-        agentId: "main",
-        sessionId: "tool-outcomes",
-        sessionKey: "agent:main:tool-outcomes",
-        storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+      const expected = allOutcomes.map(({ name, isError }) => ({ toolName: name, isError }));
+      const handlers: ExtensionFactory = (api) => {
+        if (withRecovery) {
+          api.on("tool_result", async (event) => {
+            const { toolName } = event as ToolResultEvent;
+            if (toolName === "recovered_tool") {
+              return { isError: false };
+            }
+            if (toolName === "middleware_error") {
+              return {
+                content: [{ type: "text", text: `middleware failed ${secret}` }],
+                details: { status: "error", error: "middleware failed" },
+              };
+            }
+            return undefined;
+          });
+          api.on("message_end", async (event) => {
+            const { message } = event as MessageEndEvent;
+            if (message.role !== "toolResult" || message.toolName !== "successful_tool") {
+              return undefined;
+            }
+            const content = message.content.map((block) =>
+              block.type === "text"
+                ? Object.assign({}, block, { text: `message-end rewrite ${secret}` })
+                : block,
+            );
+            return { message: { ...message, content } };
+          });
+        }
       };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const { session } = await createAgentSession({
         systemPrompt: "Test session prompt",
-        sessionManager: await SessionManager.openAsync(target, agentDir),
+        sessionManager: await SessionManager.openAsync(target, state.agentDir("main")),
         model: testModel,
         thinkingLevel: "medium" as const,
         tools: outcomes.map((tool) => tool.name),
@@ -115,54 +122,7 @@ describe("session tool outcomes", () => {
               : tool;
           }),
         ),
-        resourceLoader: createResourceLoader(
-          new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>(
-            withRecovery
-              ? [
-                  [
-                    "tool_result",
-                    [
-                      async (event: unknown) => {
-                        const { toolName } = event as ToolResultEvent;
-                        if (toolName === "recovered_tool") {
-                          return { isError: false };
-                        }
-                        return toolName === "middleware_error"
-                          ? {
-                              content: [{ type: "text", text: `middleware failed ${secret}` }],
-                              details: { status: "error", error: "middleware failed" },
-                            }
-                          : undefined;
-                      },
-                    ],
-                  ],
-                  [
-                    "message_end",
-                    [
-                      async (event: unknown) => {
-                        const { message } = event as MessageEndEvent;
-                        return message.role === "toolResult" &&
-                          message.toolName === "successful_tool"
-                          ? {
-                              message: {
-                                ...message,
-                                content: message.content.map((block) =>
-                                  block.type === "text"
-                                    ? Object.assign({}, block, {
-                                        text: `message-end rewrite ${secret}`,
-                                      })
-                                    : block,
-                                ),
-                              },
-                            }
-                          : undefined;
-                      },
-                    ],
-                  ],
-                ]
-              : [],
-          ),
-        ),
+        resourceLoader: await createResourceLoader(handlers),
         settingsManager: SettingsManager.inMemory({ retry: { enabled: false } }),
         modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       });
@@ -172,14 +132,12 @@ describe("session tool outcomes", () => {
           completed.push({ toolName: event.toolName, isError: event.isError });
         }
       });
-      let replay: AgentMessage[] = [];
+      let replay: Extract<AgentMessage, { role: "toolResult" }>[] = [];
       let firstTurn = true;
       session.agent.streamFn = (_model, context) => {
         if (!firstTurn) {
           replay = context.messages.filter((message) => message.role === "toolResult");
-          return createAssistantResultStream(
-            createAssistant(testModel, [{ type: "text", text: "done" }]),
-          );
+          return createAssistantResultStream(createAssistant(testModel, "done"));
         }
         firstTurn = false;
         return createAssistantResultStream(createAssistant(testModel, calls, "toolUse"));
@@ -191,25 +149,17 @@ describe("session tool outcomes", () => {
         expect(replay).toMatchObject(expected);
         const text = replay
           .flatMap((message) =>
-            message.role === "toolResult"
-              ? message.content.flatMap((block) => (block.type === "text" ? [block.text] : []))
-              : [],
+            message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])),
           )
           .join("\n");
         expect(text.includes("synthetic result")).toBe(true);
         expect(text.includes("message-end rewrite")).toBe(withRecovery);
         expect(text).toContain(secret);
-        expect(
-          replay.some(
-            (message) =>
-              message.role === "toolResult" &&
-              message.content.some((block) => block.type === "image" && block.data === image.data),
-          ),
-        ).toBe(true);
+        expect(replay.flatMap((message) => message.content)).toContainEqual(
+          expect.objectContaining({ type: "image", data: image.data }),
+        );
         const persistedTarget = session.sessionManager.getSessionTarget();
-        if (!persistedTarget) {
-          throw new Error("Expected a saved transcript target");
-        }
+        assert(persistedTarget, "Expected a saved transcript target");
         const events = SessionManager.open(persistedTarget).getEntries();
         expect(
           events.flatMap((event) =>
@@ -218,8 +168,7 @@ describe("session tool outcomes", () => {
         ).toMatchObject(expected);
       } finally {
         session.dispose();
-        await disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
       }
-    },
-  );
-});
+    });
+  },
+);
