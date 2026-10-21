@@ -10,6 +10,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { isCanonicalSessionTranscriptEntry } from "../../config/sessions/transcript-tree.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -184,7 +185,7 @@ describe("outbound mirror route ordering", () => {
       }, "gateway-mirror-test");
       return { result, drained };
     };
-    const transcriptEvents = (sessionKey: string) => {
+    const transcriptMessages = (sessionKey: string) => {
       const entry = loadExactSessionEntry({ ...transcriptScope(), sessionKey })?.entry;
       if (!entry?.sessionId) {
         return [];
@@ -193,7 +194,7 @@ describe("outbound mirror route ordering", () => {
         ...transcriptScope(),
         sessionKey,
         sessionId: entry.sessionId,
-      });
+      }).filter((event) => isCanonicalSessionTranscriptEntry(event) && event.type === "message");
     };
 
     beforeEach(() => {
@@ -237,22 +238,16 @@ describe("outbound mirror route ordering", () => {
         expect(sent.result.handledBy).toBe("plugin");
         expect(gatewayRequest).toHaveBeenCalledOnce();
         expect(handleAction).not.toHaveBeenCalled();
-        expect(
-          transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
-        ).toEqual([]);
+        expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([]);
         release.resolve();
         await withinTest(turn, signal);
         await withinTest(drained, signal);
-        expect(
-          transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
-        ).toEqual([
+        expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([
           expect.objectContaining({
             message: expect.objectContaining({ content: [{ type: "text", text: "card details" }] }),
           }),
         ]);
-        expect(
-          transcriptEvents(MAIN_SESSION_KEY).filter((event) => event.type === "message"),
-        ).toEqual([]);
+        expect(transcriptMessages(MAIN_SESSION_KEY)).toEqual([]);
       } finally {
         release.resolve();
         await Promise.allSettled([turn, drained]);
@@ -277,9 +272,7 @@ describe("outbound mirror route ordering", () => {
       const { drained } = await sendViaGateway(input);
       await drained;
       expect(gatewayRequest).toHaveBeenCalledOnce();
-      expect(
-        transcriptEvents(OTHER_SESSION_KEY).filter((event) => event.type === "message"),
-      ).toEqual([]);
+      expect(transcriptMessages(OTHER_SESSION_KEY)).toEqual([]);
     });
   });
 
