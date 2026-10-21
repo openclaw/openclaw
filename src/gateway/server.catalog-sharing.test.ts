@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import * as catalogs from "./server-methods/session-catalog.fixtures.test-support.js";
@@ -23,7 +22,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
   const progressId = "follower-progress";
   const publishHeldHosts: Array<() => void> = [];
   const providerRuns: Promise<(typeof host)[]>[] = [];
-  const requests: Promise<ResponseFrame>[] = [];
+  const requests: Array<ReturnType<typeof onceMessage>> = [];
   const expectCatalog = (response: unknown, id: string, hosts: (typeof host)[] = []) =>
     expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
@@ -71,8 +70,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     const socket = ws;
     const request = (catalogId: string, search: string, progress?: string) => {
       const id = `catalog-${requests.length}`;
-      const matches = (frame: ResponseFrame) => frame.type === "res" && frame.id === id;
-      const response = onceMessage<ResponseFrame>(socket, matches);
+      const response = onceMessage(socket, (frame) => frame.type === "res" && frame.id === id);
       requests.push(response);
       const params = { catalogId, search, progressId: progress };
       socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));

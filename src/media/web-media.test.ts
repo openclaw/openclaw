@@ -413,7 +413,7 @@ describe("loadWebMedia", () => {
       "alternating-high.csv",
       Buffer.from(Array.from({ length: 9000 }, (_, index) => (index % 2 === 0 ? 0x41 : 0xff))),
     ],
-  ] as const)("rejects unsafe host-read document %s", async (name, body, outside = false) => {
+  ] as const)("rejects unsafe host-read document %s", async (name, body, outside?: true) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
     }
