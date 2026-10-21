@@ -130,6 +130,7 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,

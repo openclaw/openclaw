@@ -160,7 +160,7 @@ export function createMxcSandboxBackendHandle(params: {
       );
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       try {
         const payload = buildMxcContainerConfig({
@@ -225,7 +225,7 @@ export function createMxcSandboxBackendHandle(params: {
       const effectiveWorkdir = path.resolve(params.workdir);
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 

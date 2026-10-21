@@ -21,7 +21,10 @@ import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { deleteUserPreference } from "./user-preferences.store.js";
 import {
+  enterpriseGitHubAccountPairs,
   selectEnterpriseGitHubIdentities,
+  selectVerifiedEnterpriseGitHubIdentities,
+  unambiguousEnterpriseGitHubIdentities,
   selectEnterpriseGitHubProfileIdsForMerge,
 } from "./user-profile-enterprise-github-identity.js";
 import {
@@ -184,23 +187,30 @@ export function selectProfileAccessEntries(
     return rows;
   }
   const identities = selectStoredGitHubIdentities(db, profileIds);
+  const verified = selectVerifiedEnterpriseGitHubIdentities(db, profileIds);
   const githubIdentities = projectUserProfileGitHubIdentities(
     identities,
-    selectEnterpriseGitHubIdentities(db, profileIds),
+    unambiguousEnterpriseGitHubIdentities(verified),
   );
   return rows.map(([id, row]) => {
     const identity = identities.get(id);
     const accounts = identity?.accounts;
+    const enterprise = verified.get(id);
     return [
       id,
-      accounts?.length
-        ? {
-            ...row,
-            githubAccountIds: accounts.map(({ accountId }) => accountId),
-            githubLogin: identity?.primary?.login ?? null,
-            githubIdentity: githubIdentities.get(id) ?? null,
-          }
-        : { ...row, githubIdentity: githubIdentities.get(id) ?? null },
+      {
+        ...row,
+        ...(accounts?.length
+          ? {
+              githubAccountIds: accounts.map(({ accountId }) => accountId),
+              githubLogin: identity?.primary?.login ?? null,
+            }
+          : {}),
+        githubIdentity: githubIdentities.get(id) ?? null,
+        ...(enterprise?.length
+          ? { enterpriseGitHubAccounts: enterpriseGitHubAccountPairs(enterprise) }
+          : {}),
+      },
     ];
   });
 }

@@ -285,7 +285,7 @@ describe("worker Gateway move recovery", () => {
       expect(restarted.environments.stopTunnel).not.toHaveBeenCalled();
       expect(restarted.environments.get(active.environmentId)?.state).toBe("attached");
       expect(await restartedStore.listPendingWorkspaceResultsAsync()).toEqual(acceptedPending);
-      expect(restartedStore.get(active.sessionId)).toMatchObject({
+      expect((await restartedStore.getWithMoveAsync(active.sessionId)).placement).toMatchObject({
         state: "draining",
         turnClaim:
           mode === "claim-replaced"

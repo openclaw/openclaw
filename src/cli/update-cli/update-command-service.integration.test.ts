@@ -90,11 +90,6 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-vi.mock(
-  "../daemon-cli/lifecycle.runtime.js",
-  async () => await import("../daemon-cli/lifecycle.js"),
-);
-
 vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.launchctl,

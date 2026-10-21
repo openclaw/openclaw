@@ -25,7 +25,7 @@ import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github
 import { PullRequestActions } from "./chat-pull-request-actions.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 import {
-  ChecksRow,
+  ChecksRows,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
@@ -83,26 +83,7 @@ function Checks(props: {
         </Show>
       </div>
       <div class="chat-pr__checks-counts">
-        <ChecksRow
-          label={t("chat.pullRequests.checksFailed")}
-          count={checks()?.failed ?? 0}
-          modifier="failed"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksPassed")}
-          count={checks()?.passed ?? 0}
-          modifier="passed"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksRunning")}
-          count={checks()?.running ?? 0}
-          modifier="running"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksSkipped")}
-          count={checks()?.skipped ?? 0}
-          modifier="skipped"
-        />
+        <ChecksRows checks={checks()} />
         <Show when={!checks()}>{t("chat.pullRequests.automationNoChecks")}</Show>
       </div>
       <openclaw-chat-ci-automation

@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import {
   revalidatePublishedSecurityClearance,
@@ -12,7 +11,6 @@ import { execPrGhAsync } from "./github.mjs";
 const oid = /^[a-f0-9]{40}$/u;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const workflowPath = ".github/workflows/security-review.yml";
-const root = new URL("../../", import.meta.url);
 function requireEvidence(condition, message) {
   if (!condition) {
     throw new Error(`Prior-CI security admission: ${message}`);
@@ -112,8 +110,26 @@ async function latestStatuses(path) {
   return [...latest.values()];
 }
 
-function sourceFiles() {
-  const workflow = parse(readFileSync(new URL(workflowPath, root), "utf8"));
+async function readSource(prefix, path, revision) {
+  const source = await read(`${prefix}/contents/${path}?ref=${revision}`);
+  requireEvidence(
+    source.type === "file" &&
+      source.path === path &&
+      oid.test(source.sha ?? "") &&
+      source.encoding === "base64" &&
+      typeof source.content === "string",
+    `complete protected publisher source is required: ${path}`,
+  );
+  const bytes = Buffer.from(source.content, "base64");
+  requireEvidence(
+    createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex") === source.sha,
+    `Security Review publisher source differs from the current owner: ${path} (blob bytes mismatch)`,
+  );
+  return { path, sha: source.sha, bytes };
+}
+
+function sourceFiles(bytes) {
+  const workflow = parse(bytes.toString("utf8"));
   const primary = workflow?.jobs?.review?.steps?.find((step) => step.id === "checkout");
   const retry = workflow?.jobs?.review?.steps?.find((step) => step.id === "checkout_retry");
   for (const step of [primary, retry]) {
@@ -270,20 +286,26 @@ export async function verifyPriorCiSecurity({
     "successful protected Security Review publisher is required",
   );
   const attemptPath = `${runPath}/attempts/${run.run_attempt}`;
-  const paths = sourceFiles();
+  requireEvidence(oid.test(main ?? ""), "complete current main identity is required");
+  // The publisher follows protected main, independently of the frozen PR wrapper.
+  // Read pinned owner blobs remotely: this observation may precede main materialization.
+  const workflow = await readSource(prefix, workflowPath, main);
+  const paths = sourceFiles(workflow.bytes);
   const [attempt, comparison, sources, jobs] = await readTogether([
     read(attemptPath),
     read(`${prefix}/compare/${run.head_sha}...${main}?per_page=1&page=2`),
     readTogether(
       paths.map(async (path) => {
-        const bytes = readFileSync(new URL(path, root));
-        const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-        const source = await read(`${prefix}/contents/${path}?ref=${run.head_sha}`);
+        const currentSource = path === workflowPath ? workflow : readSource(prefix, path, main);
+        const [source, expected] = await readTogether([
+          run.head_sha === main ? currentSource : readSource(prefix, path, run.head_sha),
+          currentSource,
+        ]);
         requireEvidence(
-          source.type === "file" && source.path === path && source.sha === sha,
+          source.sha === expected.sha,
           `Security Review publisher source differs from the current owner: ${path}`,
         );
-        return { path, sha };
+        return { path, sha: source.sha };
       }),
     ),
     pages(`${attemptPath}/jobs`, "jobs"),

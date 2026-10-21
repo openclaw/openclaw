@@ -24,7 +24,10 @@ const { gatherStatus, confirm, startGateway, installGateway } = vi.hoisted(() =>
 vi.mock("./status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../prompt.js", () => ({ promptYesNo: confirm }));
 vi.mock("./lifecycle.js", () => ({ runDaemonStart: startGateway }));
-vi.mock("./install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("./install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install.js")>()),
+  runDaemonInstall: installGateway,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {

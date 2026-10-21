@@ -58,16 +58,6 @@ function isContainerEnvironment() {
   }
 }
 
-function isDisabledByEnv() {
-  if (process.env.NODE_ENV === "test") {
-    return true;
-  }
-  if (process.env.VITEST) {
-    return true;
-  }
-  return parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment();
-}
-
 function resolveSystemMdnsHostname(): string | null {
   let raw: string;
   try {
@@ -93,16 +83,6 @@ function truncateToDnsLabel(name: string, fallback = "OpenClaw"): string {
     return name;
   }
   return truncateUtf8Prefix(name, MAX_DNS_LABEL_BYTES).replace(/-+$/, "").trim() || fallback;
-}
-
-function safeServiceName(name: string) {
-  const trimmed = name.trim();
-  return trimmed.length > 0 ? truncateToDnsLabel(trimmed) : "OpenClaw";
-}
-
-function prettifyInstanceName(name: string) {
-  const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
 }
 
 function serviceSummary(label: string, svc: CiaoService): string {
@@ -149,7 +129,11 @@ export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
   logger: Pick<PluginLogger, "info" | "warn">,
 ): Promise<GatewayBonjourAdvertiser> {
-  if (isDisabledByEnv()) {
+  if (
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST ||
+    (parseBooleanValue(process.env.OPENCLAW_DISABLE_BONJOUR) ?? isContainerEnvironment())
+  ) {
     return { stop: async () => {} };
   }
 
@@ -194,7 +178,9 @@ export async function startGatewayBonjourAdvertiser(
     const hostnameLabel = hostnameWithoutLocal.slice(0, labelEnd).trim() || "openclaw";
     const hostname = truncateToDnsLabel(hostnameLabel, "openclaw");
     const instanceName = opts.instanceName?.trim() || `${hostname} (OpenClaw)`;
-    const displayName = prettifyInstanceName(instanceName);
+    const normalizedInstanceName = instanceName.trim().replace(/\s+/g, " ");
+    const displayName =
+      normalizedInstanceName.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalizedInstanceName;
 
     const gatewayTxt: Record<string, string> = {
       role: "gateway",
@@ -247,7 +233,7 @@ export async function startGatewayBonjourAdvertiser(
     }
 
     const gateway = responder.createService({
-      name: safeServiceName(instanceName),
+      name: truncateToDnsLabel(instanceName),
       type: "openclaw-gw",
       port: opts.gatewayPort,
       domain: "local",
