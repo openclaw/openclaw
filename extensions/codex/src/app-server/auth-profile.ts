@@ -26,6 +26,8 @@ export const {
 export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup & {
   authMode?: "prepared-api-key" | "profile";
   onAuthRefreshFailure?: () => void;
+  /** Lets the shared-client owner re-evaluate idle retirement when native thread ownership changes. */
+  onThreadOwnershipChange?: () => void;
 };
 
 /** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */

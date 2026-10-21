@@ -33,6 +33,7 @@ import { resolveCodexAppServerUserHomeDir } from "./auth-start-options.js";
 import type * as codexAuth from "./auth-types.js";
 import {
   ensureCodexAppServerClientRuntime,
+  hasCodexAppServerThreadOwnership,
   recordCodexAppServerAuthHandoff,
 } from "./client-runtime.js";
 import {
@@ -68,6 +69,10 @@ import {
   notifyDesktopGenerationDrainChecks,
   retainSharedClientEntry,
   releaseSharedClientEntry,
+  cancelSharedClientIdleRetirement,
+  invalidateSharedClientKey,
+  readSharedClientKeyInvalidation,
+  refreshSharedClientIdleRetirement,
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getOrCreateSharedClientEntry,
@@ -800,9 +805,12 @@ function createSharedCodexAppServerClientStartup(
       (client) => {
         const state = getSharedCodexAppServerClientState();
         params.entry.client = client;
+        params.entry.readyRevision = client.getModelCatalogRevision();
+        params.entry.hasOwnedThreads = () => hasCodexAppServerThreadOwnership(client);
         // Unsupported managed candidates close before fallback starts. Only the
         // ready client's closure may remove the shared acquisition entry.
         client.addCloseHandler((closedClient) => {
+          cancelSharedClientIdleRetirement(params.entry);
           const entry = getCurrentSharedClientEntry(closedClient);
           if (entry) {
             state.clients.delete(entry.key);
@@ -1081,6 +1089,7 @@ async function startInitializedCodexAppServerClientOnce(
         ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         config: params.config,
         onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),
+        onThreadOwnershipChange: () => refreshSharedClientIdleRetirement(client),
       });
 
       assertStartupCurrent();
@@ -1195,7 +1204,12 @@ function detachCurrentSharedClient(
   client: CodexAppServerClient | undefined,
 ): client is CodexAppServerClient {
   const entry = client && getCurrentSharedClientEntry(client);
-  return Boolean(entry && getSharedCodexAppServerClientState().clients.delete(entry.key));
+  if (!entry) {
+    return false;
+  }
+  // A clear is a semantic change for this key: catalog observations must not survive it.
+  invalidateSharedClientKey(entry.key);
+  return getSharedCodexAppServerClientState().clients.delete(entry.key);
 }
 
 export function clearSharedCodexAppServerClientIfCurrent(
@@ -1208,13 +1222,44 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return true;
 }
 
-/** Captures a revocable observation of the exact shared client and native account/config. */
+/**
+ * Captures a revocable observation of the exact shared client and native account/config.
+ * Idle retirement only reclaims an unused, unmutated process: the next acquisition for
+ * the same key starts an identical client, so the observation survives until that key
+ * sees any other retirement, a mutation, or a replacement that is no longer pristine.
+ */
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
+  const state = getSharedCodexAppServerClientState();
   const isCurrent = captureSharedClientRegistration(client);
   const revision = client.getModelCatalogRevision();
-  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+  const entry = getCurrentSharedClientEntry(client);
+  const invalidation = entry ? readSharedClientKeyInvalidation(entry.key) : undefined;
+  const generation = readCodexAppServerClientDesktopGeneration(client);
+  return () => {
+    if (isCurrent()) {
+      return client.getModelCatalogRevision() === revision;
+    }
+    if (
+      !entry?.idleRetired ||
+      entry.readyRevision !== revision ||
+      readSharedClientKeyInvalidation(entry.key) !== invalidation ||
+      (generation && !isCodexDesktopGenerationCurrent(generation))
+    ) {
+      return false;
+    }
+    const successor = state.clients.get(entry.key);
+    const successorClient = successor?.client;
+    return (
+      !successorClient ||
+      (successor.readyRevision === undefined && !successor.closeError) ||
+      (!successor.closeWhenIdle &&
+        !successor.closeError &&
+        !successorClient.getCloseError() &&
+        successorClient.getModelCatalogRevision() === successor.readyRevision)
+    );
+  };
 }
 
 /** Registration ends on retirement even when sibling leases keep the process alive. */
@@ -1343,6 +1388,7 @@ export async function clearSharedCodexAppServerClientAndWait(
   const state = getSharedCodexAppServerClientState();
   const lifetime = state.startup;
   lifetime.controller.abort();
+  state.globalInvalidations += 1;
   state.clients.clear();
   const closing = Promise.all(
     [...state.liveClients].map((client) => ownCodexStartup(lifetime, client.closeAndWait(options))),

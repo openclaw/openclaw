@@ -77,6 +77,12 @@ export type SharedCodexAppServerClientEntry = {
   pendingAcquires: number;
   closeWhenIdle: boolean;
   closeError?: Error;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  hasOwnedThreads?: () => boolean;
+  /** Account/config revision of the ready client; later mutations make idle retirement semantic. */
+  readyRevision?: number;
+  /** Set only when the idle reaper retired an unmutated client. */
+  idleRetired?: boolean;
   startupAbort?: AbortController;
   onStartedClientCallbacks: Set<(client: CodexAppServerClient) => void>;
   acquireBoundary?: CodexAppServerAcquireBoundary;
@@ -115,7 +121,9 @@ export function closeSharedClientEntryIfUnclaimed(entry: SharedCodexAppServerCli
   if (state.clients.get(entry.key) !== entry) {
     return false;
   }
+  invalidateSharedClientKey(entry.key);
   state.clients.delete(entry.key);
+  cancelSharedClientIdleRetirement(entry);
   entry.client?.close();
   return Boolean(entry.client);
 }
@@ -133,6 +141,9 @@ export type SharedCodexAppServerClientState = {
   desktopGenerationDrainChecks: Set<() => void>;
   startup: CodexAppServerStartupLifetime;
   startMetadata: WeakMap<CodexAppServerClient, CodexAppServerClientStartMetadata>;
+  /** Bumped by every non-idle retirement or clear of a key; global disposal bumps all keys. */
+  keyInvalidations: Map<string, number>;
+  globalInvalidations: number;
 };
 
 type CodexAppServerClientStartMetadata = {
@@ -170,8 +181,21 @@ export const getSharedCodexAppServerClientState = defineCodexBuildState(
     desktopGenerationDrainChecks: new Set(),
     startup: createCodexAppServerStartupLifetime(),
     startMetadata: new WeakMap(),
+    keyInvalidations: new Map(),
+    globalInvalidations: 0,
   }),
 );
+
+/** Identifies the account/config generation of a shared-client key across idle replacement. */
+export function readSharedClientKeyInvalidation(key: string): string {
+  const state = getSharedCodexAppServerClientState();
+  return `${state.globalInvalidations}:${state.keyInvalidations.get(key) ?? 0}`;
+}
+
+export function invalidateSharedClientKey(key: string): void {
+  const state = getSharedCodexAppServerClientState();
+  state.keyInvalidations.set(key, (state.keyInvalidations.get(key) ?? 0) + 1);
+}
 
 export function hasActiveSharedCodexAppServerWork(): boolean {
   const state = getSharedCodexAppServerClientState();
@@ -213,7 +237,7 @@ export function getCurrentSharedClientEntry(
  */
 export function retireSharedCodexAppServerClientIfCurrent(
   client: CodexAppServerClient | undefined,
-  opts?: { failActiveLeases?: boolean },
+  opts?: { failActiveLeases?: boolean; idle?: boolean },
 ): { activeLeases: number; closed: boolean } | undefined {
   if (!client) {
     return undefined;
@@ -223,6 +247,14 @@ export function retireSharedCodexAppServerClientIfCurrent(
   const entry = currentEntry ?? state.entriesByClient.get(client);
   if (!entry || (entry.client !== client && !entry.closeError)) {
     return undefined;
+  }
+  cancelSharedClientIdleRetirement(entry);
+  // Idle reclamation of an unmutated client keeps its account/config observations;
+  // every other retirement is a semantic change for future acquisitions of this key.
+  if (opts?.idle && currentEntry && client.getModelCatalogRevision() === entry.readyRevision) {
+    entry.idleRetired = true;
+  } else {
+    invalidateSharedClientKey(entry.key);
   }
   if (currentEntry) {
     state.clients.delete(entry.key);
@@ -280,6 +312,7 @@ function closeRetiredSharedClientEntry(entry: SharedCodexAppServerClientEntry): 
     return false;
   }
   entry.client = undefined;
+  cancelSharedClientIdleRetirement(entry);
   client.close();
   return true;
 }
@@ -294,6 +327,7 @@ export function retirePendingSharedClientEntryIfUnclaimed(
   entry.closeWhenIdle = true;
   const state = getSharedCodexAppServerClientState();
   if (state.clients.get(entry.key) === entry) {
+    invalidateSharedClientKey(entry.key);
     state.clients.delete(entry.key);
   }
   closeRetiredSharedClientEntry(entry);
@@ -363,11 +397,55 @@ export function notifyDesktopGenerationDrainChecks(state: SharedCodexAppServerCl
   }
 }
 
+// Keep minute-scale discovery and background work warm without retaining unused homes forever.
+// Startup model discovery acquires one client per agent home; without this, every configured
+// agent kept an idle app-server process tree for the Gateway's whole lifetime.
+export const CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS = 5 * 60_000;
+
+export function cancelSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
+  clearTimeout(entry.idleTimer);
+  entry.idleTimer = undefined;
+}
+
+/** Re-evaluates idle retirement after native thread ownership changes on this client. */
+export function refreshSharedClientIdleRetirement(client: CodexAppServerClient): void {
+  const entry = getCurrentSharedClientEntry(client);
+  if (entry) {
+    scheduleSharedClientIdleRetirement(entry);
+  }
+}
+
+/**
+ * Gracefully retires a current shared client once it has no leases, pending
+ * acquisitions, or native thread ownership for the grace window. The next
+ * acquisition starts a fresh process; loaded threads resume from their rollout.
+ */
+function scheduleSharedClientIdleRetirement(entry: SharedCodexAppServerClientEntry): void {
+  cancelSharedClientIdleRetirement(entry);
+  if (
+    entry.activeLeases > 0 ||
+    entry.pendingAcquires > 0 ||
+    !entry.client ||
+    entry.hasOwnedThreads?.() ||
+    getCurrentSharedClientEntry(entry.client) !== entry
+  ) {
+    return;
+  }
+  entry.idleTimer = setTimeout(() => {
+    entry.idleTimer = undefined;
+    if (entry.activeLeases === 0 && entry.pendingAcquires === 0 && !entry.hasOwnedThreads?.()) {
+      retireSharedCodexAppServerClientIfCurrent(entry.client, { idle: true });
+    }
+  }, CODEX_APP_SERVER_CLIENT_IDLE_GRACE_MS);
+  entry.idleTimer.unref?.();
+}
+
 export function retainSharedClientEntry(
   entry: SharedCodexAppServerClientEntry,
   counter: "activeLeases" | "pendingAcquires" = "activeLeases",
 ): () => void {
   let released = false;
+  cancelSharedClientIdleRetirement(entry);
   entry[counter] += 1;
   return () => {
     if (released) {
@@ -384,5 +462,6 @@ export function releaseSharedClientEntry(
 ): void {
   entry[counter] -= 1;
   closeRetiredSharedClientEntryIfIdle(entry);
+  scheduleSharedClientIdleRetirement(entry);
   notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
 }

@@ -100,6 +100,18 @@ export function hasThreadOwnership(
   );
 }
 
+/** Any retained, claimed, releasing, or protected thread keeps its physical client alive. */
+export function hasAnyThreadOwnership(runtime: ThreadOwnershipState | undefined): boolean {
+  return (
+    runtime !== undefined &&
+    !runtime.closed &&
+    (runtime.retainedThreads.size > 0 ||
+      runtime.claimedThreads.size > 0 ||
+      runtime.releasingThreads.size > 0 ||
+      runtime.protectedThreads.size > 0)
+  );
+}
+
 export function hasSiblingThreadWork(
   runtime: ThreadOwnershipState | undefined,
   threadId: string,

@@ -33,6 +33,18 @@ valid only while that native owner and its account/config observation remain
 current. A missing account, failed refresh, account/config mutation, or retired
 client leaves native models unavailable until discovery succeeds again.
 
+A shared app-server client with no owned work retires after five idle minutes.
+Discovery and background turns within that window reuse the same process.
+Active leases, pending acquisitions, retained or releasing threads, claimed or
+protected threads (including native children, background terminals, and
+ephemeral history) keep their client until their owners release it. Retained
+idle threads still expire under the existing thread-retention policy, after
+which the client becomes eligible for idle retirement. Clients and accounts stay
+isolated by agent home. Idle retirement of a client whose account and config were
+not mutated keeps its discovery observation: the next acquisition for the same
+agent home starts an equivalent process. Any other retirement of that client key,
+or an account/config change on its replacement, revokes the observation as before.
+
 Use the Models page **Refresh** action (`models.list` with `view: "all"` and
 `refresh: true`) to publish the full catalog for the selected agent. Prepared-only
 reads do not start discovery. Native configuration changes outside OpenClaw
