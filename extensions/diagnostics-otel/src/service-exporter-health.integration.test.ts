@@ -7,34 +7,18 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
-  clearOtelGlobals,
-  snapshotOtelEnv,
   getReportedExporterHealth,
   startOtelService,
   type ReportedExporterHealth,
 } from "./service.test-helpers.js";
 
-installRealOtelSdkTestHarness();
-
-const PRELOAD_ENV = "OPENCLAW_OTEL_PRELOADED";
+installRealOtelSdkTestHarness({ owned: true, env: ["OTEL_PROPAGATORS"] });
 const IMMEDIATE_RETRY_AFTER = "Thu, 01 Jan 1970 00:00:00 GMT";
-const OTEL_ENV_KEYS = ["OTEL_PROPAGATORS"] as const;
 
 type ExporterEvent = Extract<DiagnosticEventPayload, { type: "telemetry.exporter" }>;
-
-let restoreEnv: () => void;
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv(OTEL_ENV_KEYS);
-  clearOtelGlobals();
-  for (const key of OTEL_ENV_KEYS) {
-    delete process.env[key];
-  }
-  process.env[PRELOAD_ENV] = "0";
-});
-afterEach(() => restoreEnv());
 
 async function startExporterHealthReceiver(
   handleRequest: (response: ServerResponse, requestCount: number) => void,

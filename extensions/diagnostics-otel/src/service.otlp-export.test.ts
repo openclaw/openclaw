@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { context, diag, DiagLogLevel, metrics, trace } from "@opentelemetry/api";
+import { context, metrics, trace } from "@opentelemetry/api";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { AggregationTemporality, MeterProvider, MetricReader } from "@opentelemetry/sdk-metrics";
@@ -19,7 +19,11 @@ import { expect, test, vi } from "vitest";
 import { runModelCallAndCaptureTraceparent } from "../../../test/e2e/qa-lab/runtime/otel-model-call.test-support.js";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
-import { installRealOtelSdkTestHarness, PRELOAD_ENV } from "./service.real-sdk.test-support.js";
+import {
+  captureOtelDiagnostics,
+  installRealOtelSdkTestHarness,
+  PRELOAD_ENV,
+} from "./service.real-sdk.test-support.js";
 import {
   clearOtelGlobals,
   createOtelContext,
@@ -35,17 +39,6 @@ const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData
   emitTrustedDiagnosticEventWithPrivateData(event, {});
 
 const spanNamed = (spans: ReadableSpan[], name: string) => spans.find((span) => span.name === name);
-
-function captureOtelDiagnostics(): string[] {
-  const messages: string[] = [];
-  const capture = (...args: unknown[]) => messages.push(args.map(String).join(" "));
-  const ignore = () => {};
-  diag.setLogger(
-    { debug: ignore, error: capture, info: ignore, verbose: ignore, warn: capture },
-    { logLevel: DiagLogLevel.ALL, suppressOverrideMessage: true },
-  );
-  return messages;
-}
 
 function releasePreloadedOtelGlobals() {
   clearOtelGlobals();

@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { diag, DiagLogLevel } from "@opentelemetry/api";
+import { diag } from "@opentelemetry/api";
 import type { DiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test } from "vitest";
 import {
@@ -8,7 +8,10 @@ import {
   startLocalOtlpReceiver,
 } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { createDiagnosticsOtelService } from "./service.js";
-import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import {
+  captureOtelDiagnostics,
+  installRealOtelSdkTestHarness,
+} from "./service.real-sdk.test-support.js";
 import {
   clearOtelGlobals,
   createOtelContext,
@@ -51,24 +54,6 @@ function assertCorrelatedGeneration(
   expect(model?.traceId).toBe(run?.traceId);
   expect(model?.parentSpanId).toBe(run?.spanId);
   expect(correlatedLog).toBeDefined();
-}
-
-function captureOtelDiagnostics(): string[] {
-  const messages: string[] = [];
-  const capture = (...args: unknown[]) => {
-    messages.push(args.map((value) => String(value)).join(" "));
-  };
-  diag.setLogger(
-    {
-      debug: () => {},
-      error: capture,
-      info: () => {},
-      verbose: () => {},
-      warn: capture,
-    },
-    { logLevel: DiagLogLevel.ALL, suppressOverrideMessage: true },
-  );
-  return messages;
 }
 
 test("flushes each private generation on restart and leaves global providers untouched", async () => {

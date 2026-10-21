@@ -414,6 +414,10 @@ function expectAbsent(attributes: Record<string, unknown> | undefined, ...keys: 
   }
 }
 
+function toolResponse(id: string, response: unknown) {
+  return { role: "tool", parts: [{ type: "tool_call_response", id, response }] };
+}
+
 function stringAttribute(attrs: Record<string, unknown> | undefined, key: string): string {
   const value = attrs?.[key];
   expect(value).toEqual(expect.any(String));
@@ -959,12 +963,9 @@ describe("diagnostics-otel service", () => {
       errors: [logError, traceError, meterError],
       message: expect.stringContaining("log provider failed"),
     });
-    expect(stopError).toMatchObject({
-      message: expect.stringContaining("trace provider failed"),
-    });
-    expect(stopError).toMatchObject({
-      message: expect.stringContaining("meter provider failed"),
-    });
+    for (const message of ["trace provider failed", "meter provider failed"]) {
+      expect(stopError).toMatchObject({ message: expect.stringContaining(message) });
+    }
   });
 
   test("retires an exporter failure retained after shutdown rejects", async () => {
@@ -3304,10 +3305,7 @@ describe("diagnostics-otel service", () => {
           },
         ],
       },
-      {
-        role: "tool",
-        parts: [{ type: "tool_call_response", id: "call-1", response: { rows: 1 } }],
-      },
+      toolResponse("call-1", { rows: 1 }),
     ]);
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))).toEqual([
       {
@@ -3440,16 +3438,8 @@ describe("diagnostics-otel service", () => {
         },
       ],
       expected: [
-        {
-          role: "tool",
-          parts: [
-            { type: "tool_call_response", id: "call-1", response: "first line\nsecond line" },
-          ],
-        },
-        {
-          role: "tool",
-          parts: [{ type: "tool_call_response", id: "call-2", response: "alpha\nbeta" }],
-        },
+        toolResponse("call-1", "first line\nsecond line"),
+        toolResponse("call-2", "alpha\nbeta"),
       ],
     },
     {
@@ -3465,16 +3455,10 @@ describe("diagnostics-otel service", () => {
         },
       ],
       expected: [
-        {
-          role: "tool",
-          parts: [
-            {
-              type: "tool_call_response",
-              id: "call-1",
-              response: `${Array.from({ length: 200 }, (_, index) => `line-${index}`).join("\n")}\n...(1 more text parts omitted)`,
-            },
-          ],
-        },
+        toolResponse(
+          "call-1",
+          `${Array.from({ length: 200 }, (_, index) => `line-${index}`).join("\n")}\n...(1 more text parts omitted)`,
+        ),
       ],
     },
   ])("serializes $name as semconv response text", async ({ inputMessages, expected }) => {

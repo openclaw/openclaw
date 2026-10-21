@@ -2,12 +2,10 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
-  clearOtelGlobals,
-  snapshotOtelEnv,
   emitRealSdkSignals,
   getReportedExporterHealth,
   startOtelService,
@@ -15,9 +13,7 @@ import {
   SPAN_ID,
 } from "./service.test-helpers.js";
 
-installRealOtelSdkTestHarness();
-
-const ENV_KEYS = ["OTEL_PROPAGATORS"] as const;
+installRealOtelSdkTestHarness({ owned: true, env: ["OTEL_PROPAGATORS"] });
 const JAEGER_DEPRECATION_WARNING =
   'The Jaeger propagator is deprecated and will be removed in a future release. Use the W3C TraceContext propagator ("tracecontext") instead.';
 const PROPAGATED_SPAN_CONTEXT = {
@@ -45,17 +41,6 @@ const PROPAGATION_ROUNDTRIP_CASES = [
     },
   ),
 ] as const;
-
-let restoreEnv: () => void;
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv(ENV_KEYS);
-  clearOtelGlobals();
-  for (const key of ENV_KEYS) {
-    delete process.env[key];
-  }
-  process.env.OPENCLAW_OTEL_PRELOADED = "0";
-});
-afterEach(() => restoreEnv());
 
 test("disables every OpenClaw route while preserving W3C propagation", async () => {
   const receiver = startLocalOtlpReceiver();

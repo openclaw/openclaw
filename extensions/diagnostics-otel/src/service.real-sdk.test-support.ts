@@ -1,13 +1,21 @@
 import { context, diag, DiagLogLevel, metrics, propagation, trace } from "@opentelemetry/api";
 import { logs } from "@opentelemetry/api-logs";
 import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  type MeterProviderOptions,
+  PeriodicExportingMetricReader,
+} from "@opentelemetry/sdk-metrics";
+import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, beforeEach } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished } from "vitest";
 import {
+  clearOtelGlobals,
   registeredOtelGlobals,
   snapshotOtelEnv,
   stopStartedOtelServices,
@@ -30,7 +38,11 @@ const ENDPOINT_ENV_KEYS = [
 const OTEL_GLOBAL_LOGS_KEY = Symbol.for("io.opentelemetry.js.api.logs");
 
 // Real-SDK suites share one owner for global registrations, providers, and environment cleanup.
-export function installRealOtelSdkTestHarness() {
+export function installRealOtelSdkTestHarness({
+  env = [],
+  owned = false,
+  replaceTraceProvider = false,
+}: { env?: readonly string[]; owned?: boolean; replaceTraceProvider?: boolean } = {}) {
   let exporter: InMemorySpanExporter;
   let provider: BasicTracerProvider;
   let restoreEnv: () => void;
@@ -38,8 +50,8 @@ export function installRealOtelSdkTestHarness() {
   let originalLogsProvider: ReturnType<typeof logs.getLoggerProvider> | undefined;
 
   beforeEach(() => {
-    restoreEnv = snapshotOtelEnv([PRELOAD_ENV, ...ENDPOINT_ENV_KEYS]);
-    for (const key of ENDPOINT_ENV_KEYS) {
+    restoreEnv = snapshotOtelEnv([PRELOAD_ENV, ...ENDPOINT_ENV_KEYS, ...env]);
+    for (const key of [...ENDPOINT_ENV_KEYS, ...env]) {
       delete process.env[key];
     }
     originalOtelGlobals = { ...registeredOtelGlobals() };
@@ -49,7 +61,14 @@ export function installRealOtelSdkTestHarness() {
     process.env[PRELOAD_ENV] = "1";
     exporter = new InMemorySpanExporter();
     provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+    if (replaceTraceProvider) {
+      trace.disable();
+    }
     trace.setGlobalTracerProvider(provider);
+    if (owned) {
+      clearOtelGlobals();
+      process.env[PRELOAD_ENV] = "0";
+    }
   });
 
   afterEach(async () => {
@@ -106,4 +125,44 @@ export function installRealOtelSdkTestHarness() {
       return provider;
     },
   };
+}
+
+export function installTestMeter(views?: MeterProviderOptions["views"]) {
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const reader = new PeriodicExportingMetricReader({
+    exporter: metricExporter,
+    ...(views ? { exportIntervalMillis: 60_000 } : {}),
+  });
+  const meterProvider = new MeterProvider({ readers: [reader], views });
+  metrics.disable();
+  expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
+  if (!views) {
+    onTestFinished(async () => {
+      try {
+        await stopStartedOtelServices();
+      } finally {
+        await meterProvider.shutdown();
+      }
+    });
+  }
+  return { reader, meterProvider, metricExporter };
+}
+
+export async function collectTestMetrics(reader: PeriodicExportingMetricReader, prefix = "") {
+  const { resourceMetrics, errors } = await reader.collect();
+  expect(errors).toEqual([]);
+  return resourceMetrics.scopeMetrics
+    .flatMap((scope) => scope.metrics)
+    .filter((metric) => metric.descriptor.name.startsWith(prefix));
+}
+
+export function captureOtelDiagnostics(): string[] {
+  const messages: string[] = [];
+  const capture = (...args: unknown[]) => messages.push(args.map(String).join(" "));
+  const ignore = () => {};
+  diag.setLogger(
+    { debug: ignore, error: capture, info: ignore, verbose: ignore, warn: capture },
+    { logLevel: DiagLogLevel.ALL, suppressOverrideMessage: true },
+  );
+  return messages;
 }
