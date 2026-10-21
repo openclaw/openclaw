@@ -47,6 +47,10 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       },
     );
     const data = () => panel().snapshot;
+    // Full Processes keeps its failed-read empty/loading states; compact Details retains rows.
+    const rows = () => (data().readError ? [] : data().rows);
+    const visibleError = () =>
+      data().readError ? (data().loading ? null : data().readError) : data().error;
     // Only local return targets/offsets reset on denied access; output remains with the data owner.
     const emptyNavigation = (): {
       listTop: number;
@@ -61,7 +65,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
       openers: new Map<string, HTMLButtonElement>(),
       outputPositions: new Map<string, { left: number; top: number }>(),
     });
-    const denied = createMemo(() => Boolean(data().error && !data().rows.length));
+    const denied = createMemo(() => Boolean(visibleError() && !rows().length));
     const [navigation, setNavigation] = createStore<ReturnType<typeof emptyNavigation>>((draft) => {
       if (denied()) {
         Object.assign(draft, emptyNavigation());
@@ -76,9 +80,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         draft.selected = row.instanceId;
       });
     };
-    const selectedRow = createMemo(() => data().rows.find((row) => row.instanceId === selected()));
-    const running = createMemo(() => data().rows.filter((row) => row.status === "running"));
-    const finished = createMemo(() => data().rows.filter((row) => row.status !== "running"));
+    const selectedRow = createMemo(() => rows().find((row) => row.instanceId === selected()));
+    const running = createMemo(() => rows().filter((row) => row.status === "running"));
+    const finished = createMemo(() => rows().filter((row) => row.status !== "running"));
     const status = (row: SessionProcessSummary) =>
       t(
         data().stopping.has(row.instanceId)
@@ -119,9 +123,9 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         </button>
       );
     const error = () =>
-      data().error && (
+      visibleError() && (
         <div class="chat-processes__error" role="alert">
-          {data().error}
+          {visibleError()}
           <button class="btn btn--sm" type="button" onClick={() => void panel().refresh()}>
             {t("common.retry")}
           </button>
@@ -436,7 +440,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
         >
           {error()}
           <Show
-            when={data().rows.length}
+            when={rows().length}
             fallback={
               <Show
                 when={data().hasResult && !data().error && !data().loading}
@@ -445,7 +449,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                     when={data().loading}
                     fallback={
                       <div class="chat-processes__empty" role="status">
-                        {!data().error ? t("chat.processesPanel.disconnected") : null}
+                        {!visibleError() ? t("chat.processesPanel.disconnected") : null}
                       </div>
                     }
                   >

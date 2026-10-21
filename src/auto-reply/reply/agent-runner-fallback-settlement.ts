@@ -9,7 +9,6 @@ import {
   isHostMissingReplyNoticeText,
   resolveReplyExpectation,
 } from "../../agents/reply-completion.js";
-import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -54,7 +53,7 @@ export async function settleAgentFallbackCycle(params: {
   const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
-    await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    await drainPendingToolTasks({ tasks: turn.pendingToolTasks });
     return { kind: "aborted", reason: abortReason };
   }
   cycle.commitTerminalOutcome();

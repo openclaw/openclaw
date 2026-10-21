@@ -46,11 +46,15 @@ export function captureWorkerGcProfiles() {
         disable: (session) =>
           Promise.all([session.post("HeapProfiler.disable"), session.post("Profiler.disable")]),
       }),
-    sanitize: ({ heap, cpu }, packageRoot, measurement): WorkerGcProfiles => ({
+    sanitize: async ({ heap, cpu }, packageRoot, measurement): Promise<WorkerGcProfiles> => ({
       heap: JSON.stringify(
         // SAFETY: V8 supplies IDs and samples omitted by Node's inspector declarations.
-        sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
+        await sanitizeDiagnosticHeapProfile(heap as SamplingProfile, packageRoot, {
           durationMs: measurement.durationMs,
+          requestedDurationMs: DURATION_MS,
+          effectiveDurationMs: DURATION_MS,
+          actualDurationMs: measurement.durationMs,
+          durationLimitReason: null,
           samplingIntervalBytes: SAMPLING_INTERVAL_BYTES,
           includeObjectsCollectedByMajorGC: true,
           includeObjectsCollectedByMinorGC: true,

@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +35,11 @@ async function expectMediaFile(mediaPath: string, pattern?: RegExp, content = "h
     await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(content);
   } finally {
     await fs.unlink(mediaPath).catch(() => {});
+    // Snap batches publish inside an owned directory; remove it once its last photo is gone.
+    const batchDir = path.dirname(mediaPath);
+    if (path.basename(batchDir).startsWith(".openclaw-camera-batch-")) {
+      await fs.rmdir(batchDir).catch(() => {});
+    }
   }
 }
 
@@ -114,7 +120,9 @@ describe("cli program (nodes media)", () => {
       .map((line) => line.trim())
       .filter(Boolean);
     expect(mediaPaths).toHaveLength(2);
-    await Promise.all(mediaPaths.map((path) => expectMediaFile(path, /openclaw-camera-snap-/)));
+    await Promise.all(
+      mediaPaths.map((mediaPath) => expectMediaFile(mediaPath, /openclaw-camera-snap-/)),
+    );
   });
 
   it("runs nodes camera clip with --no-audio", async () => {

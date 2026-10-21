@@ -288,7 +288,23 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
 
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   const desktop = () => props.presentation === "desktop";
-  const [closing, setClosing] = createSignal(false);
+  const panelScope = createMemo(() => props.panelIdPrefix);
+  const mobileHostScope = createMemo(() => props.mobileHost?.scopeKey);
+  const closeScope = createMemo(() => {
+    const initialScope = panelScope();
+    const initialMobileScope = mobileHostScope();
+    const [closing, setClosing] = createSignal(false);
+    return {
+      closing,
+      setClosing,
+      current: () =>
+        props.host.isConnected &&
+        props.host.panelIdPrefix === initialScope &&
+        props.host.mobileHost?.scopeKey === initialMobileScope,
+    };
+  });
+  const closing = () => closeScope().closing();
+  let activeClose: ReturnType<typeof closeScope> | undefined;
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -425,8 +441,8 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     const mobileScope = props.mobileHost?.scopeKey;
     const current = () =>
       props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+      props.host.panelIdPrefix === scope &&
+      props.host.mobileHost?.scopeKey === mobileScope;
     if (!current()) {
       return false;
     }
@@ -484,16 +500,15 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     return !hasPanel(panel.id);
   }
   async function closeAll() {
-    if (closing() || !props.callbacks?.newTab) {
+    const view = closeScope();
+    if (activeClose?.current() || !view.current() || !props.callbacks?.newTab) {
       return;
     }
-    setClosing(true);
-    const scope = props.panelIdPrefix;
-    const mobileScope = props.mobileHost?.scopeKey;
-    const current = () =>
-      props.host.isConnected &&
-      props.panelIdPrefix === scope &&
-      props.mobileHost?.scopeKey === mobileScope;
+    activeClose = view;
+    // This owner must publish and settle every close before admitting the next one.
+    // Keeping its busy state outside an action lets those intermediate commits finish.
+    view.setClosing(true);
+    const current = view.current;
     try {
       const panels = sidebarSidePanels(props.layout).filter(
         (panel) => panel.slot !== "conversation",
@@ -529,7 +544,12 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
     } catch (error) {
       showToast({ message: formatUiError(error) });
     } finally {
-      setClosing(false);
+      if (activeClose === view) {
+        activeClose = undefined;
+      }
+      if (view.current()) {
+        view.setClosing(false);
+      }
     }
   }
   const hostedActions = () =>

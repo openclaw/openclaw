@@ -220,11 +220,7 @@ describe("extension executable test plans", () => {
       "extensions/logbook/src/postgres-store.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
     ];
-    for (const file of files) {
-      const absolute = path.join(cwd, file);
-      mkdirSync(path.dirname(absolute), { recursive: true });
-      writeFileSync(absolute, "export {};\n");
-    }
+    files.forEach((file) => writeFixture(cwd, file));
     for (const workboard of ["extensions/workboard", "extensions/workboard/**/*.test.ts"]) {
       const plans = buildVitestRunPlans([workboard, ...files.slice(2)], cwd);
       expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(

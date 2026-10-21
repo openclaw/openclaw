@@ -1,11 +1,10 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
 import { StaleWorkerBuildError } from "./admission.js";
@@ -23,25 +22,20 @@ import { createProviderReplayDispatch } from "./provider-replay.test-support.js"
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import { executeTurn } from "./worker-turn-launcher-flow.test-support.js";
+import { executeTurn, installLauncherTest } from "./worker-turn-launcher-flow.test-support.js";
 import {
   ENVIRONMENT_ID,
   SESSION_ID,
   SESSION_KEY,
-  cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   database,
   placements,
   root,
-  setupWorkerTurnLauncherTest,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
-afterAll(closeStateDatabaseForTest);
-
-beforeEach(setupWorkerTurnLauncherTest);
-afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+installLauncherTest();
 
 it("settles a stale-build turn when a lost shared node rejects its stop acknowledgement", async () => {
   const store = await createWorkerEnvironmentStore({ database });
