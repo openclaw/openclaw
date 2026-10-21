@@ -21,11 +21,8 @@ function root(location: "legacy-main" | "state-db" = "state-db") {
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   noteCommittedSharedAuthStoreOwnership({ location }, env);
   const agentDir = path.join(stateDir, "agents", "temporary", "agent");
-  return {
-    env,
-    agentDir,
-    run: <T>(run: () => T | Promise<T>) => withAuthProfileStoreAgentDir(agentDir, stateDir, run),
-  };
+  const run = <T>(fn: () => T | Promise<T>) => withAuthProfileStoreAgentDir(agentDir, stateDir, fn);
+  return { env, agentDir, run };
 }
 
 function rows(key: string): AuthProfileRowRead {
@@ -76,10 +73,7 @@ it.each(["database-close", "owner-change"] as const)(
     });
     const run = vi.fn();
     const preparing = owner.run(run);
-    const outcome = preparing.then(
-      () => ({ rejected: false }),
-      () => ({ rejected: true }),
-    );
+    const outcome = preparing.then(() => false).catch(() => true);
     try {
       await Promise.race([
         started.promise,
@@ -93,7 +87,7 @@ it.each(["database-close", "owner-change"] as const)(
         noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, owner.env);
       }
       pendingRows.resolve(rows("fixture-retired"));
-      await expect(outcome).resolves.toEqual({ rejected: true });
+      await expect(outcome).resolves.toBe(true);
       expect(run).not.toHaveBeenCalled();
     } finally {
       pendingRows.resolve(rows("fixture-retired"));
