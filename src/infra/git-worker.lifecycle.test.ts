@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { executeGitWorktreeOperation } from "../agents/worktrees/git-worktree-operations.runtime.js";
 import * as worktreeGit from "../agents/worktrees/git.js";
@@ -103,6 +104,49 @@ const snapshot = (
 const snapshotRefExists = async (repo: string, id: string) =>
   (await gitResult(repo, ["show-ref", "--verify", `refs/openclaw/snapshots/${id}`])).code === 0;
 
+function callerGit(before: (transport: "text" | "buffered") => void | Promise<void>) {
+  return {
+    text: async (...args: Parameters<typeof gitExec.executeGitCommandBytes>) => {
+      await before("text");
+      return gitExec.executeGitCommandBytes(...args);
+    },
+    buffered: async (...args: Parameters<typeof gitExec.executeGitCommandBuffered>) => {
+      await before("buffered");
+      return gitExec.executeGitCommandBuffered(...args);
+    },
+  };
+}
+
+function traceGit(root: string) {
+  const file = path.join(root, "git-trace.jsonl");
+  vi.stubEnv("GIT_TRACE2_EVENT", file);
+  return file;
+}
+
+function snapshotCapacity(observe: (directory: string) => void | Promise<void>) {
+  return (effect: Parameters<NonNullable<GitWorkerOperationOptions["onEffect"]>>[0]) => {
+    if (
+      effect.type === "worktree.snapshot-capacity" &&
+      effect.input.purpose === "worktree safety snapshot index"
+    ) {
+      return observe(effect.input.demands[0]?.path ?? "");
+    }
+  };
+}
+
+function limitIgnoredOutput(repo: string) {
+  const realRun = worktreeGit.runGitBuffered;
+  let reads = 0;
+  vi.spyOn(worktreeGit, "runGitBuffered").mockImplementation(async (cwd, args, options) => {
+    const ignored = cwd === repo && args[0] === "ls-files" && args.includes("--ignored");
+    if (ignored) {
+      reads++;
+    }
+    return realRun(cwd, args, ignored ? { ...options, maxOutputBytes: 256 } : options);
+  });
+  return () => reads;
+}
+
 async function partialClone(root: string) {
   const source = await repository(root);
   const origin = path.join(root, "origin.git");
@@ -161,21 +205,11 @@ async function exists(directory: string): Promise<boolean> {
   );
 }
 
-async function within<T>(
+function within<T>(
   pending: Promise<T>,
   timeoutMessage = "Git worker lifecycle wait timed out",
 ): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      pending,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(timeoutMessage)), 10_000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return withTestTimeout(pending, 10_000, timeoutMessage);
 }
 
 function waitForLifecyclePoint(
@@ -184,15 +218,7 @@ function waitForLifecyclePoint(
   endedMessage: string,
   timeoutMessage?: string,
 ) {
-  return within(
-    Promise.race([
-      reached,
-      operation.then(() => {
-        throw new Error(endedMessage);
-      }),
-    ]),
-    timeoutMessage,
-  );
+  return within(awaitGateBeforeSettlement(reached, operation, endedMessage), timeoutMessage);
 }
 
 describe("Git operation host lifecycle", () => {
@@ -232,8 +258,7 @@ describe("Git operation host lifecycle", () => {
     const before = (await fs.readdir(packDirectory)).toSorted();
     // A caller's inherited opt-in cannot turn background reads into transfers.
     vi.stubEnv("GIT_NO_LAZY_FETCH", "0");
-    const trace = path.join(root, "git-trace.jsonl");
-    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const trace = traceGit(root);
     for (const [name, run] of adapters) {
       const outcome = await run(clone, [
         "-c",
@@ -278,8 +303,7 @@ describe("Git operation host lifecycle", () => {
     await git(clone, "update-ref", "refs/remotes/origin/feature", feature);
     // Same-size dirty content also exercises Git's stat-unmatch refresh path.
     await fs.writeFile(path.join(clone, "README.md"), "work\n");
-    const trace = path.join(root, "git-trace.jsonl");
-    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    const trace = traceGit(root);
     const readFacts = async () =>
       runGitWorkerOperation({
         type: "pull-request.branch-facts",
@@ -326,21 +350,13 @@ describe("Git operation host lifecycle", () => {
     await fs.writeFile(path.join(repo, input), "retain task input\n");
     await fs.mkdir(path.join(repo, "media", "project"));
     await fs.writeFile(path.join(repo, "media", "project", "private.txt"), "not owned\n");
-    const realRun = worktreeGit.runGitBuffered;
-    let ignoredReads = 0;
-    vi.spyOn(worktreeGit, "runGitBuffered").mockImplementation(async (cwd, args, options) => {
-      if (cwd === repo && args[0] === "ls-files" && args.includes("--ignored")) {
-        ignoredReads++;
-        return await realRun(cwd, args, { ...options, maxOutputBytes: 256 });
-      }
-      return await realRun(cwd, args, options);
-    });
+    const ignoredReads = limitIgnoredOutput(repo);
     const result = await snapshot(repo, "bounded-ignored");
     expect(await git(repo, "show", `${result.snapshotRef}:${input}`)).toBe("retain task input");
     const tree = await git(repo, "ls-tree", "-r", "--name-only", result.snapshotRef);
     expect(tree).not.toContain("dependencies/");
     expect(tree).not.toContain("private.txt");
-    expect(ignoredReads).toBeGreaterThan(0);
+    expect(ignoredReads()).toBeGreaterThan(0);
   });
 
   it.skipIf(!supportsRawPathBytes)(
@@ -398,17 +414,7 @@ describe("Git operation host lifecycle", () => {
     for (let index = 0; index < 64; index++) {
       await fs.writeFile(path.join(repo, `private-file-${index}.ignored`), "");
     }
-    const realRun = worktreeGit.runGitBuffered;
-    vi.spyOn(worktreeGit, "runGitBuffered").mockImplementation(
-      async (cwd, args, options) =>
-        await realRun(
-          cwd,
-          args,
-          cwd === repo && args[0] === "ls-files" && args.includes("--ignored")
-            ? { ...options, maxOutputBytes: 256 }
-            : options,
-        ),
-    );
+    limitIgnoredOutput(repo);
     await expect(inspect(repo)).rejects.toThrow("output limit exceeded");
   });
 
@@ -602,8 +608,7 @@ describe("Git operation host lifecycle", () => {
         throw new Error("Missing fixture listener address");
       }
       await git(clone, "remote", "set-url", "origin", `git://127.0.0.1:${address.port}/held.git`);
-      const trace = path.join(root, "git-trace.jsonl");
-      vi.stubEnv("GIT_TRACE2_EVENT", trace);
+      const trace = traceGit(root);
       const abort = new AbortController();
       const pending = settle(
         size(
@@ -670,17 +675,13 @@ describe("Git operation host lifecycle", () => {
     let held = false;
     const first = settle(
       size(repo, {
-        git: {
-          text: async (cwd, args, options) => {
-            if (!held) {
-              held = true;
-              entered.resolve();
-              await release.promise;
-            }
-            return await gitExec.executeGitCommandBytes(cwd, args, options);
-          },
-          buffered: gitExec.executeGitCommandBuffered,
-        },
+        git: callerGit(async (transport) => {
+          if (transport === "text" && !held) {
+            held = true;
+            entered.resolve();
+            await release.promise;
+          }
+        }),
       }),
     );
     const pending: Promise<unknown>[] = [first];
@@ -691,16 +692,9 @@ describe("Git operation host lifecycle", () => {
         "Sizing ended before the predecessor was held",
       );
       const calls = { text: 0, buffered: 0 };
-      const executors: NonNullable<GitWorkerOperationOptions["git"]> = {
-        text: async (cwd, args, options) => {
-          calls.text++;
-          return await gitExec.executeGitCommandBytes(cwd, args, options);
-        },
-        buffered: async (cwd, args, options) => {
-          calls.buffered++;
-          return await gitExec.executeGitCommandBuffered(cwd, args, options);
-        },
-      };
+      const executors = callerGit((transport) => {
+        calls[transport]++;
+      });
       const second = settle(size(repo, { git: executors }));
       pending.push(second);
       executors.text = executors.buffered = async () => {
@@ -726,12 +720,7 @@ describe("Git operation host lifecycle", () => {
       const release = createDeferredCore();
       const revoked = new Error("caller Git authority revoked");
       let current = true;
-      const trace = path.join(root, "git-trace.jsonl");
-      vi.stubEnv("GIT_TRACE2_EVENT", trace);
-      const waitForRevocation = async () => {
-        entered.resolve();
-        await release.promise;
-      };
+      const trace = traceGit(root);
       const pending = settle(
         size(repo, {
           assertCurrent: () => {
@@ -739,20 +728,12 @@ describe("Git operation host lifecycle", () => {
               throw revoked;
             }
           },
-          git: {
-            text: async (cwd, args, options) => {
-              if (transport === "text") {
-                await waitForRevocation();
-              }
-              return await gitExec.executeGitCommandBytes(cwd, args, options);
-            },
-            buffered: async (cwd, args, options) => {
-              if (transport === "buffered") {
-                await waitForRevocation();
-              }
-              return await gitExec.executeGitCommandBuffered(cwd, args, options);
-            },
-          },
+          git: callerGit(async (kind) => {
+            if (kind === transport) {
+              entered.resolve();
+              await release.promise;
+            }
+          }),
         }),
       );
       try {
@@ -787,19 +768,13 @@ describe("Git operation host lifecycle", () => {
       const release = createDeferredCore();
       const abort = new AbortController();
       let temporaryDirectory = "";
-      const onEffect: NonNullable<GitWorkerOperationOptions["onEffect"]> = async (effect) => {
-        if (
-          effect.type === "worktree.snapshot-capacity" &&
-          effect.input.purpose === "worktree safety snapshot index"
-        ) {
-          temporaryDirectory = effect.input.demands[0]?.path ?? "";
-          entered.resolve();
-          if (ending === "cancel") {
-            await release.promise;
-          }
+      const onEffect = snapshotCapacity(async (directory) => {
+        temporaryDirectory = directory;
+        entered.resolve();
+        if (ending === "cancel") {
+          await release.promise;
         }
-        return undefined;
-      };
+      });
       let completed = 0;
       const pending = settle(
         snapshot(
@@ -865,8 +840,7 @@ describe("Git operation host lifecycle", () => {
       });
       await held.promise;
       const queueCalls = vi.spyOn(gitExec, "enqueueGitRefMutation");
-      const trace = path.join(root, "git-trace.jsonl");
-      vi.stubEnv("GIT_TRACE2_EVENT", trace);
+      const trace = traceGit(root);
       let current = true;
       let temporaryDirectory = "";
       const revoked = new Error("snapshot authority revoked");
@@ -882,15 +856,9 @@ describe("Git operation host lifecycle", () => {
                 throw revoked;
               }
             },
-            onEffect: (effect) => {
-              if (
-                effect.type === "worktree.snapshot-capacity" &&
-                effect.input.purpose === "worktree safety snapshot index"
-              ) {
-                temporaryDirectory = effect.input.demands[0]?.path ?? "";
-              }
-              return undefined;
-            },
+            onEffect: snapshotCapacity((directory) => {
+              temporaryDirectory = directory;
+            }),
           },
           checkout,
         ),

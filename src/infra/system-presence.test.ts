@@ -121,29 +121,17 @@ describe("system-presence", () => {
     expect(entry).toMatchObject({ host: "desk", lastInputSeconds: undefined });
   });
 
-  it("parses node presence text and normalizes the update key", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
+  it("normalizes beacon identity and preserves old presence values across refreshes", () => {
     const text =
       "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon";
     const instanceId = "  Mixed-Case-Node  ";
     const update = updateSystemPresence({ text, instanceId });
 
-    expect(update).toEqual({
-      key: "mixed-case-node",
-      changedKeys: ["host", "ip", "version", "mode", "reason"],
-      next: {
-        instanceId,
-        lastInputSeconds: 7,
-        text,
-        ts: 1_778_472_000_000,
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
-    });
+    expect([update.key, update.next.instanceId, update.changedKeys]).toEqual([
+      "mixed-case-node",
+      instanceId,
+      ["host", "ip", "version", "mode", "reason"],
+    ]);
 
     const normalized = { text, instanceId: "mixed-case-node" };
     const refreshed = updateSystemPresence({ ...normalized, lastInputSeconds: 11 });

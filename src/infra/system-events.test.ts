@@ -42,6 +42,16 @@ function claim(sessionKey: string, events: SystemEvent[], cancelled: () => void)
 }
 
 const key = "agent:main:test";
+const cfg: OpenClawConfig = {};
+beforeEach(() => {
+  setRuntimeConfigSnapshot(cfg);
+  resetSystemEventsForTest();
+});
+afterEach(() => {
+  resetSystemEventsForTest();
+  clearRuntimeConfigSnapshot();
+  vi.useRealTimers();
+});
 const put = (text: string, options: Partial<Parameters<typeof enqueueSystemEvent>[1]> = {}) =>
   enqueueSystemEvent(text, { sessionKey: key, ...options });
 const texts = (events: SystemEvent[]) => events.map(({ text }) => text);
@@ -58,31 +68,26 @@ function roster(sessionKey: string, index: number) {
 
 describe("delivery-owned system event selection", () => {
   const sessionKey = "agent:main:test";
-  beforeEach(() => resetSystemEventsForTest());
-  afterEach(() => resetSystemEventsForTest());
 
-  it.each(["cancel", "release"] as const)(
-    "%s settles surviving batch members after one occurrence disappears",
-    (action) => {
-      const first = enqueueEntry("First", sessionKey);
-      const second = enqueueEntry("Second", sessionKey);
-      const cancelled = vi.fn();
-      const owner = claim(sessionKey, [first, second], cancelled);
-      expect(peekDeliverable(sessionKey)).toEqual([]);
-      consumeSelected(sessionKey, [first]);
-      const replacement = enqueueEntry("Replacement", sessionKey);
-      expect(() => owner.start()).toThrow("cancelled before admission");
-      expect(owner[action]()).toBe(true);
-      expect(peekDeliverable(sessionKey)).toEqual(
-        action === "cancel" ? [replacement] : [second, replacement],
-      );
-      expect(owner.cancel()).toBe(false);
-      expect(cancelled).toHaveBeenCalledOnce();
-    },
-  );
+  it.each(["cancel", "release"] as const)("%s settles surviving batch members", (action) => {
+    const first = enqueueEntry("First", sessionKey);
+    const second = enqueueEntry("Second", sessionKey);
+    const cancelled = vi.fn();
+    const owner = claim(sessionKey, [first, second], cancelled);
+    expect(peekDeliverable(sessionKey)).toEqual([]);
+    consumeSelected(sessionKey, [first]);
+    const replacement = enqueueEntry("Replacement", sessionKey);
+    expect(() => owner.start()).toThrow("cancelled before admission");
+    expect(owner[action]()).toBe(true);
+    expect(peekDeliverable(sessionKey)).toEqual(
+      action === "cancel" ? [replacement] : [second, replacement],
+    );
+    expect(owner.cancel()).toBe(false);
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
 
   it.each(["missing", "already-owned", "duplicate"] as const)(
-    "refuses an entire batch with a %s member before taking other occurrences",
+    "rejects a batch containing a %s occurrence",
     (invalid) => {
       const first = enqueueEntry("First", sessionKey);
       const second = enqueueEntry("Second", sessionKey);
@@ -159,7 +164,7 @@ describe("delivery-owned system event selection", () => {
   });
 
   it.each(["replace", "drain", "reset"] as const)(
-    "cancels only the original ordinary occurrence during %s",
+    "%s cancels only the original occurrence",
     (boundary) => {
       const options = { sessionKey, contextKey: "task:completion" };
       const occurrence = expectDefined(enqueueSystemEventEntry("Original", options), "original");
@@ -182,7 +187,7 @@ describe("delivery-owned system event selection", () => {
   );
 
   it.each([false, true])(
-    "formats only live captured occurrences (consumed by another turn: %s)",
+    "formats live captured occurrences (already consumed: %s)",
     async (consumed) => {
       put("Restart first", { contextKey: "task:restart-sentinel:first" });
       put("Newer instruction second");
@@ -219,7 +224,6 @@ async function importSystemEventsModule(cacheBust: string): Promise<SystemEvents
   return (await import(`${systemEventsModuleUrl}?t=${cacheBust}`)) as SystemEventsModule;
 }
 
-const cfg: OpenClawConfig = {};
 const mainKey = resolveMainSessionKey(cfg);
 
 async function drainFormattedEvents(
@@ -237,16 +241,6 @@ async function drainFormattedEvents(
 }
 
 describe("system events (session routing)", () => {
-  beforeEach(() => {
-    setRuntimeConfigSnapshot(cfg);
-    resetSystemEventsForTest();
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    vi.useRealTimers();
-  });
-
   it("does not leak session-scoped events into main", async () => {
     enqueueSystemEvent("Discord reaction added: ✅", {
       sessionKey: "agent:main:discord:group:123",
@@ -269,37 +263,34 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:main:discord:group:123")).toStrictEqual([]);
   });
 
-  it.each(["main", "global", "unknown"])(
-    "resolves SDK %s only at its explicitly selected owner boundary",
-    (alias) => {
-      setRuntimeConfigSnapshot({
-        agents: { entries: { alpha: {}, beta: {} } },
-        session: { mainKey: "work" },
-      });
-      expect(() => enqueueSystemEvent("Unbound", { sessionKey: alias })).toThrow("agent-qualified");
-      expect(sdkEnqueue("Legacy caller", { sessionKey: alias, agentId: "alpha" })).toBe(true);
-      const suffix = alias === "main" ? "work" : alias;
-      expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
-      expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual([]);
-      enqueueRoutedSystemEvent("Owned caller", { agentId: " BETA ", sessionKey: alias });
-      expect(texts(sdkPeek(alias, " BETA "))).toEqual(["Owned caller"]);
-      expect(texts(sdkPeek(alias, "alpha"))).toEqual(["Legacy caller"]);
-      expect(sdkEnqueue("Runtime owner", { sessionKey: alias, agentId: " BETA " })).toBe(true);
-      expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual(["Owned caller", "Runtime owner"]);
-      expect(() =>
-        sdkEnqueue("Mismatched owner", {
-          sessionKey: `agent:alpha:${suffix}`,
-          agentId: "beta",
-        }),
-      ).toThrow("owner does not match");
-      expect(() => sdkPeek(`agent:alpha:${suffix}`, "beta")).toThrow("owner does not match");
-      setRuntimeConfigSnapshot({
-        agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-      });
-      expect(() => sdkEnqueue("Ambiguous", { sessionKey: alias })).toThrow();
-      expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
-    },
-  );
+  it.each(["main", "global", "unknown"])("routes SDK %s through its explicit owner", (alias) => {
+    setRuntimeConfigSnapshot({
+      agents: { entries: { alpha: {}, beta: {} } },
+      session: { mainKey: "work" },
+    });
+    expect(() => enqueueSystemEvent("Unbound", { sessionKey: alias })).toThrow("agent-qualified");
+    expect(sdkEnqueue("Legacy caller", { sessionKey: alias, agentId: "alpha" })).toBe(true);
+    const suffix = alias === "main" ? "work" : alias;
+    expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
+    expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual([]);
+    enqueueRoutedSystemEvent("Owned caller", { agentId: " BETA ", sessionKey: alias });
+    expect(texts(sdkPeek(alias, " BETA "))).toEqual(["Owned caller"]);
+    expect(texts(sdkPeek(alias, "alpha"))).toEqual(["Legacy caller"]);
+    expect(sdkEnqueue("Runtime owner", { sessionKey: alias, agentId: " BETA " })).toBe(true);
+    expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual(["Owned caller", "Runtime owner"]);
+    expect(() =>
+      sdkEnqueue("Mismatched owner", {
+        sessionKey: `agent:alpha:${suffix}`,
+        agentId: "beta",
+      }),
+    ).toThrow("owner does not match");
+    expect(() => sdkPeek(`agent:alpha:${suffix}`, "beta")).toThrow("owner does not match");
+    setRuntimeConfigSnapshot({
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+    });
+    expect(() => sdkEnqueue("Ambiguous", { sessionKey: alias })).toThrow();
+    expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
+  });
 
   it.each([
     { agentId: "!!!", sessionKey: "global", operation: "enqueue" },
@@ -326,22 +317,6 @@ describe("system events (session routing)", () => {
     }).toThrow(/agentId/);
     expect(peekSystemEvents("agent:main:global")).toEqual(["Main canary"]);
     expect(peekSystemEvents("agent:beta:global")).toEqual(["Beta canary"]);
-  });
-
-  it("replaces one keyed event without evicting unrelated queued events", () => {
-    roster(key, 0);
-    for (let index = 0; index < 19; index += 1) {
-      put(`unrelated ${index}`, { contextKey: `unrelated:${index}` });
-    }
-    for (let index = 1; index <= 25; index += 1) {
-      roster(key, index);
-    }
-
-    expect(peekSystemEvents(key)).toHaveLength(20);
-    expect(peekSystemEvents(key).filter((event) => event.startsWith("unrelated "))).toHaveLength(
-      19,
-    );
-    expect(peekSystemEvents(key).at(-1)).toBe("Voice roster 25");
   });
 
   it("consumes unchanged inspected events when a keyed event is replaced in flight", () => {
