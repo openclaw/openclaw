@@ -140,15 +140,19 @@ async function readNativeCredential(
   if (client.getRuntimeIdentity()?.codexHome !== home) {
     return undefined;
   }
-  const observedAccountModes: (string | undefined)[] = [];
+  const observedAccountUpdates: {
+    authMode: string | undefined;
+    accountId: string | undefined;
+  }[] = [];
   const removeNotificationHandler = client.addNotificationHandler((notification) => {
     if (notification.method !== "account/updated") {
       return;
     }
     const params = asOptionalRecord(notification.params);
-    observedAccountModes.push(
-      params && typeof params.authMode === "string" ? params.authMode : undefined,
-    );
+    observedAccountUpdates.push({
+      authMode: params && typeof params.authMode === "string" ? params.authMode : undefined,
+      accountId: params && typeof params.accountId === "string" ? params.accountId : undefined,
+    });
   });
   try {
     const configured = await client.request<CodexConfigReadResponse>(
@@ -202,12 +206,22 @@ async function readNativeCredential(
     // initialize. Same-route account/updated notifications (startup announcements,
     // token rotation) are transparent; a cross-route mode change invalidates the
     // read. A different user signing in on the same route mid-read is accepted.
-    const transparent = observedAccountModes.every((authMode) => {
-      if (authMode === "apiKey") {
+    const transparent = observedAccountUpdates.every((update) => {
+      if (update.authMode === "apiKey") {
         return !oauth;
       }
-      if (authMode === "chatgpt" || authMode === "chatgptAuthTokens") {
-        return !apiKey;
+      if (update.authMode === "chatgpt" || update.authMode === "chatgptAuthTokens") {
+        // When the notification identifies its account, a different account
+        // selected mid-read displaces the inspected credential even on the
+        // same route. Without an account id the route alone stays transparent.
+        return (
+          !apiKey &&
+          !(
+            update.accountId !== undefined &&
+            oauth?.accountId !== undefined &&
+            update.accountId !== oauth.accountId
+          )
+        );
       }
       return false;
     });

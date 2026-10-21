@@ -335,6 +335,51 @@ describe("Codex migration credential inspection and persistence", () => {
     },
   );
 
+  it.each([
+    { accountId: "native-account", notificationId: "native-account" },
+    { accountId: "native-account", notificationId: undefined },
+    { accountId: undefined, notificationId: "native-account" },
+  ])(
+    "keeps OAuth through a same-account announcement (credential id=$accountId, notification id=$notificationId)",
+    async ({ accountId, notificationId }) => {
+      const access = fakeJwt({ exp: 2_000_000_000 });
+      await writeAuth({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: access,
+          refresh_token: "fixture-refresh",
+          ...(accountId ? { account_id: accountId } : {}),
+        },
+      });
+      credentialStorage.startupAccountUpdate = "chatgpt";
+      credentialStorage.startupAccountUpdateId = notificationId;
+
+      const credentials = await readCodexCliCredentialsAsync({
+        codexHome: fixture.codexHome,
+        allowKeychainPrompt: true,
+      });
+
+      expect(credentials?.oauth).toMatchObject({ access, refresh: "fixture-refresh" });
+    },
+  );
+
+  it("discards OAuth when the announced native account differs mid-read", async () => {
+    const access = fakeJwt({ exp: 2_000_000_000 });
+    await writeAuth({
+      auth_mode: "chatgpt",
+      tokens: { access_token: access, refresh_token: "fixture-refresh", account_id: "inspected" },
+    });
+    credentialStorage.startupAccountUpdate = "chatgpt";
+    credentialStorage.startupAccountUpdateId = "displaced";
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials?.oauth).toBeUndefined();
+  });
+
   it("keeps the API key credential through a same-route account/updated", async () => {
     await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-key" });
     credentialStorage.startupAccountUpdate = "apiKey";
