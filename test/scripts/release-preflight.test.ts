@@ -20,44 +20,34 @@ import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/release-preflight.mjs");
 const testNodeExecPath = resolveTestNodeExecPath();
+const LOCK_COMMAND = "node scripts/generate-npm-package-lock.mjs --all";
+const PLUGIN_COMMAND_PAIRS = [
+  [
+    "node --import tsx scripts/sync-plugin-versions.ts --check",
+    "node --import tsx scripts/sync-plugin-versions.ts",
+  ],
+  ["pnpm channels:catalog:check", "pnpm channels:catalog:gen"],
+  [
+    "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
+    "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
+  ],
+];
+const CONFIG_COMMANDS = ["schema", "channels", "docs"].map((name) => `pnpm config:${name}:check`);
+const OTHER_COMMAND_PAIRS = [
+  ...CONFIG_COMMANDS.map((command) => [command, command.replace(/check$/u, "gen")]),
+  ["pnpm plugin-sdk:check-exports", "pnpm plugin-sdk:sync-exports"],
+  ["pnpm ui:i18n:check", "pnpm ui:i18n:sync"],
+];
+const ALL_COMMAND_PAIRS = [...PLUGIN_COMMAND_PAIRS, ...OTHER_COMMAND_PAIRS];
 const CHECK_COMMANDS = [
   "pnpm deps:root-ownership:check",
-  "node scripts/generate-npm-package-lock.mjs --all",
-  "node --import tsx scripts/sync-plugin-versions.ts --check",
-  "pnpm channels:catalog:check",
-  "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
-  "pnpm config:schema:check",
-  "pnpm config:channels:check",
-  "pnpm config:docs:check",
-  "pnpm plugin-sdk:check-exports",
+  LOCK_COMMAND,
+  ...ALL_COMMAND_PAIRS.map(([check]) => check),
   "pnpm plugin-sdk:surface:check",
-  "pnpm ui:i18n:check",
   "pnpm native:i18n:check",
 ];
-const FIX_COMMANDS = [
-  "node --import tsx scripts/sync-plugin-versions.ts",
-  "pnpm channels:catalog:gen",
-  "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
-  "pnpm config:schema:gen",
-  "pnpm config:channels:gen",
-  "pnpm config:docs:gen",
-  "pnpm plugin-sdk:sync-exports",
-  "pnpm ui:i18n:sync",
-];
-const CONFIG_COMMANDS = [
-  "pnpm config:schema:check",
-  "pnpm config:channels:check",
-  "pnpm config:docs:check",
-];
-const PLUGIN_COMMANDS = [
-  "node --import tsx scripts/sync-plugin-versions.ts",
-  "pnpm channels:catalog:gen",
-  "node --import tsx scripts/generate-plugin-inventory-doc.mts --write",
-  "node --import tsx scripts/sync-plugin-versions.ts --check",
-  "pnpm channels:catalog:check",
-  "node scripts/generate-npm-package-lock.mjs --all",
-  "node --import tsx scripts/generate-plugin-inventory-doc.mts --check",
-];
+const FIX_COMMANDS = ALL_COMMAND_PAIRS.map(([, fix]) => fix);
+const PLUGIN_COMMANDS = [...PLUGIN_COMMAND_PAIRS.flat(), LOCK_COMMAND];
 const STALE_METADATA = { buildVersion: "2026061000", shortVersion: "2026.6.10" };
 
 const tempDirs = new Set<string>();

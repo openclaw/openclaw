@@ -36,10 +36,6 @@ function plan(overrides: PlanOverrides = {}, base = sourceFixture) {
   };
 }
 
-function rejects(overrides: PlanOverrides, message: string, base = sourceFixture) {
-  expect(() => validateReleasePlan(plan(overrides, base))).toThrow(message);
-}
-
 function versionFields(version: string) {
   return {
     version,
@@ -60,13 +56,6 @@ describe("release plan contract", () => {
     expect(parseReleasePlanLockJson(lockText)).toEqual(lockFixture);
     expect(lockText.endsWith("\n")).toBe(true);
     expect(lockText.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
-  });
-
-  it("rejects alpha as beta publication authority", () => {
-    rejects(
-      { purpose: "beta-publish", ...versionFields("2026.9.24-alpha.1") },
-      "Alpha releases are retired;",
-    );
   });
 
   it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
@@ -146,15 +135,19 @@ describe("release plan contract", () => {
     expect(() => canonicalReleasePlanJson(symbolKey)).toThrow("must use string keys");
   });
 
-  it("enforces the purpose, version, tag, and target context matrix", () => {
-    rejects(
+  it.each<[PlanOverrides, string]>([
+    [
+      { purpose: "beta-publish", ...versionFields("2026.9.24-alpha.1") },
+      "Alpha releases are retired;",
+    ],
+    [
       {
         purpose: "stable-publish",
         validation: { ...fullValidation, intent: "release-stable", profile: "stable" },
       },
       "stable-publish release plan version must be stable",
-    );
-    rejects(
+    ],
+    [
       {
         purpose: "main-qualification",
         tag: null,
@@ -162,17 +155,31 @@ describe("release plan contract", () => {
         validation: { ...fullValidation, intent: "main-weekly" },
       },
       "candidate SHA context",
-    );
-    rejects({ tag: "v2026.8.1-beta.3" }, "exact version tag context");
-  });
-
-  it("binds purpose, intent, profile, and soak to one authoritative policy", () => {
-    rejects(
-      { validation: { intent: "release-stable" } },
-      "beta-publish does not allow validation intent",
-    );
-    rejects({ validation: { profile: "full" } }, "profile assertion conflicts");
-    rejects({ validation: { soak: true } }, "soak assertion conflicts");
+    ],
+    [{ tag: "v2026.8.1-beta.3" }, "exact version tag context"],
+    [{ validation: { intent: "release-stable" } }, "beta-publish does not allow validation intent"],
+    [{ validation: { profile: "full" } }, "profile assertion conflicts"],
+    [{ validation: { soak: true } }, "soak assertion conflicts"],
+    [{ run_id: "123" }, "release plan keys must be exactly"],
+    [versionFields("2026.08.1-beta.2"), "supported release version"],
+    [
+      { inventory: { packages: sourceFixture.inventory.packages.toReversed() } },
+      "ascending ASCII order",
+    ],
+    [{ tooling: { ref: "refs/heads/main" } }, "protected release-publish tag"],
+    [{ tooling: { ref: "refs/tags/release-publish/cccccccccccc-123" } }, "bound to its SHA"],
+    [
+      {
+        purpose: "main-qualification",
+        tag: null,
+        target_context_ref: sourceFixture.candidate_sha,
+        tooling: { ref: "refs/heads/feature" },
+        validation: { ...fullValidation, intent: "main-weekly" },
+      },
+      "trusted main",
+    ],
+  ])("rejects conflicting release authority: %s", (overrides, error) => {
+    expect(() => validateReleasePlan(plan(overrides))).toThrow(error);
   });
 
   it("keeps diagnostic plans tagless, non-publishable, and distinct from qualification", () => {
@@ -192,53 +199,22 @@ describe("release plan contract", () => {
       validation: { intent: "diagnostic-full", profile: "full", soak: true },
     });
 
-    rejects(
-      {
-        tag: sourceFixture.tag,
-        target_context_ref: sourceFixture.target_context_ref,
-      },
-      "diagnostic release plans require a null tag and candidate SHA context",
-      diagnosticPlan,
-    );
-    rejects(
-      {
-        validation: { intent: "release-beta", profile: "beta", soak: false },
-      },
-      "diagnostic does not allow validation intent",
-      diagnosticPlan,
-    );
-    rejects(
-      { tooling: { ref: "refs/heads/feature" } },
-      "diagnostic tooling must use trusted main or a protected release-publish tag",
-      diagnosticPlan,
-    );
-  });
-
-  it("rejects unknown authority, invalid ordering, and unsupported versions", () => {
-    rejects({ run_id: "123" }, "release plan keys must be exactly");
-    rejects(versionFields("2026.08.1-beta.2"), "supported release version");
-    rejects(
-      {
-        inventory: {
-          packages: sourceFixture.inventory.packages.toReversed(),
-        },
-      },
-      "ascending ASCII order",
-    );
-  });
-
-  it("rejects arbitrary tooling routes", () => {
-    rejects({ tooling: { ref: "refs/heads/main" } }, "protected release-publish tag");
-    rejects({ tooling: { ref: "refs/tags/release-publish/cccccccccccc-123" } }, "bound to its SHA");
-    rejects(
-      {
-        purpose: "main-qualification",
-        tag: null,
-        target_context_ref: sourceFixture.candidate_sha,
-        tooling: { ref: "refs/heads/feature" },
-        validation: { ...fullValidation, intent: "main-weekly" },
-      },
-      "trusted main",
-    );
+    const invalid: [PlanOverrides, string][] = [
+      [
+        { tag: sourceFixture.tag, target_context_ref: sourceFixture.target_context_ref },
+        "diagnostic release plans require a null tag and candidate SHA context",
+      ],
+      [
+        { validation: { intent: "release-beta", profile: "beta", soak: false } },
+        "diagnostic does not allow validation intent",
+      ],
+      [
+        { tooling: { ref: "refs/heads/feature" } },
+        "diagnostic tooling must use trusted main or a protected release-publish tag",
+      ],
+    ];
+    for (const [overrides, error] of invalid) {
+      expect(() => validateReleasePlan(plan(overrides, diagnosticPlan))).toThrow(error);
+    }
   });
 });
