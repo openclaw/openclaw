@@ -70,7 +70,6 @@ function harness(
   options: {
     cached?: Promise<BootRoster | null>;
     withBootRecord?: boolean;
-    admittedRecord?: BootRecord;
     retainedHelloScope?: string;
   } = {},
 ) {
@@ -126,13 +125,17 @@ function harness(
   const sessions = createSessionCapability(
     gateway,
     selection,
-    options.withBootRecord !== false ? { bootRecord: options.admittedRecord ?? bootRecord } : {},
+    options.withBootRecord !== false ? { bootRecord } : {},
   );
   activeCapabilities.add(sessions);
   const publish = (patch: Partial<typeof snapshot>) => {
     snapshot = { ...snapshot, ...patch };
     listeners.forEach((listener) => listener(snapshot));
   };
+  const emitChanged = (payload: unknown) =>
+    eventListeners.forEach((listener) =>
+      listener({ type: "event", event: "sessions.changed", payload, seq: 1 }),
+    );
   return {
     sessions,
     read,
@@ -140,26 +143,22 @@ function harness(
     live,
     gateway,
     publish,
-    emitChanged(payload: unknown) {
-      eventListeners.forEach((listener) =>
-        listener({ type: "event", event: "sessions.changed", payload, seq: 1 }),
-      );
+    emitChanged,
+    admit(
+      row: GatewaySessionRow,
+      source: "read" | "event",
+      reconcile = sessions.captureReconcile(),
+    ) {
+      if (source === "read") {
+        expect(reconcile(row, undefined, { archivedFilter: "all" })).toBe(true);
+      } else {
+        emitChanged(row);
+      }
     },
     changeCredentials() {
       connectionRevision += 1;
     },
-    connect(
-      profileId = "profile-one",
-      method:
-        | "token"
-        | "device-token"
-        | "trusted-proxy"
-        | "password"
-        | "tailscale"
-        | "bootstrap-token"
-        | "none"
-        | undefined = "token",
-    ) {
+    connect(profileId = "profile-one") {
       publish({
         phase: "connected",
         client,
@@ -167,7 +166,12 @@ function harness(
         hello: {
           type: "hello-ok",
           protocol: 1,
-          auth: { method, deviceToken: "test-token", role: "operator", scopes: ["operator.read"] },
+          auth: {
+            method: "token",
+            deviceToken: "test-token",
+            role: "operator",
+            scopes: ["operator.read"],
+          },
         },
       });
     },
@@ -440,13 +444,7 @@ describe("session capability warm roster", () => {
           status: "done" as const,
           hasActiveRun: false,
         };
-        if (source === "read") {
-          expect(
-            h.sessions.captureReconcile()(observed, undefined, { archivedFilter: "all" }),
-          ).toBe(true);
-        } else {
-          h.emitChanged(observed);
-        }
+        h.admit(observed, source);
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === observed.key);
         expect(accepted).toMatchObject(observed);
         expect(h.sessions.state.resultCached).toBe(true);
@@ -504,11 +502,7 @@ describe("session capability warm roster", () => {
         h.connect();
         await vi.waitFor(() => expect(lists).toBe(1));
         const retiredReconcile = h.sessions.captureReconcile();
-        if (source === "read") {
-          expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(true);
-        } else {
-          h.emitChanged(previous);
-        }
+        h.admit(previous, source, retiredReconcile);
         expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(
           previous,
         );
@@ -520,13 +514,7 @@ describe("session capability warm roster", () => {
         expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(false);
         const current = { ...previous, label: "Current connection", status: "failed" as const };
         if (observeAfterReconnect) {
-          if (source === "read") {
-            expect(
-              h.sessions.captureReconcile()(current, undefined, { archivedFilter: "all" }),
-            ).toBe(true);
-          } else {
-            h.emitChanged(current);
-          }
+          h.admit(current, source);
         }
         const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
         expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);

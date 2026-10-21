@@ -31,13 +31,11 @@ const mainRow: GatewaySessionRow = {
   activeRunIds: [],
 };
 const workRow: GatewaySessionRow = {
-  key: "global",
+  ...mainRow,
   agentId: "work",
   sessionId: "work-global-session",
-  kind: "global",
   updatedAt: 200,
   label: "Work descriptor",
-  archived: false,
   status: "running",
   hasActiveRun: true,
   activeRunIds: ["work-run"],
@@ -160,6 +158,15 @@ async function descriptorOwner(
     );
     return { response, settled: read(target) };
   };
+  const settleRun = (fields: Partial<Parameters<typeof sessions.reconcileRunTerminal>[0]>) =>
+    sessions.reconcileRunTerminal({
+      sessionKeys: ["global"],
+      agentId: "work",
+      runId: "work-run",
+      status: "done",
+      endedAt: 400,
+      ...fields,
+    });
   return {
     sessions,
     observation,
@@ -171,6 +178,7 @@ async function descriptorOwner(
     holdWorkList,
     holdDescribe,
     keepMain,
+    settleRun,
   };
 }
 
@@ -376,6 +384,8 @@ describe("session row observations", () => {
       const managed =
         source === "managed" ? sessions.observeList(query, () => undefined) : undefined;
       let rebound: SessionRowObservation | undefined;
+      const delivered = vi.fn<SessionRowEventListener>();
+      const currentDelivered = vi.fn<SessionRowEventListener>();
       onTestFinished(() => {
         rebound?.dispose();
         managed?.dispose();
@@ -393,7 +403,10 @@ describe("session row observations", () => {
       const target = { key: initial.key, agentId: "main" };
       const changed = vi.fn<(row: GatewaySessionRow | null) => void>();
       const observation = sessions.observeRow(target, changed);
+      // This observer stays attached: retirement must not require consumer disposal.
+      const captured = sessions.observeRow(target, () => undefined, { onEvent: delivered });
       onTestFinished(observation.dispose);
+      onTestFinished(captured.dispose);
       changed.mockImplementation((row) => {
         const published =
           source === "managed" ? sessions.listSnapshot(query).result : sessions.state.result;
@@ -405,11 +418,17 @@ describe("session row observations", () => {
         });
         if (!observation.isCurrent()) {
           observation.dispose();
-          rebound = sessions.observeRow(target, () => undefined);
+          rebound = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
         }
       });
       expect(observation.row).toMatchObject(initial);
       const old = observation.captureReconcile();
+      const retiringFrame: GatewayEventFrame = {
+        type: "event",
+        event: "sessions.changed",
+        seq: 1,
+        payload: { agentId: "main", reason: "create", session: successor, ts: 200 },
+      };
       listed = [successor];
       if (source === "primary") {
         await sessions.refresh({ agentId: "main", force: true });
@@ -429,7 +448,8 @@ describe("session row observations", () => {
         expect(observation.isCurrent()).toBe(true);
         expect(observation.row).toMatchObject(initial);
         expect(deliveries).toEqual([]);
-        change(emitEvent, { agentId: "main", reason: "create", session: successor, ts: 200 });
+        delivered.mockClear();
+        emitEvent(retiringFrame);
       }
       expect(deliveries).toHaveLength(1);
       expect(deliveries[0]).toMatchObject({
@@ -444,6 +464,41 @@ describe("session row observations", () => {
       });
       expect(rebound?.row).toMatchObject(successor);
       expect(deliveries).toHaveLength(1);
+      expect(captured.isCurrent()).toBe(false);
+      expect(captured.row).toBeNull();
+      expect(captured.captureReconcile()(initial)).toEqual({ status: "retired" });
+      if (source === "event") {
+        expect(delivered).toHaveBeenCalledExactlyOnceWith(retiringFrame, { applied: false });
+      } else {
+        expect(delivered).not.toHaveBeenCalled();
+      }
+      const next: GatewayEventFrame = {
+        type: "event",
+        event: "session.message",
+        seq: 2,
+        payload: {
+          agentId: "main",
+          sessionKey: initial.key,
+          session: { ...successor, updatedAt: 201 },
+        },
+      };
+      emitEvent(next);
+      expect(currentDelivered).toHaveBeenCalledExactlyOnceWith(
+        next,
+        expect.objectContaining({
+          applied: true,
+          admittedRow: expect.objectContaining({ sessionId: successor.sessionId }),
+        }),
+      );
+      const unrelated: GatewayEventFrame = {
+        type: "event",
+        event: "session.message",
+        seq: 3,
+        payload: { agentId: "main", sessionKey: "agent:main:unrelated", reason: "patch" },
+      };
+      emitEvent(unrelated);
+      expect(delivered).toHaveBeenCalledTimes(source === "event" ? 1 : 0);
+      expect(currentDelivered).toHaveBeenLastCalledWith(unrelated, { applied: false });
     },
   );
 
@@ -459,16 +514,7 @@ describe("session row observations", () => {
     };
     const h = await descriptorOwner(initial);
     const list = h.holdWorkList();
-    expect(
-      h.sessions.reconcileRunTerminal({
-        sessionKeys: ["global"],
-        agentId: "work",
-        runId: "work-run",
-        status: "timeout",
-        endedAt: 400,
-        errorMessage: "Current run\ntimed out",
-      }),
-    ).toBe(true);
+    expect(h.settleRun({ status: "timeout", errorMessage: "Current run\ntimed out" })).toBe(true);
     const expected = {
       key: "global",
       agentId: "work",
@@ -509,15 +555,7 @@ describe("session row observations", () => {
       const list = h.holdWorkList();
       const old = source === "describe" ? h.holdDescribe() : null;
       const before = h.observation.row;
-      expect(
-        h.sessions.reconcileRunTerminal({
-          sessionKeys: ["global"],
-          agentId: "work",
-          runId: "work-run",
-          status: "done",
-          endedAt: 200,
-        }),
-      ).toBe(false);
+      expect(h.settleRun({ endedAt: 200 })).toBe(false);
       expect(h.observation.row).toBe(before);
       expect(h.changed).not.toHaveBeenCalled();
       h.keepMain();
@@ -581,15 +619,7 @@ describe("session row observations", () => {
     const list = h.holdWorkList();
     h.changed.mockClear();
     react = true;
-    expect(
-      h.sessions.reconcileRunTerminal({
-        sessionKeys: ["global"],
-        agentId: "work",
-        runId: "work-run",
-        status: "done",
-        endedAt: 400,
-      }),
-    ).toBe(true);
+    expect(h.settleRun({})).toBe(true);
     expect(delivered).toHaveLength(1);
     const remaining = { hasActiveRun: true, activeRunIds: ["other-run"], status: "running" };
     expect(delivered[0]?.managed).toMatchObject(remaining);
