@@ -2065,6 +2065,49 @@ operation counts, not Gateway calls per turn. Run both revisions with identical
 arguments, interleave samples, and compare with the `chat.send` allocation
 workload below before drawing an end-to-end conclusion.
 
+## Tool schema preparation
+
+`tool-schema-preparation-measure.ts` measures the source owners used by provider
+requests and generic schema validation. The default fixture has 100 nested tools.
+It covers SDK OpenAI compatibility normalization, Responses, completions, the
+Moonshot typed-union dialect, Anthropic, Google, and the actual Mistral SDK with an
+in-process synthetic fetch. It makes no network requests.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/tool-schema-preparation-measure.ts \
+  --tools 100 --iterations 20 --samples 5 \
+  --output /path/to/report.json --golden-output /path/to/provider-json.json
+```
+
+Reports include sampled allocated bytes per catalog, named schema-function self
+and inclusive allocations, elapsed time, and median/p95/min/max. Sampling includes
+objects collected by minor and major GC. Warm published schemas, fresh mutable
+schemas, and cold publication are separate modes. Fresh fixture construction is
+outside sampling; cold publication includes publication and the first preparation
+of each new identity, but does not reset process-wide content caches. Separate
+work counts observe enumeration, serialization, and cloning of source schema
+objects after warmup, outside allocation measurement.
+
+For synchronized A/B pairs, select the same `--workload` and `--mode`, use
+`--samples 1`, and pass a shared future epoch millisecond `--start-at`. For example,
+`--workload sdk-responses-loose --mode warm-published`. Start both processes under
+the host's exclusive measurement lock on separate CPU halves, swap halves for
+the next pair, and compare at least five paired differences. A missed start fails
+the run. Use `--golden-only` for a setup check without allocation sampling.
+
+`--schemas /path/to/catalog.json` accepts an array of `{name, description,
+parameters, value?}` or OpenAI function descriptors. `value` supplies validation
+input and otherwise defaults to `{}`. Only use synthetic or approved catalogs.
+The report records the input hash and each provider's exact serialized byte count
+and hash; compare the two `--golden-output` files byte for byte across revisions.
+A catalog captured from an outgoing request already contains that provider's
+projection, so label that evidence separately from raw tool definitions.
+
+This probe measures preparation and validation, including Mistral serialization;
+it does not measure a whole chat turn. Pair it with
+`transcript-broadcast-measure.ts --scenario chat.send --allocations` when assessing
+the effect on Gateway turn allocations.
+
 ## Allocated bytes per RPC or turn
 
 For a bounded chat-owner replay, run:

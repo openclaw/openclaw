@@ -12,6 +12,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   applyJsonSchemaDefaults,
   findJsonSchemaShapeError,
@@ -33,6 +34,7 @@ type CachedValidator = {
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new LruCache<CachedValidator>(512);
+const immutableSchemaValidators = new WeakMap<object, CachedValidator>();
 const annotationOnlyFormats = [
   "date-time",
   "date",
@@ -364,31 +366,40 @@ export function validateJsonSchemaValue(params: {
   applyDefaults?: boolean;
   cache?: boolean;
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  let cacheKey: string;
-  try {
-    cacheKey = JSON.stringify(params.schema);
-  } catch (error) {
-    const schemaError = findJsonSchemaShapeError(params.schema);
-    throw schemaError ? new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`)) : error;
-  }
-  let cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
-  if (!cached || cached.schema !== params.schema) {
-    const schemaError = findJsonSchemaShapeError(params.schema);
-    if (schemaError) {
-      throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
-    }
-  }
+  const schemaObject =
+    params.cache !== false && typeof params.schema === "object" ? params.schema : undefined;
+  let cached = schemaObject ? immutableSchemaValidators.get(schemaObject) : undefined;
   if (!cached) {
-    cached = {
-      hasDefaults: schemaHasDefaults(params.schema),
-      validate: compileSchema(params.schema),
-      schema: params.schema,
-    };
-    if (params.cache !== false) {
-      schemaCache.set(cacheKey, cached);
+    let cacheKey: string;
+    try {
+      cacheKey = JSON.stringify(params.schema);
+    } catch (error) {
+      const schemaError = findJsonSchemaShapeError(params.schema);
+      throw schemaError ? new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`)) : error;
     }
-  } else if (cached.schema !== params.schema) {
-    cached.schema = params.schema;
+    cached = params.cache === false ? undefined : schemaCache.get(cacheKey);
+    if (!cached || cached.schema !== params.schema) {
+      const schemaError = findJsonSchemaShapeError(params.schema);
+      if (schemaError) {
+        throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+      }
+    }
+    if (!cached) {
+      cached = {
+        hasDefaults: schemaHasDefaults(params.schema),
+        validate: compileSchema(params.schema),
+        schema: params.schema,
+      };
+      if (params.cache !== false) {
+        schemaCache.set(cacheKey, cached);
+      }
+    } else if (cached.schema !== params.schema) {
+      cached.schema = params.schema;
+    }
+    if (schemaObject && isDeeplyFrozenPlainData(schemaObject)) {
+      // Keep this owner's schema; the content LRU may later bind an equivalent mutable source.
+      immutableSchemaValidators.set(schemaObject, { ...cached, schema: schemaObject });
+    }
   }
 
   return withPluginFormatSemantics(() => {
