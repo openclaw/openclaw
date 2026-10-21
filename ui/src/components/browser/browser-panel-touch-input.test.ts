@@ -1,8 +1,8 @@
 import { createComponent } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { BROWSER_ANNOTATION_EVENT } from "./browser-annotation.ts";
+import { setupAnnotationCapture } from "./browser-panel-capture.test-support.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -15,6 +15,7 @@ import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
+const { receive: acceptAnnotation, stubCanvas } = setupAnnotationCapture();
 
 function pointer(type: string, id: number, x: number, y: number, pointerType: string) {
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
@@ -46,7 +47,7 @@ function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
   return root.querySelector<HTMLTextAreaElement>(".bp-input")!;
 }
 
-function setup() {
+function setup<T>(mount: (controller: BrowserPanel) => T) {
   vi.useFakeTimers();
   const { client, request } = createBrowserClient(async ({ path }) => {
     if (path !== "/act") {
@@ -62,7 +63,7 @@ function setup() {
     actions()
       .filter((body) => body?.kind === "evaluate")
       .map((body) => /window\.scrollBy\((-?\d+), (-?\d+)\)/.exec(String(body?.fn))?.slice(1));
-  return { controller, clicks, scrolls };
+  return { controller, clicks, scrolls, input: mount(controller) };
 }
 
 async function settle() {
@@ -70,72 +71,53 @@ async function settle() {
   await flushBrowserResponses();
 }
 
-describe("Browser panel touch and pen input", () => {
-  it.each(["touch", "pen", "mouse"])("handles %s taps and drags", async (pointerType) => {
-    const { controller, clicks, scrolls } = setup();
-    const input = renderInput(controller);
-    const tap = { kind: "clickCoords", targetId: "tab-a", x: 20, y: 20 };
-    const drag = { kind: "clickCoords", targetId: "tab-a", x: 50, y: 40 };
+it.each(["touch", "pen", "mouse"])("handles %s taps and drags", async (pointerType) => {
+  const { input, clicks, scrolls } = setup(renderInput);
+  const tap = { kind: "clickCoords", targetId: "tab-a", x: 20, y: 20 };
+  const drag = { kind: "clickCoords", targetId: "tab-a", x: 50, y: 40 };
 
-    input.dispatchEvent(pointer("pointerdown", 1, 20, 20, pointerType));
-    input.dispatchEvent(pointer("pointerup", 1, 20, 20, pointerType));
-    input.dispatchEvent(click(20, 20));
-    await settle();
-    expect(clicks()).toEqual([tap]);
+  input.dispatchEvent(pointer("pointerdown", 1, 20, 20, pointerType));
+  input.dispatchEvent(pointer("pointerup", 1, 20, 20, pointerType));
+  input.dispatchEvent(click(20, 20));
+  await settle();
+  expect(clicks()).toEqual([tap]);
 
-    input.dispatchEvent(pointer("pointerdown", 2, 50, 70, pointerType));
-    input.dispatchEvent(pointer("pointermove", 2, 50, 40, pointerType));
-    input.dispatchEvent(pointer("pointerup", 2, 50, 40, pointerType));
-    input.dispatchEvent(click(50, 40));
-    await settle();
-    input.dispatchEvent(pointer("pointerdown", 3, 50, 40, pointerType));
-    input.dispatchEvent(pointer("pointermove", 3, 50, 60, pointerType));
-    input.dispatchEvent(pointer("pointercancel", 3, 50, 60, pointerType));
-    await settle();
+  input.dispatchEvent(pointer("pointerdown", 2, 50, 70, pointerType));
+  input.dispatchEvent(pointer("pointermove", 2, 50, 40, pointerType));
+  input.dispatchEvent(pointer("pointerup", 2, 50, 40, pointerType));
+  input.dispatchEvent(click(50, 40));
+  await settle();
+  input.dispatchEvent(pointer("pointerdown", 3, 50, 40, pointerType));
+  input.dispatchEvent(pointer("pointermove", 3, 50, 60, pointerType));
+  input.dispatchEvent(pointer("pointercancel", 3, 50, 60, pointerType));
+  await settle();
 
-    const deltas = pointerType === "mouse" ? [] : ["30", "-20"];
-    expect(scrolls()).toEqual(deltas.map((dy) => ["0", dy]));
-    expect(clicks()).toEqual(pointerType === "mouse" ? [tap, drag] : [tap]);
-  });
+  const deltas = pointerType === "mouse" ? [] : ["30", "-20"];
+  expect(scrolls()).toEqual(deltas.map((dy) => ["0", dy]));
+  expect(clicks()).toEqual(pointerType === "mouse" ? [tap, drag] : [tap]);
+});
 
-  it("drops a pending pen scroll when capture state resets", async () => {
-    const { controller, scrolls } = setup();
-    const input = renderInput(controller);
+it("drops a pending pen scroll when capture state resets", async () => {
+  const { controller, input, scrolls } = setup(renderInput);
+  input.dispatchEvent(pointer("pointerdown", 1, 50, 70, "pen"));
+  input.dispatchEvent(pointer("pointermove", 1, 50, 40, "pen"));
+  controller.input.resetCaptureState();
+  input.dispatchEvent(pointer("pointermove", 1, 50, 10, "pen"));
+  await settle();
+  expect(scrolls()).toEqual([]);
+});
 
-    input.dispatchEvent(pointer("pointerdown", 1, 50, 70, "pen"));
-    input.dispatchEvent(pointer("pointermove", 1, 50, 40, "pen"));
-    controller.input.resetCaptureState();
-    input.dispatchEvent(pointer("pointermove", 1, 50, 10, "pen"));
-    await settle();
-
-    expect(scrolls()).toEqual([]);
-  });
-
-  it("suppresses the click that follows an inspect pointerdown", async () => {
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-      drawImage: vi.fn(),
-      strokeRect: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
-      "data:image/png;base64,annotated",
-    );
-    const { controller, clicks } = setup();
-    controller.setMode("inspect");
-    controller.inspected = createInspectedNode("inspected");
-    const acceptAnnotation = vi.fn((event: Event) => event.preventDefault());
-    window.addEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);
-    try {
-      controller.input.handleOverlayPointerDown(pointer("pointerdown", 1, 20, 20, "pen"));
-      await flushBrowserResponses();
-      expect(controller.mode).toBe("interact");
-      controller.input.handleStageClick(click(20, 20));
-      controller.input.handleStageClick(click(40, 50));
-      await flushBrowserResponses();
-    } finally {
-      window.removeEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);
-    }
-
-    expect(acceptAnnotation).toHaveBeenCalledTimes(1);
-    expect(clicks()).toEqual([{ kind: "clickCoords", targetId: "tab-a", x: 40, y: 50 }]);
-  });
+it("suppresses the click that follows an inspect pointerdown", async () => {
+  stubCanvas(["strokeRect"]);
+  const { controller, clicks } = setup(() => undefined);
+  controller.setMode("inspect");
+  controller.inspected = createInspectedNode("inspected");
+  acceptAnnotation.mockImplementation((event) => event.preventDefault());
+  controller.input.handleOverlayPointerDown(pointer("pointerdown", 1, 20, 20, "pen"));
+  expect(controller.mode).toBe("interact");
+  controller.input.handleStageClick(click(20, 20));
+  controller.input.handleStageClick(click(40, 50));
+  await flushBrowserResponses();
+  expect(acceptAnnotation).toHaveBeenCalledTimes(1);
+  expect(clicks()).toEqual([{ kind: "clickCoords", targetId: "tab-a", x: 40, y: 50 }]);
 });
