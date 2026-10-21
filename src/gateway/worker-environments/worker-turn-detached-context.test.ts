@@ -1,5 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
-import type { AgentMessage } from "@openclaw/agent-core";
+import type { AgentMessage, CustomMessage } from "@openclaw/agent-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
@@ -72,7 +72,7 @@ function seedPrevious() {
 const user = (content: string, timestamp = 0) => makeAgentUserMessage({ content, timestamp });
 const assistant = (text: string, timestamp = 0) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp });
-const runtimeContext = (customType = "openclaw.runtime-context"): AgentMessage => ({
+const runtimeContext = (customType = "openclaw.runtime-context"): CustomMessage => ({
   role: "custom",
   customType,
   content: "runtime context",
@@ -83,7 +83,8 @@ const runtimeContext = (customType = "openclaw.runtime-context"): AgentMessage =
       : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
   timestamp: 1,
 });
-function toolActivity(id: string, text: string, isError = false): AgentMessage[] {
+type ToolActivity = Array<Extract<AgentMessage, { role: "assistant" | "toolResult" }>>;
+function toolActivity(id: string, text: string, isError = false): ToolActivity {
   return [
     makeAgentAssistantMessage({
       content: [{ type: "toolCall", id, name: "exec", arguments: { command: "effect-once" } }],

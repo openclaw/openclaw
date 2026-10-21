@@ -118,15 +118,8 @@ vi.mock("../plugins/plugin-registry.js", async (importActual) => {
 import { stageLaunchAgent } from "../daemon/launchd.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 
-let isolatedHome: string;
-beforeEach(() => {
-  isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
-  mockNodeGatewayPlanFixture();
-});
-afterEach(() => {
-  fs.rmSync(isolatedHome, { recursive: true, force: true });
-  vi.resetAllMocks();
-});
+beforeEach(() => mockNodeGatewayPlanFixture());
+afterEach(() => vi.resetAllMocks());
 
 function buildNodePlan(
   params: Omit<Parameters<typeof buildGatewayInstallPlan>[0], "port" | "runtime">,
@@ -386,6 +379,12 @@ describe("buildGatewayInstallPlan", () => {
     vi.clearAllMocks();
   });
 
+  // Isolate state-dir fallback from the developer's real ~/.openclaw/.env.
+  let isolatedHome: string;
+  beforeEach(() => {
+    isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
+  });
+  afterEach(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
   const isolatedPlanEnv = (env: Record<string, string | undefined> = {}) => ({
     HOME: isolatedHome,
     ...env,
@@ -864,10 +863,17 @@ describe("buildGatewayInstallPlan", () => {
 });
 
 describe("buildGatewayInstallPlan — dotenv merge", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-dotenv-"));
+  });
+  afterEach(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
   it("retains active gateway auth and channel SecretRefs through real LaunchAgent regeneration", async () => {
     mockLaunchAgentPlanFixture();
     const existing = await readGeneratedLaunchAgentFixture({
-      root: isolatedHome,
+      root: tmpDir,
       environment: {
         OPENCLAW_GATEWAY_AUTH_TOKEN: "gateway-existing-env-file-token",
         OLD_GATEWAY_AUTH_TOKEN: "stale-gateway-token",
@@ -878,7 +884,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
     const plan = await buildNodePlan({
-      env: { HOME: isolatedHome },
+      env: { HOME: tmpDir },
       platform: "darwin",
       existingEnvironment: existing.environment,
       existingEnvironmentValueSources: existing.environmentValueSources,
@@ -898,7 +904,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "OPENCLAW_GATEWAY_AUTH_TOKEN,TELEGRAM_DEFAULT_BOTTOKEN",
     );
-    const home = path.join(isolatedHome, "rewritten-home");
+    const home = path.join(tmpDir, "rewritten-home");
     const stateDir = path.join(home, ".openclaw");
     const label = "ai.openclaw.gateway";
     mocks.assertNoSystemLaunchDaemonOwnership.mockResolvedValue(undefined);
@@ -962,7 +968,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     async (platform, mode, key, source, processValue, expectedValue) => {
       mockLaunchAgentPlanFixture();
       const plan = await buildNodePlan({
-        env: { HOME: isolatedHome, ...(processValue ? { [key]: processValue } : {}) },
+        env: { HOME: tmpDir, ...(processValue ? { [key]: processValue } : {}) },
         platform,
         existingEnvironment: {
           [key]: "existing-secret",
@@ -989,13 +995,13 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {
     await writeStateDirDotEnv("TAVILY_API_KEY=fresh-dotenv-value\n", {
-      stateDir: path.join(isolatedHome, ".openclaw"),
+      stateDir: path.join(tmpDir, ".openclaw"),
     });
     mockNodeGatewayPlanFixture({
       serviceEnvironment: { HOME: "/from-service", OPENCLAW_PORT: "3000" },
     });
     const plan = await buildNodePlan({
-      env: { HOME: isolatedHome },
+      env: { HOME: tmpDir },
       existingEnvironment: {
         TAVILY_API_KEY: "old-inline-value",
         CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
@@ -1009,7 +1015,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
   it("preserves Windows startup tracing while regenerating managed service values", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_GATEWAY_PORT: "3000" } });
     const plan = await buildNodePlan({
-      env: { HOME: isolatedHome },
+      env: { HOME: tmpDir },
       platform: "win32",
       existingEnvironment: {
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",

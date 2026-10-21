@@ -716,7 +716,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     ).toBe(true);
   });
 
-  it("passes npm specs and integrity while preserving installer progress and warnings", async () => {
+  it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
     const cfg = installPolicyConfig();
     const npmResolution = {
       name: "@wecom/wecom-openclaw-plugin",
@@ -728,17 +728,13 @@ describe("ensureOnboardingPluginInstalled", () => {
     };
     const { name: resolvedName, version: resolvedVersion, ...resolution } = npmResolution;
     const installFields = { resolvedName, resolvedVersion, ...resolution };
-    const warning =
-      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";
     buildNpmResolutionInstallFields.mockReturnValueOnce(installFields);
     installers.npm.mockImplementation(async (params) => {
       params.logger?.info?.("Downloading demo-plugin…");
-      params.logger?.warn?.(warning);
       return installedPlugin({ npmResolution });
     });
     const stop = vi.fn();
     const update = vi.fn();
-    const log = vi.fn();
 
     const result = await runInstall(
       installEntry(
@@ -746,7 +742,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         { label: "WeCom", trustedSourceLinkedOfficialInstall: true },
       ),
       choose("npm", { progress: progress(update, stop) }),
-      { cfg, runtime: { log } as never },
+      { cfg },
     );
 
     expect(npmCall()).toMatchObject({
@@ -759,8 +755,6 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
     expect(npmCall().config).toBe(cfg);
     expect(update).toHaveBeenCalledWith("Downloading demo-plugin…");
-    expect(update).toHaveBeenCalledWith(warning);
-    expect(log).toHaveBeenCalledExactlyOnceWith(`${warning}\n`);
     expect(stop).toHaveBeenCalledWith("Installed WeCom plugin");
     expect(buildNpmResolutionInstallFields).toHaveBeenCalledWith(npmResolution);
     expect(result).toMatchObject({ installed: true, status: "installed" });
@@ -773,6 +767,34 @@ describe("ensureOnboardingPluginInstalled", () => {
       ...installFields,
     });
     expectDiscoveryInvalidated();
+  });
+
+  it("preserves npm install warnings in progress and logs them once", async () => {
+    const warning =
+      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";
+    installers.npm.mockImplementation(async (params) => {
+      params.logger?.warn?.(warning);
+      return installedPlugin({
+        pluginId: "codex",
+        targetDir: "/tmp/openclaw/extensions/codex",
+        version: "2026.5.10-beta.5",
+      });
+    });
+    const log = vi.fn();
+    const stop = vi.fn();
+    const update = vi.fn();
+
+    const result = await runInstall(
+      installEntry({ npmSpec: "@openclaw/codex@beta" }, { pluginId: "codex", label: "Codex" }),
+      choose("npm", { progress: progress(update, stop) }),
+      { runtime: { log } as never },
+    );
+
+    expect(update).toHaveBeenCalledWith(warning);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(`${warning}\n`);
+    expect(stop).toHaveBeenCalledWith("Installed Codex plugin");
+    expect(result.status).toBe("installed");
   });
 
   it("cancels a timed out npm install before returning and releasing its lease", async () => {

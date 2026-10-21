@@ -122,6 +122,54 @@ async function buildPendingPayload(input: PendingInput): Promise<SlackPayload> {
   })) as SlackPayload;
 }
 
+function buildPluginResolvedResult() {
+  return presentation.buildResolvedResult({
+    ...APPROVAL_CONTEXT,
+    request: SCREEN_SHARE_REQUEST,
+    resolved: {
+      id: SCREEN_SHARE_APPROVAL.approvalId,
+      decision: "allow-once",
+      resolvedBy: "U123APPROVER",
+      ts: 0,
+    } as never,
+    view: {
+      ...SCREEN_SHARE_APPROVAL,
+      phase: "resolved",
+      decision: "allow-once",
+      resolvedBy: "U123APPROVER",
+    },
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function buildPluginExpiredResult() {
+  return presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: SCREEN_SHARE_REQUEST,
+    view: { ...SCREEN_SHARE_APPROVAL, phase: "expired" },
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
+  return blocks.find((block) => block.type === "actions");
+}
+
+function readSlackActionLabels(block: { elements?: unknown[] } | undefined): string[] {
+  return (block?.elements ?? []).map((element) => {
+    const text = (element as { text?: { text?: unknown } } | null)?.text?.text;
+    return typeof text === "string" ? text : "";
+  });
+}
+
+function decodeSlackApprovalElements(block: { elements?: unknown[] } | undefined) {
+  return (block?.elements ?? []).map((element) =>
+    decodeSlackApprovalAction(
+      element && typeof element === "object" ? (element as { value?: unknown }).value : undefined,
+    ),
+  );
+}
+
 function expectPendingActions(
   payload: SlackPayload,
   kind: "exec" | "plugin",
@@ -130,12 +178,10 @@ function expectPendingActions(
 ) {
   expect(payload.text).toContain(`*${kind === "exec" ? "Exec" : "Plugin"} approval required*`);
   expect(payload.blocks?.[0]).toMatchObject({ block_id: "openclaw_approval_header" });
-  const actions = payload.blocks?.find((block) => block.type === "actions")?.elements ?? [];
-  expect(
-    actions.map((element) => (typeof element.text === "object" ? element.text.text : "")),
-  ).toEqual(labels);
+  const actions = findSlackActionsBlock(payload.blocks ?? []);
+  expect(readSlackActionLabels(actions)).toEqual(labels);
   expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
-  expect(actions.map((element) => decodeSlackApprovalAction(element.value))).toEqual(
+  expect(decodeSlackApprovalElements(actions)).toEqual(
     decisions.map((decision) => expect.objectContaining({ approvalKind: kind, decision })),
   );
 }
@@ -253,12 +299,16 @@ describe("slackApprovalNativeRuntime", () => {
         phase,
       });
 
-      expect(calls).toEqual(["deliver", "suspended", "update", status]);
+      expect(calls).toEqual(
+        threadTs ? ["deliver", "suspended", "update", status] : ["deliver", "update"],
+      );
       expect(apiCall.mock.calls).toEqual(
-        ["suspended", status].map((sessionStatus) => [
-          "agents.sessions.setStatus",
-          { channel_id: "C123", thread_ts: threadTs, status: sessionStatus },
-        ]),
+        threadTs
+          ? ["suspended", status].map((sessionStatus) => [
+              "agents.sessions.setStatus",
+              { channel_id: "C123", thread_ts: threadTs, status: sessionStatus },
+            ])
+          : [],
       );
     },
   );
@@ -373,26 +423,8 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {
-    const params = { ...APPROVAL_CONTEXT, request: SCREEN_SHARE_REQUEST, entry: APPROVAL_ENTRY };
-    const resolved = await presentation.buildResolvedResult({
-      ...params,
-      resolved: {
-        id: SCREEN_SHARE_APPROVAL.approvalId,
-        decision: "allow-once",
-        resolvedBy: "U123APPROVER",
-        ts: 0,
-      } as never,
-      view: {
-        ...SCREEN_SHARE_APPROVAL,
-        phase: "resolved",
-        decision: "allow-once",
-        resolvedBy: "U123APPROVER",
-      },
-    });
-    const expired = await presentation.buildExpiredResult({
-      ...params,
-      view: { ...SCREEN_SHARE_APPROVAL, phase: "expired" },
-    });
+    const resolved = await buildPluginResolvedResult();
+    const expired = await buildPluginExpiredResult();
 
     expect(resolved.kind).toBe("update");
     expect(expired.kind).toBe("update");

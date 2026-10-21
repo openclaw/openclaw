@@ -177,9 +177,8 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   const systemInfoCount = (await gateway.getRequests("system.info")).length;
   await page.getByRole("button", { name: /^Open overlay/u }).click();
   const overlay = page.getByRole("complementary", { name: "System busyness" });
-  const vital = (metric: string) => overlay.locator(`.gateway-vital--${metric}`);
-  await contains(vital("memory"), "432 MB");
-  await contains(vital("cpu"), "0.25 cores");
+  await contains(overlay.locator(".gateway-vital--memory"), "432 MB");
+  await contains(overlay.locator(".gateway-vital--cpu"), "0.25 cores");
   await page.clock.runFor(10_000);
   await expect.poll(() => overlay.locator(".gateway-vital--cpu polyline").count()).toBe(1);
   await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
@@ -188,26 +187,30 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await finishAnimations(widget);
   expect(await widget.getByRole("heading", { name: "Lanes", exact: true }).count()).toBe(0);
   const metrics = ["cpu", "ping", "memory"];
-  const graph = (metric: string) => vital(metric).locator("polyline");
   const graphPoints = async (metric: string) =>
-    (await graph(metric).getAttribute("points"))?.trim().split(/\s+/u);
+    (await widget.locator(`.gateway-vital--${metric} polyline`).getAttribute("points"))
+      ?.trim()
+      .split(/\s+/u);
   for (const metric of metrics) {
-    await expect.poll(() => graph(metric).count()).toBe(1);
+    const graph = widget.locator(`.gateway-vital--${metric} polyline`);
+    await expect.poll(() => graph.count()).toBe(1);
     expect((await graphPoints(metric))?.length).toBeGreaterThan(1);
   }
-  await expect.poll(() => vital("ping").textContent()).toMatch(/\d+\s*ms/u);
-  await contains(vital("memory"), "432 MB");
+  await expect
+    .poll(() => widget.locator(".gateway-vital--ping").textContent())
+    .toMatch(/\d+\s*ms/u);
+  await contains(widget.locator(".gateway-vital--memory"), "432 MB");
   const desktopWidget = await expectBounds(widget, 1280, 1000, 32);
   expect(desktopWidget!.width).toBeLessThanOrEqual(240);
   expect(desktopWidget!.height).toBeLessThanOrEqual(100);
   const pingMs = async () =>
     Number.parseInt(
-      (await vital("ping").locator(".sparkline-tile__value").textContent()) ?? "",
+      (await widget.locator(".gateway-vital--ping .sparkline-tile__value").textContent()) ?? "",
       10,
     );
   const initialPingMs = await pingMs();
   expect(Number.isFinite(initialPingMs)).toBe(true);
-  const ping = vital("ping");
+  const ping = widget.locator(".gateway-vital--ping");
   expect(await ping.getAttribute("data-degraded")).toBeNull();
   const nextSystemInfoCount = (await gateway.getRequests("system.info")).length;
   const minimizedCurrentWorkCount = (await gateway.getRequests("sessions.list", currentWorkQuery))
@@ -222,8 +225,8 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   // This delay is the simulated network latency the ping graph must measure.
   await page.clock.runFor(initialPingMs + 250);
   await gateway.resolveDeferred("system.info");
-  await contains(vital("memory"), "654 MB");
-  await contains(vital("cpu"), "0.75 cores");
+  await contains(widget.locator(".gateway-vital--memory"), "654 MB");
+  await contains(widget.locator(".gateway-vital--cpu"), "0.75 cores");
   await expect.poll(pingMs).toBeGreaterThanOrEqual(initialPingMs + 200);
   expect(await ping.getAttribute("data-degraded")).toBe("");
   await page.clock.runFor(10_000);
@@ -316,19 +319,20 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
       systemInfo(total, 0.3, [22, 24], [654, 300, 384], cpu),
     );
     await page.clock.runFor(10_000);
-    await contains(vital("cpu").locator(".sparkline-tile__value"), `${total.toFixed(2)} cores`);
-    await contains(
-      widget.locator(".sparkline-tile__secondary"),
-      cpu[3] === undefined ? "Host —" : `Host ${Math.round(cpu[3] * 100)}%`,
-    );
+    await expect
+      .poll(() => widget.locator(".gateway-vital--cpu .sparkline-tile__value").textContent())
+      .toContain(`${total.toFixed(2)} cores`);
+    await expect
+      .poll(() => widget.locator(".sparkline-tile__secondary").textContent())
+      .toContain(cpu[3] === undefined ? "Host —" : `Host ${Math.round(cpu[3] * 100)}%`);
     await cpuTrigger.click();
     await expect.poll(() => cpuDetail.isVisible()).toBe(true);
     await transitionCpuDetail("overlay-after-hide", () => page.keyboard.press("Escape"));
   }
   await widget.getByRole("button", { name: "Expand system busyness" }).click();
   await widget.waitFor({ state: "detached" });
-  await contains(vital("memory"), "654 MB");
-  expect(await graph("cpu").count()).toBe(1);
+  await contains(overlay.locator(".gateway-vital--memory"), "654 MB");
+  expect(await overlay.locator(".gateway-vital--cpu polyline").count()).toBe(1);
   expect(
     await Promise.all(
       snapshotMethods.map(async (method) => (await gateway.getRequests(method)).length),
@@ -380,7 +384,7 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await gateway.resolveDeferred("status");
   await expect.poll(() => refresh.textContent()).toMatch(/^\s*Refresh\s*$/u);
   await page.getByRole("button", { name: /^Open overlay/u }).click();
-  await contains(vital("cpu"), "0.50 cores");
+  await contains(overlay.locator(".gateway-vital--cpu"), "0.50 cores");
   await overlay.getByRole("button", { name: "Minimize system busyness" }).click();
   await widget.waitFor();
   await gateway.setOnline(false);

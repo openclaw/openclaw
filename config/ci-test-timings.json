@@ -3452,6 +3452,7 @@
       "ui/src/e2e/markdown-progress-adversarial.e2e.test.ts": 2,
       "ui/src/e2e/meetings.e2e.test.ts": 17,
       "ui/src/e2e/memory-settings-defaults.e2e.test.ts": 2,
+      "ui/src/e2e/memory-settings-engine.e2e.test.ts": 3,
       "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts": 8,
       "ui/src/e2e/mobile-inbox-sheet.e2e.test.ts": 7,
       "ui/src/e2e/mobile-pairing.e2e.test.ts": 15,

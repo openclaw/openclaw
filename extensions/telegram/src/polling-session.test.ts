@@ -131,7 +131,7 @@ type IsolatedIngressOptions = NonNullable<
   ConstructorParameters<typeof TelegramPollingSession>[0]["ingress"]
 >;
 type SessionOptions = ConstructorParameters<typeof TelegramPollingSession>[0];
-const noop = async () => undefined;
+const noop: AsyncVoidFn = async () => undefined;
 const mockNoop = () => vi.fn(noop);
 function makeWorker(
   task: AsyncVoidFn = noop,

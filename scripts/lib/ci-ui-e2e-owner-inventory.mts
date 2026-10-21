@@ -1274,6 +1274,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["config"],
     ["ui/src/components/settings-save-indicator.ts"],
   ),
+  pageWatch(
+    "ui/src/e2e/memory-settings-engine.e2e.test.ts",
+    ["config"],
+    ["ui/src/pages/config/memory-page.ts"],
+  ),
   pageWatch("ui/src/e2e/mobile-chat-session-menu.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch(
     "ui/src/e2e/mobile-shell-geometry.e2e.test.ts",
