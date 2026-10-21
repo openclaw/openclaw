@@ -80,13 +80,14 @@ process.on('message', async (request) => {
     config: { modelDir: dir, threads: 1, maxLoadedModels: 1 },
   });
   clients.push(client);
-  const events = (): FixtureEvent[] =>
+  const events = (kind?: string): FixtureEvent[] =>
     fs
       .readFileSync(eventsPath, "utf8")
       .trim()
       .split("\n")
       .filter(Boolean)
-      .map((line: string) => JSON.parse(line));
+      .map((line: string): FixtureEvent => JSON.parse(line))
+      .filter((event) => kind === undefined || event.kind === kind);
   const waitFor = (match: (event: FixtureEvent) => boolean): Promise<FixtureEvent> =>
     vi.waitFor(
       () => {
@@ -98,36 +99,34 @@ process.on('message', async (request) => {
       },
       { timeout: 10_000 },
     );
+  const observedHeld = () => {
+    const found = events().find((event) => event.text === "wait");
+    if (!found) {
+      throw new Error("Fixture did not reach the requested IPC boundary");
+    }
+    return found;
+  };
+  const classify = (text: string, abortSignal = signal()) =>
+    client.classify("test-model", input(text), abortSignal);
   return {
     client,
+    classify,
     events,
     waitFor,
-    waitForHeldClassification: async (operation: PromiseLike<unknown>, signal: AbortSignal) => {
-      const observed = () => events().find((event) => event.text === "wait");
+    waitHeld: async (operation: PromiseLike<unknown>, signal: AbortSignal) => {
       await withinTest(
         Promise.race([
           receipts.waitFor(eventsPath, "classify wait"),
           // The event log is durable before any reply; receipts use a separate pipe.
-          Promise.resolve(operation).then(
-            () => {
-              if (!observed()) {
-                throw new Error("Fixture did not reach the requested IPC boundary");
-              }
-            },
-            (error: unknown) => {
-              if (!observed()) {
-                throw error;
-              }
-            },
-          ),
+          Promise.resolve(operation).then(observedHeld, (error: unknown) => {
+            if (!events().some((event) => event.text === "wait")) {
+              throw error;
+            }
+          }),
         ]),
         signal,
       );
-      const started = observed();
-      if (!started) {
-        throw new Error("Fixture did not reach the requested IPC boundary");
-      }
-      return started;
+      return observedHeld();
     },
     release: () => fs.writeFileSync(path.join(dir, "release"), ""),
   };
@@ -150,32 +149,30 @@ function alive(pid: number): boolean {
 }
 
 const signal = () => new AbortController().signal;
+const rejectsCode = (operation: Promise<unknown>, code = "runtime") =>
+  expect(operation).rejects.toMatchObject({ code });
 
 describe("InferenceWorkerClient", () => {
   it.for([
     [input("x".repeat(262145))[0]!],
     Array.from({ length: 8 }, () => input("x".repeat(150000))[0]!),
   ])("rejects oversized input before starting a worker and remains usable", async (inputs) => {
-    const { client, events } = fixture();
-    await expect(client.classify("test-model", inputs, signal())).rejects.toMatchObject({
-      code: "unsupported-input",
-    });
+    const { client, classify, events } = fixture();
+    await rejectsCode(client.classify("test-model", inputs, signal()), "unsupported-input");
     expect(events()).toEqual([]);
-    await expect(client.classify("test-model", input("valid"), signal())).resolves.toHaveLength(1);
+    await expect(classify("valid")).resolves.toHaveLength(1);
   });
 
   it("reuses a warm process, preserves known model errors, and excludes inherited credentials", async () => {
     vi.stubEnv("ONNX_CLIENT_TEST_SECRET", "synthetic");
-    const { client, events } = fixture();
+    const { client, classify, events } = fixture();
     await client.warm(["test-model"], signal());
-    const first = await client.classify("test-model", input("first"), signal());
-    await expect(client.classify("test-model", input("missing"), signal())).rejects.toMatchObject({
-      code: "model-missing",
-    });
-    const second = await client.classify("test-model", input("second"), signal());
+    const first = await classify("first");
+    await rejectsCode(classify("missing"), "model-missing");
+    const second = await classify("second");
     expect(first).toEqual(second);
     expect(first[0]?.logits[1]).toBe(0);
-    expect(events().filter((event) => event.kind === "init")).toHaveLength(1);
+    expect(events("init")).toHaveLength(1);
     const pid = first[0]!.logits[0]!;
     expect(alive(pid)).toBe(true);
     await client.stop();
@@ -185,33 +182,30 @@ describe("InferenceWorkerClient", () => {
   it("removes canceled queued work without killing active work and enforces FIFO capacity", async ({
     signal: testSignal,
   }) => {
-    const { client, events, waitForHeldClassification, release } = fixture();
-    const active = client.classify("test-model", input("wait"), signal());
+    const { client, classify, events, waitHeld, release } = fixture();
+    const active = classify("wait");
     void active.catch(() => {});
     try {
-      const started = await waitForHeldClassification(active, testSignal);
+      const started = await waitHeld(active, testSignal);
       const canceled = new AbortController();
-      const queued = client.classify("test-model", input("canceled"), canceled.signal);
+      const queued = classify("canceled", canceled.signal);
       const queuedRejected = expect(queued).rejects.toThrow("queued canceled");
-      const second = client.classify("test-model", input("second"), signal());
-      const third = client.classify("test-model", input("third"), signal());
-      await expect(
-        client.classify("test-model", input("overflow"), signal()),
-      ).rejects.toMatchObject({
-        code: "runtime",
-      });
+      const second = classify("second");
+      const third = classify("third");
+      await rejectsCode(classify("overflow"));
       canceled.abort(new Error("queued canceled"));
       await queuedRejected;
-      const fourth = client.classify("test-model", input("fourth"), signal());
+      const fourth = classify("fourth");
       expect(alive(started.pid)).toBe(true);
       release();
       const results = await Promise.all([active, second, third, fourth]);
       expect(results.every((result) => result[0]?.logits[0] === started.pid)).toBe(true);
-      expect(
-        events()
-          .filter((event) => event.kind === "classify")
-          .map((event) => event.text),
-      ).toEqual(["wait", "second", "third", "fourth"]);
+      expect(events("classify").map((event) => event.text)).toEqual([
+        "wait",
+        "second",
+        "third",
+        "fourth",
+      ]);
     } finally {
       release();
       await client.stop();
@@ -221,7 +215,7 @@ describe("InferenceWorkerClient", () => {
   it.for(["closed", "throws"] as const)(
     "skips queued decisions whose admission %s without restarting the warm worker",
     async (mode, { signal: testSignal }) => {
-      const { client, events, waitForHeldClassification, release } = fixture();
+      const { client, events, waitHeld, release } = fixture();
       const provider = createOnnxProvider(client, vi.fn());
       const evaluate = (text: string, isAdmissible?: () => boolean) =>
         provider.evaluate(
@@ -243,7 +237,7 @@ describe("InferenceWorkerClient", () => {
         );
       const active = evaluate("wait");
       try {
-        const started = await waitForHeldClassification(active, testSignal);
+        const started = await waitHeld(active, testSignal);
         let admitted = true;
         const queued = evaluate("revoked", () => {
           if (!admitted && mode === "throws") {
@@ -255,7 +249,7 @@ describe("InferenceWorkerClient", () => {
         const survivor = evaluate("survivor");
         release();
         const outcomes = await Promise.all([active, queued, survivor]);
-        const classifications = events().filter((event) => event.kind === "classify");
+        const classifications = events("classify");
         expect(classifications.map((event) => event.text)).toEqual(["wait", "survivor"]);
         expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok", "unavailable", "ok"]);
         expect(classifications.every((event) => event.pid === started.pid)).toBe(true);
@@ -268,12 +262,12 @@ describe("InferenceWorkerClient", () => {
   );
 
   it("joins native process exit before settling active cancellation and restarts surviving queued work", async () => {
-    const { client, waitFor } = fixture();
+    const { classify, waitFor } = fixture();
     const controller = new AbortController();
-    const active = client.classify("test-model", input("block"), controller.signal);
+    const active = classify("block", controller.signal);
     const rejected = expect(active).rejects.toThrow("active canceled");
     const started = await waitFor((event) => event.text === "block");
-    const queued = client.classify("test-model", input("survivor"), signal());
+    const queued = classify("survivor");
     controller.abort(new Error("active canceled"));
     await rejected;
     expect(alive(started.pid)).toBe(false);
@@ -282,10 +276,9 @@ describe("InferenceWorkerClient", () => {
   });
 
   it("recovers queued work in a new process after the worker exits", async () => {
-    const { client, events } = fixture();
-    const bad = client.classify("test-model", input("exit"), signal());
-    const rejected = expect(bad).rejects.toMatchObject({ code: "runtime" });
-    const good = client.classify("test-model", input("recovery"), signal());
+    const { classify, events } = fixture();
+    const rejected = rejectsCode(classify("exit"));
+    const good = classify("recovery");
     await rejected;
     const result = await good;
     const oldPid = events().find((event) => event.text === "exit")!.pid;
@@ -296,21 +289,18 @@ describe("InferenceWorkerClient", () => {
   it.each([false, true])(
     "stops and joins running work with initialization blocked=%s, then refuses new admission",
     async (holdInit) => {
-      const { client, waitFor, events } = fixture({ holdInit });
-      const active = client.classify("test-model", input("block"), signal());
-      const activeRejected = expect(active).rejects.toMatchObject({ code: "runtime" });
+      const { client, classify, waitFor, events } = fixture({ holdInit });
+      const activeRejected = rejectsCode(classify("block"));
       const started = await waitFor((event) =>
         holdInit ? event.kind === "init" : event.text === "block",
       );
       const queued = client.warm(["test-model"], signal());
-      const queuedRejected = expect(queued).rejects.toMatchObject({ code: "runtime" });
+      const queuedRejected = rejectsCode(queued);
       await Promise.all([client.stop(), client.stop(), activeRejected, queuedRejected]);
       expect(alive(started.pid)).toBe(false);
-      await expect(client.classify("test-model", input("late"), signal())).rejects.toMatchObject({
-        code: "runtime",
-      });
-      expect(events().filter((event) => event.kind === "init")).toHaveLength(1);
-      expect(events().some((event) => event.kind === "warm")).toBe(false);
+      await rejectsCode(classify("late"));
+      expect(events("init")).toHaveLength(1);
+      expect(events("warm")).toHaveLength(0);
     },
   );
 });

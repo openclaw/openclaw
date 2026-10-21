@@ -11,6 +11,7 @@ const context = () => ({
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 1000,
 });
+const unavailable = { status: "unavailable", reason: "unsupported-input" };
 
 describe("ONNX prepared decision contract", () => {
   const preparedContext = (): DecisionProviderContextV2 => ({
@@ -30,19 +31,31 @@ describe("ONNX prepared decision contract", () => {
     const input = decisionBatchV1ToV2(batch)!;
     const ctx = preparedContext();
     const result = await createPreparedOnnxProvider({ classify }, vi.fn()).evaluate(input, ctx);
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       status: "ok",
       result: {
         model,
         answers: {
-          topic: { type: "choice", choice: "holiday" },
-          rating: { type: "score", score: expect.closeTo(1.6) },
+          topic: {
+            type: "choice",
+            choice: "holiday",
+            probabilities: { holiday: expect.closeTo(0.75, 14), finance: expect.closeTo(0.25, 14) },
+          },
+          rating: {
+            type: "score",
+            score: expect.closeTo(1.6),
+            probabilities: [expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.7)],
+          },
           mentioned: { type: "boolean", probabilityTrue: 0.8 },
         },
         usage: { inputTokens: 41 },
       },
     });
     expect(classify).toHaveBeenCalledWith(model, expect.any(Array), ctx.signal, ctx.isAdmissible);
+    expect(classify.mock.calls[0]?.[1][0]).toMatchObject({
+      text: '{"message":"A pleasant holiday"}',
+      labels: ["holiday", "finance"],
+    });
   });
 
   it("rejects unsupported V2 content and reasoning before worker dispatch", async () => {
@@ -54,10 +67,10 @@ describe("ONNX prepared decision contract", () => {
         { ...input, state: { type: "list", items: [{ id: "one", content: "first" }] } },
         preparedContext(),
       ),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    ).resolves.toEqual(unavailable);
     await expect(
       provider.evaluate(input, { ...preparedContext(), reasoning: "on" }),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    ).resolves.toEqual(unavailable);
     expect(classify).not.toHaveBeenCalled();
   });
 
@@ -79,27 +92,21 @@ describe("ONNX prepared decision contract", () => {
         },
       },
     };
+    const question = {
+      probabilities: "provider-defined" as const,
+      abstention: false,
+      maxOptions: 64,
+    };
     const legacy = {
-      provider: "onnx",
+      ...native,
       id: "deberta-v3-base-zeroshot-v2.0",
       name: "DeBERTa",
       inference: {
-        chat: false as const,
+        ...native.inference,
         decision: {
           protocol: "decision-v1",
-          input: ["text" as const],
-          questions: {
-            choice: {
-              probabilities: "provider-defined" as const,
-              abstention: false,
-              maxOptions: 64,
-            },
-            score: {
-              probabilities: "provider-defined" as const,
-              abstention: false,
-              maxOptions: 64,
-            },
-          },
+          input: native.inference.decision.input,
+          questions: { choice: question, score: question },
           limits: {
             maxQuestions: 32,
             maxInputTokens: 512,
@@ -137,36 +144,6 @@ const batch: DecisionBatch = {
 };
 
 describe("ONNX decision contract", () => {
-  it("returns complete distributions and computes ordered scores from actual logits", async () => {
-    const classify = vi.fn<InferenceWorkerClient["classify"]>().mockResolvedValue([
-      { logits: [Math.log(3), 0], inputTokens: 12 },
-      { logits: [0, Math.log(2), Math.log(7)], inputTokens: 15 },
-      { logits: [Math.log(4), 0], inputTokens: 14 },
-    ]);
-    const result = await createOnnxProvider({ classify }, vi.fn()).evaluate(batch, context());
-    expect(result.status).toBe("ok");
-    if (result.status !== "ok") {
-      throw new Error("Expected an available provider");
-    }
-    expect(result.result.answers.topic).toEqual({
-      type: "choice",
-      choice: "holiday",
-      probabilities: { holiday: expect.closeTo(0.75, 14), finance: expect.closeTo(0.25, 14) },
-    });
-    expect(result.result.answers.rating).toEqual({
-      type: "score",
-      score: expect.closeTo(1.6),
-      probabilities: [expect.closeTo(0.1), expect.closeTo(0.2), expect.closeTo(0.7)],
-    });
-    expect(result.result.answers.mentioned).toEqual({ type: "boolean", probabilityTrue: 0.8 });
-    expect(result.result.usage).toEqual({ inputTokens: 41 });
-    expect(classify.mock.calls[0]?.[0]).toBe(model);
-    expect(classify.mock.calls[0]?.[1][0]).toMatchObject({
-      text: '{"message":"A pleasant holiday"}',
-      labels: ["holiday", "finance"],
-    });
-  });
-
   it("rejects an entire batch with an undescribed Boolean predicate before dispatch", async () => {
     const classify = vi.fn<InferenceWorkerClient["classify"]>();
     const provider = createOnnxProvider({ classify }, vi.fn());
@@ -175,7 +152,7 @@ describe("ONNX decision contract", () => {
         { ...batch, questions: { ...batch.questions, bare: { type: "boolean" } } },
         context(),
       ),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    ).resolves.toEqual(unavailable);
     expect(classify).not.toHaveBeenCalled();
   });
 
