@@ -7,9 +7,11 @@ import {
   type AgentDeletionOperation,
 } from "../agents/agent-lifecycle-registry.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
@@ -76,6 +78,14 @@ export function useAgentDeletionFixture() {
       agents: { entries: { worker: {}, kept: {} } },
       ...(shared ? { session: { store: target.path } } : {}),
     };
+    const purgeStore = (
+      deletion: Pick<AgentDeletionOperation, "runDatabaseCleanup">,
+      config: OpenClawConfig = cfg,
+    ) =>
+      purgeAgentSessionStoreEntries(config, "worker", {
+        env,
+        runDatabaseCleanup: deletion.runDatabaseCleanup,
+      });
     return {
       root,
       env,
@@ -83,7 +93,9 @@ export function useAgentDeletionFixture() {
       target,
       entry,
       cfg,
+      scope,
       write,
+      purgeStore,
       open: () => openOpenClawAgentDatabase(options),
       resource: (close = async () => {}) =>
         registerOpenClawAgentDatabaseAsyncResource({ ...target, revoke: () => {}, close }),
@@ -127,7 +139,15 @@ export function useAgentDeletionFixture() {
         const keptScope = { ...workerScope, agentId: "kept", sessionKey: "agent:kept:shared" };
         replaceSessionEntrySync(workerScope, { sessionId: "remove", updatedAt: Date.now() });
         replaceSessionEntrySync(keptScope, { sessionId: "keep", updatedAt: Date.now() });
-        return { sharedOptions, shared: sharedDatabase, workerScope, keptScope };
+        const sharedConfig = { ...cfg, session: { store: sharedDatabase.path } };
+        return {
+          sharedOptions,
+          shared: sharedDatabase,
+          workerScope,
+          keptScope,
+          purge: (deletion: Pick<AgentDeletionOperation, "runDatabaseCleanup">) =>
+            purgeStore(deletion, sharedConfig),
+        };
       },
     };
   };

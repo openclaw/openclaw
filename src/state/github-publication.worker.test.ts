@@ -139,14 +139,20 @@ function createScope(owner = context) {
   scopes.add(scope);
   return scope;
 }
-function seed(id: string) {
-  const row = repositoryRow(id);
+function seed(input: string | RepositoryPublicationRow) {
+  const row = typeof input === "string" ? repositoryRow(input) : input;
   runOpenClawStateWriteTransaction(
     (database) =>
       insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
     { path: context.admission.databasePath },
   );
   return row;
+}
+
+async function reopenWorker() {
+  await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+  openOpenClawStateDatabase();
+  context = captureOpenClawStateWorkerContext();
 }
 function read(row: RepositoryPublicationRow) {
   // Observe the durable commit independently while the ordinary worker reply is withheld.
@@ -671,9 +677,7 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
   signal,
 }) => {
   const { row, source } = await sourceFixture("source-receipt-deletion");
-  runOpenClawStateWriteTransaction((database) =>
-    insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
-  );
+  seed(row);
   const remove = await preparePersonalGitHubSessionReceiptDeletion({
     agentId: row.agent_id,
     generations: [
@@ -716,9 +720,7 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
     await deletion;
   }
   expectRows(row, []);
-  runOpenClawStateWriteTransaction((database) =>
-    insertRepositoryGitHubPublicationInDatabase(database, row, context.admission.assertCurrent),
-  );
+  seed(row);
   expect(() => bindGitHubPublicationSource(source)).toThrow("source authority changed");
 });
 
@@ -861,9 +863,7 @@ describe("retained publication lifecycle authority", () => {
 
   beforeAll(async () => {
     // Retire earlier uninstrumented workers before this suite seeds its fault-enabled owner.
-    await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-    openOpenClawStateDatabase();
-    context = captureOpenClawStateWorkerContext();
+    await reopenWorker();
     profileId = ensureProfileForEmail("lifecycle-worker@example.test").id;
     runOpenClawStateWriteTransaction(({ db }) => {
       for (const { revision, ...input } of lifecycleCases) {
@@ -880,9 +880,7 @@ describe("retained publication lifecycle authority", () => {
       insertPersonal(requestId, "original-revision");
     }
     // A real close drops resident facts so the next preparations exercise cold worker reads.
-    await closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-    openOpenClawStateDatabase();
-    context = captureOpenClawStateWorkerContext();
+    await reopenWorker();
   });
 
   it("loads shared and personal revisions, retained NULL and missing rows through the worker", async () => {
@@ -957,9 +955,7 @@ describe("retained publication lifecycle authority", () => {
 
   it("rolls back receipt batches and publishes only the exact committed tombstones", async () => {
     const databasePath = context.admission.databasePath;
-    await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    openOpenClawStateDatabase();
-    context = captureOpenClawStateWorkerContext();
+    await reopenWorker();
     const selected = Array.from({ length: 65 }, (_, index) =>
       personalRow(`00000000-0000-4000-8000-${String(index).padStart(12, "0")}`),
     );

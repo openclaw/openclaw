@@ -4842,7 +4842,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/state/openclaw-state-lease-acquisition.test.ts",
   "src/state/openclaw-state-lease-contention.test.ts",
   "src/state/openclaw-state-read.existing-schema.test.ts",
-  "src/state/user-profile-writes.role.test.ts",
   "src/state/user-profiles.avatar-worker.test.ts",
   "src/state/user-profiles.test.ts",
   "src/system-agent/config-redaction.test.ts",
