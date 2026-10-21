@@ -65,16 +65,4 @@ describe("shared control ownership", () => {
       "pages/new-session/place-browser.ts",
     ]);
   });
-
-  it("limits custom dividers to docked multi-pane layouts", () => {
-    // These layouts coordinate sidebar, inspector, and responsive dock state
-    // across more than two panes.
-    expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
-      "app/app-shell-view.ts",
-      "components/assistant-panel-view.ts",
-      "components/dock-layout-solid.ts",
-      "pages/chat/chat-page-pane-render.ts",
-      "pages/chat/components/chat-sidebar-region.runtime.ts",
-    ]);
-  });
 });

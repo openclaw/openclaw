@@ -55,10 +55,13 @@ export async function executeWorkerSessionToolWithReplay<T>(
 
 export function workerSessionToolErrorResult(error: unknown) {
   const message = error instanceof Error ? error.message : "Worker session operation failed";
-  return jsonResult({
-    status: "error",
-    error: truncateUtf16Safe(message, 1_024),
-  });
+  return {
+    ...jsonResult({
+      status: "error",
+      error: truncateUtf16Safe(message, 1_024),
+    }),
+    isError: true,
+  };
 }
 
 export function serializeWorkerSessionToolError(error: unknown): string {

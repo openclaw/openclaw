@@ -6,8 +6,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
-  settlePlaybackTranscodeJobsForTest,
-  waitForPlaybackTranscodeJobsForTest,
+  observePlaybackSourceOpen,
+  waitForPlaybackSourceCleanup,
 } from "./playback-transcode.test-support.js";
 
 const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
@@ -15,6 +15,15 @@ const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted
   probePlaybackMediaFileDescriptor: vi.fn(),
   runFfmpeg: vi.fn(),
 }));
+
+vi.mock("../infra/fs-safe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/fs-safe.js")>();
+  return {
+    ...actual,
+    openLocalFileSafely: (...args: Parameters<typeof actual.openLocalFileSafely>) =>
+      observePlaybackSourceOpen(actual.openLocalFileSafely(...args)),
+  };
+});
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: (subsystem: string) => ({ subsystem, warn: playbackWarn }),
@@ -40,8 +49,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
+    await waitForPlaybackSourceCleanup();
     await tempHome.restore();
   } finally {
+    vi.doUnmock("../infra/fs-safe.js");
     vi.doUnmock("./ffmpeg-exec.js");
     vi.doUnmock("./media-probe.js");
     vi.resetModules();
@@ -94,22 +105,6 @@ function createGatedFfmpegJob(output: string) {
       return "";
     },
   };
-}
-
-function createCacheKey(source: {
-  path: string;
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-  exactIdentity: { dev: bigint; ino: bigint };
-}): string {
-  const testApi = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.playbackTranscodeTestApi")
-  ] as { createPlaybackTranscodeCacheKey?: (value: typeof source) => string } | undefined;
-  if (!testApi?.createPlaybackTranscodeCacheKey) {
-    throw new Error("playback transcode test API unavailable");
-  }
-  return testApi.createPlaybackTranscodeCacheKey(source);
 }
 
 describe("playback transcode policy", () => {
@@ -182,7 +177,7 @@ describe("playback transcode policy", () => {
       await expect(
         playback.resolvePlaybackTranscode({ ...source, mimeType, kind }),
       ).resolves.toEqual({ kind: "preparing" });
-      await waitForPlaybackTranscodeJobsForTest("all");
+      await waitForPlaybackSourceCleanup();
 
       const ffmpegArgs = runFfmpeg.mock.calls[0]?.[0] as string[];
       const inputFormatIndex = ffmpegArgs.indexOf("-f");
@@ -197,25 +192,36 @@ describe("playback transcode policy", () => {
     },
   );
 
-  it("derives a stable cache key from path, size, and modification time", () => {
-    const source = {
-      path: "/media/clip.mkv",
-      size: 1234,
-      mtimeMs: 5678.25,
-      ctimeMs: 5679.5,
-      exactIdentity: { dev: 16n, ino: 32n },
-    };
-    const key = createCacheKey(source);
+  it("does not reuse a rendition after the source file is replaced", async () => {
+    const original = await createSource("replaced-cache.mkv", "first-source");
+    const params = { ...original, mimeType: "video/x-matroska", kind: "video" as const };
+    runFfmpeg.mockImplementation(async (args: string[]) => {
+      await fs.writeFile(args.at(-1) ?? "", `rendition-${runFfmpeg.mock.calls.length}`);
+      return "";
+    });
+    await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({ kind: "preparing" });
+    await waitForPlaybackSourceCleanup();
+    await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
+      kind: "transcoded",
+    });
 
-    expect(key).toMatch(/^[a-f0-9]{64}$/u);
-    expect(createCacheKey(source)).toBe(key);
-    expect(createCacheKey({ ...source, path: "/media/other.mkv" })).not.toBe(key);
-    expect(createCacheKey({ ...source, size: 1235 })).not.toBe(key);
-    expect(createCacheKey({ ...source, mtimeMs: 5679 })).not.toBe(key);
-    expect(createCacheKey({ ...source, ctimeMs: 5680 })).not.toBe(key);
-    expect(
-      createCacheKey({ ...source, exactIdentity: { ...source.exactIdentity, ino: 33n } }),
-    ).not.toBe(key);
+    await fs.rename(original.sourcePath, `${original.sourcePath}.old`);
+    const replacement = await createSource("replaced-cache.mkv", "other-source");
+    expect(replacement.sourceStat.exactIdentity.ino).not.toBe(
+      original.sourceStat.exactIdentity.ino,
+    );
+    const replacedParams = { ...params, ...replacement };
+    await expect(playback.resolvePlaybackTranscode(replacedParams)).resolves.toEqual({
+      kind: "preparing",
+    });
+    await waitForPlaybackSourceCleanup();
+    const result = await playback.resolvePlaybackTranscode(replacedParams);
+    expect(runFfmpeg).toHaveBeenCalledTimes(2);
+    expect(result.kind).toBe("transcoded");
+    if (result.kind !== "transcoded") {
+      throw new Error("Expected replacement playback output");
+    }
+    expect(await fs.readFile(result.path, "utf8")).toBe("rendition-2");
   });
 });
 
@@ -397,7 +403,7 @@ describe("resolvePlaybackTranscode", () => {
       await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
       expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledTimes(2);
-      const finished = waitForPlaybackTranscodeJobsForTest("all");
+      const finished = waitForPlaybackSourceCleanup();
       transcode.release();
       await finished;
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
@@ -405,7 +411,7 @@ describe("resolvePlaybackTranscode", () => {
       });
     } finally {
       transcode.release();
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
     }
   });
 
@@ -473,7 +479,7 @@ describe("resolvePlaybackTranscode", () => {
     await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
       kind: "preparing",
     });
-    await waitForPlaybackTranscodeJobsForTest("all");
+    await waitForPlaybackSourceCleanup();
     expect(runFfmpeg).toHaveBeenCalledOnce();
     await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
       kind: "transcoded",
@@ -507,7 +513,7 @@ describe("resolvePlaybackTranscode", () => {
         kind: "preparing",
       });
       expect(probePlaybackMediaFileDescriptor).toHaveBeenCalledOnce();
-      const finished = waitForPlaybackTranscodeJobsForTest("all");
+      const finished = waitForPlaybackSourceCleanup();
       transcode.release();
       await finished;
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
@@ -518,7 +524,7 @@ describe("resolvePlaybackTranscode", () => {
       );
     } finally {
       transcode.release();
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
     }
   });
 
@@ -545,7 +551,7 @@ describe("resolvePlaybackTranscode", () => {
       ).resolves.toEqual([{ kind: "preparing" }, { kind: "preparing" }]);
       await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
-      const finished = waitForPlaybackTranscodeJobsForTest("all");
+      const finished = waitForPlaybackSourceCleanup();
       transcode.release();
       await finished;
       await expect(
@@ -557,7 +563,7 @@ describe("resolvePlaybackTranscode", () => {
       });
     } finally {
       transcode.release();
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
     }
   });
 
@@ -580,7 +586,7 @@ describe("resolvePlaybackTranscode", () => {
       });
       await transcode.started;
       expect(runFfmpeg).toHaveBeenCalledOnce();
-      const finished = waitForPlaybackTranscodeJobsForTest("all");
+      const finished = waitForPlaybackSourceCleanup();
       transcode.release();
       await finished;
 
@@ -629,7 +635,7 @@ describe("resolvePlaybackTranscode", () => {
       );
     } finally {
       transcode.release();
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
     }
   });
 
@@ -669,9 +675,13 @@ describe("resolvePlaybackTranscode", () => {
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "preparing",
         });
-        const completed = waitForPlaybackTranscodeJobsForTest("all");
+        const completed = waitForPlaybackSourceCleanup();
         if (probeFails) {
-          await expect(completed).rejects.toBe(probeError);
+          await completed;
+          await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+            kind: "fallback",
+          });
+          expect(playbackWarn).toHaveBeenCalledWith(expect.stringContaining("output probe failed"));
         } else {
           await completed;
           const result = await playback.resolvePlaybackTranscode(params);
@@ -686,7 +696,7 @@ describe("resolvePlaybackTranscode", () => {
           error: closeError,
         });
       } finally {
-        await settlePlaybackTranscodeJobsForTest();
+        await waitForPlaybackSourceCleanup();
         openSpy.mockRestore();
       }
     },
@@ -706,9 +716,7 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await expect(waitForPlaybackTranscodeJobsForTest("all")).rejects.toThrow(
-        "ffmpeg unavailable",
-      );
+      await waitForPlaybackSourceCleanup();
       expect(runFfmpeg).toHaveBeenCalledOnce();
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "fallback",
@@ -721,13 +729,13 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await waitForPlaybackTranscodeJobsForTest("all");
+      await waitForPlaybackSourceCleanup();
       expect(runFfmpeg).toHaveBeenCalledTimes(2);
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
         kind: "transcoded",
       });
     } finally {
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
       nowSpy.mockRestore();
     }
   });
@@ -759,9 +767,7 @@ describe("resolvePlaybackTranscode", () => {
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "preparing",
         });
-        await expect(waitForPlaybackTranscodeJobsForTest("all")).rejects.toThrow(
-          "ffmpeg temporarily unavailable",
-        );
+        await waitForPlaybackSourceCleanup();
         expect(runFfmpeg).toHaveBeenCalledOnce();
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "fallback",
@@ -779,13 +785,13 @@ describe("resolvePlaybackTranscode", () => {
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
           kind: "preparing",
         });
-        await waitForPlaybackTranscodeJobsForTest("all");
+        await waitForPlaybackSourceCleanup();
         expect(runFfmpeg).toHaveBeenCalledTimes(2);
         await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
           kind: "transcoded",
         });
       } finally {
-        await settlePlaybackTranscodeJobsForTest();
+        await waitForPlaybackSourceCleanup();
         nowSpy.mockRestore();
       }
     },
@@ -805,9 +811,10 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await expect(waitForPlaybackTranscodeJobsForTest("all")).rejects.toThrow(
-        "ffmpeg unavailable",
-      );
+      await waitForPlaybackSourceCleanup();
+      await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+        kind: "fallback",
+      });
       expect(playbackWarn).toHaveBeenCalledOnce();
       expect(playbackWarn).toHaveBeenCalledWith(
         expect.stringContaining(`${source.sourcePath}: ffmpeg unavailable`),
@@ -817,16 +824,14 @@ describe("resolvePlaybackTranscode", () => {
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "preparing",
       });
-      await expect(waitForPlaybackTranscodeJobsForTest("all")).rejects.toThrow(
-        "ffmpeg unavailable",
-      );
+      await waitForPlaybackSourceCleanup();
       expect(runFfmpeg).toHaveBeenCalledTimes(2);
       await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
         kind: "fallback",
       });
       expect(playbackWarn).toHaveBeenCalledOnce();
     } finally {
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
       nowSpy.mockRestore();
     }
   });
@@ -861,19 +866,19 @@ describe("resolvePlaybackTranscode", () => {
       });
       expect(runFfmpeg).toHaveBeenCalledTimes(2);
 
-      const capacityAvailable = waitForPlaybackTranscodeJobsForTest("next");
+      const capacityAvailable = waitForPlaybackSourceCleanup("next");
       transcodes[0]!.release();
-      await expect(capacityAvailable).resolves.toBe(2);
+      await capacityAvailable;
       await expect(playback.resolvePlaybackTranscode(params[2]!)).resolves.toEqual({
         kind: "preparing",
       });
       await transcodes[2]!.started;
       expect(runFfmpeg).toHaveBeenCalledTimes(3);
-      const remainingJobs = waitForPlaybackTranscodeJobsForTest("all");
+      const remainingJobs = waitForPlaybackSourceCleanup();
       for (const transcode of transcodes.slice(1)) {
         transcode.release();
       }
-      await expect(remainingJobs).resolves.toBe(2);
+      await remainingJobs;
       await expect(
         Promise.all(params.map(async (param) => await playback.resolvePlaybackTranscode(param))),
       ).resolves.toEqual([
@@ -885,7 +890,7 @@ describe("resolvePlaybackTranscode", () => {
       for (const transcode of transcodes) {
         transcode.release();
       }
-      await settlePlaybackTranscodeJobsForTest();
+      await waitForPlaybackSourceCleanup();
     }
   });
 

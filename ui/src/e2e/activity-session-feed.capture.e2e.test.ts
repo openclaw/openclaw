@@ -246,10 +246,10 @@ suite.define(() => {
         expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
           sessionList.activityPulse.buckets.length,
         );
-        // The title sits centered in the toolbar row; the intro copy and the
-        // mode tabs share the content's left edge below it.
+        // The stacked page header's intro copy and the mode tabs share the
+        // content's left edge.
         const introLeft = await activityPage
-          .locator(".page-sub")
+          .locator(".page-subtitle")
           .evaluate((element) => element.getBoundingClientRect().left);
         const tabsLeft = await activityPage
           .locator(".activity-mode-tabs")

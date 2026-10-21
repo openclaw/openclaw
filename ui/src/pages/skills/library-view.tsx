@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
 import "../../components/modal-dialog.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -20,27 +20,78 @@ export function SkillLibrary(props: {
 }) {
   const current = () => props.library.state;
   // List receipts replace the snapshot; mutable editor drafts and feedback do not.
-  const list = createMemo(() => current().list);
-  const query = createMemo(() => props.library.local.query.toLowerCase().trim());
-  const scope = createMemo(() => current().view);
-  const entries = createMemo(() => {
-    const snapshot = list();
-    const search = query();
-    const view = scope();
-    return (snapshot?.entries ?? []).filter((entry) => {
-      const scopeMatches =
-        view === "mine"
-          ? entry.ownerProfileId === snapshot?.profileId
-          : view !== "team" || entry.shared || entry.ownerProfileId === null;
-      return (
-        scopeMatches &&
-        (!search ||
-          `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
-            .toLowerCase()
-            .includes(search))
-      );
+  const acceptedList = createMemo(() => current().list);
+  const completion = createMemo(() => current().listRead);
+  const read = createMemo(() => completion()?.completion ?? { list: acceptedList(), error: null });
+  // Accepted rows stay live; the shared feedback also owns refresh errors.
+  const readError = () => {
+    if (acceptedList()) {
+      return null;
+    }
+    const error = read().error;
+    if (error) {
+      throw new Error(error);
+    }
+    return null;
+  };
+  const Entries = () => {
+    const list = createMemo(() => acceptedList() ?? read().list);
+    const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+    const scope = createMemo(() => current().view);
+    const entries = createMemo(() => {
+      const snapshot = list();
+      const search = query();
+      const view = scope();
+      return (snapshot?.entries ?? []).filter((entry) => {
+        const scopeMatches =
+          view === "mine"
+            ? entry.ownerProfileId === snapshot?.profileId
+            : view !== "team" || entry.shared || entry.ownerProfileId === null;
+        return (
+          scopeMatches &&
+          (!search ||
+            `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
+              .toLowerCase()
+              .includes(search))
+        );
+      });
     });
-  });
+    return (
+      <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
+        <Show
+          when={entries().length > 0}
+          fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
+        >
+          <For each={entries()} keyed={(entry) => entry.skillId}>
+            {(entry) => (
+              <div class="settings-row">
+                <button
+                  type="button"
+                  class="settings-row__text plugins-item__detail-button"
+                  disabled={current().loading || current().busy}
+                  onClick={() => void props.library.open(entry().skillId)}
+                >
+                  <span class="settings-row__title">{entry().slug}</span>
+                  <span class="settings-row__desc">{entry().description}</span>
+                  <span class="settings-row__desc">
+                    {entry().ownerLabel} ·{" "}
+                    {entry().shared ? t("skillLibrary.shared") : t("skillLibrary.private")} ·{" "}
+                    {entry().revision.slice(0, 8)}
+                  </span>
+                </button>
+                <div class="settings-row__control">
+                  <SettingsStatus
+                    kind={entry().enabled ? "ok" : "muted"}
+                    label={t(entry().enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
+                  />
+                </div>
+              </div>
+            )}
+          </For>
+        </Show>
+      </SettingsSection>
+    );
+  };
   return (
     <>
       <SkillLibraryToolbar library={props.library} navigationActions={props.navigationActions} />
@@ -75,44 +126,13 @@ export function SkillLibrary(props: {
             }
           />
         </label>
-        <Show
-          when={Boolean(list()) || !current().loading}
+        <Loading
+          on={acceptedList() ? null : completion()}
           fallback={<p role="status">{t("common.loading")}</p>}
         >
-          <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
-            <Show
-              when={entries().length > 0}
-              fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
-            >
-              <For each={entries()} keyed={(entry) => entry.skillId}>
-                {(entry) => (
-                  <div class="settings-row">
-                    <button
-                      type="button"
-                      class="settings-row__text plugins-item__detail-button"
-                      disabled={current().loading || current().busy}
-                      onClick={() => void props.library.open(entry().skillId)}
-                    >
-                      <span class="settings-row__title">{entry().slug}</span>
-                      <span class="settings-row__desc">{entry().description}</span>
-                      <span class="settings-row__desc">
-                        {entry().ownerLabel} ·{" "}
-                        {entry().shared ? t("skillLibrary.shared") : t("skillLibrary.private")} ·{" "}
-                        {entry().revision.slice(0, 8)}
-                      </span>
-                    </button>
-                    <div class="settings-row__control">
-                      <SettingsStatus
-                        kind={entry().enabled ? "ok" : "muted"}
-                        label={t(entry().enabled ? "skillsPage.enabled" : "skillsPage.disabled")}
-                      />
-                    </div>
-                  </div>
-                )}
-              </For>
-            </Show>
-          </SettingsSection>
-        </Show>
+          <Errored fallback={() => null}>{readError()}</Errored>
+          <Entries />
+        </Loading>
       </Show>
       <SkillLibraryDialogs library={props.library} />
     </>

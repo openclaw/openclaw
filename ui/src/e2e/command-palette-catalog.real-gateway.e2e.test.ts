@@ -152,13 +152,13 @@ suite.define(() => {
     const stages: unknown[] = [];
     const assets: Array<Promise<{ path: string; sha256: string }>> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
-    const publish = async () => {
+    const publish = async (agentId = "main") => {
       acquisitionDiagnostics.trigger("publication");
       acquisitionDiagnostics.request("readback", "readback", "models.list", true);
       try {
         const result = requireRecord(
           await readback.request("models.list", {
-            agentId: "main",
+            agentId,
             view: "configured",
             refresh: true,
           }),
@@ -179,11 +179,13 @@ suite.define(() => {
     const url = new URL("/settings/model-providers", browserUrl);
     url.hash = new URL(browserUrl).hash;
     try {
-      // Settle startup acquisition before measuring page-owned requests.
-      expect((await publish()).providerOutcomes).toContainEqual({
-        provider: "ollama",
-        status: "ready",
-      });
+      // The provider counter spans both owners; settle each before measuring page-owned requests.
+      for (const agentId of ["main", "reviewer"]) {
+        expect((await publish(agentId)).providerOutcomes).toContainEqual({
+          provider: "ollama",
+          status: "ready",
+        });
+      }
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {

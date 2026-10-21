@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
@@ -20,6 +23,7 @@ import {
   loadCliSessionHistoryMessages,
   loadCliSessionPromptContext,
 } from "./session-history.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -147,4 +151,69 @@ it("records a redacted blocked CLI turn on the selected actor", async () => {
     expect(JSON.stringify(history)).toContain("Policy blocked this request");
     expect(JSON.stringify(history)).not.toContain("Private rejected content");
   });
+});
+
+it("covers an incognito native-login turn only while its attested login holds", async () => {
+  const { target, binding } = await create("native-login");
+  // The child's native Claude login; the stub profile endpoint names each token's own account.
+  const configDir = fs.mkdtempSync(join(os.tmpdir(), "openclaw-incognito-claude-"));
+  const login = (account: string) =>
+    fs.writeFileSync(
+      join(configDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: { accessToken: `token-${account}`, expiresAt: Date.parse("2030-01-01") },
+      }),
+    );
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string | URL | Request, init?: RequestInit) =>
+      Response.json({
+        account: { uuid: new Headers(init?.headers).get("authorization")?.slice(13) },
+      }),
+    ),
+  );
+  const coveredSeq = () => {
+    const boundary = binding.actor.snapshot(authority)?.entry?.cliHistoryBoundary;
+    return boundary?.state === "known" ? boundary.maxSeq : undefined;
+  };
+  const admission = prepareSystemAgentRunAdmission({}, "native-cli-run", "main", "history-test");
+  try {
+    login("account-a");
+    const params: PreparedCliRunContext["params"] = {
+      ...target,
+      sessionTarget: target,
+      sessionFile: target.sessionKey,
+      admittedRunContext: await admission.admit("embedded"),
+      runId: "native-cli-run",
+      provider: "claude-cli",
+      model: "test-model",
+      prompt: "current ask",
+      workspaceDir: env.OPENCLAW_STATE_DIR!,
+      timeoutMs: 1000,
+      config: {
+        plugins: {
+          entries: { anthropic: { config: { historyRecovery: { attestNativeLogin: true } } } },
+        },
+      },
+    };
+    const writer = await prepareCliHistoryBoundary(params, {
+      preparedBackend: { backend: { command: "claude", env: { CLAUDE_CONFIG_DIR: configDir } } },
+    });
+    assert(writer?.bindsNativeLogin);
+    await runWithCliHistoryWriter(writer, async () => {
+      const manager = await SessionManager.openAsync(target);
+      const covered = (coveredSeq() ?? -1) + 1;
+      await manager.appendMessageAsync(makeUserMessage("Under account a", 1));
+      expect(coveredSeq()).toBe(covered);
+      // Another account's credential, never attested here: the row is kept but not covered.
+      login("account-b");
+      await manager.appendMessageAsync(makeUserMessage("Under account b", 2));
+      expect(coveredSeq()).toBe(covered);
+      expect(JSON.stringify(manager.getEntries())).toContain("Under account b");
+    });
+  } finally {
+    admission.close();
+    vi.unstubAllGlobals();
+    fs.rmSync(configDir, { recursive: true, force: true });
+  }
 });

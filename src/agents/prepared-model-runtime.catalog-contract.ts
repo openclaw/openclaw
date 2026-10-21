@@ -64,7 +64,6 @@ export type PreparedModelRuntimeCatalogAccessParams = {
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
   isCurrent: () => boolean;
-  isPublished?: () => boolean;
   retirementSignal: AbortSignal;
   inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "catalogAttempt"> &
     Partial<Pick<PreparedModelRuntimeOwner, "provenance">>;

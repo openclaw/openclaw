@@ -10,13 +10,11 @@ import {
 import { createChannelIngressQueue } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
+type QueueOptions = Parameters<typeof createChannelIngressQueue>[0];
 
 export function createTestIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
   stateDir: string,
-  options: Omit<
-    Parameters<typeof createChannelIngressQueue>[0],
-    "channelId" | "accountId" | "stateDir"
-  > = {},
+  options: Omit<QueueOptions, "channelId" | "accountId" | "stateDir"> = {},
 ) {
   return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
     channelId: "test",
@@ -31,18 +29,27 @@ export function useRetainedIngressState(
 ) {
   let retainedState: OpenClawTestState | undefined;
   let retainedFailure: { error: unknown } | undefined;
-
+  const cleanup = async (...causes: unknown[]) => {
+    try {
+      await retainedState?.cleanup();
+      retainedState = undefined;
+    } catch (cleanupError) {
+      const error = causes.length
+        ? new AggregateError(
+            [...causes, cleanupError],
+            `Fixture cleanup unverified; retained ${retainedState?.root}`,
+            { cause: causes[0] },
+          )
+        : cleanupError;
+      retainedFailure = { error };
+      throw error;
+    }
+  };
   registerCleanup(async () => {
     if (retainedFailure) {
       throw retainedFailure.error;
     }
-    try {
-      await retainedState?.cleanup();
-      retainedState = undefined;
-    } catch (error) {
-      retainedFailure = { error };
-      throw error;
-    }
+    await cleanup();
   });
 
   return async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
@@ -90,18 +97,7 @@ export function useRetainedIngressState(
       );
       return outcome.value;
     } catch (error) {
-      try {
-        await state.cleanup();
-        retainedState = undefined;
-      } catch (cleanupError) {
-        const failure = new AggregateError(
-          [error, cleanupError],
-          `Fixture cleanup unverified; retained ${state.root}`,
-          { cause: error },
-        );
-        retainedFailure = { error: failure };
-        throw failure;
-      }
+      await cleanup(error);
       throw error;
     }
   };

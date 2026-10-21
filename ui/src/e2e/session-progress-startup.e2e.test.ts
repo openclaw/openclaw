@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -130,14 +131,6 @@ suite.define(() => {
               card: outcome === "card" ? card : null,
             });
           }
-          if (outcome === "card") {
-            await page
-              .locator('[data-progress-card-placement="details"]')
-              .waitFor({ state: "attached" });
-          }
-          await expect
-            .poll(() => page.locator('openclaw-chat-details-progress [role="status"]').count())
-            .toBe(0);
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,
           );
@@ -173,6 +166,20 @@ suite.define(() => {
           await geometry.evaluate((capture) => capture.cancel());
           await geometry.dispose();
         }
+
+        await openChatDetails(page);
+        if (outcome === "card") {
+          await page
+            .locator(".task-progress-details__plan")
+            .getByText("Inspect the conversation", { exact: true })
+            .waitFor();
+        } else {
+          expect(await page.locator('[data-progress-card-placement="details"]').count()).toBe(0);
+          if (outcome === "error") {
+            await page.getByText("Session progress is unavailable.", { exact: true }).waitFor();
+          }
+        }
+        await closeChatDetails(page);
 
         await composer.fill("Keep this draft while progress refreshes");
         await gateway.deferNext("progressCard.get");
@@ -233,9 +240,6 @@ suite.define(() => {
             await gateway.resolveDeferred("progressCard.get", {
               card: { sessionKey, revision: 1, updatedAt: 1, markdown: "Initial task progress" },
             });
-            await page
-              .locator('[data-progress-card-placement="details"]')
-              .waitFor({ state: "attached" });
           }
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,
@@ -243,6 +247,11 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe(draft);
           expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
         }
+        await openChatDetails(page);
+        await page
+          .locator(".task-progress-details__plan")
+          .getByText("Initial task progress", { exact: true })
+          .waitFor();
       } finally {
         await suite.closeBrowserContext(context);
       }
@@ -262,7 +271,8 @@ suite.define(() => {
       await gateway.rejectDeferred("chat.startup", { message: "History temporarily unavailable" });
       const error = page.locator('.chat-history-error[role="alert"]');
       await error.waitFor();
-      expect(await error.textContent()).toContain("History temporarily unavailable");
+      expect(await error.textContent()).toContain("Couldn’t load this conversation");
+      expect(await error.locator("p").textContent()).toContain("History temporarily unavailable");
       await page
         .locator(".agent-chat__composer-combobox textarea")
         .fill("Preserve this recovery draft");

@@ -407,10 +407,9 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     }
   }
   // Slow resumes must be diagnosable without enabling a profiler beforehand.
-  const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
-    ...params.timing,
-    enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
-  });
+  const lifecycleTiming = createCodexThreadLifecycleTimingTracker(
+    isCodexAppServerProfilerEnabled(params.params.config),
+  );
   const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
     "legacy-dynamic-tools-fingerprint",
     () => legacyFingerprintDynamicTools(params.dynamicTools),

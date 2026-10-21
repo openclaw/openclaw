@@ -510,11 +510,7 @@ function parseGroundedRef(
   fallbackPath: string,
   ref: string,
 ): { path: string; startLine: number; endLine: number } | null {
-  const trimmed = ref.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const match = trimmed.match(/^(.*?):(\d+)(?:-(\d+))?$/);
+  const match = ref.trim().match(/^(.*?):(\d+)(?:-(\d+))?$/);
   if (!match) {
     return null;
   }

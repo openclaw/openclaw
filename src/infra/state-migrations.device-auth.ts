@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 // Doctor-only import for the retired device-auth JSON store.
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +14,7 @@ import {
 import {
   emptyClientCredentialReceipt,
   readClientCredentialFileIdentity,
+  type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
@@ -24,18 +24,34 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import { readLegacyMigrationSourceSnapshot } from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
-const LEGACY_PATH = "identity/device-auth.json";
+const LEGACY_SOURCES = [
+  { profile: "primary", relativePath: "identity/device-auth.json" },
+  { profile: "node", relativePath: "identity/node-device-auth.json" },
+  { profile: "shareExtension", relativePath: "identity/share-device-auth.json" },
+] as const;
+type LegacyDeviceAuthSource = (typeof LEGACY_SOURCES)[number];
+const MAX_BYTES = 256 * 1024;
 type DeviceAuthMigrationDatabase = Pick<ClientCredentialDatabase, "device_auth_tokens">;
+
+function sourceCandidates(stateDir: string, source: LegacyDeviceAuthSource): string[] {
+  const sourcePath = path.join(stateDir, source.relativePath);
+  return [sourcePath, `${sourcePath}.doctor-importing`, `${sourcePath}.native-importing`];
+}
 
 /** Detect the retired device-auth store only when an explicit Doctor flow opts in. */
 export function detectLegacyDeviceAuth(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
 }): LegacyStateDetection["deviceAuth"] {
-  const sourcePath = path.join(params.stateDir, LEGACY_PATH);
-  const sourcePresent = fs.existsSync(sourcePath);
+  const existingSourcePath = LEGACY_SOURCES.flatMap((source) =>
+    sourceCandidates(params.stateDir, source),
+  ).find((candidate) => fs.existsSync(candidate));
+  const sourcePath =
+    existingSourcePath ?? path.join(params.stateDir, LEGACY_SOURCES[0].relativePath);
+  const sourcePresent = existingSourcePath !== undefined;
   return {
     sourcePath,
     sourcePresent,
@@ -88,6 +104,59 @@ function rowIsCanonical(row: { scopes_json: string; updated_at_ms: number }): bo
   }
 }
 
+async function readLegacyDeviceAuthSource(stateDir: string, source: LegacyDeviceAuthSource) {
+  const stateRoot = await root(stateDir, {
+    hardlinks: "reject",
+    maxBytes: MAX_BYTES,
+    symlinks: "reject",
+  });
+  const snapshots = [];
+  for (const sourcePath of sourceCandidates(stateDir, source)) {
+    if (await stateRoot.exists(path.relative(stateDir, sourcePath))) {
+      snapshots.push(
+        await readLegacyMigrationSourceSnapshot({
+          stateRoot,
+          stateDir,
+          sourcePath,
+          maxBytes: MAX_BYTES,
+          label: "device auth",
+        }),
+      );
+    }
+  }
+  const snapshot = snapshots[0];
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshots.some((other) => other.sha256 !== snapshot.sha256)) {
+    throw new Error(
+      "Legacy device-auth files disagree; preserve them and resolve the conflict before importing.",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshot.buffer.toString("utf8"));
+  } catch {
+    throw new Error("Legacy device-auth store is invalid or unsupported.");
+  }
+  return { snapshot, store: parseStore(parsed) };
+}
+
+/** Preparation shares the importer parser and never reopens a consumed JSON input. */
+export async function prepareLegacyDeviceAuth(params: {
+  stateDir: string;
+  legacyImports: ClientCredentialReceipt["legacyImports"];
+}): Promise<void> {
+  for (const source of LEGACY_SOURCES) {
+    if (
+      !params.legacyImports[`auth:${source.profile}`] &&
+      sourceCandidates(params.stateDir, source).some((candidate) => fs.existsSync(candidate))
+    ) {
+      await readLegacyDeviceAuthSource(params.stateDir, source);
+    }
+  }
+}
+
 /** Import retired device-auth JSON while excluding Gateways that can rewrite it. */
 export async function migrateLegacyDeviceAuth(params: {
   detected: LegacyStateDetection["deviceAuth"];
@@ -97,6 +166,27 @@ export async function migrateLegacyDeviceAuth(params: {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
   }
+  const results: MigrationMessages[] = [];
+  for (const source of LEGACY_SOURCES) {
+    if (sourceCandidates(params.stateDir, source).some((candidate) => fs.existsSync(candidate))) {
+      results.push(await migrateLegacyDeviceAuthSource({ ...params, source }));
+    }
+  }
+  return {
+    changes: results.flatMap((result) => result.changes),
+    warnings: results.flatMap((result) => result.warnings),
+    ...(results.some((result) => result.notices?.length)
+      ? { notices: results.flatMap((result) => result.notices ?? []) }
+      : {}),
+  };
+}
+
+async function migrateLegacyDeviceAuthSource(params: {
+  source: LegacyDeviceAuthSource;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<MigrationMessages> {
+  const claimKey = `auth:${params.source.profile}` as const;
   return await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
@@ -113,7 +203,7 @@ export async function migrateLegacyDeviceAuth(params: {
         const prior = readClientCredentialReceipt(owner.database);
         if (prior) {
           owner.transaction(() => assertClientCredentialStoreReady(owner.database, env, false));
-          if (prior.receipt.legacyImports["auth:primary"]) {
+          if (prior.receipt.legacyImports[claimKey]) {
             return {
               changes: [],
               warnings: [],
@@ -123,23 +213,11 @@ export async function migrateLegacyDeviceAuth(params: {
             };
           }
         }
-        const stateRoot = await root(params.stateDir, {
-          hardlinks: "reject",
-          maxBytes: 256 * 1024,
-          symlinks: "reject",
-        });
-        const source = await stateRoot.read(LEGACY_PATH, {
-          hardlinks: "reject",
-          maxBytes: 256 * 1024,
-          symlinks: "reject",
-        });
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(source.buffer.toString("utf8"));
-        } catch {
-          throw new Error("Legacy device-auth store is invalid or unsupported.");
+        const prepared = await readLegacyDeviceAuthSource(params.stateDir, params.source);
+        if (!prepared) {
+          return { changes: [], warnings: [] };
         }
-        const store = parseStore(parsed);
+        const { snapshot: source, store } = prepared;
         counts = owner.transaction(() => {
           const db = owner.database;
           if (!readClientCredentialReceipt(db)) {
@@ -151,7 +229,7 @@ export async function migrateLegacyDeviceAuth(params: {
             writeClientCredentialReceipt(db, emptyClientCredentialReceipt(), "complete");
           }
           assertClientCredentialStoreReady(db, env, false);
-          if (readClientCredentialReceipt(db)?.receipt.legacyImports["auth:primary"]) {
+          if (readClientCredentialReceipt(db)?.receipt.legacyImports[claimKey]) {
             return { imported: 0, preserved: store.entries.length };
           }
           const stateDb = getNodeSqliteKysely<DeviceAuthMigrationDatabase>(db);
@@ -182,8 +260,8 @@ export async function migrateLegacyDeviceAuth(params: {
             }
           }
           importClientCredentialLegacy(owner, {
-            key: "auth:primary",
-            sha256: createHash("sha256").update(source.buffer).digest("hex"),
+            key: claimKey,
+            sha256: source.sha256,
             tokens: store.entries.map((entry) => ({
               device_id: store.deviceId,
               role: entry.role,

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as toast from "../../../lib/toast.ts";
 import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
 import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
@@ -44,6 +45,7 @@ afterEach(() => {
   draft.dispose();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it("keeps consent optional, reserves remaining batch bytes, and leaves small files unchanged", async () => {
@@ -110,13 +112,22 @@ it.each(["remove", "reset"] as const)("ignores late replies after %s", async (ac
 });
 
 it.each(["unsupported", "failed", "oversize"] as const)("removes %s errors", async (failure) => {
-  const { reads, entry, worker, attachments } = await encoding();
+  const notify = vi.spyOn(toast, "showToast");
+  const { reads, worker, attachments } = await encoding();
   worker.reply(
     failure === "oversize" ? { type: "ready", file: video() } : { type: "error", reason: failure },
   );
   await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
-  expect(entry.state).toBe("error");
   expect(attachments()).toEqual([]);
-  reads.remove(entry);
   expect(reads.project([])).toHaveLength(0);
+  expect(notify).toHaveBeenCalledExactlyOnceWith({
+    message:
+      failure === "unsupported"
+        ? "This browser cannot compress this video."
+        : failure === "oversize"
+          ? "Video is still too large. Try a smaller file."
+          : "Could not compress video. Try again.",
+    placement: "top-center",
+    severity: "error",
+  });
 });

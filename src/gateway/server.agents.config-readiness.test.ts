@@ -122,7 +122,7 @@ beforeAll(async () => {
     gateway: { mode: "local", auth: { mode: "token", token } },
     agents: {
       ownership: "explicit",
-      defaults: { skipBootstrap: true, model: "openai/gpt-4.1", heartbeat: { every: "0m" } },
+      defaults: { skipBootstrap: true, model: "openai/gpt-4.1" },
       entries: { main: { workspace: state.workspaceDir } },
     },
     plugins: { slots: { memory: "none" } },

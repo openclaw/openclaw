@@ -1,5 +1,5 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Match, onCleanup, Switch, untrack } from "solid-js";
+import { For, Match, onSettled, Switch, untrack } from "solid-js";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
@@ -227,9 +227,12 @@ function CuratedSections(props: {
 }) {
   // A retained handler belongs to this mounted config target, not a later owner.
   const initialSectionPath = untrack(() => props.path);
-  let active = true;
-  onCleanup(() => {
-    active = false;
+  let active = false;
+  onSettled(() => {
+    active = true;
+    return () => {
+      active = false;
+    };
   });
   const settings: CuratedSettingsProps = {
     get document() {

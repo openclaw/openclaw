@@ -163,7 +163,6 @@ function startLogs(args: string[] = [], dispose = vi.fn(async () => {})) {
 const disconnected = () => new Error("gateway closed (1006 abnormal closure): disconnected");
 const journalPage = (line: string) => ({
   stdout: `${line}\n-- cursor: s=abc`,
-  stderr: "",
   code: 0,
   truncated: false,
 });

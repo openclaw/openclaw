@@ -203,7 +203,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
     expect(writeCachedFeishuBotIdentityMock).toHaveBeenCalledWith({
@@ -253,7 +252,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
 

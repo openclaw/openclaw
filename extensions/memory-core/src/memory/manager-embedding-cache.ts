@@ -12,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 
+export type MemoryEmbeddingCacheSize = { size: number; exact: boolean };
+
 type MemoryEmbeddingCacheRow = {
   provider: string;
   model: string;
@@ -147,24 +149,24 @@ export function countMemoryEmbeddingCache(database: EngineConnection): number {
   return result.rows[0]!.count;
 }
 
-/** The publication owner supplies its retained upper bound and holds the write transaction. */
+/** The publication owner supplies its retained count and holds the write transaction. */
 export function pruneMemoryEmbeddingCache(
   database: EngineConnection,
-  cacheSize: number,
+  cacheSize: MemoryEmbeddingCacheSize,
   maxEntries: number,
   unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference,
-): number {
-  if (cacheSize <= maxEntries) {
+): MemoryEmbeddingCacheSize {
+  if (cacheSize.size <= maxEntries) {
     return cacheSize;
   }
-  const size = countMemoryEmbeddingCache(database);
+  const size = cacheSize.exact ? cacheSize.size : countMemoryEmbeddingCache(database);
   const excess = size - maxEntries;
   if (excess <= 0) {
-    return size;
+    return { size, exact: true };
   }
   const limit = Math.min(excess, 100);
   const removed = deleteOldestMemoryEmbeddingCacheRows(database, limit, unreferencedFirst);
-  return size - removed;
+  return { size: size - removed, exact: true };
 }
 
 function deleteOldestMemoryEmbeddingCacheRows(
@@ -265,7 +267,7 @@ export function clearMemoryEmbeddingCacheIdentities(
 
 export function upsertMemoryEmbeddingCache(params: {
   db: EngineConnection;
-  cacheSize: number;
+  cacheSize: MemoryEmbeddingCacheSize;
   provider: { id: string; model: string };
   providerKey: string;
   /** Stable replayable rows let staged writes retain hashes without a second vector batch. */
@@ -273,8 +275,9 @@ export function upsertMemoryEmbeddingCache(params: {
   maxEntries?: number;
   unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
   now?: number;
-}): number {
+}): MemoryEmbeddingCacheSize {
   let cacheSize = params.cacheSize;
+  let exactAfterInsert = cacheSize.exact && cacheSize.size === 0;
   const provider = params.provider;
   const lastRows = new Map<string, number>();
   let row = 0;
@@ -292,15 +295,18 @@ export function upsertMemoryEmbeddingCache(params: {
   if (retainedRows.length === 0) {
     return cacheSize;
   }
-  if (maxEntries !== undefined && cacheSize + retainedRows.length > maxEntries) {
-    cacheSize = reserveMemoryEmbeddingCacheCapacity({
+  if (maxEntries !== undefined && cacheSize.size + retainedRows.length > maxEntries) {
+    const reserved = reserveMemoryEmbeddingCacheCapacity({
       db: params.db,
+      cacheSize,
       provider,
       providerKey: params.providerKey,
       hashes: retainedRows.map(([hash]) => hash),
       maxEntries,
       unreferencedFirst: params.unreferencedFirst,
     });
+    cacheSize = { size: reserved.size, exact: true };
+    exactAfterInsert = reserved.exactAfterInsert;
   }
   const now = params.now ?? Date.now();
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
@@ -345,28 +351,29 @@ export function upsertMemoryEmbeddingCache(params: {
     }
   }
   flush();
-  // Replacements make this an upper bound; a reserved write inserts only new rows.
-  return cacheSize + retainedRows.length;
+  // Reservation removes replacement keys, so every retained row then increments the count.
+  return { size: cacheSize.size + retainedRows.length, exact: exactAfterInsert };
 }
 
 /*
  * Evicts before inserting so even an uncommitted write never holds more rows than the cap;
  * a forced rebuild otherwise grows the primary file before the excess is deleted. The
- * retained size is only an upper bound, so count first: below capacity a direct UPSERT
- * cannot overflow. At capacity, removing replaced rows makes every UPSERT row a true insert.
+ * retained count needs a reread only when inexact. Below capacity a direct UPSERT cannot
+ * overflow; at capacity, removing replaced rows makes every UPSERT row a true insert.
  */
 function reserveMemoryEmbeddingCacheCapacity(params: {
   db: EngineConnection;
+  cacheSize: MemoryEmbeddingCacheSize;
   provider: { id: string; model: string };
   providerKey: string;
   hashes: string[];
   maxEntries: number;
   unreferencedFirst?: MemoryEmbeddingCacheEvictionPreference;
-}): number {
-  const { hashes, maxEntries } = params;
-  let size = countMemoryEmbeddingCache(params.db);
+}): { size: number; exactAfterInsert: boolean } {
+  const { hashes, maxEntries, cacheSize } = params;
+  let size = cacheSize.exact ? cacheSize.size : countMemoryEmbeddingCache(params.db);
   if (size + hashes.length <= maxEntries) {
-    return size;
+    return { size, exactAfterInsert: size === 0 };
   }
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(params.db);
   // Chunks stay below SQLite's portable binding limit.
@@ -386,7 +393,7 @@ function reserveMemoryEmbeddingCacheCapacity(params: {
   if (excess > 0) {
     size -= deleteOldestMemoryEmbeddingCacheRows(params.db, excess, params.unreferencedFirst);
   }
-  return size;
+  return { size, exactAfterInsert: true };
 }
 
 export function collectMemoryCachedEmbeddings(params: {

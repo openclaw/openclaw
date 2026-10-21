@@ -61,8 +61,11 @@ describe("serialized cold-load probes", () => {
         const owner = {
           hostElement: sidebar, isConnected: true,
           sessionData: { requestSessionDataUpdate() { return this; } },
-          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; }
+          shouldPublishSessionData() { return true; },
+          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; },
+          releaseSidebarSnapshot() {}
         };
+        const originalPublicationGate = owner.shouldPublishSessionData;
         if (${ownerProbes}) map.set(sidebar, owner);
         const paneOwner = {
           element: pane, isConnected: true,
@@ -87,6 +90,7 @@ describe("serialized cold-load probes", () => {
               nativeUntouched, restoredAfterCapture, receiverPreserved,
               nativeRestored: WeakMap === NativeWeakMap && NativeWeakMap.prototype.set === nativeSet && requestAnimationFrame === nativeFrame,
               renderRestored: paneOwner.render === originalRender,
+              publicationGateRestored: owner.shouldPublishSessionData === originalPublicationGate,
               storedOwner: ${ownerProbes} ? map.get(sidebar) === owner : !map.has(sidebar),
               ownerProbes: live.ownerProbes,
               sidebarMethods: live.solidSidebar?.passes.map(pass => pass.method) ?? [],
@@ -105,6 +109,7 @@ describe("serialized cold-load probes", () => {
         receiverPreserved: true,
         nativeRestored: true,
         renderRestored: true,
+        publicationGateRestored: true,
         storedOwner: true,
         ownerProbes,
         sidebarMethods: ownerProbes ? ["invalidate", "prepareRender", "commitRender"] : [],

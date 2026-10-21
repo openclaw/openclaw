@@ -90,6 +90,8 @@ import {
   type RetainedUpdateCustodyReport,
 } from "./update-retained-custody.js";
 
+export type UpdateCoreCompletion = "completed" | "pending";
+
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
@@ -230,6 +232,7 @@ export async function updateFinalizeCommand(
                 if (opts.json) {
                   defaultRuntime.writeJson({
                     status: "warning",
+                    coreUpdate: "pending" satisfies UpdateCoreCompletion,
                     nextAction: reportedNextAction,
                     mode: "finalize",
                     root,
@@ -557,9 +560,12 @@ async function updateFinalizeCommandInternal(
         if (!failure) {
           lifecycle.handoff?.complete(invokingRunId);
         }
+        // Exit status and advisories do not distinguish completed core work from deferred maintenance.
+        const coreUpdate: UpdateCoreCompletion = failure || retained ? "pending" : "completed";
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,
+            coreUpdate,
             ...(observed
               ? { recovery: observed.recovery, verification: observed.verification }
               : {}),

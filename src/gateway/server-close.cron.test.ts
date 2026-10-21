@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { saveCronStore } from "../cron/store.js";
@@ -26,9 +25,7 @@ it("joins cron writes and receipt finalization before close", async ({ signal })
   let closing: Promise<void> | undefined;
   let restore: (() => void) | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
+    const { server, kernel } = await fixture.startServer();
     const storePath = fixture.state.statePath("cron", "close.json");
     const job = makeCronReceiptJob("accepted-before-close", "main");
     await saveCronStore(storePath, { version: 1, jobs: [job] });

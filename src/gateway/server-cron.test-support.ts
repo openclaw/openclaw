@@ -26,6 +26,7 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
+  runCronSessionTurnMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -62,6 +63,9 @@ const {
     status: "ok",
     summary: "ok",
   })),
+  runCronSessionTurnMock: vi.fn<typeof import("../cron/session-run.js").runCronSessionTurn>(
+    async () => ({ status: "ok", summary: "ok" }),
+  ),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -115,11 +119,14 @@ const {
   isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
-// mock-isolation: Keep system events in the fixture; real enqueueing persists and wakes session work.
-vi.mock("../infra/system-events.js", async () => {
+// mock-isolation: Legacy enqueue wiring is synthetic; automation notice preparation stays real.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
   const { createCronSystemEventMocks } =
     await import("./server-cron.system-event-receipt.test-support.js");
-  return createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock);
+  return {
+    ...(await importOriginal<typeof import("../infra/system-events.js")>()),
+    ...createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock),
+  };
 });
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -184,6 +191,13 @@ vi.mock("../cron/delivery.js", async () => {
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
+
+// mock-isolation: Adapter routing retains Cron custody without invoking controller/model execution.
+vi.mock("../cron/session-run.js", () => ({
+  runCronSessionTurn: runCronSessionTurnMock,
+}));
+
+export { runCronIsolatedAgentTurnMock, runCronSessionTurnMock };
 
 // mock-isolation: Hooks are fixture-owned so registered host plugins cannot run during cron tests.
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -312,6 +326,15 @@ export function addSystemEventJob(
   return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
 }
 
+export function addAgentTurnJob(
+  service: CronServiceFixture,
+  name: string,
+  message: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
+}
+
 function runExit(overrides: Partial<RunExit> = {}): RunExit {
   return {
     reason: "manual-cancel",
@@ -372,6 +395,7 @@ export function resetGatewayCronMocks() {
   fetchWithSsrFGuardMock.mockClear();
   sendCronAnnouncePayloadStrictMock.mockClear();
   runCronIsolatedAgentTurnMock.mockClear();
+  runCronSessionTurnMock.mockClear();
   runCronChangedMock.mockClear();
   getGlobalHookRunnerMock.mockClear();
   abortAndDrainEmbeddedAgentRunMock.mockClear();

@@ -4,6 +4,7 @@ import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setu
 import "../../components/sparkline-tile.tsx";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import "../../components/desktop/desktop-panel.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
@@ -397,7 +398,7 @@ function SystemsWorkspace(props: {
       controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.title"));
+  const title = () => (row() ? systemName(row()!) : t("systems.select"));
   const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
     !controller().connected()
@@ -448,9 +449,15 @@ function SystemsWorkspace(props: {
   };
   return (
     <section class="systems-workspace" aria-label={t("systems.title")}>
+      <HubPageHeader
+        active="systems"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#systems-workspace"
+        class="systems-page-header"
+      />
       <header class="systems-toolbar">
         <div class="systems-heading">
-          <h1>{title()}</h1>
+          <h2>{title()}</h2>
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select

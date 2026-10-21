@@ -333,9 +333,16 @@ suite.define(() => {
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await active.locator(".lr-files .lr-file summary").click();
 
-        const external = page.waitForEvent("popup");
-        await named(panel, "link", "Open on GitHub").click();
-        const popup = await external;
+        await clickButton(panel, "Link reader actions");
+        const external = named(
+          panel.getByRole("menu", { name: "Link reader actions", exact: true }),
+          "menuitem",
+          "Open on GitHub",
+        );
+        expect(await external.getAttribute("href")).toBe(commit.url);
+        expect(await external.getAttribute("target")).toBe("_blank");
+        expect(await external.getAttribute("rel")).toBe("noopener noreferrer");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), external.click()]);
         await popup.waitForLoadState("domcontentloaded");
         expect(popup.url()).toBe(commit.url);
         await popup.close();

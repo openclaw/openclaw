@@ -130,6 +130,12 @@ const ownedChildMetadata = {
       sessionId: "cli-session-123",
       authProfileId: "anthropic:work",
       extraSystemPromptHash: "prompt-hash",
+      reseedReceipt: {
+        version: 1,
+        promptHash: "a".repeat(64),
+        localSessionId: "sess-owned-child",
+        userTurnDisposition: "omitted",
+      },
     },
   },
   claudeCliSessionId: "cli-session-123",
@@ -236,6 +242,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   await writeSessionStore({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
+        agentHarnessId: "codex",
         sessionFile: customSessionFile,
         ...ownedChildMetadata,
         forkedFromParent: undefined,
@@ -254,7 +261,15 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath });
   for (const entry of [reset.payload?.entry, stored]) {
     expect(entry).not.toHaveProperty("sessionFile");
-    expect(entry).toMatchObject({ ...ownedChildMetadata, ...provenance });
+    expect(entry).not.toHaveProperty("agentHarnessId");
+    expect(entry).toMatchObject({
+      sessionId: "sess-owned-child",
+      ...ownedChildMetadata,
+      ...provenance,
+    });
+    // Spawned children retain CLI bindings and reseed receipts (fa56682b3ced).
+    expect(entry?.cliSessionIds).toEqual(ownedChildMetadata.cliSessionIds);
+    expect(entry?.cliSessionBindings).toEqual(ownedChildMetadata.cliSessionBindings);
   }
   expect(stored?.inheritedGitContributorProfileIds).toEqual(["original-contributor"]);
 });

@@ -38,39 +38,48 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+function leaseFixture(beforeCommit = () => {}) {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("lease-diagnostics-") };
+  const database = openOpenClawStateDatabase({ env });
+  const db = requireNativeSqliteDatabase(database.db);
+  const identity = { scope: "synthetic", key: "release", owner: "original-owner" };
+  runOpenClawStateWriteTransaction(
+    ({ db: connection }) => acquireOpenClawStateLeaseInTransaction(connection, identity, 30_000),
+    { database, env },
+  );
+  const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+    if (request.stage === "commit") {
+      beforeCommit();
+    }
+    grant();
+  });
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  const release = (databaseIdentity = readDatabasePathIdentitySync(database.path).key) =>
+    runWithSqliteWorkerStateContext({ environment: env }, () =>
+      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+        executeOpenClawStateLeaseCommand(
+          {
+            type: "stateLease.release",
+            input: { identity, operationLabel: "test.lease.release", databaseIdentity },
+          },
+          database,
+        ),
+      ),
+    );
+  return { env, database, db, identity, admission, release };
+}
+
 it.each(["native", "existing", "worker"] as const)(
   "keeps %s lease try-locks quiet without hiding ordinary transaction contention",
   async (kind) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("lease-diagnostics-") };
-    const database = openOpenClawStateDatabase({ env });
-    const identity = { scope: "synthetic", key: "release", owner: "owner" };
-    runOpenClawStateWriteTransaction(
-      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, 30_000),
-      { database, env },
-    );
+    const { env, database, identity, admission, release: workerRelease } = leaseFixture();
     const peer = new DatabaseSync(database.path);
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-    vi.spyOn(Atomics, "wait").mockImplementation(() => {
-      admission.service();
-      return "ok";
-    });
     const release = () =>
       kind === "worker"
-        ? runWithSqliteWorkerStateContext({ environment: env }, () =>
-            withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-              executeOpenClawStateLeaseCommand(
-                {
-                  type: "stateLease.release",
-                  input: {
-                    identity,
-                    operationLabel: "test.lease.release",
-                    databaseIdentity: readDatabasePathIdentitySync(database.path).key,
-                  },
-                },
-                database,
-              ),
-            ),
-          )
+        ? workerRelease()
         : releaseOpenClawStateLease({
             ...identity,
             leaseLabel: "state lease",
@@ -108,57 +117,36 @@ it.each(["native", "existing", "worker"] as const)(
 it.each(["released", "admission-refused", "identity-mismatch", "replacement-owner"] as const)(
   "settles worker lease release at its final admission (%s)",
   async (outcome) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("lease-release-admission-") };
-    const database = openOpenClawStateDatabase({ env });
-    const db = requireNativeSqliteDatabase(database.db);
-    const identity = { scope: "synthetic", key: "release", owner: "original-owner" };
-    runOpenClawStateWriteTransaction(
-      ({ db: connection }) => acquireOpenClawStateLeaseInTransaction(connection, identity, 30_000),
-      { database, env },
-    );
+    const refused = new Error("Lease cleanup owner refused its final grant");
+    const {
+      database,
+      db,
+      identity,
+      admission,
+      release: workerRelease,
+    } = leaseFixture(() => {
+      if (outcome === "admission-refused") {
+        throw refused;
+      }
+      if (outcome === "replacement-owner") {
+        db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?").run(
+          "replacement-owner",
+          identity.scope,
+          identity.key,
+        );
+      }
+    });
     let databaseIdentity = readDatabasePathIdentitySync(database.path).key;
     if (outcome === "identity-mismatch") {
       const otherPath = path.join(dirs.make("lease-other-file-"), "state.sqlite");
-      const other = new DatabaseSync(otherPath);
-      other.close();
+      new DatabaseSync(otherPath).close();
       databaseIdentity = readDatabasePathIdentitySync(otherPath).key;
     }
-    const refused = new Error("Lease cleanup owner refused its final grant");
-    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-      if (request.stage === "commit") {
-        if (outcome === "admission-refused") {
-          throw refused;
-        }
-        if (outcome === "replacement-owner") {
-          db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?").run(
-            "replacement-owner",
-            identity.scope,
-            identity.key,
-          );
-        }
-      }
-      grant();
-    });
-    vi.spyOn(Atomics, "wait").mockImplementation(() => {
-      admission.service();
-      return "ok";
-    });
     const deletes = trackSqliteStatementExecutions(db, ["release"], (sql) =>
       /^delete from "state_leases"(?:\s|$)/i.test(sql) ? "release" : null,
     );
     const exec = vi.spyOn(db, "exec");
-    const release = () =>
-      runWithSqliteWorkerStateContext({ environment: env }, () =>
-        withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-          executeOpenClawStateLeaseCommand(
-            {
-              type: "stateLease.release",
-              input: { identity, operationLabel: "test.lease.release", databaseIdentity },
-            },
-            database,
-          ),
-        ),
-      );
+    const release = () => workerRelease(databaseIdentity);
     try {
       if (outcome === "admission-refused") {
         expect(release).toThrow("SQLite transaction admission was refused");

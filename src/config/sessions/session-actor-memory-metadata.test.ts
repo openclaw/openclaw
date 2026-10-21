@@ -227,6 +227,107 @@ describe("memory actor metadata storage", () => {
     expect((await hydrate(storage)).eventJson).toEqual(after.eventJson);
   });
 
+  it("keeps adopted file provenance through media rewrite, boundary removal and manual trim", async () => {
+    const { actor, storage, raw, user } = await fixture();
+    await raw(header);
+    await user("old-discarded", "Earlier original source");
+    await user("old-kept", "Original notes.md");
+    await user("adoption-boundary", "Prepare the PR");
+    const prior = actor.snapshot(authority)!.transcript.watermark;
+    await commitMemory(storage, "session.entry.patch", {
+      operation: {
+        kind: "fields",
+        patch: {
+          worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+          priorWorkspace: {
+            worktreeId: "adopted",
+            sessionId,
+            workspaceDir: "/synthetic/original",
+            fileRoot: "/synthetic/original",
+            through: prior,
+          },
+        },
+      },
+      preserveActivity: true,
+    });
+    await user("current", "Current notes.md");
+    await commitMemory(storage, "session.metadata.append", {
+      scope,
+      event: {
+        type: "message",
+        id: "assistant",
+        parentId: "current",
+        timestamp: "1970-01-01T00:00:00.002Z",
+      },
+      options: { appendIntent: "active-branch" },
+      message: {
+        messageJson: JSON.stringify({
+          role: "assistant",
+          content: "Prepared the PR",
+          timestamp: 2,
+        }),
+        cwd: "/synthetic",
+        validateTurn: false,
+      },
+    });
+    const anchor = actor
+      .snapshot(authority)!
+      .transcript.anchors.find((item) => item.entryId === "assistant")!;
+    const target = { kind: "anchor" as const, anchor, active: "exact" as const };
+    const expected = await readMemory(storage, "session.rewrite.prepare", { scope, target });
+    assert(expected);
+    await commitMemory(storage, "session.rewrite.commit", {
+      scope,
+      target,
+      expected,
+      message: {
+        role: "assistant",
+        content: "Prepared the PR and attached a preview",
+        timestamp: 2,
+      },
+    });
+    const rewritten = actor.snapshot(authority)!;
+    expect(rewritten.transcript.watermark.generation).not.toBe(prior.generation);
+    expect(rewritten.entry?.priorWorkspace?.through).toEqual({
+      generation: rewritten.transcript.watermark.generation,
+      maxSeq: 3,
+    });
+    const before = await hydrate(storage);
+    const next = before.events
+      .filter((event) => !isIndexedSessionEntry(event) || event.id !== "adoption-boundary")
+      .map((event) =>
+        isIndexedSessionEntry(event) && event.id === "current"
+          ? Object.assign({}, event, { parentId: "old-kept" })
+          : event,
+      );
+    await commitMemory(storage, "session.transcript.replaceSuffix", {
+      scope,
+      args: [before.events, next, 0, before.version.updatedAt, false, []],
+    });
+    const replaced = actor.snapshot(authority)!;
+    expect(replaced.entry?.priorWorkspace?.through).toEqual({
+      generation: replaced.transcript.watermark.generation,
+      maxSeq: 2,
+    });
+    expect(replaced.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+      ["old-discarded", 1],
+      ["old-kept", 2],
+      ["current", 3],
+      ["assistant", 4],
+    ]);
+    await commitMemory(storage, "session.transcript.manualCompact", { scope, maxLines: 4 });
+    const compacted = actor.snapshot(authority)!;
+    expect(compacted.entry?.priorWorkspace?.through).toEqual({
+      generation: compacted.transcript.watermark.generation,
+      maxSeq: 1,
+    });
+    expect(compacted.transcript.anchors.map(({ entryId, rawSeq }) => [entryId, rawSeq])).toEqual([
+      ["old-kept", 1],
+      ["current", 2],
+      ["assistant", 3],
+    ]);
+  });
+
   it("retains an old window across branch replacement and commits compaction accounting atomically", async () => {
     const { storage, raw, user, acquire } = await fixture();
     await raw(header);

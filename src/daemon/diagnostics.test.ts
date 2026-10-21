@@ -1,14 +1,15 @@
-// Daemon diagnostics tests cover service diagnostic collection and formatting.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readGatewayLogTailLines, readLastGatewayErrorLine } from "./diagnostics.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
-const tempDirs: string[] = [];
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 const DIAGNOSTIC_TAIL_BYTES = 256 * 1024;
+const blocked = "gateway start blocked";
+const bindError = "failed to bind gateway socket";
 type PositionalRead = (
   buffer: Buffer,
   offset: number,
@@ -16,126 +17,68 @@ type PositionalRead = (
   position: number,
 ) => Promise<{ bytesRead: number; buffer: Buffer }>;
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+afterEach(() => vi.restoreAllMocks());
 
-function makeTempStateDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-diagnostics-"));
-  tempDirs.push(dir);
-  return dir;
+function logs(stdout: string, stderr?: string, platform: "linux" | "darwin" = "linux") {
+  const env = {
+    HOME: dirs.make("diagnostic-home-"),
+    OPENCLAW_STATE_DIR: dirs.make("diagnostic-state-"),
+  };
+  const paths = (platform === "darwin" ? resolveGatewaySupervisorLogPaths : resolveGatewayLogPaths)(
+    env,
+  );
+  fs.mkdirSync(paths.logDir, { recursive: true });
+  fs.writeFileSync(paths.stdoutPath, stdout, "utf8");
+  if (stderr !== undefined) {
+    fs.writeFileSync(paths.stderrPath, stderr, "utf8");
+  }
+  return env;
 }
 
-describe("readLastGatewayErrorLine", () => {
-  it("reads the launchd supervisor log instead of a state-dir stderr file on darwin", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    const launchdLogs = resolveGatewaySupervisorLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    fs.mkdirSync(launchdLogs.logDir, { recursive: true });
-    fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");
-    fs.writeFileSync(launchdLogs.stdoutPath, "Gateway failed to start: current failure\n", "utf8");
+it("reads the launchd supervisor log instead of a state-dir stderr file on darwin", async () => {
+  const env = logs("Gateway failed to start: current failure\n", undefined, "darwin");
+  const stateLogs = resolveGatewayLogPaths(env);
+  fs.mkdirSync(stateLogs.logDir, { recursive: true });
+  fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket stale\n", "utf8");
 
-    await expect(readLastGatewayErrorLine(env, { platform: "darwin" })).resolves.toBe(
-      "Gateway failed to start: current failure",
+  await expect(readLastGatewayErrorLine(env, { platform: "darwin" })).resolves.toBe(
+    "Gateway failed to start: current failure",
+  );
+});
+
+it.each([
+  ["stderr wins", blocked, bindError, bindError],
+  ["outside tail", `${blocked}\n${"filler\n".repeat(50_000)}current\n`, undefined, null],
+  [
+    "partial boundary",
+    `${"x".repeat(DIAGNOSTIC_TAIL_BYTES + 1)} ${blocked}\ncurrent\n`,
+    undefined,
+    null,
+  ],
+  ["ENOSPC over generic stderr", "ENOSPC", "generic stderr", "ENOSPC"],
+] as const)("linux diagnostic tail: %s", async (_name, stdout, stderr, expected) => {
+  await expect(readLastGatewayErrorLine(logs(stdout, stderr), { platform: "linux" })).resolves.toBe(
+    expected,
+  );
+});
+
+it("fills short positional reads before decoding the tail", async () => {
+  const file = path.join(dirs.make("diagnostic-tail-"), "gateway.log");
+  fs.writeFileSync(file, "old line\nrecent one\nrecent two\n", "utf8");
+  const realOpen = fsPromises.open.bind(fsPromises);
+  vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+    const handle = await realOpen(...args);
+    const realRead = handle.read.bind(handle) as PositionalRead;
+    const shortRead = vi.fn<PositionalRead>((buffer, offset, length, position) =>
+      realRead(buffer, offset, Math.min(length, 3), position),
     );
+    Object.defineProperty(handle, "read", { configurable: true, value: shortRead });
+    return handle;
   });
 
-  it("prefers the current stderr error over a stale stdout match on linux", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    // stderr carries the real, current failure; stdout carries an older matching
-    // line. On non-darwin platforms stderr is the strongest failure signal, so
-    // it must win instead of the stale stdout match.
-    fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket EADDRINUSE\n", "utf8");
-    fs.writeFileSync(stateLogs.stdoutPath, "gateway start blocked: stale prior reason\n", "utf8");
-
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "failed to bind gateway socket EADDRINUSE",
-    );
-  });
-
-  it("ignores stale stdout errors outside the bounded diagnostic tail", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    fs.writeFileSync(
-      stateLogs.stdoutPath,
-      [
-        "gateway start blocked: stale prior reason",
-        "non-error filler line\n".repeat(20_000),
-        "gateway stdout current",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
-  });
-
-  it("ignores a matching partial line at the bounded tail boundary", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    fs.writeFileSync(
-      stateLogs.stdoutPath,
-      `${"x".repeat(DIAGNOSTIC_TAIL_BYTES + 1)} gateway start blocked: partial stale reason\n` +
-        "gateway stdout current\n",
-      "utf8",
-    );
-
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBeNull();
-  });
-
-  it("fills short positional reads before decoding the tail", async () => {
-    const dir = makeTempStateDir();
-    const file = path.join(dir, "gateway.log");
-    fs.writeFileSync(file, "old line\nrecent one\nrecent two\n", "utf8");
-    const realOpen = fsPromises.open.bind(fsPromises);
-    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const realRead = handle.read.bind(handle) as PositionalRead;
-      const shortRead = vi.fn<PositionalRead>((buffer, offset, length, position) =>
-        realRead(buffer, offset, Math.min(length, 3), position),
-      );
-      Object.defineProperty(handle, "read", { configurable: true, value: shortRead });
-      return handle;
-    });
-
-    await expect(readGatewayLogTailLines(file)).resolves.toEqual([
-      "old line",
-      "recent one",
-      "recent two",
-    ]);
-  });
-
-  it("surfaces ENOSPC from stdout ahead of a generic stderr tail on linux", async () => {
-    const stateDir = makeTempStateDir();
-    const homeDir = makeTempStateDir();
-    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
-    const stateLogs = resolveGatewayLogPaths(env);
-    fs.mkdirSync(stateLogs.logDir, { recursive: true });
-    fs.writeFileSync(
-      stateLogs.stdoutPath,
-      "parse/handle error: Error: ENOSPC: no space left on device, write\n",
-      "utf8",
-    );
-    fs.writeFileSync(stateLogs.stderrPath, "gateway stderr tail without a known pattern\n", "utf8");
-
-    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
-      "parse/handle error: Error: ENOSPC: no space left on device, write",
-    );
-  });
+  await expect(readGatewayLogTailLines(file)).resolves.toEqual([
+    "old line",
+    "recent one",
+    "recent two",
+  ]);
 });

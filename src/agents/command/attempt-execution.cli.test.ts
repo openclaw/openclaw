@@ -41,7 +41,11 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
-import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
+} from "../auth-profiles/credential-fixtures.test-support.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { closeAuthProfileReadPool } from "../auth-profiles/sqlite.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -1422,14 +1426,11 @@ describe("CLI attempt execution", () => {
     {
       name: "selects a google-gemini-cli auth profile for canonical Google models routed through Gemini CLI",
       profiles: () => ({
-        "google-gemini-cli:user@example.test": {
-          type: "oauth",
+        "google-gemini-cli:user@example.test": createOAuthRefreshCredential({
           provider: "google-gemini-cli",
-          access: "access-token",
-          refresh: "refresh-token",
           expires: Date.now() + 3_600_000,
           email: "user@example.test",
-        },
+        }),
       }),
       order: { "google-gemini-cli": ["google-gemini-cli:user@example.test"] },
       expectedProfile: "google-gemini-cli:user@example.test",
@@ -1438,7 +1439,7 @@ describe("CLI attempt execution", () => {
       name: "forwards pinned canonical Google API-key profiles to Google models routed through Gemini CLI",
       entry: { authProfileOverride: "google:api-key", authProfileOverrideSource: "user" },
       profiles: () => ({
-        "google:api-key": { type: "api_key", provider: "google", key: "gemini-api-key" },
+        "google:api-key": createApiKeyCredential("google", "gemini-api-key"),
       }),
       expectedProfile: "google:api-key",
     },
@@ -1449,11 +1450,7 @@ describe("CLI attempt execution", () => {
         authProfileOverrideSource: "user",
       },
       profiles: () => ({
-        "vercel-ai-gateway:default": {
-          type: "api_key",
-          provider: "vercel-ai-gateway",
-          key: "vercel-key",
-        },
+        "vercel-ai-gateway:default": createApiKeyCredential("vercel-ai-gateway", "vercel-key"),
       }),
       error: /cannot use auth profile "vercel-ai-gateway:default"/,
     },
@@ -1461,14 +1458,11 @@ describe("CLI attempt execution", () => {
       name: "ignores stale auto-selected profiles when resolving Gemini CLI auth order",
       entry: { authProfileOverride: "openai:work", authProfileOverrideSource: "auto" },
       profiles: () => ({
-        "openai:work": {
-          type: "oauth",
-          provider: "openai",
+        "openai:work": createOAuthRefreshCredential({
           access: "openai-access",
           refresh: "openai-refresh",
-          expires: Date.now() + 60_000,
-        },
-        "google:api-key": { type: "api_key", provider: "google", key: "gemini-api-key" },
+        }),
+        "google:api-key": createApiKeyCredential("google", "gemini-api-key"),
       }),
       order: { google: ["google:api-key"] },
       expectedProfile: "google:api-key",
@@ -1536,7 +1530,7 @@ describe("CLI attempt execution", () => {
     ).toEqual([]);
   });
 
-  it("persists CLI replies into the session transcript", async () => {
+  it.each([false, true])("persists CLI replies with diagnostic usage=%s", async (diagnostic) => {
     const sessionKey = "agent:main:subagent:cli-transcript";
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-transcript",
@@ -1558,6 +1552,9 @@ describe("CLI attempt execution", () => {
     Object.assign(expectDefined(result.meta.agentMeta, "agent metadata"), {
       usage: { input: 12, output: 4, cacheRead: 3, total: 19 },
       lastCallUsage: { input: 7, output: 4, cacheRead: 2, total: 13 },
+      ...(diagnostic
+        ? { diagnosticUsage: { input: 6, output: 77, cacheRead: 54_631, total: 54_714 } }
+        : {}),
     });
     const beforePersist = Date.now();
     const updatedEntry = await persistCliTranscriptEntry({
@@ -1587,10 +1584,9 @@ describe("CLI attempt execution", () => {
         model: "opus",
         content: [{ type: "text", text: "hello from cli" }],
         usage: {
-          input: 7,
-          output: 4,
-          cacheRead: 2,
-          totalTokens: 13,
+          ...(diagnostic
+            ? { input: 6, output: 77, cacheRead: 54_631, totalTokens: 54_714 }
+            : { input: 7, output: 4, cacheRead: 2, totalTokens: 13 }),
           contextUsage: { state: "available", promptTokens: 9, totalTokens: 13 },
         },
       },
@@ -2362,13 +2358,7 @@ describe("embedded attempt harness pinning", () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const sessionEntry = makeSessionEntry("codex-auth-session");
     saveTestAuthProfiles(tmpDir, {
-      "openai:work": {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-        expires: Date.now() + 60_000,
-      },
+      "openai:work": createOAuthRefreshCredential(),
     });
     clearAgentHarnesses();
     registerAgentHarness({

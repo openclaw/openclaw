@@ -6,8 +6,9 @@ const mockState = vi.hoisted(() => ({
   autoHello: true,
 }));
 
-const resolveGatewayClientBootstrapMock = vi.hoisted(() =>
-  vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
+// mock-isolation: Startup fixtures supply endpoint/auth facts without reading operator config.
+vi.mock("../gateway/client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
     url: "wss://127.0.0.1:18789",
     urlSource: "local loopback",
     connectionDetails: {
@@ -16,52 +17,33 @@ const resolveGatewayClientBootstrapMock = vi.hoisted(() =>
       message: "Gateway target: wss://127.0.0.1:18789",
     },
     tlsFingerprint: "sha256:local",
-    auth: {
-      token: undefined,
-      password: undefined,
-    },
+    auth: { token: undefined, password: undefined },
   })),
-);
-
-vi.mock("../gateway/client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: resolveGatewayClientBootstrapMock,
 }));
 
+// mock-isolation: The hello handshake is controlled without opening a real Gateway connection.
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class MockGatewayClient {
-    private readonly options: Record<string, unknown>;
-
-    constructor(options: Record<string, unknown>) {
-      this.options = options;
+    constructor(private readonly options: Record<string, unknown>) {
       mockState.clientOptions = options;
     }
 
     start(): void {
-      if (!mockState.autoHello) {
-        return;
-      }
       const onHelloOk = this.options.onHelloOk;
-      if (typeof onHelloOk === "function") {
+      if (mockState.autoHello && typeof onHelloOk === "function") {
         onHelloOk();
       }
     }
 
     async request(): Promise<void> {}
-
     async stopAndWait(): Promise<void> {}
   },
 }));
-
+// mock-isolation: Start the synthetic client directly without the real event-loop readiness wait.
 vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
     client.start();
-    return {
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 1,
-    };
+    return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 1 };
   }),
 }));
 
@@ -78,37 +60,27 @@ vi.mock("../../packages/gateway-protocol/src/client-info.js", () => ({
 }));
 
 const { OpenClawChannelBridge } = await import("./channel-bridge.js");
+const createBridge = () =>
+  new OpenClawChannelBridge({}, { claudeChannelMode: "off", verbose: false });
 
 describe("OpenClawChannelBridge startup", () => {
   beforeEach(() => {
-    mockState.clientOptions = null;
-    mockState.autoHello = true;
+    Object.assign(mockState, { clientOptions: null, autoHello: true });
   });
 
   it("passes the resolved TLS fingerprint to the Gateway client", async () => {
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "off",
-      verbose: false,
-    });
-
+    const bridge = createBridge();
     await bridge.start();
-
     expect(mockState.clientOptions?.tlsFingerprint).toBe("sha256:local");
     await bridge.close();
   });
 
   it("waits for the Gateway hello before completing startup", async () => {
     mockState.autoHello = false;
-    const bridge = new OpenClawChannelBridge({} as never, {
-      claudeChannelMode: "off",
-      verbose: false,
-    });
-
+    const bridge = createBridge();
     const onStarted = vi.fn();
     const started = bridge.start().then(onStarted);
-    await vi.waitFor(() => {
-      expect(mockState.clientOptions).not.toBeNull();
-    });
+    await vi.waitFor(() => expect(mockState.clientOptions).not.toBeNull());
     expect(onStarted).not.toHaveBeenCalled();
     expect(mockState.clientOptions?.notifyOnStartupRetry).not.toBe(true);
 

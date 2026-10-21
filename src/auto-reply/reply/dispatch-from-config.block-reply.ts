@@ -95,7 +95,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           state.progressState.accumulatedBlockTtsText += "\n";
         }
         state.progressState.accumulatedBlockTtsText += payload.text;
-        state.progressState.blockCount++;
       }
       let source: BlockReplySource | undefined;
       let cleanedPayload = payload;

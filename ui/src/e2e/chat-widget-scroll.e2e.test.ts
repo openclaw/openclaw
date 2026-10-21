@@ -88,6 +88,21 @@ async function swipe(
       touchPoints: [],
       timestamp: timestamp + moveCount * moveSeconds + 0.002,
     });
+    // The CDP response does not guarantee delivery to the document's listener.
+    await expect
+      .poll(
+        async () =>
+          (
+            await Promise.all(
+              releases.map((release) => release.evaluate(({ state }) => state.time)),
+            )
+          ).some((time) => time !== null),
+        {
+          timeout: 10_000,
+          message: "Native touch gesture did not release in the page or its frames",
+        },
+      )
+      .toBe(true);
     const releaseTimes = await Promise.all(
       releases.map((release) => release.evaluate(({ state }) => state.time)),
     );

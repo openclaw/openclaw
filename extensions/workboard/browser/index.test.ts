@@ -1,11 +1,11 @@
 import "./test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiAccessory,
   ControlUiNavigationItem,
   ControlUiPage,
 } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import workboardPlugin from "./index.ts";
 import { createGatewaySession, createWorkboardCard } from "./lib/workboard/test/index-helpers.ts";

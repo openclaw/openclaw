@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { buildFishAudioSpeechProvider } from "./speech-provider.js";
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -31,6 +32,31 @@ afterEach(() => {
   fetchMock.mockReset();
   vi.unstubAllEnvs();
 });
+
+it.each(["synthesize", "stream", "voices"] as const)(
+  "redacts the active credential from %s provider diagnostics",
+  async (operation) => {
+    const credential = "opaque-fish-secret42";
+    respond(() => Response.json({ message: `provider diagnostic ${credential}` }, { status: 401 }));
+    const params = {
+      ...request,
+      providerConfig: { apiKey: credential },
+      target: "audio-file" as const,
+    };
+    const pending =
+      operation === "synthesize"
+        ? provider.synthesize(params)
+        : operation === "stream"
+          ? provider.streamSynthesize?.(params)
+          : provider.listVoices?.(params);
+    assert(pending);
+    const error: unknown = await pending.catch((cause: unknown) => cause);
+    assert(error instanceof Error);
+    expect(formatErrorMessage(error)).not.toContain(credential);
+    expect(error.message).toContain("provider diagnostic");
+    expect(error).toMatchObject({ status: 401, statusCode: 401 });
+  },
+);
 
 it("preserves Talk setting precedence and explicit blank-key clearing", () => {
   const params = {

@@ -4,6 +4,7 @@ import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-run
 import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout, runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
 import {
@@ -79,10 +80,6 @@ function resolveProbeTransport(token: string, options?: TelegramProbeOptions): T
     }
   }
   return transport;
-}
-
-function normalizeBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
 }
 
 async function readTelegramDiagnosticJson(response: Response, timeoutMs: number): Promise<unknown> {
@@ -197,17 +194,17 @@ export async function probeTelegram(
       }
       result.bot = {
         id: typeof bot.id === "number" ? bot.id : null,
-        isBot: normalizeBoolean(bot.is_bot),
+        isBot: asBoolean(bot.is_bot) ?? null,
         firstName: typeof bot.first_name === "string" ? bot.first_name : null,
         username: typeof bot.username === "string" ? bot.username : null,
-        canJoinGroups: normalizeBoolean(bot.can_join_groups),
-        canReadAllGroupMessages: normalizeBoolean(bot.can_read_all_group_messages),
-        canManageBots: normalizeBoolean(bot.can_manage_bots),
-        supportsInlineQueries: normalizeBoolean(bot.supports_inline_queries),
-        canConnectToBusiness: normalizeBoolean(bot.can_connect_to_business),
-        hasMainWebApp: normalizeBoolean(bot.has_main_web_app),
-        hasTopicsEnabled: normalizeBoolean(bot.has_topics_enabled),
-        allowsUsersToCreateTopics: normalizeBoolean(bot.allows_users_to_create_topics),
+        canJoinGroups: asBoolean(bot.can_join_groups) ?? null,
+        canReadAllGroupMessages: asBoolean(bot.can_read_all_group_messages) ?? null,
+        canManageBots: asBoolean(bot.can_manage_bots) ?? null,
+        supportsInlineQueries: asBoolean(bot.supports_inline_queries) ?? null,
+        canConnectToBusiness: asBoolean(bot.can_connect_to_business) ?? null,
+        hasMainWebApp: asBoolean(bot.has_main_web_app) ?? null,
+        hasTopicsEnabled: asBoolean(bot.has_topics_enabled) ?? null,
+        allowsUsersToCreateTopics: asBoolean(bot.allows_users_to_create_topics) ?? null,
       };
 
       if (includeWebhookInfo) {

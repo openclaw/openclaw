@@ -6,6 +6,7 @@ import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
 } from "./compiled-cache.js";
+import { resolveMemoryWikiAgentConfig } from "./config.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
@@ -113,10 +114,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.obsidian.daily", {}],
 ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
 
-type GatewayOptions = Omit<
-  Parameters<typeof registerMemoryWikiGatewayMethods>[0],
-  "api" | "config"
->;
+type GatewayOptions = Partial<Omit<Parameters<typeof registerMemoryWikiGatewayMethods>[0], "api">>;
 async function createGateway(
   method: string,
   options:
@@ -132,7 +130,9 @@ async function createGateway(
   const { api, registerGatewayMethod } = createPluginApi();
   registerMemoryWikiGatewayMethods({
     api,
-    config,
+    getAppConfig: () => ({}),
+    resolveConfig: (agentId, appConfig) =>
+      resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
     ...(typeof options === "function" ? options(vault) : options),
   });
   return {

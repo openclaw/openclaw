@@ -790,6 +790,23 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
     };
   }
 
+  function expectedChild(
+    runId: string,
+    startedAt: number,
+    childState: "running" | "completing" | "paused" = "running",
+    wakeArmed = false,
+    extra: { label?: string; childSessionKey?: string } = {},
+  ) {
+    return {
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      startedAt,
+      state: childState,
+      wakeArmed,
+      ...extra,
+    };
+  }
+
   it("lists the ordered current roster while excluding unowned, settled, and superseded children", () => {
     const yielded = runningRun("run-yielded", {
       label: "Work session",
@@ -849,42 +866,13 @@ describe("listUnsettledRequesterChildrenInRuns", () => {
         now: NOW,
       }),
     ).toEqual([
-      {
-        runId: "run-completing",
-        childSessionKey: "agent:main:subagent:run-completing",
-        startedAt: NOW - 3_000,
-        state: "completing",
-        wakeArmed: false,
-      },
-      {
-        runId: "run-paused",
-        childSessionKey: "agent:main:subagent:run-paused",
-        startedAt: NOW - 2_000,
-        state: "paused",
-        wakeArmed: true,
-      },
-      {
-        runId: "run-yielded",
-        childSessionKey: "agent:main:subagent:run-yielded",
-        label: "Work session",
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: true,
-      },
-      {
-        runId: "run-earlier",
-        childSessionKey: "agent:main:subagent:run-earlier",
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: false,
-      },
-      {
-        runId: "current",
-        childSessionKey: old.childSessionKey,
-        startedAt: NOW - 1_000,
-        state: "running",
-        wakeArmed: false,
-      },
+      expectedChild("run-completing", NOW - 3_000, "completing"),
+      expectedChild("run-paused", NOW - 2_000, "paused", true),
+      expectedChild("run-yielded", NOW - 1_000, "running", true, { label: "Work session" }),
+      expectedChild("run-earlier", NOW - 1_000),
+      expectedChild("current", NOW - 1_000, "running", false, {
+        childSessionKey: "agent:main:subagent:old",
+      }),
     ]);
   });
 });

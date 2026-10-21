@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createSignal, flush } from "solid-js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState, type DreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
@@ -256,6 +257,52 @@ describe("dreaming view", () => {
     viewState = createDreamingViewState();
   });
 
+  it("retains diary controls and focus across same-tab snapshot refreshes", () => {
+    setDreamSubTab("diary");
+    const initial = buildProps();
+    let update!: (next: DreamingProps) => void;
+    const { container } = mountSolid(() => {
+      const [props, setProps] = createSignal(initial);
+      update = setProps;
+      return renderDreaming({
+        ...initial,
+        get viewState() {
+          return props().viewState;
+        },
+        get dreamDiaryContent() {
+          return props().dreamDiaryContent;
+        },
+      });
+    });
+    flush();
+    const diary = expectElement(container, ".dreams-diary");
+    const day = container.querySelector<HTMLButtonElement>(".dreams-diary__day-chip");
+    expect(day).toBeInstanceOf(HTMLButtonElement);
+    day?.focus();
+    expect(document.activeElement).toBe(day);
+
+    update({
+      ...initial,
+      viewState: { ...initial.viewState },
+      dreamDiaryContent:
+        initial.dreamDiaryContent?.replace(
+          "The repository whispered of forgotten endpoints tonight.",
+          "A refreshed dream is still on the same diary day.",
+        ) ?? null,
+    });
+    flush();
+
+    expect(container.querySelector(".dreams-diary")).toBe(diary);
+    expect(container.querySelector(".dreams-diary__day-chip")).toBe(day);
+    expect(document.activeElement).toBe(day);
+    expect(container.textContent).toContain("A refreshed dream is still on the same diary day.");
+
+    update({ ...initial, viewState: { ...initial.viewState, activeSubTab: "scene" } });
+    flush();
+    expect(diary.isConnected).toBe(false);
+    expectElement(container, ".dreams__lobster");
+  });
+
   it("renders the active dream scene chrome and selects another view", () => {
     vi.spyOn(Date, "now").mockReturnValue(0);
     viewState.dreamIndex = 0;
@@ -430,8 +477,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
@@ -567,8 +619,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("reports/weekly-stock.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(textItems(container, ".dreams-diary__insight-list strong")).not.toContain(
       "Page details",

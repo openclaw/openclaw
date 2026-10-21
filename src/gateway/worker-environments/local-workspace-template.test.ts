@@ -11,7 +11,6 @@ import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-bac
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
@@ -341,13 +340,17 @@ it("joins background preparation through the allocation owner", async ({ signal 
 });
 
 it.each(["shutdown", "config"])(
-  "settles an interrupted background install before releasing allocation (%s)",
+  "settles a background install without publishing after %s",
   async (reason) => {
     const warmed = prewarmFixture();
+    let config = warmed.config;
     const controller = new AbortController();
     const { waitForStart, release } = holdInstall();
     let settled = false;
-    const preparation = warmed.prepare(controller.signal).then(() => {
+    const preparation = prewarmLocalWorkspaceTemplates({
+      getConfig: () => config,
+      signal: controller.signal,
+    }).then(() => {
       settled = true;
     });
     try {
@@ -355,9 +358,9 @@ it.each(["shutdown", "config"])(
       if (reason === "shutdown") {
         controller.abort();
       } else {
-        sessionChanges.emit({ all: true, scope: "config" });
+        config = { ...config, worktreeAcceleration: false };
       }
-      expect(signal.aborted).toBe(true);
+      expect(signal.aborted).toBe(reason === "shutdown");
       await Promise.resolve();
       expect(settled).toBe(false);
       release.resolve();

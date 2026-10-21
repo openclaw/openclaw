@@ -1,5 +1,6 @@
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   getAcpSessionManager,
   testing as managerTesting,
@@ -16,11 +17,15 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { resolveConfiguredBinding } from "../plugins/configured-binding-registry.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
+const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
+
 it.each(["current", "capability lookup", "accepted control"])(
   "retains native Telegram owner authority during configured ACP preparation: %s",
-  async (phase) => {
-    await withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
+  (phase) =>
+    withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
       const backendId = "telegram-native-owner-proof";
+      const route = { channel: "telegram", accountId: "default" };
+      const peer = { kind: "group", id: "-10012345:topic:42" } as const;
       cfg.acp = { enabled: true, backend: backendId, allowedAgents: ["main"] };
       cfg.session = { store: state.path("native-acp-sessions.json") };
       cfg.agents = {
@@ -33,20 +38,15 @@ it.each(["current", "capability lookup", "accepted control"])(
         {
           type: "acp",
           agentId: "main",
-          match: {
-            channel: "telegram",
-            accountId: "default",
-            peer: { kind: "group", id: "-10012345:topic:42" },
-          },
+          match: { ...route, peer },
           acp: { backend: backendId, cwd: state.workspaceDir, mode: "persistent" },
         },
       ];
       const binding = resolveConfiguredBinding({
         cfg,
         conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-10012345:topic:42",
+          ...route,
+          conversationId: peer.id,
           parentConversationId: "-10012345",
         },
       });
@@ -61,23 +61,18 @@ it.each(["current", "capability lookup", "accepted control"])(
       let pause = false;
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
-        async ensureSession(input) {
+        async ensureSession({ agentId, sessionKey, model, thinking }) {
           effects.push("initialize");
           acceptedOptions.clear();
-          if (input.model) {
-            acceptedOptions.set("model", input.model);
+          for (const [key, value] of [
+            ["model", model],
+            ["thinking", thinking],
+          ] as const) {
+            if (value) {
+              acceptedOptions.set(key, value);
+            }
           }
-          if (input.thinking) {
-            acceptedOptions.set("thinking", input.thinking);
-          }
-          return {
-            agentId: input.agentId,
-            sessionKey: input.sessionKey,
-            backend: backendId,
-            runtimeSessionName: input.sessionKey,
-            backendSessionId: `runtime:${input.sessionKey}`,
-            cwd: input.cwd,
-          };
+          return { agentId, sessionKey, backend: backendId, runtimeSessionName: sessionKey };
         },
         async getCapabilities() {
           if (pause && phase === "capability lookup") {
@@ -97,9 +92,7 @@ it.each(["current", "capability lookup", "accepted control"])(
             configOptions: [...acceptedOptions].map(([id, currentValue]) => ({ id, currentValue })),
           };
         },
-        async close() {
-          effects.push("close");
-        },
+        async close() {},
         async cancel() {},
         runTurn() {
           throw new Error("Native preparation must not start a provider turn");
@@ -122,12 +115,7 @@ it.each(["current", "capability lookup", "accepted control"])(
         pause = true;
         pending = invokeTopic();
         if (phase !== "current") {
-          expect(
-            await Promise.race([
-              preparing.promise.then(() => "preparing"),
-              pending.then(() => "finished"),
-            ]),
-          ).toBe("preparing");
+          await awaitGateBeforeSettlement(preparing.promise, pending, "ACP preparation must pause");
           setUserProfileRole(admins[0]!.profile.id, "member");
           finish.resolve();
         }
@@ -139,25 +127,18 @@ it.each(["current", "capability lookup", "accepted control"])(
           expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
         } else {
           expect(handler).not.toHaveBeenCalled();
-          expect(driver.sentMessages()).toEqual([
-            {
-              chatId: -10012345,
-              text: "Configured ACP binding is unavailable right now. Please try again.",
-            },
-          ]);
+          expect(driver.sentMessages()).toEqual([{ chatId: -10012345, text: unavailable }]);
           expect(driver.deliveries()).toEqual([]);
           expect(effects).toEqual(phase === "capability lookup" ? [] : ["configure:model"]);
         }
         if (phase === "capability lookup") {
           expect(after).toEqual(before);
         } else {
-          expect(after.kind).toBe("ready");
-          if (after.kind === "ready") {
-            expect(after.meta.runtimeOptions).toMatchObject({
-              model: spec.model,
-              thinking: phase === "current" ? "high" : "off",
-            });
-          }
+          const runtimeOptions = {
+            model: spec.model,
+            thinking: phase === "current" ? "high" : "off",
+          };
+          expect(after).toMatchObject({ kind: "ready", meta: { runtimeOptions } });
         }
       } finally {
         finish.resolve();
@@ -169,6 +150,5 @@ it.each(["current", "capability lookup", "accepted control"])(
           managerTesting.resetAcpSessionManagerForTests();
         }
       }
-    });
-  },
+    }),
 );

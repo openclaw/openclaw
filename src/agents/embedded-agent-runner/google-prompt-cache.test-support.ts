@@ -145,6 +145,7 @@ export function streamOptions(streamFn: { mock: { calls: unknown[][] } }, callIn
 
 export function preparePromptCacheStream(params: {
   apiKey?: string;
+  extraParams?: Record<string, unknown>;
   fetchMock?: typeof fetch;
   model?: ReturnType<typeof makeGoogleModel>;
   now: number;
@@ -159,7 +160,7 @@ export function preparePromptCacheStream(params: {
   }
   return prepareGooglePromptCacheStreamFn({
     apiKey: params.apiKey ?? "gemini-api-key",
-    extraParams: { cacheRetention: "long" },
+    extraParams: { cacheRetention: "long", ...params.extraParams },
     model,
     modelId: model.id,
     provider: "google",

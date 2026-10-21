@@ -415,6 +415,7 @@ it.each(["coordinator-contention", "admission-unavailable"] as const)(
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "warning",
+        coreUpdate: "pending",
         nextAction: expect.stringContaining("openclaw update repair"),
         postUpdate: { doctor: { status: "warning", warnings: expect.any(Array) } },
       }),

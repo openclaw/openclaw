@@ -492,7 +492,7 @@ describe("diagnostic support redaction", () => {
 it("preserves exact typed lease guidance without widening maintenance prose", () => {
   const context = { env: {}, stateDir: "/synthetic/state" };
   const guidance =
-    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+    "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";
   expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
   for (const input of [
     guidance + " /private/state.db token=fixture-only-token alice@example.invalid",

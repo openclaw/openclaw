@@ -24,7 +24,6 @@ const TOOL_ARGUMENT_MARKER = `copilot-stream-arguments-${"x".repeat(128)}`;
 
 type CopilotRuntimeAuth = {
   apiKey: string;
-  source: string;
   baseUrl: string;
 };
 

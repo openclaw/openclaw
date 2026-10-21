@@ -90,9 +90,8 @@ function transcriptPageLimit(limit = TRANSCRIPTS_PAGE_DEFAULT, max = TRANSCRIPTS
 export function assertTranscriptByteLimit(
   text: string,
   maxBytes = TRANSCRIPTS_RESULT_MAX_BYTES,
-  exporting = false,
 ): void {
-  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes, exporting);
+  assertTranscriptByteCount(Buffer.byteLength(text, "utf8"), maxBytes);
 }
 
 export function assertTranscriptByteCount(

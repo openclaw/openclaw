@@ -100,7 +100,15 @@ it.each(["legacy", "malformed", "unknown-policy"])(
               .update(OPENCLAW_AGENT_SCHEMA_SQL)
               .digest("hex")
           : "unknown-policy";
-      expect(writeSqliteCleanCloseSeal(agentPath, identity, file, seal)).toBe(true);
+      expect(
+        writeSqliteCleanCloseSeal(agentPath, identity, file, {
+          ...seal,
+          identity:
+            kind === "legacy"
+              ? undefined
+              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
+        }),
+      ).toBe(true);
     }
     retireSqliteDatabaseAdmissionForPath(agentPath);
     expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);

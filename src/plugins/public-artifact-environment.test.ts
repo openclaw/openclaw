@@ -97,7 +97,7 @@ module.exports.createFixture${suffix} = () => ({
   };
 }
 
-function useProcessEnvironment(fixture: ReturnType<typeof environment>) {
+function useProcessEnvironment(fixture: Pick<Resolution, "env">) {
   for (const [key, value] of Object.entries(fixture.env)) {
     vi.stubEnv(key, value);
   }
@@ -167,12 +167,18 @@ describe("public artifact environment ownership", () => {
     {
       name: "document extractors",
       artifact: "document-extractor.js",
-      resolve: resolvePluginDocumentExtractors,
+      resolve: (params: Resolution) => {
+        useProcessEnvironment(params);
+        return resolvePluginDocumentExtractors({ config: params.config });
+      },
     },
     {
       name: "web content extractors",
       artifact: "web-content-extractor.js",
-      resolve: resolvePluginWebContentExtractors,
+      resolve: (params: Resolution) => {
+        useProcessEnvironment(params);
+        return resolvePluginWebContentExtractors({ config: params.config });
+      },
     },
   ])("loads and reuses each caller's artifact for $name", async ({ resolve, artifact }) => {
     const ambient = environment("ambient");

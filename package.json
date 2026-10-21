@@ -15,7 +15,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 29,
+      "state": 30,
       "agent": 31
     }
   },
@@ -181,6 +181,8 @@
     "!dist/plugin-sdk/plugin-state-runtime.d.ts",
     "!dist/plugin-sdk/plugin-state-test-runtime.js",
     "!dist/plugin-sdk/plugin-state-test-runtime.d.ts",
+    "!dist/plugin-sdk/mcp-enterprise-test-runtime.js",
+    "!dist/plugin-sdk/mcp-enterprise-test-runtime.d.ts",
     "!dist/plugin-sdk/plugin-test-api.js",
     "!dist/plugin-sdk/plugin-test-api.d.ts",
     "!dist/plugin-sdk/plugin-test-contracts.js",
@@ -1631,6 +1633,10 @@
       "types": "./dist/plugin-sdk/decisions.d.ts",
       "default": "./dist/plugin-sdk/decisions.js"
     },
+    "./plugin-sdk/decisions-openai-runtime": {
+      "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"
@@ -1773,6 +1779,7 @@
     "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
+    "check:baseline-ratchets": "node --import ./scripts/tsx.mjs scripts/ci-baseline-ratchets.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
@@ -2034,6 +2041,7 @@
     "release-metadata:check": "node --import ./scripts/tsx.mjs scripts/check-release-metadata-only.mts",
     "release:beta": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:beta-smoke": "node --import ./scripts/tsx.mjs scripts/release-beta-smoke.ts",
+    "release:backport-companions": "node scripts/release-backport-companions.mjs",
     "release:candidate": "node --import ./scripts/tsx.mjs scripts/release-candidate-checklist.mts",
     "release:clawhub-recovery": "node scripts/plugin-clawhub-recovery.mjs",
     "release:check": "pnpm build:package && pnpm release:generated:check && node --import ./scripts/tsx.mjs scripts/release-check.ts",
@@ -2042,6 +2050,8 @@
     "release:openclaw:npm:check": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-release-check.ts",
     "release:openclaw:npm:verify-published": "node --import ./scripts/tsx.mjs scripts/openclaw-npm-postpublish-verify.ts",
     "release:prepare": "node --import ./scripts/tsx.mjs scripts/release-prepare.ts",
+    "release:prepush": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts",
+    "release:push": "node --import ./scripts/tsx.mjs scripts/release-prepush.mts --push",
     "release:plugins:clawhub:check": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-check.ts",
     "release:plugins:clawhub:plan": "node --import ./scripts/tsx.mjs scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import ./scripts/tsx.mjs scripts/plugin-npm-release-check.ts",
@@ -2387,6 +2397,7 @@
     "node-edge-tts": "1.2.11",
     "npm": "12.2.0",
     "openai": "7.32.0",
+    "openid-client": "6.8.8",
     "p-limit": "7.3.3",
     "p-map": "7.1.1",
     "parse5": "8.0.1",
@@ -2408,7 +2419,6 @@
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.13.0",
     "@a2ui/web_core": "0.13.0",
     "@babel/types": "8.0.6",
     "@copilotkit/aimock": "1.45.1",

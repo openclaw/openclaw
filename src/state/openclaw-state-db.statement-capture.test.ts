@@ -32,22 +32,13 @@ it.skipIf(!output)(
     };
     let phase: keyof typeof phases = "cold";
     const sqlByStatement = new WeakMap<StatementSync, string>();
-    const diagnostics: Array<{
-      source: string;
-      phase: string;
-      engine: unknown;
-      threadId: unknown;
-    }> = [];
+    const diagnostics: { source: string; phase: string; engine: unknown; threadId: unknown }[] = [];
     const observations = channel("openclaw.database.statement");
     const nativeObservations = channel("sqlite.db.query");
     const observe = (message: unknown) => {
       if (message && typeof message === "object" && "engine" in message && "threadId" in message) {
-        diagnostics.push({
-          source: "engine",
-          phase,
-          engine: message.engine,
-          threadId: message.threadId,
-        });
+        const { engine, threadId: observedThread } = message;
+        diagnostics.push({ source: "engine", phase, engine, threadId: observedThread });
       }
     };
     const observeNative = () =>
@@ -94,17 +85,15 @@ it.skipIf(!output)(
     nativeObservations.subscribe(observeNative);
     try {
       const first = openOpenClawStateDatabase(options);
-      expect(first.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
+      expect(first.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(first.db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
-      const firstNative = first.db;
-      const pathname = first.path;
       phase = "restart";
       await closeOpenClawStateDatabaseAsync();
-      revokeSqliteDatabaseAdmissionsForPath(pathname);
+      revokeSqliteDatabaseAdmissionsForPath(first.path);
       const reopened = openOpenClawStateDatabase(options);
-      expect(reopened.db === firstNative).toBe(false);
+      expect(reopened.db).not.toBe(first.db);
       phase = "write";
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare(

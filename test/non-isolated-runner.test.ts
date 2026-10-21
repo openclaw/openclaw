@@ -14,6 +14,7 @@ import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { authOwnershipFixtureFiles } from "./non-isolated-runner.auth-fixtures.ts";
+import { controllerStorageFixtureFiles } from "./non-isolated-runner.controller-fixtures.ts";
 import { domResourceFixtureFiles } from "./non-isolated-runner.dom-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
@@ -483,6 +484,7 @@ it(${JSON.stringify(title)}, () => {
     ),
     ...mockResolutionFixtureFiles,
     ...mcpManagerFixtureFiles(repoRoot),
+    ...controllerStorageFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
     ...domResourceFixtureFiles,
@@ -583,7 +585,7 @@ async function assertCompletion(
     pid: expected.pid,
     root: expected.root,
     processTimedOut: false,
-    ended: { reason: "failed", unhandledErrors: 0, failedModules: 5, suiteErrors: 5 },
+    ended: { reason: "failed", unhandledErrors: 0, failedModules: 6, suiteErrors: 6 },
   });
   const project = {
     name: "non-isolated-runner",
@@ -600,8 +602,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 72,
-    numPassedTests: 71,
+    numTotalTests: 80,
+    numPassedTests: 79,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -613,13 +615,16 @@ async function assertCompletion(
       name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
     const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
     const failedRunCancellation = name === "97-mcp-a-cancel-failure.test.ts";
+    const failedControllerWrite = name === "96-a-controller-write-failure.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
     expect(file.status, name).toBe(
-      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation ? "failed" : "passed",
+      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation || failedControllerWrite
+        ? "failed"
+        : "passed",
     );
     if (uncertainMcp || mockedMcpDisposer) {
       expect(file.message).toContain("MCP runtime custody failed");
@@ -628,6 +633,10 @@ async function assertCompletion(
           ? "MCP test teardown could not confirm cleanup"
           : "MCP test teardown cannot use a mocked disposer",
       );
+    } else if (failedControllerWrite) {
+      expect(file.message).toContain("run state failed");
+      expect(file.message).toContain("Session-controller cleanup failed");
+      expect(file.message).toContain("readonly");
     } else if (failedRunCancellation) {
       expect(file.message).toContain("run state failed");
       expect(file.message).toContain("Synthetic run cancellation failed");

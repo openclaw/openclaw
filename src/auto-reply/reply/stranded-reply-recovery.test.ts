@@ -6,7 +6,20 @@ import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
-const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
+function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecovery>[0]> = {}) {
+  return resolveStrandedReplyRecovery({
+    base: createMockFollowupRun({ prompt: "question" }),
+    payloads: [],
+    finalText: "The answer is ready.",
+    terminalReply: { disposition: "visible", text: "The answer is ready." },
+    sourceReplyDeliveryMode: "message_tool_only",
+    sendPolicyDenied: false,
+    successfulSourceReplyDelivery: false,
+    isHeartbeat: false,
+    isRoomEvent: false,
+    ...overrides,
+  });
+}
 
 describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
   it("does not share the client turn's turnAdoptionLifecycle with the system retry", () => {
@@ -25,31 +38,22 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
       replyOperationRunStates: receipts,
     });
 
-    const recovery = resolveStrandedReplyRecovery({
-      base: parent,
-      payloads: [],
-      finalText: "The answer is ready.",
-      terminalReply: { disposition: "visible", text: "The answer is ready." },
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
-      isRoomEvent: false,
-    });
+    const recovery = recover({ base: parent });
     expect(recovery.kind).toBe("retry");
     if (recovery.kind !== "retry") {
       throw new Error("expected retry recovery");
     }
     const retry = recovery.run;
 
-    expect(retry.turnAdoptionLifecycle).toBeUndefined();
-    expect(retry.replyOperationRunStates).toBeUndefined();
+    expect(retry).toMatchObject({
+      turnAdoptionLifecycle: undefined,
+      replyOperationRunStates: undefined,
+      strandedReplyRetry: true,
+      summaryLine: "stranded-reply-retry",
+      admissionSessionId: "sess-rotated",
+      run: { sessionKey: parent.run.sessionKey },
+    });
     expect(parent.replyOperationRunStates).toBe(receipts);
-    expect(retry.strandedReplyRetry).toBe(true);
-    expect(retry.summaryLine).toBe(STRANDED_REPLY_RETRY_MARKER);
-    // Session routing stays; only the client-turn lifecycle identity is detached.
-    expect(retry.admissionSessionId).toBe("sess-rotated");
-    expect(retry.run.sessionKey).toBe(parent.run.sessionKey);
 
     // mark/complete no-op when lifecycle is absent (drop-policy onDrop path too).
     expect(markFollowupRunEnqueued(retry)).toBe(true);
@@ -68,9 +72,6 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
 });
 
 describe("resolveStrandedReplyRecovery", () => {
-  const finalText = "The answer is ready.";
-  const terminalReply = { disposition: "visible", text: finalText } as const;
-
   it.each([
     { payload: { text: "The recovered answer is ready." }, expected: "none" },
     {
@@ -80,16 +81,8 @@ describe("resolveStrandedReplyRecovery", () => {
   ])(
     "distinguishes a pending terminal answer from a notice: $expected",
     ({ payload, expected }) => {
-      const recovery = resolveStrandedReplyRecovery({
-        base: createMockFollowupRun({ prompt: "question" }),
+      const recovery = recover({
         payloads: [markReplyPayloadForSourceSuppressionDelivery(payload)],
-        finalText,
-        terminalReply,
-        sourceReplyDeliveryMode: "message_tool_only",
-        sendPolicyDenied: false,
-        successfulSourceReplyDelivery: false,
-        isHeartbeat: false,
-        isRoomEvent: false,
       });
 
       expect(recovery.kind).toBe(expected);
@@ -110,41 +103,27 @@ describe("resolveStrandedReplyRecovery", () => {
   ])("restricts the priority retry to authorized messaging: $label", ({ toolsAllow, expected }) => {
     const base = createMockFollowupRun({ prompt: "question", toolsAllow });
 
-    const recovery = resolveStrandedReplyRecovery({
-      base,
-      payloads: [],
-      finalText,
-      terminalReply,
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
-      isRoomEvent: false,
-    });
+    const recovery = recover({ base });
 
     expect(recovery.kind).toBe("retry");
     if (recovery.kind === "retry") {
-      expect(recovery.run.strandedReplyRetry).toBe(true);
-      expect(recovery.run.disableCollectBatching).toBe(true);
-      expect(recovery.run.toolsAllow).toEqual(expected);
-      expect(recovery.run.run.suppressNextUserMessagePersistence).toBe(true);
-      expect(recovery.run.transcriptPrompt).toBeUndefined();
+      expect(recovery.run).toMatchObject({
+        strandedReplyRetry: true,
+        disableCollectBatching: true,
+        toolsAllow: expected,
+        run: { suppressNextUserMessagePersistence: true },
+        transcriptPrompt: undefined,
+      });
     }
   });
 
   it("returns a diagnostic rather than a second retry", () => {
     const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
 
-    const recovery = resolveStrandedReplyRecovery({
+    const recovery = recover({
       base,
-      payloads: [],
       finalText: "",
       terminalReply: { disposition: "empty" },
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
-      isRoomEvent: false,
     });
 
     expect(recovery).toMatchObject({
@@ -163,21 +142,6 @@ describe("resolveStrandedReplyRecovery", () => {
     { label: "send-policy denial", sendPolicyDenied: true },
     { label: "completed delivery", successfulSourceReplyDelivery: true },
   ])("does not recover $label", (override) => {
-    const base = createMockFollowupRun({ prompt: "question" });
-
-    const recovery = resolveStrandedReplyRecovery({
-      base,
-      payloads: [],
-      finalText,
-      terminalReply,
-      sourceReplyDeliveryMode: "message_tool_only",
-      sendPolicyDenied: false,
-      successfulSourceReplyDelivery: false,
-      isHeartbeat: false,
-      isRoomEvent: false,
-      ...override,
-    });
-
-    expect(recovery).toEqual({ kind: "none" });
+    expect(recover(override)).toEqual({ kind: "none" });
   });
 });

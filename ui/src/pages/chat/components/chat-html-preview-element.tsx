@@ -18,12 +18,14 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
 import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
+import { HtmlPreviewLoading } from "./chat-html-preview-view.tsx";
 import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 registerEnglishCatalog(registerBoardEnglish);
 
 type HtmlPreviewProps = {
+  desktop: boolean;
   html: string;
   sourceIdentity: string;
   sessionFileSource?: SessionFileSource;
@@ -70,7 +72,8 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.sourceIdentity === host.sourceIdentity &&
         candidate.sessionFileSource?.sessionKey === host.sessionFileSource?.sessionKey &&
         candidate.sessionFileSource?.agentId === host.sessionFileSource?.agentId &&
-        candidate.sessionFileSource?.path === host.sessionFileSource?.path,
+        candidate.sessionFileSource?.path === host.sessionFileSource?.path &&
+        candidate.sessionFileSource?.messageEntryId === host.sessionFileSource?.messageEntryId,
       );
 
     const sourceInput = createMemo(
@@ -82,6 +85,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           props.sessionFileSource?.sessionKey,
           props.sessionFileSource?.agentId,
           props.sessionFileSource?.path,
+          props.sessionFileSource?.messageEntryId,
           snapshot?.client,
           snapshot?.phase === "connected",
           getCanvasWidgetFrameConnectionGeneration(),
@@ -193,7 +197,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             </div>
           </Show>
           <Show when={!rendered()}>
-            <div role="status">{t("common.loading")}</div>
+            <HtmlPreviewLoading />
           </Show>
           <iframe
             ref={(element) => (frame = element)}
@@ -257,7 +261,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       );
       return (
         <Errored fallback={(reason) => <ErrorNotice message={formatUiError(reason())} />}>
-          <Show when={view()} keyed fallback={<div role="status">{t("common.loading")}</div>}>
+          <Show when={view()} keyed fallback={<HtmlPreviewLoading />}>
             {(preview) => (
               <Show when={props.embedSandboxMode} keyed>
                 {(mode) => renderFrame(preview, mode)}
@@ -276,6 +280,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
   },
   {
     properties: {
+      desktop: { default: false, type: Boolean },
       html: { default: "", attribute: false },
       sourceIdentity: { default: "" },
       sessionFileSource: { default: undefined, attribute: false },
@@ -288,5 +293,15 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-chat-html-preview": ChatHtmlPreviewElement;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-html-preview": HTMLAttributes<ChatHtmlPreviewElement> & {
+        [Key in keyof HtmlPreviewProps as `prop:${Key}`]?: HtmlPreviewProps[Key];
+      };
+    }
   }
 }

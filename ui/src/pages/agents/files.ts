@@ -11,6 +11,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 type AgentFileVersion = { hash: string } | { missing: true };
 
 type AgentFileEditor = {
+  workspace?: string;
+  baseWorkspace?: string;
   content?: string;
   draft?: string;
   baseVersion?: AgentFileVersion;
@@ -62,8 +64,16 @@ export function hasAgentFileContent(
   return Boolean(file && (Object.hasOwn(file, "content") || Object.hasOwn(file, "draft")));
 }
 
+export function isAgentFileDirty(file: AgentFileEditor | undefined): boolean {
+  return Boolean(
+    file &&
+    Object.hasOwn(file, "draft") &&
+    (file.draft !== file.content || file.workspace !== file.baseWorkspace),
+  );
+}
+
 export type RetainedAgentFileDrafts = {
-  editors: Record<string, Pick<AgentFileEditor, "draft" | "version">>;
+  editors: Record<string, Pick<AgentFileEditor, "draft" | "version" | "workspace">>;
   active: string | null;
   conflict: string | null;
 };
@@ -72,16 +82,14 @@ export function retainAgentFileDrafts(
   state: AgentFilesState & { agentFileActive: string | null },
 ): RetainedAgentFileDrafts | null {
   const entries = Object.entries(state.agentFileEditors).filter(
-    ([name, file]) =>
-      Object.hasOwn(file, "draft") &&
-      (file.draft !== file.content || state.agentFileConflict === name),
+    ([name, file]) => isAgentFileDirty(file) || state.agentFileConflict === name,
   );
   if (entries.length === 0) {
     return null;
   }
   return {
     editors: Object.fromEntries(
-      entries.map(([name, { draft, version }]) => [name, { draft, version }]),
+      entries.map(([name, { draft, version, workspace }]) => [name, { draft, version, workspace }]),
     ),
     active: state.agentFileActive,
     conflict: state.agentFileConflict,
@@ -127,7 +135,7 @@ async function requestAgentFile(
   const revision = state.agentFileWriteRevisions.get(name);
   const isCurrent = () =>
     isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
-  const version = state.agentFileEditors[name]?.version;
+  const { version, workspace } = state.agentFileEditors[name] ?? {};
   const resolution = operation.kind === "read" ? operation.resolution : undefined;
   state[busy] = true;
   state.agentFilesError = null;
@@ -140,6 +148,7 @@ async function requestAgentFile(
         ...(operation.kind === "write"
           ? {
               content: operation.content,
+              ...(workspace ? { expectedWorkspace: workspace } : {}),
               ...(version &&
                 ("hash" in version ? { expectedHash: version.hash } : { expectedMissing: true })),
             }
@@ -158,14 +167,16 @@ async function requestAgentFile(
       const rebasesDraft =
         resolution === "draft" ||
         !Object.hasOwn(file, "draft") ||
-        file.draft === content ||
-        (!saving && file.draft === file.content);
+        (file.workspace === res.workspace && file.draft === content) ||
+        (!saving && !isAgentFileDirty(file));
       const rebasesVersion = saving || resolution !== undefined || rebasesDraft;
       // Refresh advances the workspace base while dirty drafts retain their ancestry.
       state.agentFileEditors = {
         ...state.agentFileEditors,
         [name]: {
           content,
+          baseWorkspace: res.workspace,
+          workspace: rebasesVersion ? res.workspace : file.workspace,
           draft: rebasesDraft ? content : file.draft,
           baseVersion: nextVersion,
           version: rebasesVersion ? nextVersion : file.version,
@@ -226,7 +237,12 @@ export function resetAgentFile(state: AgentFilesState, name: string): void {
   }
   state.agentFileEditors = {
     ...state.agentFileEditors,
-    [name]: { ...file, draft: file.content ?? "", version: file.baseVersion },
+    [name]: {
+      ...file,
+      draft: file.content ?? "",
+      version: file.baseVersion,
+      workspace: file.baseWorkspace,
+    },
   };
   if (state.agentFileConflict === name) {
     state.agentFileConflict = null;

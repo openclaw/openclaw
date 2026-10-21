@@ -33,9 +33,7 @@ describe("scripts/bench-sqlite-state", () => {
     expect(() =>
       parseSqliteStateBenchmarkCli(["--profile", "smoke", "--profile", "large"]),
     ).toThrow("--profile was provided more than once");
-    expect(parseSqliteStateBenchmarkCli(["--help", "--profile", "huge"])).toEqual({
-      help: true,
-    });
+    expect(parseSqliteStateBenchmarkCli(["--help", "--profile", "huge"])).toEqual({ help: true });
   });
 
   it("reports production-shaped SQLite scenarios in the existing smoke benchmark", () => {
@@ -123,22 +121,16 @@ describe("scripts/bench-sqlite-state", () => {
   });
 
   it("normalizes modern plan forms without inventing table scans", () => {
-    expect(
-      collectSqliteQueryPlanEvidence([
-        "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
-        "SCAN json_each VIRTUAL TABLE INDEX 1:",
-        "SCAN 2-ROW VALUES CLAUSE",
-        "SCAN task_runs",
-      ]),
-    ).toEqual({
+    const raw = [
+      "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
+      "SCAN json_each VIRTUAL TABLE INDEX 1:",
+      "SCAN 2-ROW VALUES CLAUSE",
+      "SCAN task_runs",
+    ];
+    expect(collectSqliteQueryPlanEvidence([...raw])).toEqual({
       fullTableScans: ["SCAN task_runs"],
       indexes: ["AUTOMATIC PARTIAL COVERING INDEX"],
-      raw: [
-        "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
-        "SCAN json_each VIRTUAL TABLE INDEX 1:",
-        "SCAN 2-ROW VALUES CLAUSE",
-        "SCAN task_runs",
-      ],
+      raw,
       tempSorts: [],
     });
   });

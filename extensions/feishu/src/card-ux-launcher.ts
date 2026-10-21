@@ -15,12 +15,9 @@ const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launc
 
 function createQuickActionLauncherCard(params: {
   operatorOpenId: string;
-  chatId?: string;
   expiresAt: number;
-  chatType?: "p2p" | "group";
-  sessionKey?: string;
 }): Record<string, unknown> {
-  const context = buildFeishuCardInteractionContext(params);
+  const context = buildFeishuCardInteractionContext({ ...params, chatType: "p2p" });
   return buildFeishuActionCard({
     title: "Quick actions",
     template: "indigo",
@@ -84,7 +81,6 @@ export async function maybeHandleFeishuQuickActionMenu(params: {
       card: createQuickActionLauncherCard({
         operatorOpenId: params.operatorOpenId,
         expiresAt,
-        chatType: "p2p",
       }),
       accountId: params.accountId,
     });

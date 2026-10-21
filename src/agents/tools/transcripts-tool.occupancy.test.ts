@@ -95,7 +95,7 @@ function harness() {
     return request;
   };
   const tool = (agentId = "main", config: OpenClawConfig = {}) =>
-    f.tool({ config, agentId, logger: undefined, caller: { kind: "operator", source: "local" } });
+    f.tool({ config, agentId, caller: { kind: "operator", source: "local" } });
   return {
     ...f,
     entry,

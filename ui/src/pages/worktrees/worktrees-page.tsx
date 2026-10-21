@@ -78,21 +78,23 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
   return (
     <>
       <HubPageHeader<"sessions" | "worktrees">
-        id="sessions"
         active="worktrees"
-        tabs={[
-          { value: "sessions", label: t("tabs.sessions") },
-          { value: "worktrees", label: t("tabs.worktrees") },
-        ]}
-        ariaLabel={t("sessionsPage.hubTablistLabel")}
-        panelId="sessions-hub-panel"
+        tabs={{
+          id: "sessions",
+          items: [
+            { value: "sessions", label: t("tabs.sessions") },
+            { value: "worktrees", label: t("tabs.worktrees") },
+          ],
+          ariaLabel: t("sessionsPage.hubTablistLabel"),
+          panelId: "sessions-hub-panel",
+          onSelect: (value) => {
+            if (value === "sessions") {
+              model.context.navigate("sessions");
+            }
+          },
+        }}
         docsUrl={WORKTREES_DOCS_URL}
         class="sessions-hub-header"
-        onSelect={(value) => {
-          if (value === "sessions") {
-            model.context.navigate("sessions");
-          }
-        }}
       />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>

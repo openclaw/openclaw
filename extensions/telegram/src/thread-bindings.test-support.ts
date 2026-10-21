@@ -14,19 +14,12 @@ import {
 } from "./thread-bindings-store.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
-const acpHost = vi.hoisted(() => ({
-  read: vi.fn(),
-}));
+const acpHost = vi.hoisted(() => ({ read: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/acp-runtime")>(
-    "openclaw/plugin-sdk/acp-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime")>();
   acpHost.read.mockImplementation(actual.readAcpSessionEntryAsync);
-  return {
-    ...actual,
-    readAcpSessionEntryAsync: acpHost.read,
-  };
+  return { ...actual, readAcpSessionEntryAsync: acpHost.read };
 });
 
 export { acpHost };
@@ -51,22 +44,18 @@ export function useTelegramThreadBindingsFixture() {
     allowLegacySync = false,
   ) => {
     store = next;
-    setTelegramRuntime(
-      createPluginRuntimeMock({
-        state: {
-          openSyncKeyedStore: <T>(
-            options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
-          ) => {
-            if (!allowLegacySync) {
-              throw new Error("Bundled bindings must not execute host SQLite");
-            }
-            return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
-          },
-          // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
-          openKeyedStoreV2: (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"],
-        },
-      }),
-    );
+    const runtime = createPluginRuntimeMock();
+    runtime.state.openSyncKeyedStore = <T>(
+      options: Parameters<TelegramRuntime["state"]["openSyncKeyedStore"]>[0],
+    ) => {
+      if (!allowLegacySync) {
+        throw new Error("Bundled bindings must not execute host SQLite");
+      }
+      return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("telegram", options);
+    };
+    // SAFETY: This fixture serves only the thread-binding namespace and its canonical record type.
+    runtime.state.openKeyedStoreV2 = (() => store) as TelegramRuntime["state"]["openKeyedStoreV2"];
+    setTelegramRuntime(runtime);
   };
   beforeEach(async () => {
     // A source-reload case may reset modules while retaining this fixture.
@@ -77,10 +66,7 @@ export function useTelegramThreadBindingsFixture() {
     );
     acpHost.read.mockImplementation(acpRuntime.readAcpSessionEntryAsync);
     await stopManagers();
-    state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-telegram-bindings-",
-    });
+    state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-bindings-" });
     stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
       stateRuntime.createPluginStateKeyedStoreV2ForTests(

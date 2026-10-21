@@ -72,13 +72,19 @@ export function setCliCompactionTestDeps(overrides: CliCompactionTestDeps): void
   }
 }
 
-export function buildContextEngine(params: { compactCalls: CompactParams[] }): ContextEngine {
+export function buildContextEngine(params: {
+  compactCalls: CompactParams[];
+  compact?: ContextEngine["compact"];
+}): ContextEngine {
   return {
     info: { id: "legacy", name: "Legacy Context Engine" },
     ingest: async () => ({ ingested: false }),
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
     async compact(compactParams) {
       params.compactCalls.push(compactParams);
+      if (params.compact) {
+        return params.compact(compactParams);
+      }
       return {
         ok: true,
         compacted: true,
@@ -145,6 +151,7 @@ export async function prepareCompactionScenario(params: {
   sessionEntry?: Partial<SessionEntry>;
   cfg?: OpenClawConfig;
   cwd?: string;
+  compact?: ContextEngine["compact"];
   contextEngine?: (compactCalls: CompactParams[]) => ContextEngine;
   maintenance?: CliCompactionTestDeps["runContextEngineMaintenance"];
   recordCliCompactionInStore?: CliCompactionTestDeps["recordCliCompactionInStore"];
@@ -187,8 +194,9 @@ export async function prepareCompactionScenario(params: {
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
 
   const compactCalls: CompactParams[] = [];
-  const contextEngine =
-    params.contextEngine?.(compactCalls) ?? buildContextEngine({ compactCalls });
+  const contextEngine = params.compact
+    ? buildContextEngine({ compactCalls, compact: params.compact })
+    : (params.contextEngine?.(compactCalls) ?? buildContextEngine({ compactCalls }));
   const maintenance = vi.fn(
     params.maintenance ?? (async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 })),
   );
@@ -219,6 +227,8 @@ export async function prepareCompactionScenario(params: {
     model: params.model ?? "opus",
   };
   return {
+    calls: compactCalls,
+    record: recordCliCompactionInStore,
     compactCalls,
     contextEngine,
     maintenance,

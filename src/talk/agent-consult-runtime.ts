@@ -519,6 +519,7 @@ export async function consultRealtimeVoiceAgent(params: {
           sessionKey: params.sessionKey,
           storePath,
         },
+        spawnedBy: sessionEntry.spawnedBy,
         sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
         agentId,
         ...toolAuthorityOverlay,

@@ -6,6 +6,12 @@ const enSessionOrganization = {
   sessionsView: {
     pullRequestCount: en.sessionsView.pullRequestCount,
     advanced: "Advanced",
+    searchGroups: "Search groups",
+    unassigned: "Unassigned",
+    mobileConversation: "Conversation",
+    mobileCopyPreviewLink: "Copy preview link",
+    mobileCopySessionId: "Copy session ID",
+    mobileCopyMarkdown: "Copy as Markdown",
     copyDetails: "Copy details",
     copyLink: "Copy link",
     communication: {

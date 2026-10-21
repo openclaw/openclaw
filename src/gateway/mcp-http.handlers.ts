@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
+import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
 import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
@@ -131,6 +132,10 @@ export async function handleMcpJsonRpc(params: {
       if (!tool) {
         return toolError(`Tool not available: ${toolName || "unknown"}`);
       }
+      const assertGatewayToolPolicy = createGatewayToolPolicyAssertion(
+        tool,
+        params.hookContext?.config,
+      );
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       const startedAt = Date.now();
       let executedToolArgs = toolArgs;
@@ -212,6 +217,7 @@ export async function handleMcpJsonRpc(params: {
           );
           return toolError("Tool call authorization expired");
         }
+        assertGatewayToolPolicy(finalizedToolArgs);
         let result: Awaited<ReturnType<typeof tool.execute>>;
         try {
           const { authorizeToolCall } = params;

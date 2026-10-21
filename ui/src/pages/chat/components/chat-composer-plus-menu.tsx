@@ -7,7 +7,8 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
@@ -15,6 +16,8 @@ import type {
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuProps,
 } from "./chat-composer-plus-menu.types.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 type MenuContent = typeof import("./chat-composer-plus-menu-content.tsx");
 type ContentState =
@@ -155,7 +158,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
       }
       // Only a changed presentation snapshot recreates owned nodes; actions read live props.
       const { view: selected, menu } = inputs();
-      return current.module.menuItems(menu, selected);
+      return current.module.menuItems(menu, selected, () => inputs().menu);
     },
     { lazy: true },
   );
@@ -244,8 +247,7 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       showCapabilities: capabilityMenu !== undefined,
       basePath: capabilityMenu?.basePath ?? "",
       skills: capabilityMenu?.skills ?? null,
-      skillsLoading: capabilityMenu?.skillsLoading ?? false,
-      skillsError: capabilityMenu?.skillsError ?? false,
+      skillsRead: capabilityMenu?.skillsRead ?? null,
       mcpServers: capabilityMenu?.mcpServers ?? [],
       toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
       toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,

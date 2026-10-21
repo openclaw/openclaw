@@ -14,7 +14,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-membership-facts.types.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
@@ -286,7 +289,7 @@ function createSessionMembersListHandler(
         );
         // Persisted provenance deliberately has no current profile label or avatar.
         // Project it at the same display boundary as session rows; never change the access identity.
-        const storedOwner = entry.createdActor;
+        const storedOwner = resolveSessionCreatorActor(entry.createdActor);
         const owner = sessionCreatorProfileId(storedOwner)
           ? projectSessionActor(storedOwner, new Map(), currentCfg)
           : storedOwner

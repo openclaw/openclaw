@@ -102,7 +102,7 @@ export default defineControlUiPlugin({
         });
       }
     };
-    const catalog = new WorkboardCatalog(({ boards }) => syncBoardNavigation(boards), workboard);
+    const catalog = new WorkboardCatalog(syncBoardNavigation, workboard);
     const registrations = [
       host.ui.registerPage({
         id: "workboard",

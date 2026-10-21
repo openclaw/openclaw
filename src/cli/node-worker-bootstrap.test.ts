@@ -46,15 +46,19 @@ beforeEach(() => {
   resetConfigRuntimeState();
   configGuardTestApi.resetConfigGuardStateForTests();
 });
-afterEach(() => {
-  pathEnv.restore();
-  resetConfigRuntimeState();
-  resetNodeHostPluginRegistry();
-  resetPluginLoaderTestStateForTest();
-  clearPluginMetadataLifecycleCaches();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+afterEach(async () => {
+  try {
+    await closeOpenClawStateDatabaseAsync();
+  } finally {
+    pathEnv.restore();
+    resetConfigRuntimeState();
+    resetNodeHostPluginRegistry();
+    resetPluginLoaderTestStateForTest();
+    clearPluginMetadataLifecycleCaches();
+    closeOpenClawStateDatabaseForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 function fixture() {
@@ -159,14 +163,15 @@ describe("private node worker bootstrap", () => {
     ],
     ["future", "PRAGMA user_version = 999", true],
     ["corrupt", "", true],
-  ] as const)("does not adopt %s state as native bootstrap", async (shape, sql, throws) => {
+  ] as const)("does not adopt %s state as native bootstrap", (shape, sql, throws) => {
     const { databasePath } = fixture();
     seedMacNodeWorkerProofState(databasePath);
-    const db = new DatabaseSync(databasePath);
-    if (sql) {
-      db.exec(sql);
+    {
+      using db = new DatabaseSync(databasePath);
+      if (sql) {
+        db.exec(sql);
+      }
     }
-    db.close();
     if (shape === "corrupt") {
       fs.writeFileSync(databasePath, "not a SQLite database");
     }
@@ -179,21 +184,26 @@ describe("private node worker bootstrap", () => {
     expect(fs.readFileSync(databasePath)).toEqual(before);
   });
 
-  it("requires captured Doctor migration for canonical native state before node readiness", async () => {
-    const { stateDir, databasePath } = fixture();
+  it("migrates native credentials during node startup without changing identity, tokens or policy", async () => {
+    const { stateDir, databasePath, configPath } = fixture();
     const rows = seedMacNodeWorkerProofState(databasePath);
-    const before = fs.readFileSync(databasePath);
+    const configBefore = fs.readFileSync(configPath);
+
     await bootstrap();
-    await expect(ensureNodeHostStateReady()).rejects.toThrow(/openclaw doctor --fix/);
-    closeOpenClawStateDatabaseForTest();
-    expect(fs.readFileSync(databasePath)).toEqual(before);
-    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(readMacNodeWorkerProofRows(database)).toEqual(rows);
-    } finally {
-      database.close();
-    }
+    await ensureNodeHostStateReady();
+    await closeOpenClawStateDatabaseAsync();
+
+    using database = new DatabaseSync(databasePath, { readOnly: true });
+    const credentialsPath = path.join(stateDir, "client", "credentials.sqlite");
+    expect(readMacNodeWorkerProofRows(database, credentialsPath)).toEqual(rows);
+    expect(
+      database
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE name IN ('device_identities','device_auth_tokens')",
+        )
+        .all(),
+    ).toEqual([]);
+    expect(fs.readFileSync(configPath)).toEqual(configBefore);
   });
 
   it("pins core config and preserves existing Gateway state", async () => {

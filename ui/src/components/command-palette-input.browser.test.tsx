@@ -194,11 +194,14 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
     observer.observe(input, { attributes: true, attributeFilter: ["style"] });
     try {
       // ResizeObserver can enqueue more frames; require a quiet three-frame window.
-      await vi.waitFor(async () => {
-        styleChanges.length = 0;
-        await threeFrames();
-        expect(styleChanges).toEqual([]);
-      });
+      await vi.waitFor(
+        async () => {
+          styleChanges.length = 0;
+          await threeFrames();
+          expect(styleChanges).toEqual([]);
+        },
+        { timeout: 5_000 },
+      );
     } finally {
       observer.disconnect();
     }

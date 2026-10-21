@@ -103,11 +103,12 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     expect(terminal.terminal.paste).not.toHaveBeenCalled();
     expect(upload.hasPendingBatch()).toBe(false);
   });
-  it("reacts to upload policy changes without intercepting text drops", async () => {
+  it("reacts to mobile upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const host = createApplicationContextProvider({ ...createInitializationContext(), config });
     const panel = createUploadPanel();
     panel.embedded = true;
+    panel.mobile = true;
     panel.available = true;
     host.append(panel);
     document.body.append(host);

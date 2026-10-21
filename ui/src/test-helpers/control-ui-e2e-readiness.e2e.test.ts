@@ -114,12 +114,14 @@ suite.define(() => {
         await page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`).click();
         await page.getByText("Ready before diagnostics.", { exact: true }).waitFor();
         await openChatSidePanelType(page, "Terminal");
-        await page.locator("openclaw-terminal-panel .tp-host canvas").waitFor();
+        const terminal = page.locator("openclaw-terminal-panel");
+        await terminal.locator(".tp-session.is-current").click();
+        await terminal.locator(".tp-host canvas").waitFor();
         if (offline) {
           await gateway.setOnline(false);
           await page
             .locator(".sidebar-shell__footer .gateway-status")
-            .getByRole("button", { name: /Reconnecting…/ })
+            .getByText("Reconnecting…", { exact: true })
             .waitFor();
         }
         expect(requests).toEqual([]);

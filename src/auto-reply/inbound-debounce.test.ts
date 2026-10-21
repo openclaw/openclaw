@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
+import {
+  GatewayDrainingError,
+  getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createInboundDebouncer, type InboundDebounceCreateParams } from "./inbound-debounce.js";
 
 describe("createInboundDebouncer", () => {
@@ -11,6 +20,7 @@ describe("createInboundDebouncer", () => {
 
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  afterEach(resetGatewayWorkAdmission);
 
   type Message = { key: string; id: string };
   type RecordingOptions<T> = Omit<
@@ -95,6 +105,79 @@ describe("createInboundDebouncer", () => {
     });
     return { debouncer, started, finished, entered, release };
   }
+
+  it.each([false, true])(
+    "waits for shipped flush callbacks when ordering and draining (thenable: %s)",
+    async (thenable) => {
+      const started: string[] = [];
+      const finished: string[] = [];
+      const firstCompletion = createDeferred();
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          started.push(id);
+          const completion = (id === "first" ? firstCompletion.promise : Promise.resolve()).then(
+            () => {
+              finished.push(id);
+            },
+          );
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+      });
+      const first = debouncer.enqueue({ key: "a", id: "first" });
+      const second = debouncer.enqueue({ key: "a", id: "second" });
+      const outcomes = Promise.allSettled([first, second]);
+      const onDrained = vi.fn();
+      const drain = debouncer.drain().then(onDrained);
+      let beforeRelease;
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        beforeRelease = { started: [...started], drained: onDrained.mock.calls.length };
+      } finally {
+        firstCompletion.resolve();
+        await Promise.all([outcomes, drain]);
+      }
+
+      expect(await outcomes).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      expect(beforeRelease).toEqual({ started: ["first"], drained: 0 });
+      expect(finished).toEqual(["first", "second"]);
+      expect(onDrained).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "reports a shipped flush rejection once and releases its key (thenable: %s)",
+    async (thenable) => {
+      const failure = new Error("legacy flush failed");
+      const onError = vi.fn();
+      const calls: string[] = [];
+      const debouncer = keyedDebouncer({
+        serializeImmediate: true,
+        // @ts-expect-error Released plugins return promises instead of the current lifecycle shape.
+        onFlush: (items) => {
+          const id = items[0]?.id ?? "";
+          calls.push(id);
+          const completion = id === "first" ? Promise.reject(failure) : Promise.resolve();
+          // oxlint-disable-next-line unicorn/no-thenable -- Exercise a shipped structural PromiseLike callback.
+          return thenable ? { then: completion.then.bind(completion) } : completion;
+        },
+        onError,
+      });
+
+      await expect(debouncer.enqueue({ key: "a", id: "first" })).resolves.toBeUndefined();
+      await expect(debouncer.enqueue({ key: "a", id: "second" })).resolves.toBeUndefined();
+      await debouncer.drain();
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(failure, [{ key: "a", id: "first" }]);
+      expect(calls).toEqual(["first", "second"]);
+    },
+  );
 
   it("seals bounded batches without blocking collection behind an active flush", async () => {
     const firstGate = createDeferred();
@@ -306,6 +389,56 @@ describe("createInboundDebouncer", () => {
     await drain;
     expect(completed).toEqual(["2", "1"]);
   });
+
+  it.each(["accepting", "suspended", "restarting"] as const)(
+    "keeps adopted immediate dispatch owned after HTTP request release (%s)",
+    async (phase) => {
+      const execute = createDeferred();
+      const reply = vi.fn(async () => {});
+      const onError = vi.fn();
+      const debouncer = lifecycleDebouncer(
+        async (_id, lifecycle) => {
+          await lifecycle.onAdopted();
+          await execute.promise;
+          await enqueueCommandInLane("inbound-adopted-turn", reply);
+        },
+        { onError },
+      );
+      const request = tryBeginGatewayRootWorkAdmission("http:request");
+      if (!request) {
+        throw new Error("Expected HTTP request admission");
+      }
+      try {
+        await request.run(() => debouncer.enqueue({ key: "a", id: "1" }));
+        request.release();
+        expect(reply).not.toHaveBeenCalled();
+        if (phase === "suspended") {
+          const suspension = tryBeginGatewaySuspendAdmission(() => {});
+          expect(suspension).not.toBeNull();
+          // New requests are refused while this already-adopted turn finishes.
+          expect(tryBeginGatewayRootWorkAdmission("http:request")).toBeNull();
+        } else if (phase === "restarting") {
+          markGatewayRestartDraining();
+        }
+        execute.resolve();
+        await debouncer.drain();
+        if (phase === "restarting") {
+          expect(reply).not.toHaveBeenCalled();
+          expect(onError).toHaveBeenCalledExactlyOnceWith(expect.any(GatewayDrainingError), [
+            { key: "a", id: "1" },
+          ]);
+        } else {
+          expect(onError).not.toHaveBeenCalled();
+          expect(reply).toHaveBeenCalledOnce();
+        }
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        request.release();
+        execute.resolve();
+        await debouncer.drain();
+      }
+    },
+  );
 
   it("hands pre-admission completion failures to the source lifecycle once", async () => {
     const sessionError = new Error("Session changed while starting work. Retry.");

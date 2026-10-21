@@ -6,7 +6,6 @@ type IsMainModuleOptions = {
   currentFile: string;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  cwd?: string;
   wrapperEntryPairs?: Array<{
     wrapperBasename: string;
     entryBasename: string;
@@ -32,10 +31,9 @@ export function isMainModule({
   currentFile,
   argv = process.argv,
   env = process.env,
-  cwd,
   wrapperEntryPairs = [],
 }: IsMainModuleOptions): boolean {
-  const resolvedCwd = cwd ?? tryProcessCwd() ?? path.dirname(currentFile);
+  const resolvedCwd = tryProcessCwd() ?? path.dirname(currentFile);
   const normalizedCurrent = normalizePathCandidate(currentFile, resolvedCwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], resolvedCwd);
 

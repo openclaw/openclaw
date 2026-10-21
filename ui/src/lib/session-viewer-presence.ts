@@ -45,13 +45,12 @@ export function sessionViewerPresenceForGateway(
       lifecycle.clearRequest();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
     if (client !== knownClient) {
-      retry.reset();
+      lifecycle.resetRetry();
       knownClient = client;
       lifecycle.clearRequest();
     }
@@ -92,7 +91,7 @@ export function sessionViewerPresenceForGateway(
             lifecycle.detach();
           }
         },
-        onError: () => retry.schedule(lifecycle.schedule),
+        onError: () => lifecycle.scheduleRetry(lifecycle.schedule),
       },
     );
   }
@@ -112,7 +111,7 @@ export function sessionViewerPresenceForGateway(
     } else {
       watchedByOwner.set(owner, next);
     }
-    retry.reset();
+    lifecycle.resetRetry();
     if (isActive()) {
       lifecycle.attach();
     }

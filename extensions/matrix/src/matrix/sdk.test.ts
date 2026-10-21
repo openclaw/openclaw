@@ -1267,14 +1267,12 @@ describe("MatrixClient request hardening", () => {
       const { withResolvedRuntimeMatrixClient } = await import("./client-bootstrap.js");
       let replacementLease: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
       let replacementAcquisition: ReturnType<typeof acquireSharedMatrixClient> | undefined;
-      createSharedMatrixClientMock.mockReset();
-      createSharedMatrixClientMock
-        .mockResolvedValueOnce(firstClient)
-        .mockImplementationOnce(async () => {
-          matrixJsClient = createMatrixJsClientStub();
-          replacementClient = new MatrixClient(auth.homeserver, auth.accessToken);
-          return replacementClient;
-        });
+      createSharedMatrixClientMock.mockReset().mockResolvedValueOnce(firstClient);
+      createSharedMatrixClientMock.mockImplementationOnce(async () => {
+        matrixJsClient = createMatrixJsClientStub();
+        replacementClient = new MatrixClient(auth.homeserver, auth.accessToken);
+        return replacementClient;
+      });
       const keepalive = createDeferred<boolean>();
       const keepaliveOutcome = keepalive.promise.then(
         () => "resolved",
@@ -1283,6 +1281,7 @@ describe("MatrixClient request hardening", () => {
       const syncInternals = requireMatrixSyncApiTestInternals(firstSdkClient.syncApi);
       try {
         const monitor = await acquireSharedMatrixClient({ auth, role: "monitor" });
+        await monitor.start();
         monitor.registerMonitorRetirement({
           closeTaskAdmission: () => {},
           detachListeners: () => {},
@@ -1324,7 +1323,7 @@ describe("MatrixClient request hardening", () => {
           ok: false,
           error: { message: "Matrix client retirement did not settle within 5000ms" },
         });
-        replacementAcquisition = acquireSharedMatrixClient({ auth, startClient: false });
+        replacementAcquisition = acquireSharedMatrixClient({ auth });
         await vi.advanceTimersByTimeAsync(0);
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
         gate.resolve("late-result");

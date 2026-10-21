@@ -193,7 +193,6 @@ export function createXApiClient(options: {
   refreshToken: string;
   bearerToken?: string;
   fetch?: XFetch;
-  signal?: AbortSignal;
   loadRefreshToken?: () => Promise<string | undefined>;
   saveRefreshToken: (token: string) => Promise<void>;
   onTokenState?: (state: XTokenState) => void;
@@ -206,10 +205,8 @@ export function createXApiClient(options: {
   let refreshTask: Promise<void> | undefined;
 
   function requestSignal(signal?: AbortSignal): AbortSignal {
-    return AbortSignal.any([
-      ...[options.signal, signal].filter((value): value is AbortSignal => Boolean(value)),
-      AbortSignal.timeout(30_000),
-    ]);
+    const timeout = AbortSignal.timeout(30_000);
+    return signal ? AbortSignal.any([signal, timeout]) : timeout;
   }
 
   async function refresh() {
@@ -317,11 +314,7 @@ export function createXApiClient(options: {
           throw new Error("X Activity API requires a bearer token");
         }
         const signal = params.stream
-          ? AbortSignal.any(
-              [options.signal, params.signal].filter((value): value is AbortSignal =>
-                Boolean(value),
-              ),
-            )
+          ? (params.signal ?? AbortSignal.any([]))
           : requestSignal(params.signal);
         signal.throwIfAborted();
         const body =
@@ -548,11 +541,16 @@ export function createXApiClient(options: {
         },
       });
     },
-    async getUserByUsername(username: string, signal?: AbortSignal): Promise<XUser> {
+    async getUserByUsername(
+      username: string,
+      signal?: AbortSignal,
+      assertActive?: XAssertActive,
+    ): Promise<XUser> {
       const user = await request(
         `/2/users/by/username/${encodeURIComponent(username.replace(/^@/, ""))}?user.fields=id,username,name`,
         {
           signal,
+          assertActive,
           billing: {
             maximum: X_USER_READ_MICRO_USD,
             actual: (value) => xReadCost(value, "users"),
@@ -579,12 +577,9 @@ export function createXApiClient(options: {
       return user;
     },
     async uploadMedia(params: XMediaUploadParams): Promise<string> {
-      const signal = AbortSignal.any(
-        [options.signal, params.signal].filter((value): value is AbortSignal => Boolean(value)),
-      );
       try {
-        signal.throwIfAborted();
-        return await uploadXMedia({ ...params, signal }, request);
+        params.signal?.throwIfAborted();
+        return await uploadXMedia(params, request);
       } catch (cause) {
         if (cause instanceof PlatformMessageNotDispatchedError) {
           throw cause;
@@ -596,7 +591,7 @@ export function createXApiClient(options: {
           {
             cause,
             retryable:
-              !signal.aborted &&
+              !params.signal?.aborted &&
               !(cause instanceof XBudgetExceededError) &&
               (!(cause instanceof XApiError) || cause.status === 429 || cause.status >= 500),
           },
@@ -661,7 +656,7 @@ export function createXApiClient(options: {
         }
         throw new PlatformMessageNotDispatchedError(
           cause instanceof Error ? cause.message : "X reply failed before dispatch",
-          { cause, retryable: !params.signal?.aborted && !options.signal?.aborted },
+          { cause, retryable: !params.signal?.aborted },
         );
       }
     },

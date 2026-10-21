@@ -20,6 +20,8 @@ export type UpdatesPageProps = {
   configObject: Record<string, unknown>;
   configBusy: boolean;
   updateBusy: boolean;
+  statusRead: Promise<boolean> | null;
+  onCheckStatus: () => Promise<boolean>;
   nowMs?: number;
 };
 
@@ -31,6 +33,8 @@ export function UpdatesPage(props: UpdatesPageProps) {
   return (
     <Updates
       update={overlays().read()}
+      statusRead={props.statusRead}
+      commandScope={snapshot().client ?? props.context.overlays}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
       gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
@@ -59,7 +63,7 @@ export function UpdatesPage(props: UpdatesPageProps) {
       onUpdateNow={() => {
         const context = props.context;
         const update = overlays().read();
-        void confirmAndStartUpdate({
+        return confirmAndStartUpdate({
           isCurrentTarget: context.overlays.captureUpdateTarget(),
           startGatewayUpdate: () => void context.overlays.runUpdate(),
           // The dialog outlives this page, so read live snapshots after each change.
@@ -73,7 +77,7 @@ export function UpdatesPage(props: UpdatesPageProps) {
         });
       }}
       onHoldUpdate={() => props.context.overlays.holdUpdate()}
-      onCheckStatus={() => props.context.overlays.refreshUpdateStatus()}
+      onCheckStatus={() => props.onCheckStatus()}
       onReportFailure={(attemptId) => props.context.overlays.reportUpdateFailure(attemptId)}
       onDiagnoseFailure={(attemptId) => props.context.overlays.diagnoseUpdateFailure(attemptId)}
     />

@@ -52,20 +52,6 @@ export function formatStrictJsonParseFailure(params: { value: string; cause: unk
   ].join(" ");
 }
 
-export function formatGatewayCommandFailure(params: { action: string; error: unknown }): string {
-  const raw = params.error instanceof Error ? params.error.message : String(params.error);
-  const message = raw
-    .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
-    .replace(/\s+Gateway target:\s+.*$/isu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.。]+$/u, "");
-  const detail = message ? `: ${message}` : "";
-  return `Could not ${params.action} because the Gateway did not respond${detail}. Run ${formatInlineCliCommand(
-    "openclaw gateway status --deep",
-  )} to inspect the active Gateway.`;
-}
-
 export function formatMissingPluginMessage(params: {
   id: string;
   listCommand?: string;

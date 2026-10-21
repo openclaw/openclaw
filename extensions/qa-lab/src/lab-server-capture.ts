@@ -65,7 +65,6 @@ const CAPTURE_QUERY_PRESETS = new Set([
 ]);
 
 type QaStartupProbeStatus = {
-  label: string;
   url: string;
   ok: boolean;
   error?: string;
@@ -105,7 +104,6 @@ async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatu
   const parsed = URL.parse(rawUrl);
   if (!parsed) {
     return {
-      label: rawUrl,
       url: rawUrl,
       ok: false,
       error: "invalid url",
@@ -115,7 +113,6 @@ async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatu
   const port = parsed.port ? Number(parsed.port) : defaultPortForProtocol(parsed.protocol);
   if (!host || !Number.isFinite(port) || port <= 0) {
     return {
-      label: parsed.origin,
       url: parsed.toString(),
       ok: false,
       error: "missing host or port",
@@ -128,9 +125,7 @@ async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatu
         socket.destroy();
         reject(error);
       };
-      socket.setTimeout(700, () => {
-        socket.destroy(new Error("timeout"));
-      });
+      socket.setTimeout(700);
       socket.once("connect", () => {
         socket.end();
         resolve();
@@ -139,13 +134,11 @@ async function probeTcpReachability(rawUrl: string): Promise<QaStartupProbeStatu
       socket.once("timeout", () => onError(new Error("timeout")));
     });
     return {
-      label: parsed.host,
       url: parsed.toString(),
       ok: true,
     };
   } catch (error) {
     return {
-      label: parsed.host,
       url: parsed.toString(),
       ok: false,
       error: formatErrorMessage(error),

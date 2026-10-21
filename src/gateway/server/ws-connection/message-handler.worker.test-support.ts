@@ -262,6 +262,7 @@ export function attachHarness(
   });
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
+    transport: socket,
     connectionWork,
     connId: "worker-connection",
     service,

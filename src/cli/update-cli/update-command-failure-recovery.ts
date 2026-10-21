@@ -147,6 +147,7 @@ export async function verifyUpdateFailureRecovery(params: {
             // Native process identity alone cannot reconfirm earlier readiness.
             versionMatch: undefined,
             readyz: false,
+            coreReady: false,
             settled: false,
             channelsReady: false,
           };

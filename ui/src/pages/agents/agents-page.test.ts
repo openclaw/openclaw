@@ -8,6 +8,7 @@ import type {
   CronJob,
   CronJobsListResult,
   ModelCatalogEntry,
+  SkillStatusReport,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -102,6 +103,37 @@ function cronListResponse(
 }
 
 describe("AgentsPage gateway lifecycle", () => {
+  it("retires issued skill reads across a same-client reconnect", async () => {
+    const stale = deferred<SkillStatusReport>();
+    const current: SkillStatusReport = {
+      workspaceDir: "/workspace/current",
+      managedSkillsDir: "/skills/current",
+      skills: [],
+    };
+    let skillReads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return ++skillReads === 1 ? stale.promise : current;
+      }
+      return {};
+    });
+    const client = createTestGatewayClient(request);
+    const { page, currentGateway } = mountPage(client, "skills");
+    const issued = page.read().readData().agentSkillsRead;
+    expect(issued?.agentId).toBe("main");
+    page.read().agentSkills.onRefresh();
+    expect(skillReads).toBe(1);
+
+    emitGatewaySnapshot(currentGateway, snapshot(client, false));
+    emitGatewaySnapshot(currentGateway, snapshot(client));
+    await waitForFast(() => expect(page.read().readData().agentSkillsReport).toBe(current));
+    expect(skillReads).toBe(2);
+    stale.resolve({ ...current, workspaceDir: "/workspace/retired" });
+    await issued?.result;
+    expect(page.read().readData().agentSkillsReport).toBe(current);
+    expect(page.read().readData().agentSkillsRead).not.toBe(issued);
+  });
+
   it("retires visible-session effective tools across a same-client reconnect", async () => {
     const staleResult = deferred<ToolsEffectiveResult>();
     let effectiveReads = 0;
@@ -193,8 +225,9 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(canDispatch?.()).toBe(false);
   });
 
-  it("surfaces a rejected agent skills clear in the panel", async () => {
-    const client = createTestGatewayClient(vi.fn(async () => ({ skills: [] })));
+  it("clears a prior reset error after success while a skill read is pending", async () => {
+    const pending = deferred<SkillStatusReport>();
+    const client = createTestGatewayClient(vi.fn(() => pending.promise));
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));
     const runtimeConfig = {
@@ -203,7 +236,7 @@ describe("AgentsPage gateway lifecycle", () => {
         path: ["agents", "entries", "main"],
         entry: { skills: ["coding-agent"] },
       })),
-      patch: vi.fn(async () => false),
+      patch: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
       subscribe: vi.fn(() => () => undefined),
     } as unknown as ApplicationContext["runtimeConfig"];
     const { page } = mountPage(client, "skills", {
@@ -214,8 +247,18 @@ describe("AgentsPage gateway lifecycle", () => {
     page.read().agentSkills.onClear("main");
 
     await waitForFast(() =>
-      expect(page.read().readData().agentSkillsError).toBe("Gateway rejected the patch."),
+      expect(page.read().readData().agentSkillsUpdateError).toBe("Gateway rejected the patch."),
     );
+    const issued = page.read().readData().agentSkillsRead;
+    page.read().agentSkills.onClear("main");
+    await waitForFast(() => expect(page.read().readData().agentSkillsUpdateError).toBeNull());
+    expect(page.read().readData().agentSkillsRead).toBe(issued);
+    pending.resolve({
+      workspaceDir: "/workspace/synthetic",
+      managedSkillsDir: "/skills",
+      skills: [],
+    });
+    await issued?.result;
   });
 
   it("does not refresh the agent roster after a rejected config save", async () => {
@@ -341,8 +384,8 @@ describe("AgentsPage gateway lifecycle", () => {
       refreshPanel(page);
       await waitForFast(() => expect(page.read().overview.modelCatalog[0]?.id).toBe("old"));
       emitCatalogChanged(currentGateway);
-      await waitForFast(() =>
-        expect(page.read().readData().chatModelCatalogStatus.error).toBe(
+      await waitForFast(async () =>
+        expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
           hasRows
             ? "Some models could not be refreshed. Open Models to try again."
             : "Models unavailable",
@@ -351,10 +394,9 @@ describe("AgentsPage gateway lifecycle", () => {
       expect(page.read().overview.modelCatalog).toEqual(models);
 
       page.read().overview.onModelCatalogOpen?.();
-      await waitForFast(() =>
-        expect(page.read().readData().chatModelCatalogStatus.stale).toBe(false),
+      await waitForFast(async () =>
+        expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined(),
       );
-      expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
       expect(page.read().overview.modelCatalog).toEqual([]);
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
         Array.from({ length: 3 }, () => ({
@@ -506,15 +548,17 @@ describe("AgentsPage gateway lifecycle", () => {
     const { page } = mountPage({ request } as unknown as GatewayBrowserClient, "overview");
 
     refreshPanel(page);
-    await waitForFast(() => {
-      expect(page.read().readData().chatModelCatalogStatus.error).toBe("model catalog unavailable");
+    await waitForFast(async () => {
+      await expect(page.read().readData().chatModelCatalogRead).rejects.toThrow(
+        "model catalog unavailable",
+      );
     });
     expect(page.read().overview.modelCatalog).toEqual([]);
 
     refreshPanel(page);
     await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(models));
 
-    expect(page.read().readData().chatModelCatalogStatus.error).toBeNull();
+    await expect(page.read().readData().chatModelCatalogRead).resolves.toBeUndefined();
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",

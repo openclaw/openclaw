@@ -17,11 +17,12 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
     transactionOptions?: Pick<
       SqliteTransactionOptions,
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-    >,
+    > & { singleStatement?: true },
   ) => T;
   writeAdmitted: <T>(
     operation: (database: OpenClawStateDatabase) => T,
     options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      singleStatement?: never;
       receipt?: "result";
       /** Preserve worker-process ownership checks for native-default callers. */
       transactionEnvironment?: "process";

@@ -42,7 +42,6 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  disablePluginTools?: boolean;
   clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
 };
@@ -223,10 +222,6 @@ export function resolveOpenClawPluginToolsForOptions(params: PluginToolOptions):
 function* resolveOpenClawPluginToolSteps(
   params: PluginToolOptions,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
-  if (params.options?.disablePluginTools) {
-    return [];
-  }
-
   const inputConfig = params.resolvedConfig ?? params.options?.config;
   const availabilityConfig = resolveAgentRuntimeToolConfig(inputConfig);
   // Bind ownership before reload replaces the source snapshot. Explicit run

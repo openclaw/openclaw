@@ -328,6 +328,7 @@ jobs:
           IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
           BUILT_AT: ${{ needs.resolve.outputs.built_at }}
           INCLUDE_BROWSER: ${{ needs.resolve.outputs.include_browser }}
+          PREPARED_ARTIFACT_NAME: ${{ needs.resolve.outputs.artifact_name }}
         run: |
           set -euo pipefail
           node workflow-source/scripts/docker-release-artifacts.mjs seal \

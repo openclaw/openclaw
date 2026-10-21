@@ -260,3 +260,43 @@ it("reports a failing exit status when non-interactive credentials are missing",
   expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--custom-no-auth"));
   expect(runtime.exit).toHaveBeenCalledWith(1);
 });
+
+it.each(["not-a-url", "ftp://gateway.example/v1"])(
+  "reports an actionable error after resolving the setup key for invalid URL %s",
+  async (customBaseUrl) => {
+    const provider = requireRegisteredProvider(
+      capturePluginRegistration(plugin).providers,
+      "bifrost",
+    );
+    const runtime = createRuntimeSpies();
+    const resolveApiKey = vi.fn(async () => ({
+      key: "synthetic-bifrost-key",
+      source: "flag" as const,
+    }));
+    await expect(
+      provider.auth[0]?.runNonInteractive?.({
+        authChoice: "bifrost-api-key",
+        config: {},
+        baseConfig: {},
+        opts: { customBaseUrl, bifrostApiKey: "synthetic-bifrost-key" },
+        runtime,
+        resolveApiKey,
+        toApiKeyCredential: () => {
+          throw new Error("Invalid gateway setup must not store credentials");
+        },
+      }),
+    ).resolves.toBeNull();
+    expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
+      provider: "bifrost",
+      flagValue: "synthetic-bifrost-key",
+      allowProfile: false,
+      flagName: "--bifrost-api-key",
+      envVar: "BIFROST_VIRTUAL_KEY",
+      required: false,
+    });
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+      "The Bifrost gateway URL must be a full http:// or https:// URL, such as http://localhost:8080/openai/v1.",
+    );
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  },
+);

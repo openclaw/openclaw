@@ -13,6 +13,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -348,6 +349,28 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
   });
+  if (opts?.scheduledAutomation) {
+    opts.operatorAuthority?.assertCurrent();
+    opts.abortSignal?.throwIfAborted();
+    opts.queuedFollowupAbortSignal?.throwIfAborted();
+    opts.replyOperation?.abortSignal.throwIfAborted();
+    opts.internalEventExecution?.assertCurrent?.();
+    opts.scheduledAutomation.assertCurrent();
+    if (!sessionKey) {
+      throw new Error("A scheduled session turn requires its admitted session key");
+    }
+    const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+      cfg,
+      agentId,
+      sessionKey,
+      admissionSource: opts.scheduledAutomation.admissionSource,
+      ownerSessionKey: opts.scheduledAutomation.job.owner?.sessionKey,
+      hasWorkspaceBinding: Boolean(sessionWorkspaceOverride || sessionEntry?.worktree),
+    });
+    if (ownershipError) {
+      throw new Error(ownershipError);
+    }
+  }
   const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =
     isBareSessionReset && workspaceDir

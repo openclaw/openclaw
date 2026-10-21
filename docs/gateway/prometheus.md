@@ -100,6 +100,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | --------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------- |
 | `openclaw_gateway_build_info`                             | gauge     | `process_instance_id`, optional `build_id`                                                |
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
+| `openclaw_control_ui_document_duration_seconds`           | histogram | `stage`                                                                                   |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_gateway_rpc_client_requests_total`              | counter   | `method`, `client_kind`                                                                   |
@@ -199,6 +200,11 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_worker_request_seconds`                         | histogram | `kind`, `request_class`                                                                   |
 | `openclaw_worker_heap_sampled_count`                      | gauge     | none (aggregate), `script`                                                                |
 | `openclaw_worker_heap_used_bytes`                         | gauge     | `script`                                                                                  |
+| `openclaw_worker_heap_used_high_water_bytes`              | gauge     | `worker_class`, `script`                                                                  |
+| `openclaw_worker_tasks_completed_total`                   | counter   | `worker_class`, `script`                                                                  |
+| `openclaw_worker_gc_duration_seconds_total`               | counter   | `worker_class`, `script`, `kind`                                                          |
+| `openclaw_worker_gc_collections_total`                    | counter   | `worker_class`, `script`, `kind`                                                          |
+| `openclaw_worker_gc_reclaimed_bytes_total`                | counter   | `worker_class`, `script`, `kind`                                                          |
 | `openclaw_worker_heap_space_used_bytes`                   | gauge     | `script`, `space`                                                                         |
 | `openclaw_worker_external_bytes`                          | gauge     | `script`                                                                                  |
 | `openclaw_worker_array_buffers_bytes`                     | gauge     | `script`                                                                                  |
@@ -509,6 +515,19 @@ or `threw`. `phase=total` is the complete elapsed time. Other fixed phases are
 `containerStart`. Only entered phases are recorded. Nested phases are inclusive
 and must not be summed. No paths, session identifiers, or template keys become
 metric labels.
+
+### Control UI documents
+
+`openclaw_control_ui_document_duration_seconds` measures the Control UI HTML handler.
+Its only label is `stage`: `auth_grants`, `identity_avatar`, `plugin_catalog`,
+`git_branch`, `preferences`, `render`, or `total`. Preparation stages include awaited
+work and run in parallel, so their durations must not be added together. `render`
+includes HTML rewriting, CSP preparation, compression, and response submission;
+`total` starts at handler entry and includes asset resolution. Neither includes
+time queued before the handler or delivery to the browser. Only entered stages
+are observed, including on failure; HEAD requests record `render` and `total`.
+The JSON bootstrap endpoint and static assets do not contribute samples.
+Queued diagnostic traces retain each stage's original start and end times.
 
 ### Session diff stages
 
@@ -1006,6 +1025,78 @@ inventory. It examines at most eight checkout roots per full recovery sweep,
 serially, and yields to active Gateway requests. The existing recovery scheduler
 continues unfinished work; completed roots remain recorded only for that startup
 cleanup pass. Normal result settlement still removes its own refs immediately.
+
+### Pool worker task and GC totals
+
+Shared compute workers can finish and retire between scrapes. Their task and GC
+counters accumulate in the existing worker registry across retirement and pool
+recreation. The diagnostics heartbeat republishes these absolute totals without
+double-counting. They reset with the Gateway process; an exporter restart recovers
+the registry's totals on the next heartbeat.
+
+Labels contain a bounded `worker_class` (`reader`, `file-reader`, `compute`,
+`writer`, `singleton`, or `other`) and the allowlisted `script` basename described
+above. GC counters also carry the same `kind` values as
+`openclaw_gc_duration_seconds`. No worker, pool, session, or task ID is exported.
+
+`openclaw_worker_tasks_completed_total` counts observed terminal task replies,
+including handled failures. `openclaw_worker_gc_duration_seconds_total` and
+`openclaw_worker_gc_collections_total` record elapsed GC seconds and collection
+counts. `openclaw_worker_gc_reclaimed_bytes_total` sums positive differences
+between heap usage before and after each observed collection. Reclaimed bytes are
+an allocation-pressure proxy, not exact allocated bytes: retained allocations,
+external memory, and garbage not yet collected are excluded.
+
+`openclaw_worker_heap_used_high_water_bytes` retains the largest observed
+individual worker heap usage for each label set. It is a gauge for context, not a
+byte counter or a sum of simultaneous worker heaps. It can miss peaks between
+samples, and remains visible after the last worker exits.
+
+Workers report through the existing periodic memory channel. The native sampler
+drains worker GC batches every 100 ms (the main thread remains at one second).
+Task replies carry
+only a completion marker, without a heap read or another per-task round trip.
+Healthy retirement flushes the last GC batch and heap sample over the same channel
+before stopping the worker, with a 100 ms best-effort limit. Collection requires
+enabled diagnostics and an interested consumer. Tasks before activation are not
+backfilled. Forced termination, crashes, cancellation, or a retirement flush timeout
+can lose the unfinished interval; periodic reports preserve earlier observations.
+Bun does not provide native GC samples, so its GC counters are absent. The existing
+GC histogram remains available for duration distributions.
+
+For provider prompt preparation, compare GC seconds and reclaimed bytes per
+completed task over the same workload window:
+
+```promql
+sum(rate(openclaw_worker_gc_duration_seconds_total{worker_class="compute",script="provider-prompt-state.worker.js"}[5m]))
+/
+sum(rate(openclaw_worker_tasks_completed_total{worker_class="compute",script="provider-prompt-state.worker.js"}[5m]))
+```
+
+```promql
+sum(rate(openclaw_worker_gc_reclaimed_bytes_total{worker_class="compute",script="provider-prompt-state.worker.js"}[5m]))
+/
+sum(rate(openclaw_worker_tasks_completed_total{worker_class="compute",script="provider-prompt-state.worker.js"}[5m]))
+```
+
+Use windows with completed tasks; an empty denominator does not establish zero
+cost. A task is not necessarily an agent turn, so use a matching turn counter
+when the workload can issue multiple tasks per turn. For GC seconds per created
+agent turn, align both sides to the same Gateway and workload window:
+
+```promql
+sum by (instance) (increase(openclaw_worker_gc_duration_seconds_total{worker_class="compute",script="provider-prompt-state.worker.js"}[30m]))
+/
+sum by (instance) (increase(openclaw_session_turn_created_total[30m]))
+```
+
+Replace the numerator with `openclaw_worker_gc_reclaimed_bytes_total` for reclaimed
+bytes per created turn. Keep the same traffic mix and allow in-flight turns and
+worker retirement to settle at window boundaries. Compare the retained heap
+high-water separately with
+`openclaw_worker_heap_used_high_water_bytes{worker_class="compute",script="provider-prompt-state.worker.js"}`;
+do not apply `rate()` to that gauge. Before/after windows must both have these
+metrics enabled; earlier deployments cannot be backfilled.
 
 ### Garbage collection duration
 

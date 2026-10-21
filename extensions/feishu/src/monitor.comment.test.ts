@@ -282,6 +282,60 @@ describe("resolveDriveCommentEventTurn", () => {
     );
   });
 
+  it("caps a long comment card around the current reply while retaining its root and latest reply", async () => {
+    const replies = Array.from({ length: 30 }, (_, index) =>
+      timedReply(`reply-${index}`, `message ${index}`, index, USER_ID),
+    );
+    const turn = await resolveCommentTurn({
+      client: makeOpenApiClient({ batchReplies: replies }),
+      event: makeDriveCommentEvent({ reply_id: "reply-15" }),
+    });
+    const timeline = turn?.prompt.split("\n").filter((line) => /^- \[\d+\] author=/.test(line));
+    expect(timeline?.map((line) => line.match(/reply_id=(\S+)/)?.[1])).toEqual(
+      [0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 29].map(
+        (index) => `reply-${index}`,
+      ),
+    );
+    expect(timeline?.filter((line) => line.includes("current_event=yes"))).toEqual([
+      expect.stringContaining("reply_id=reply-15 current_event=yes"),
+    ]);
+  });
+
+  it.each([
+    { currentCommentId: "comment-8", selected: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] },
+    { currentCommentId: "missing", selected: [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] },
+  ])("caps whole-comment context for $currentCommentId", async ({ currentCommentId, selected }) => {
+    const turn = await resolveCommentTurn({
+      client: makeOpenApiClient({
+        isWholeComment: true,
+        batchCommentId: currentCommentId,
+        wholeComments: Array.from({ length: 18 }, (_, index) =>
+          wholeComment(
+            `comment-${index}`,
+            timedReply(
+              `reply-${index}`,
+              `message ${index}`,
+              index,
+              index === 4 || index === 12 ? "ou_bot" : USER_ID,
+            ),
+          ),
+        ),
+      }),
+      event: makeDriveCommentEvent({ comment_id: currentCommentId }),
+    });
+    const timeline = turn?.prompt
+      .split("\n")
+      .filter((line) => /^- \[\d+\] create_time=/.test(line));
+    expect(timeline?.map((line) => line.match(/comment_id=(\S+)/)?.[1])).toEqual(
+      selected.map((index) => `comment-${index}`),
+    );
+    expect(timeline?.filter((line) => line.includes("current_comment=yes"))).toEqual(
+      currentCommentId === "missing"
+        ? []
+        : [expect.stringContaining("comment_id=comment-8 author=user")],
+    );
+  });
+
   it("does not trust whole-comment metadata from a mismatched batch_query item", async () => {
     const turn = await resolveCommentTurn({
       client: makeOpenApiClient({

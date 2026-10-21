@@ -80,6 +80,7 @@
   "llm",
   "markdown-table-runtime",
   "media-ffmpeg",
+  "mcp-enterprise-test-runtime",
   "media-generation-runtime",
   "meeting-config",
   "meeting-page-script-runtime",

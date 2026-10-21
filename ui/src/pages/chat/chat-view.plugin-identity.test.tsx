@@ -17,6 +17,7 @@ import {
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { GroupedMessage } from "./components/chat-message-bubble-view.tsx";
 import { prepareChatMessageRender } from "./components/chat-message-markdown-view.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
@@ -79,26 +80,29 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
   // ChatView still contains registered bridges that request their application through the DOM.
   const container = document.body.appendChild(createApplicationContextProvider(context));
   const view = mountSolid(
-    () => (
-      <>
-        <ChatView props={props} />
-        <GroupedMessage
-          preparation={prepareChatMessageRender({
-            role: "toolResult",
-            toolCallId: "identity-result",
-            toolName: "inspect",
-            content: [{ type: "text", text: "Inspection complete" }],
-          })}
-          messageKey="identity-message"
-          options={{
-            isStreaming: false,
-            showReasoning: false,
-            sessionKey: props.sessionKey,
-            agentId: props.currentAgentId,
-          }}
-        />
-      </>
-    ),
+    () => {
+      const questions = createComposerQuestions(props.paneId, () => props);
+      return (
+        <>
+          <ChatView props={props} questions={questions} />
+          <GroupedMessage
+            preparation={prepareChatMessageRender({
+              role: "toolResult",
+              toolCallId: "identity-result",
+              toolName: "inspect",
+              content: [{ type: "text", text: "Inspection complete" }],
+            })}
+            messageKey="identity-message"
+            options={{
+              isStreaming: false,
+              showReasoning: false,
+              sessionKey: props.sessionKey,
+              agentId: props.currentAgentId,
+            }}
+          />
+        </>
+      );
+    },
     { container, wrapper: provider.wrapper },
   );
   onTestFinished(() => {
