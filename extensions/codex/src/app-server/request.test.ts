@@ -21,6 +21,7 @@ const shared = vi.hoisted(() => ({
   release: vi.fn(),
   retire: vi.fn(),
 }));
+// mock-isolation: Requests use fixture-owned clients, never process-global shared leases.
 vi.mock("./shared-client.js", () => ({
   createIsolatedCodexAppServerClient: shared.isolated,
   getSharedCodexAppServerClient: shared.acquire,

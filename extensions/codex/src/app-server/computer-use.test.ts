@@ -52,6 +52,7 @@ vi.mock("./computer-use-service.js", async (importOriginal) => ({
     provisioning.resolveCodexComputerUseServiceAppSourcePath,
 }));
 
+// mock-isolation: Cache provisioning stays fixture-owned; this suite must not publish a shared cache.
 vi.mock("./computer-use-cache.js", () => ({
   ensureCodexComputerUseSharedPluginCache: provisioning.ensureCodexComputerUseSharedPluginCache,
 }));

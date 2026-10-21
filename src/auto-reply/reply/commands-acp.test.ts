@@ -52,14 +52,17 @@ const hoisted = vi.hoisted(() => ({
     vi.fn<typeof import("../../config/sessions/session-accessor.js").updateSessionEntry>(),
 }));
 
+// mock-isolation: Spawn cleanup belongs to the fixture lifecycle, not a live ACP runtime.
 vi.mock("../../acp/control-plane/spawn.js", () => ({
   cleanupFailedAcpSpawn: hoisted.cleanupFailedAcpSpawnMock,
 }));
 
+// mock-isolation: Command tests use a fixture transport and must not open a live Gateway connection.
 vi.mock("../../gateway/call.js", () => ({
   callGateway: hoisted.callGatewayMock,
 }));
 
+// mock-isolation: Resolve only the fixture backend, not the process-global runtime registry.
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: hoisted.requireAcpRuntimeBackendMock,
   getAcpRuntimeBackend: hoisted.getAcpRuntimeBackendMock,
