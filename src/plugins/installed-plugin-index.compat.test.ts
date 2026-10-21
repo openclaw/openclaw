@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import type { PluginCandidate } from "./discovery.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
@@ -14,19 +14,13 @@ import {
 } from "./installed-plugin-index.js";
 import { listAvailableManifestContractValues } from "./manifest-contract-eligibility.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const PLUGIN_ID = "contract-provider";
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  clearPluginMetadataLifecycleCaches();
-  await closeStateDatabaseForTest();
-  cleanupTrackedTempDirs(tempDirs);
-});
+afterEach(clearPluginMetadataLifecycleCaches);
+const tempDirs = useStateDatabaseTempDirs();
 
 function createFixture() {
-  const stateDir = makeTrackedTempDir("openclaw-provider-compat-index", tempDirs);
+  const stateDir = tempDirs.make("openclaw-provider-compat-index-");
   const pluginDir = path.join(stateDir, PLUGIN_ID);
   fs.mkdirSync(pluginDir, { recursive: true });
   const write = (file: string, text: string) => fs.writeFileSync(path.join(pluginDir, file), text);

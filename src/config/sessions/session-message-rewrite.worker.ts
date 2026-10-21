@@ -632,6 +632,7 @@ export function applySessionMessageRewrite<T>(
     candidate: SessionMessageRewriteCommitted,
     current: SessionMessageRewriteSnapshot | null,
   ) => T,
+  options: { touchMutation?: boolean } = {},
 ) {
   return writeTransaction(
     "session.transcript.message-rewrite",
@@ -665,7 +666,7 @@ export function applySessionMessageRewrite<T>(
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined },
+            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {

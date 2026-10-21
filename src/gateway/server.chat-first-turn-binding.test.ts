@@ -86,7 +86,6 @@ it("binds a first native chat.send before streaming and persists its stopped par
       defaults: {
         workspace: state.workspaceDir,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: provider.modelRef },
         models: {
           [provider.modelRef]: {

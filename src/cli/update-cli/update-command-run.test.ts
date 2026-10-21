@@ -386,6 +386,7 @@ it("saves the complete error diagnostics before printing the Markdown path", asy
 // Real signals terminate a separate process; the parent never emits into Vitest.
 it.skipIf(process.platform === "win32").each([
   { signal: "SIGTERM", mode: "fresh" },
+  { signal: "SIGTERM", mode: "no-run" },
   { signal: "SIGTERM", mode: "resolved" },
   { signal: "SIGINT", mode: "resolved-foreign-before" },
   { signal: "SIGINT", mode: "resolved-foreign-after" },
@@ -413,12 +414,14 @@ it.skipIf(process.platform === "win32").each([
       import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
       import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
       import { resolveUpdateCommandTarget } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandTarget).href)};
+      import { resolveCommandProcessSignal } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processSpawn).href)};
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
+      const run = mode === 'no-run' ? undefined : await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
       const preview = () => withUpdatePreviewSignals({ ...opts, run }, async () => {
-        const sibling = createUpdateRun({ trigger: 'cli' });
+        const commandSignal = resolveCommandProcessSignal();
+        const sibling = run ? createUpdateRun({ trigger: 'cli' }) : undefined;
         if (mode.startsWith('resolved')) {
           const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
           if (mode === 'resolved-foreign-before') foreign();
@@ -442,7 +445,7 @@ it.skipIf(process.platform === "win32").each([
         }
         if (mode === 'changed') recordUpdateRunPhase(run.runId, 'staging');
         if (mode === 'completed') finishUpdateRun(run.runId, { status: 'skipped', reason: 'dry-run' });
-        const expected = getUpdateRun(run.runId);
+        const expected = run ? getUpdateRun(run.runId) : undefined;
         if (mode === 'missing') {
           closeOpenClawStateDatabaseForTest();
           const base = ${JSON.stringify(path.join(root, "state"))};
@@ -450,11 +453,12 @@ it.skipIf(process.platform === "win32").each([
           fs.mkdirSync(family);
           fs.renameSync(base + '/openclaw.sqlite', family + '/displaced');
         }
-        process.send({ runId: run.runId, expected, sibling });
+        process.send({ runId: run?.runId, expected, sibling });
         process.channel.ref();
         await new Promise(resolve => {
-          if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
+          process.once(${JSON.stringify(signal)}, resolve);
         });
+        fs.writeFileSync(${JSON.stringify(path.join(root, "command-signal.json"))}, JSON.stringify({ present: commandSignal !== undefined, aborted: commandSignal?.aborted === true }));
       });
       if (mode === "inherited") await preview();
       else {
@@ -498,9 +502,9 @@ it.skipIf(process.platform === "win32").each([
         once(child, "message").then(
           ([payload]) =>
             payload as {
-              runId: string;
+              runId?: string;
               expected: ReturnType<typeof getUpdateRun>;
-              sibling: ReturnType<typeof createUpdateRun>;
+              sibling?: ReturnType<typeof createUpdateRun>;
             },
         ),
         closed.then(() => {
@@ -520,10 +524,21 @@ it.skipIf(process.platform === "win32").each([
         }, 100);
       }
       const [code, exitSignal] = await closed;
+      expect(JSON.parse(fs.readFileSync(path.join(root, "command-signal.json"), "utf8"))).toEqual({
+        present: true,
+        aborted: true,
+      });
       expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
       if (mode !== "inherited") {
         expect(exitSignal).toBeNull();
         expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe("settled");
+      }
+      if (mode === "no-run") {
+        expect(fs.existsSync(path.join(root, "state"))).toBe(false);
+        return;
+      }
+      if (!message.runId || !message.sibling) {
+        throw new Error("Admitted preview omitted its original run or sibling");
       }
       const options =
         mode === "missing"

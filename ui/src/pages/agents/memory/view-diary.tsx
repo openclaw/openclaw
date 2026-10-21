@@ -6,11 +6,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import type { DreamingViewState } from "./dreaming.ts";
 import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
 import type { DreamingProps } from "./view-types.ts";
-import {
-  ImportedInsightsContent,
-  renderWikiPreviewOverlay,
-  WikiOverviewContent,
-} from "./view-wiki.tsx";
+import { ImportedInsightsContent, WikiPreviewOverlay, WikiOverviewContent } from "./view-wiki.tsx";
 
 type DiaryEntry = {
   date: string;
@@ -178,7 +174,7 @@ function DreamDiaryContent(props: {
   );
 }
 
-export function renderDiarySection(props: DreamingProps) {
+export function DreamingDiarySection(props: DreamingProps) {
   const state = () => props.viewState;
   const activeDiarySubTab = createMemo(() => state().activeDiarySubTab);
   const content = createMemo(() => props.dreamDiaryContent);
@@ -344,7 +340,7 @@ export function renderDiarySection(props: DreamingProps) {
             )}
           </Show>
         </div>
-        {renderWikiPreviewOverlay(props)}
+        <WikiPreviewOverlay {...props} />
       </Show>
     </section>
   );

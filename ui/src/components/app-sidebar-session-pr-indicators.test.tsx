@@ -1,5 +1,5 @@
 import { createMemo, For } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -173,6 +173,46 @@ it("does not subscribe to PR status for session-only sidebar viewers", async () 
   expect(host.indicators.summary(row.key, "", initial)).toEqual(initial);
   expect(host.indicators.summary(row.key, row.worktreeId ?? "", initial)).toBeUndefined();
 });
+it("shows and clears the badge from the session-only reader's own conversation read", async () => {
+  vi.useFakeTimers();
+  const other = sessionRow("agent:main:other", "wt-other", {
+    pullRequest: { numbers: [9], state: "open" },
+  });
+  const { harness, row, host } = mountRow(undefined, [
+    "operator.sessions.read",
+    "operator.sessions.write",
+  ]);
+  host.readRows = () => [row, other];
+  await settle(host);
+  expect(harness.request).not.toHaveBeenCalled();
+
+  const store = sessionPullRequestsForGateway(harness.gateway);
+  const conversation = {};
+  store.watch(conversation, [row.key], { foreground: true });
+  onTestFinished(() => store.unwatch(conversation));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(harness.request).toHaveBeenLastCalledWith(
+    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+    { sessionKeys: [row.key] },
+    { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+  );
+  harness.publish(row.key, { pullRequests: [{ number: 7, state: "open" }] });
+  await host.updateComplete;
+  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
+    numbers: [7],
+    state: "open",
+  });
+  expect(host.indicators.count(row.key)).toBe(1);
+  // Another checkout row keeps its catalog summary hidden: no own read confirmed it.
+  expect(
+    host.indicators.summary(other.key, other.worktreeId ?? "", other.pullRequest),
+  ).toBeUndefined();
+
+  harness.publish(row.key, { status: "unavailable", discardPrevious: true });
+  await host.updateComplete;
+  expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+  expect(host.indicators.count(row.key)).toBe(0);
+});
 it("keeps empty rows idle across sidebar updates", async () => {
   vi.useFakeTimers();
   const harness = createGatewayHarness();
@@ -196,6 +236,17 @@ it.each(["merged"] as const)(
     const { harness, row, host } = mountRow();
     await settle(host);
     expectSubscription(harness, [row.key]);
+
+    const store = sessionPullRequestsForGateway(harness.gateway);
+    const activeOwner = {};
+    store.watch(activeOwner, [row.key], { foreground: true });
+    onTestFinished(() => store.unwatch(activeOwner));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.request).toHaveBeenLastCalledWith(
+      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      { sessionKeys: [row.key] },
+      { timeoutMs: 30_000, signal: expect.any(AbortSignal) },
+    );
 
     harness.publish(row.key, {
       pullRequests: [
@@ -221,6 +272,15 @@ it.each(["merged"] as const)(
       numbers: [1, 2],
       state,
     });
+
+    harness.publish(row.key, { status: "unavailable", discardPrevious: true });
+    await host.updateComplete;
+    expect(store.get(row.key)?.pullRequests).toEqual([]);
+    expect(host.textContent).toBe("");
+    expect(host.indicators.count(row.key)).toBe(0);
+    expect(
+      host.indicators.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
+    ).toBeUndefined();
 
     harness.publish(row.key);
     await host.updateComplete;

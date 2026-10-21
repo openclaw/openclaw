@@ -330,7 +330,9 @@ export function renderChatComposerView(
           </Show>
         </div>
         <Show when={props.mobileComposer && props.mobileActivityPills}>
-          {(activities) => <ChatActivityPills {...activities()} />}
+          {(activities) => (
+            <ChatActivityPills {...activities()} onLayout={props.onActivityPillsLayout} />
+          )}
         </Show>
         {props.mobileApprovalContent}
       </div>
@@ -338,7 +340,7 @@ export function renderChatComposerView(
         <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
       </Show>
       {showComposerInput() ? (
-        <ComposerInputScope state={context().state}>
+        <ComposerInputScope>
           <div
             class={[
               "agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar",
@@ -369,7 +371,14 @@ export function renderChatComposerView(
               focusComposerFromChrome(event, context().canCompose, state.composerTextarea)
             }
             ref={[
-              context().state.composerInputRef ?? undefined,
+              elementRef<HTMLDivElement>((element) => {
+                state.composerInputRef?.(element);
+                return () => {
+                  if (state.composerInput === element) {
+                    state.composerInputRef?.();
+                  }
+                };
+              }),
               createBackgroundLayoutRef("composer"),
             ]}
           >

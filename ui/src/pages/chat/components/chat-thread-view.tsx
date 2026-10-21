@@ -1,4 +1,4 @@
-import { Show, createMemo, onCleanup, onSettled, useContext } from "solid-js";
+import { Show, createMemo, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -15,12 +15,13 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
@@ -47,6 +48,8 @@ import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
 function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
@@ -67,13 +70,6 @@ export function ChatThread(input: {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
-  let stopHistory: (() => void)[] = [];
-  let releaseViewport: (() => void) | undefined;
-  // Retained transcript roots can settle before refs; bind native input at the ref.
-  onCleanup(() => {
-    stopHistory.forEach((stop) => stop());
-    releaseViewport?.();
-  });
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => root && registerTranscriptElement(paneId(), root));
   const search = createMemo(() =>
@@ -187,15 +183,20 @@ export function ChatThread(input: {
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <div
         ref={[
-          (element) => {
+          elementRef((element: HTMLDivElement) => {
             root = element;
-            releaseViewport = input.bindViewport?.(element);
-            markdownRef(element);
-            prefetchRef(element);
-            stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+            // Retained roots can settle before refs; bind viewport and input together here.
+            const releaseViewport = input.bindViewport?.(element);
+            const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
               listen(element, type, historyIntent, { passive: true }),
             );
-          },
+            return () => {
+              stopHistory.forEach((stop) => stop());
+              releaseViewport?.();
+            };
+          }),
+          markdownRef,
+          prefetchRef,
           elementRef(input.props.onScrollPortRef),
         ]}
         class={[

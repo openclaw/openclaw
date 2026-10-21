@@ -72,6 +72,7 @@ import type {
   GatewayReloadPlan,
 } from "./config-reload.js";
 import { registerPluginServiceReloadTests } from "./config-reload.services.test-support.js";
+import { registerSkillsRefreshTests } from "./config-reload.skills.test-support.js";
 import {
   closeTestConfigReloaders,
   createConfigReloadTestClock,
@@ -3261,90 +3262,5 @@ describe("startGatewayConfigReloader", () => {
   );
 });
 
-describe("startGatewayConfigReloader skills discovery refresh", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(async () => {
-    await closeTestConfigReloaders();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it.each([
-    { path: "skills.allowBundled", config: { skills: { allowBundled: ["gog"] } } },
-    { path: "browser.enabled required by a skill", config: { browser: { enabled: false } } },
-    { path: "env.vars.PATH", config: { env: { vars: { PATH: "/fixture/bin" } } } },
-  ])("refreshes after publishing $path", async ({ config }) => {
-    const nextConfig: OpenClawConfig = { gateway: { reload: {} }, ...config };
-    const readSnapshot = vi.fn(async () =>
-      makeSnapshot({ config: nextConfig, hash: "skills-config-change" }),
-    );
-    const order: string[] = [];
-    let acceptedConfig: OpenClawConfig | undefined;
-    refreshSkillsDiscoveryMock.mockImplementation(async ({ config: candidateConfig }) => {
-      expect(candidateConfig).toEqual(acceptedConfig);
-      order.push("skills");
-    });
-    const { watcher, reloader } = createReloaderHarness(readSnapshot, {
-      onConfigAccepted: async (candidateConfig) => {
-        acceptedConfig = candidateConfig;
-        order.push("config");
-      },
-    });
-    await reloader.ready;
-
-    watcher.emit("change");
-    await flushReload(reloader);
-
-    expect(order).toEqual(["config", "skills"]);
-    expect(refreshSkillsDiscoveryMock).toHaveBeenCalledExactlyOnceWith({
-      config: nextConfig,
-      reason: "config-change",
-    });
-    await reloader.stop();
-  });
-
-  it("keeps an applied config when discovery refresh fails", async () => {
-    refreshSkillsDiscoveryMock.mockRejectedValue(new Error("discovery unavailable"));
-    const nextConfig: OpenClawConfig = {
-      gateway: { reload: {} },
-      skills: { allowBundled: ["gog"] },
-    };
-    const { watcher, log, reloader, onConfigAccepted } = createReloaderHarness(async () =>
-      makeSnapshot({ config: nextConfig, hash: "skills-refresh-failure" }),
-    );
-    await reloader.ready;
-
-    watcher.emit("change");
-    await flushReload(reloader);
-
-    expect(onConfigAccepted).toHaveBeenCalledOnce();
-    expect(log.warn).toHaveBeenCalledWith(
-      "config applied, but skills discovery refresh failed: Error: discovery unavailable",
-    );
-    expect(log.error).not.toHaveBeenCalled();
-    await reloader.stop();
-  });
-
-  it("does not refresh skills for a config left unapplied by reload mode off", async () => {
-    const initialConfig: OpenClawConfig = { gateway: { reload: { mode: "off" } } };
-    const { watcher, reloader } = createReloaderHarness(
-      async () =>
-        makeSnapshot({
-          config: { ...initialConfig, skills: { allowBundled: ["gog"] } },
-          hash: "skills-not-applied",
-        }),
-      { initialConfig },
-    );
-    await reloader.ready;
-
-    watcher.emit("change");
-    await flushReload(reloader);
-
-    expect(refreshSkillsDiscoveryMock).not.toHaveBeenCalled();
-    await reloader.stop();
-  });
-});
+registerSkillsRefreshTests(refreshSkillsDiscoveryMock);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

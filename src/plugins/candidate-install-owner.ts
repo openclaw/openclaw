@@ -1,3 +1,6 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+
 type InstallOwner = { installOwner?: string; ambiguous?: true };
 
 export function createPluginInstallOwnerMetadata(key: string, configurable: boolean) {
@@ -30,3 +33,22 @@ export const {
   resolve: resolvePluginCandidateInstallOwner,
   isAmbiguous: isPluginCandidateInstallOwnerAmbiguous,
 } = createPluginInstallOwnerMetadata("openclaw.pluginCandidateInstallOwner", true);
+
+/** Editable installs have no reusable identity; npm replacement records invalidate installed code. */
+export function resolveImmutableInstallIdentity(
+  origin: PluginOrigin,
+  installOwner: string | undefined,
+  installRecords: Readonly<Record<string, PluginInstallRecord>>,
+): string | undefined {
+  const install = installOwner ? installRecords[installOwner] : undefined;
+  if (origin !== "global" || install?.source !== "npm" || !install.integrity) {
+    return undefined;
+  }
+  return JSON.stringify([
+    installOwner,
+    install.installPath ?? "",
+    install.resolvedSpec ?? install.spec ?? "",
+    install.integrity,
+    install.installedAt ?? "",
+  ]);
+}

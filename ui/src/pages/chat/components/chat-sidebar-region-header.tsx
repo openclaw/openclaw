@@ -1,13 +1,4 @@
-import {
-  For,
-  Show,
-  createMemo,
-  createUniqueId,
-  createSignal,
-  onSettled,
-  mapArray,
-  onCleanup,
-} from "solid-js";
+import { For, Show, createMemo, createUniqueId, createSignal, onSettled, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -26,6 +17,7 @@ import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
 import "../../../components/tooltip.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { TabFocus } from "../../../lib/tabs.ts";
 import { showToast } from "../../../lib/toast.ts";
@@ -279,7 +271,6 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
 }
 
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
-  onCleanup(() => props.headerRef(null));
   const desktop = () => props.presentation === "desktop";
   const [closing, setClosing] = createSignal(false);
   const state = createMemo(() => {
@@ -544,7 +535,12 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   });
   return (
     <header
-      ref={props.headerRef}
+      ref={[
+        elementRef<HTMLElement>((element) => {
+          props.headerRef(element);
+          return () => props.headerRef(null);
+        }),
+      ]}
       class={[
         "rail-header side-panel__header",
         { "side-panel__header--occupied": state().tabs.length > 0 },

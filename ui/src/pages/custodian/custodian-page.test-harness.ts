@@ -111,6 +111,7 @@ export function createContext(
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot: null,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,

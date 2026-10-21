@@ -1,6 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import {
   isBrowserDashboardAvailable,
@@ -122,8 +122,8 @@ function BrowserDashboardWidgetContent(
             }
           }
         }
-        onSettled(() =>
-          context?.gateway.subscribeEvents((event) => {
+        onSettled(() => {
+          const unsubscribe = context?.gateway.subscribeEvents((event) => {
             const payload = asNullableRecord(event.payload);
             if (
               event.event !== "plugin.browser.dashboard_changed" ||
@@ -136,10 +136,11 @@ function BrowserDashboardWidgetContent(
             if (props.active) {
               void request("inspect");
             }
-          }),
-        );
-        onCleanup(() => {
-          connected = false;
+          });
+          return () => {
+            connected = false;
+            unsubscribe?.();
+          };
         });
         const tab = () => {
           const value = state().dashboard;

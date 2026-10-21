@@ -58,11 +58,7 @@ it("preserves caller responses, errors, and dispatcher ownership when capture re
   const transportError = new Error("Telegram request failed");
   mocks.fetch.mockResolvedValueOnce(response).mockRejectedValueOnce(transportError);
   const callerDispatcher = { destroy: vi.fn() };
-  const init = {
-    method: "POST",
-    body: "{}",
-    dispatcher: callerDispatcher,
-  };
+  const init = { method: "POST", body: "{}", dispatcher: callerDispatcher };
   const transport = resolveTelegramTransport(undefined, {
     network: { autoSelectFamily: false, dnsResultOrder: "verbatim" },
   });
@@ -73,11 +69,7 @@ it("preserves caller responses, errors, and dispatcher ownership when capture re
     expect(mocks.fetch).toHaveBeenCalledOnce();
     expect(mocks.fetch).toHaveBeenCalledWith(
       url,
-      expect.objectContaining({
-        method: "POST",
-        body: "{}",
-        dispatcher: callerDispatcher,
-      }),
+      expect.objectContaining({ method: "POST", body: "{}", dispatcher: callerDispatcher }),
     );
     await expect(transport.fetch(url, init)).rejects.toBe(transportError);
     expect(mocks.fetch).toHaveBeenCalledTimes(2);

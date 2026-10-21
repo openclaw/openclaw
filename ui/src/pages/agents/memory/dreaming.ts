@@ -118,8 +118,6 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
-export type WikiPreviewState = { page: WikiPagePreview; loading: boolean; error: string | null };
-
 export type DreamingViewState = {
   dreamIndex: number;
   dreamLastSwap: number;

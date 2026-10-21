@@ -7,6 +7,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
@@ -17,6 +18,8 @@ import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 

@@ -14,12 +14,13 @@ import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infr
 import { generateSecureUuid } from "../infra/secure-random.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { updateConfigMachineStateInDatabase } from "./config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -103,7 +104,7 @@ export function publishUserChannelPolicyInDatabase(
       const previous = splitPolicy(current);
       if (
         !isDeepStrictEqual(previous.policy, policy) &&
-        getAdmittedSqliteSchemaFacts(db)?.tables.has("user_profile_identities")
+        tableExists(db, "user_profile_identities")
       ) {
         profiles = executeSqliteQuerySync(
           db,
@@ -145,10 +146,7 @@ export function authorizeUserChannelIdentityInDatabase(
     grant: GatewayAccessGrantRef | null;
   },
 ): UserChannelAuthorizationReference | undefined {
-  if (
-    (getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 ||
-    !matchesPolicy(db, input.policy)
-  ) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, input.policy)) {
     return undefined;
   }
   const subject = userChannelIdentitySubject(input.identity);
@@ -186,7 +184,7 @@ function readAuthorization(
   id: string,
   policy: UserChannelAuthorizationPolicy,
 ) {
-  if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 || !matchesPolicy(db, policy)) {
+  if (!isStateSchemaVersionAtLeast(db, 19) || !matchesPolicy(db, policy)) {
     return undefined;
   }
   const row = executeSqliteQueryTakeFirstSync(
@@ -326,8 +324,7 @@ export function unlinkUserChannelIdentity(
 }
 
 function hasIdentityTables(db: EngineConnection): boolean {
-  const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
-  return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
+  return tableExists(db, "user_profiles") && tableExists(db, "user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(

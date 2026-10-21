@@ -84,10 +84,10 @@ type VoiceTranscriptReservation = {
   receivedAt: number;
   status: "pending" | "ready" | "checking" | "rejected";
   isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertCurrent?: () => void;
   start?: () => Promise<unknown>;
   resolve: (admission: VoiceTranscriptReservationAdmission) => void;
   rejectDecision: (reason: unknown) => void;
-  decision: Promise<VoiceTranscriptReservationAdmission>;
 };
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
@@ -363,6 +363,7 @@ async function handlePreparedNodeEvent(
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       const sessionId = entry?.sessionId ?? randomUUID();
       const runId = randomUUID();
+      source?.assertCurrent();
       // Resolve reservations in receipt order so delayed currentness checks cannot
       // change the dedupe window, while rejected connections leave no committed state.
       const decision = createDeferredCore<VoiceTranscriptReservationAdmission>();
@@ -372,7 +373,7 @@ async function handlePreparedNodeEvent(
         status: "pending",
         resolve: decision.resolve,
         rejectDecision: decision.reject,
-        decision: decision.promise,
+        assertCurrent: source?.assertCurrent,
       };
       const queue = pendingVoiceTranscriptReservations.get(canonicalKey) ?? [];
       queue.push(reservation);
@@ -380,11 +381,7 @@ async function handlePreparedNodeEvent(
 
       const drain = () => {
         while (queue[0]?.status === "rejected") {
-          const next = queue.shift();
-          if (!next) {
-            break;
-          }
-          next.resolve(null);
+          queue.shift()?.resolve(null);
         }
         const next = queue[0];
         if (!next) {
@@ -398,6 +395,7 @@ async function handlePreparedNodeEvent(
         void (async () => {
           try {
             const isCurrent = next.isConnectionCurrent ? await next.isConnectionCurrent() : true;
+            next.assertCurrent?.();
             const admission =
               isCurrent &&
               !shouldDropDuplicateVoiceTranscript({
@@ -408,13 +406,13 @@ async function handlePreparedNodeEvent(
               next.start
                 ? { work: next.start() }
                 : null;
-            queue.shift();
             next.resolve(admission);
           } catch (err) {
-            queue.shift();
             next.rejectDecision(err);
+          } finally {
+            queue.shift();
+            drain();
           }
-          drain();
         })();
       };
       const settle = (status: "ready" | "rejected") => {
@@ -425,7 +423,6 @@ async function handlePreparedNodeEvent(
         drain();
       };
 
-      source?.assertCurrent();
       const isConnectionCurrent = opts?.isConnectionCurrent;
       const voiceWork = runWithGatewayIndependentRootWorkContinuation(async () => {
         if (isConnectionCurrent && !(await isConnectionCurrent())) {
@@ -473,7 +470,7 @@ async function handlePreparedNodeEvent(
           );
         };
         settle("ready");
-        const admission = await reservation.decision;
+        const admission = await decision.promise;
         if (!admission) {
           return;
         }

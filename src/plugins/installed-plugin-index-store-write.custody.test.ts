@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   refreshPersistedInstalledPluginIndex as refreshIndex,
   writePersistedInstalledPluginIndex as writeIndex,
@@ -17,13 +16,7 @@ import {
 import { refreshPluginRegistryAfterConfigMutation as refreshConfig } from "./registry-refresh.js";
 import { createInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 
 it.each(["manual", "committed-config", "committed-config-default"] as const)(
   "%s refresh retains install records committed while waiting for plugin ownership",

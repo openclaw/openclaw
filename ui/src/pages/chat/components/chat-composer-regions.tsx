@@ -1,9 +1,9 @@
-import { createMemo, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { renderChatQueueSolid as ChatQueue } from "./chat-composer-queue.tsx";
 import { isChatRunWorking } from "./chat-composer-state.ts";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 export function ComposerQueue(view: { composer: ChatComposerProps; showAbortableUi: boolean }) {
   const canAct = () =>
@@ -25,11 +25,7 @@ export function ComposerQueue(view: { composer: ChatComposerProps; showAbortable
   );
 }
 
-export function ComposerInputScope(props: {
-  state: ChatComposerState;
-  children: import("@solidjs/web").JSX.Element;
-}) {
-  onCleanup(() => props.state.composerInputRef?.());
+export function ComposerInputScope(props: { children: import("@solidjs/web").JSX.Element }) {
   // This scope retains one native input subtree, including its focus and undo history.
   const initialChildren = untrack(() => props.children);
   return initialChildren;

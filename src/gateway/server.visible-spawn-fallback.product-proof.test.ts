@@ -187,6 +187,7 @@ async function startProvider(scenario: Scenario) {
       primaryRateLimited = true;
     },
     controlSourcesHeld: Promise.all([parentHeld.promise, childHeld.promise]),
+    releaseHeldResponses: () => releaseControl.resolve(),
     stop: () => {
       releaseControl.resolve();
       return closeProvider(server);
@@ -238,7 +239,6 @@ async function withProofGateway(
           defaults: {
             workspace: home.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: scenario.cli ? CHILD_BACKUP : scenario.inherited ? ladder : undefined,
             models: Object.fromEntries(
               [PRIMARY, BACKUP, CHILD_BACKUP].map((ref) => [
@@ -321,6 +321,8 @@ async function withProofGateway(
         },
       });
     },
+    // Cleanup wakes may call the provider too; release response holds before joining them.
+    () => provider?.releaseHeldResponses(),
     // Flush older delayed notices before this Gateway closes.
     () =>
       gateway &&

@@ -247,7 +247,6 @@ it(
       writeJson(configPath, {
         agents: {
           ownership: "explicit",
-          defaults: { heartbeat: { every: "30m" } },
           entries: { main: {} },
         },
       });

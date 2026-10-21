@@ -3,6 +3,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { loadDeliveryQueueEntryInDatabase as loadEntry } from "../delivery-queue-sqlite-bound.js";
 import {
+  completeDeliveryQueueEntryInDatabase as complete,
   prepareDeliveryQueueTerminalEntry as prepareTerminal,
   pruneExpiredDeliveryQueueTombstonesInDatabase as prune,
   terminalizePendingDeliveryQueueEntryInDatabase as terminalize,
@@ -35,6 +36,34 @@ function pruneAt(database: OpenClawStateDatabase, time = NOW) {
 }
 
 const contracts: Array<[string, (database: OpenClawStateDatabase) => void]> = [
+  [
+    "prunes bounded completions by count and age without pruning another queue",
+    (database) => {
+      const completionRetention = { idPrefix: "completion-", maxAgeMs: 60_000, maxEntries: 2 };
+      const completeReceipt = (suffix: string, queueName = QUEUE) => {
+        const id = `${completionRetention.idPrefix}${suffix}`;
+        transaction(database.db, () => {
+          upsert({ queueName, entry: { ...entry(id, Date.now()), completionRetention } }, database);
+          complete(database, queueName, id);
+        });
+        return id;
+      };
+      const sibling = completeReceipt("sibling", "another-queue");
+      const first = completeReceipt("a");
+      const second = completeReceipt("b");
+      const third = completeReceipt("c");
+      expect(loadEntry(database, QUEUE, first)).toBeNull();
+      expect(loadEntry(database, QUEUE, second)).not.toBeNull();
+      expect(loadEntry(database, QUEUE, third)).not.toBeNull();
+
+      vi.mocked(Date.now).mockReturnValue(NOW + completionRetention.maxAgeMs + 1);
+      const newest = completeReceipt("d");
+      expect(loadEntry(database, QUEUE, second)).toBeNull();
+      expect(loadEntry(database, QUEUE, third)).toBeNull();
+      expect(loadEntry(database, QUEUE, newest)).not.toBeNull();
+      expect(loadEntry(database, "another-queue", sibling)).not.toBeNull();
+    },
+  ],
   [
     "orders mixed receipt deadlines and preserves large bounded ages",
     (database) => {

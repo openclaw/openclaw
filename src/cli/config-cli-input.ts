@@ -12,6 +12,7 @@ import {
 } from "../config/types.secrets.js";
 import { visitConfigValueTree } from "../config/value-tree.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidFileSecretRefId,
@@ -33,7 +34,6 @@ import {
 } from "./config-cli-path.js";
 import type { ConfigSetDryRunInputMode } from "./config-set-dryrun.js";
 import {
-  decodeConfigMutationInput,
   parseBatchSource,
   parseConfigMutationJson5,
   readConfigMutationFileSync,
@@ -442,7 +442,7 @@ async function readStdinText(): Promise<string> {
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
-  return decodeConfigMutationInput(bytes, "--stdin");
+  return decodeUtf8Input(bytes, "--stdin");
 }
 
 export function buildUnsetOperation(

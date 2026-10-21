@@ -473,9 +473,9 @@ it.each(["create", "close"] as const)(
 it("touches the current attachment with one guarded write and no preliminary row read", () => {
   const database = openDatabase("worker-attachment-touch-sql-");
   let nowMs = 1_000;
-  const kernel = createWorkerEnvironmentStoreKernel(database, () => nowMs);
   const write = <T>(operation: () => T) =>
     runOpenClawStateWriteTransaction(operation, { database });
+  const kernel = write(() => createWorkerEnvironmentStoreKernel(database, () => nowMs));
   const { attachment } = write(() =>
     kernel.createSessionAttachmentIntent(
       attachmentIntent("touch-environment", "touch-session", "touch-provision"),

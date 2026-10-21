@@ -1,3 +1,4 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 import type { RealtimeVoiceBridgeEvent } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
@@ -182,14 +183,7 @@ export function createMeetingRealtimeOutputOwner() {
 
   const rememberStale = (responseId: string) => {
     staleResponseIds.delete(responseId);
-    staleResponseIds.add(responseId);
-    while (staleResponseIds.size > STALE_RESPONSE_LIMIT) {
-      const oldest = staleResponseIds.values().next().value;
-      if (!oldest) {
-        break;
-      }
-      staleResponseIds.delete(oldest);
-    }
+    rememberBoundedKey(staleResponseIds, responseId, STALE_RESPONSE_LIMIT);
   };
 
   return {

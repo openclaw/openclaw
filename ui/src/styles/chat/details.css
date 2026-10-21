@@ -174,7 +174,8 @@ openclaw-chat-details[mobile] {
   font-size: 13px;
 }
 .chat-details__toolbar button,
-.chat-details__row .chat-copy-btn {
+.chat-details__row .chat-copy-btn,
+.chat-details .chat-pr__actions-trigger {
   display: grid;
   place-items: center;
   width: 24px;
@@ -184,7 +185,8 @@ openclaw-chat-details[mobile] {
   border-radius: 5px;
   background: transparent;
 }
-.chat-details__toolbar button {
+.chat-details__toolbar button,
+.chat-details .chat-pr__actions-trigger {
   color: var(--muted);
 }
 @media (hover: hover) {
@@ -721,17 +723,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 .chat-details .chat-pr__actions {
   flex: none;
   margin-inline-start: auto;
-}
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
 }
 .chat-details .chat-pr__actions-trigger svg {
   width: 15px;

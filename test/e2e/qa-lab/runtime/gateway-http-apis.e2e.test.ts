@@ -12,6 +12,7 @@ import {
   startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
+import { prepareScheduledHookReceiversForTest } from "../../../../src/gateway/test-scheduled-hook-receivers.test-support.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
 
 installGatewayTestHooks();
@@ -33,6 +34,7 @@ async function fetchJson(port: number, pathname: string, init?: RequestInit) {
 it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", async () => {
   const embeddingFixture = await startGenericEmbeddingServer();
   let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+  let restoreReceivers: (() => void) | undefined;
 
   try {
     const configPath = createConfigIO().configPath;
@@ -62,6 +64,7 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
       },
     };
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    restoreReceivers = await prepareScheduledHookReceiversForTest();
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
       .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
@@ -195,6 +198,7 @@ it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", 
     ]);
   } finally {
     await gateway?.close({ reason: "Gateway HTTP API QA proof complete" });
+    restoreReceivers?.();
     await embeddingFixture.close();
   }
 }, 60_000);

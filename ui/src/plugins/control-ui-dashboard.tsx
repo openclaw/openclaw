@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, Loading, Show, createMemo, createStore, isPending, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
@@ -32,17 +32,7 @@ function PluginSessionDashboardContent(
 ) {
   const context = useOptionalApplication();
   const gateway = context ? projectGateway(context.gateway) : undefined;
-  const [viewAttempt, setViewAttempt] = createSignal(0);
-  const boardView = createMemo(() => {
-    viewAttempt();
-    return import("../components/board/board-view.tsx").then(
-      (module) => ({ view: module.BoardView, error: null }),
-      (error: unknown) => ({
-        view: null,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
-  });
+  const boardView = createMemo(() => import("../components/board/board-view.tsx"));
   const scope = createMemo(
     () => {
       gateway?.revision();
@@ -103,7 +93,10 @@ function PluginSessionDashboardContent(
       },
       applyOps: (ops) => lease.provider.applyOps(ops),
       grant: (name, decision) => lease.provider.grant(name, decision),
-      selectTab: (activeTabId) => setPresentation((previous) => ({ ...previous, activeTabId })),
+      selectTab: (activeTabId) =>
+        setPresentation((draft) => {
+          draft.activeTabId = activeTabId;
+        }),
       frameLoadFailed: (name) => lease.provider.refreshWidgetFrame(name),
       widgetAppView: (name, revision) => lease.provider.widgetAppView(name, revision),
       refreshWidgetAppView: (name, revision) => lease.provider.refreshWidgetAppView(name, revision),
@@ -128,28 +121,29 @@ function PluginSessionDashboardContent(
     },
   );
   // Preserve manual choices within a scope; a replacement initializes only after its first snapshot.
-  const [presentation, setPresentation] = createSignal<{
+  const [presentation, setPresentation] = createStore<{
     scope: ReturnType<typeof scope>;
     expanded: boolean;
     initialized: boolean;
     activeTabId: string;
-  }>((previous) => {
-    const current = scope();
-    const state = resource()?.projection.read();
-    const retained = previous?.scope === current;
-    const initialize = state?.hasLoadedSnapshot && (!retained || !previous?.initialized);
-    return {
-      scope: current,
-      expanded: initialize ? boardExists(state.snapshot) : (previous?.expanded ?? false),
-      initialized: initialize || (retained && previous?.initialized),
-      activeTabId:
-        previous &&
-        retained &&
-        state?.snapshot.tabs.some((tab) => tab.tabId === previous.activeTabId)
-          ? previous.activeTabId
-          : (state?.snapshot.tabs[0]?.tabId ?? ""),
-    };
-  });
+  }>(
+    (draft) => {
+      const current = scope();
+      const state = resource()?.projection.read();
+      const retained = draft.scope === current;
+      const initialize = state?.hasLoadedSnapshot === true && (!retained || !draft.initialized);
+      draft.expanded = initialize ? boardExists(state.snapshot) : draft.expanded;
+      draft.initialized = initialize || (retained && draft.initialized);
+      draft.activeTabId =
+        retained && state?.snapshot.tabs.some((tab) => tab.tabId === draft.activeTabId)
+          ? draft.activeTabId
+          : (state?.snapshot.tabs[0]?.tabId ?? "");
+      draft.scope = current;
+    },
+    { scope: null, expanded: false, initialized: false, activeTabId: "" },
+    // Scope is an immutable identity, not nested presentation state.
+    { shallow: true },
+  );
   const board = createMemo(() => {
     const current = resource();
     const session = props.session;
@@ -163,13 +157,12 @@ function PluginSessionDashboardContent(
       <button
         type="button"
         class="plugin-session-dashboard__toggle"
-        aria-expanded={presentation().expanded ? "true" : "false"}
+        aria-expanded={presentation.expanded ? "true" : "false"}
         onClick={() =>
-          setPresentation((previous) => ({
-            ...previous,
-            initialized: true,
-            expanded: !previous.expanded,
-          }))
+          setPresentation((draft) => {
+            draft.initialized = true;
+            draft.expanded = !draft.expanded;
+          })
         }
       >
         <span class="plugin-session-dashboard__title">
@@ -180,30 +173,38 @@ function PluginSessionDashboardContent(
           <Icon name="arrowDown" />
         </span>
       </button>
-      <div class="plugin-session-dashboard__body" hidden={!presentation().expanded}>
-        <Loading>
-          {boardView().error ? (
-            <>
-              <p role="alert">{boardView().error}</p>
-              <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
-                {t("common.retry")}
-              </button>
-            </>
-          ) : (
-            <Show
-              when={board()}
-              fallback={
-                <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
-              }
-            >
-              {(current) => (
-                <Show when={boardView().view} keyed>
-                  {(BoardView) => (
+      <div class="plugin-session-dashboard__body" hidden={!presentation.expanded}>
+        <Errored
+          fallback={(error, reset) => {
+            const message = () => {
+              const failure = error();
+              return failure instanceof Error ? failure.message : String(failure);
+            };
+            return (
+              <Show when={!isPending(() => boardView())}>
+                <p role="alert">{message()}</p>
+                <button type="button" onClick={reset}>
+                  {t("common.retry")}
+                </button>
+              </Show>
+            );
+          }}
+        >
+          <Loading>
+            <Show when={boardView().BoardView} keyed>
+              {(BoardView) => (
+                <Show
+                  when={board()}
+                  fallback={
+                    <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
+                  }
+                >
+                  {(current) => (
                     <BoardView
-                      active={presentation().expanded && props.presented}
+                      active={presentation.expanded && props.presented}
                       session={current().session}
                       snapshot={current().snapshot}
-                      activeTabId={presentation().activeTabId}
+                      activeTabId={presentation.activeTabId}
                       widgetFrameUrl={(name: string, revision: number) =>
                         current().lease.provider.widgetFrameUrl(name, revision)
                       }
@@ -215,10 +216,10 @@ function PluginSessionDashboardContent(
                 </Show>
               )}
             </Show>
-          )}
-        </Loading>
+          </Loading>
+        </Errored>
       </div>
-      <Show when={!presentation().expanded && presentation().initialized && !board()}>
+      <Show when={!presentation.expanded && presentation.initialized && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>
       </Show>
     </section>

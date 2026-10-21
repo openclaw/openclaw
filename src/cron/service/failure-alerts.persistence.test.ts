@@ -158,7 +158,7 @@ it.each([
     expect(job.state.lastFailureNotificationDeliveryStatus).toBe(notification.status);
     expect(deferredNotifications).toEqual([]);
     expect(send).not.toHaveBeenCalled();
-    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSessionEvent).not.toHaveBeenCalled();
   },
 );
 

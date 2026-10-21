@@ -57,6 +57,8 @@ const DIFF_CACHE_MISS_REASONS = new Set([
 ]);
 const CHAT_SEND_PHASE =
   /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
+const CONTROL_UI_DOCUMENT_STAGE =
+  /^control-ui\.document\.(auth_grants|identity_avatar|plugin_catalog|git_branch|preferences|render|total)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
@@ -158,6 +160,16 @@ export function recordOperationTimingEvent(
       return;
     case "diagnostic.phase.completed": {
       if (!metadata.trusted) {
+        return;
+      }
+      const documentStage = CONTROL_UI_DOCUMENT_STAGE.exec(evt.name)?.[1];
+      if (documentStage) {
+        store.histogram(
+          "openclaw_control_ui_document_duration_seconds",
+          "Elapsed Control UI HTML document handler stages in seconds; stages can overlap.",
+          { stage: documentStage },
+          seconds(evt.durationMs),
+        );
         return;
       }
       if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {

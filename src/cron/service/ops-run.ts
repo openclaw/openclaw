@@ -20,7 +20,7 @@ import {
   waitForCronJobRun,
   type RequestedCronRun,
 } from "./run-queue.js";
-import type { CronRunMode, CronRunResult, CronServiceState, CronWakeMode } from "./state.js";
+import type { CronRunMode, CronRunResult, CronServiceState } from "./state.js";
 import { captureCronServiceMutationSource } from "./store.js";
 import { wake } from "./wake.js";
 
@@ -198,15 +198,6 @@ export async function waitForManualRun(
 }
 
 /** Enqueues manual wake text through the cron wake API. */
-export function wakeNow(
-  state: CronServiceState,
-  opts: {
-    mode: CronWakeMode;
-    text: string;
-    sessionKey?: string;
-    agentId?: string;
-    commitGuard?: () => void;
-  },
-) {
+export function wakeNow(state: CronServiceState, opts: Parameters<typeof wake>[1]) {
   return wake(state, opts);
 }

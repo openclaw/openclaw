@@ -1,5 +1,6 @@
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
@@ -21,7 +22,10 @@ import {
 } from "./session-transcript-worker-resources.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.js";
 
-type PreparedStoreTarget = Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>;
+type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
+type PreparedStoreTarget = DeepReadonly<
+  Extract<SessionStoreTargetReadResult, { kind: "session-store-target" }>
+>;
 type StoreTargetReadOwner = {
   assertCurrent: () => void;
   onRegistryChange: (change: AgentDatabaseRegistryChange) => void;
@@ -29,27 +33,27 @@ type StoreTargetReadOwner = {
   revalidateTarget: () => Promise<void>;
 };
 
-type PreparedInventory = Extract<
-  SessionStoreTargetInventoryResult,
-  { kind: "session-target-inventory" }
+type PreparedInventory = DeepReadonly<
+  Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>
 >;
-type PreparedSelection = PreparedStoreTarget | PreparedInventory;
 type SelectionMemo<Value> = Map<string, { registry: symbol; value: Value }>;
 const targetSelections: SelectionMemo<PreparedStoreTarget> = new Map();
 const targetInventories: SelectionMemo<PreparedInventory> = new Map();
 const MAX_SELECTIONS = 128;
 
 /** Registry receipts and physical replacement invalidate locator facts, never caller authority. */
-function captureSelectionMemo<Value extends PreparedSelection>(
+function captureSelectionMemo<Value>(
   selections: SelectionMemo<Value>,
   request: Pick<SessionStoreTargetReadRequest, "env" | "candidates">,
   selection: unknown,
   includeRows = false,
 ) {
   const registry = readOpenClawAgentDatabaseRegistryToken({ env: request.env });
-  const key = () => {
-    try {
-      return JSON.stringify([
+  let captured: string | undefined;
+  try {
+    // Family custody does not enumerate every row source an inventory can discover.
+    if (!includeRows || !request.candidates.some((candidate) => candidate.scope)) {
+      captured = JSON.stringify([
         selection,
         request.candidates.map((candidate) => {
           const identity = readDatabasePathIdentitySync(candidate.path);
@@ -61,33 +65,23 @@ function captureSelectionMemo<Value extends PreparedSelection>(
           ];
         }),
       ]);
-    } catch {
-      // Unreadable candidates retain the discovery owner's normal error path.
-      return undefined;
     }
-  };
-  // Family custody does not enumerate every row source an inventory can discover.
-  const captured =
-    includeRows && request.candidates.some((candidate) => candidate.scope) ? undefined : key();
+  } catch {
+    // Unreadable candidates retain the discovery owner's normal error path.
+  }
+  const cached = captured ? selections.get(captured) : undefined;
+  if (captured && cached?.registry === registry) {
+    selections.delete(captured);
+    selections.set(captured, cached);
+  }
   return {
-    read(): Value | undefined {
-      if (!captured) {
-        return undefined;
-      }
-      const cached = selections.get(captured);
-      if (!cached || cached.registry !== registry) {
-        return undefined;
-      }
-      selections.delete(captured);
-      selections.set(captured, cached);
-      return structuredClone(cached.value);
-    },
+    value: cached?.registry === registry ? cached.value : undefined,
     install(value: Value): void {
       if (!captured) {
         return;
       }
       selections.delete(captured);
-      selections.set(captured, { registry, value: structuredClone(value) });
+      selections.set(captured, { registry, value: freezeTrustedJsonSnapshot(value) });
       while (selections.size > MAX_SELECTIONS) {
         selections.delete(selections.keys().next().value!);
       }
@@ -101,6 +95,17 @@ export function prepareSessionStoreTargetInventoryRead(
   registeredDatabases?: SessionStoreRegistryRead,
 ) {
   const { candidates, ...prepared } = request;
+  const selection = [
+    request.selection,
+    request.recoveryExclusions,
+    request.agentIds,
+    request.config.session?.store,
+    request.config.agents?.defaults?.sessionStore?.agentId,
+    resolveSessionStoreCompatibilityAgentId(request.config),
+    listConfiguredSessionStoreAgentIds(request.config),
+    [...request.paths],
+    request.registryDiscovery,
+  ];
   // Security-scoped inventories can supply a stricter witness. Ordinary discovery
   // keeps its selected registry snapshot; later registrations affect the next read.
   const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
@@ -114,10 +119,7 @@ export function prepareSessionStoreTargetInventoryRead(
     assertRegistryCurrent,
     followRegistration: registry.followRegistration,
     withRead<T>(
-      operation: (
-        inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
-        assertCurrent: () => void,
-      ) => Promise<T>,
+      operation: (inventory: PreparedInventory, assertCurrent: () => void) => Promise<T>,
       assertCallerCurrent?: () => void,
       signal?: AbortSignal,
     ) {
@@ -133,27 +135,19 @@ export function prepareSessionStoreTargetInventoryRead(
           const memo = captureSelectionMemo(
             targetInventories,
             request,
-            [
-              request.selection,
-              request.recoveryExclusions,
-              request.agentIds,
-              request.config.session?.store,
-              request.config.agents?.defaults?.sessionStore?.agentId,
-              resolveSessionStoreCompatibilityAgentId(request.config),
-              listConfiguredSessionStoreAgentIds(request.config),
-              [...request.paths],
-              request.registryDiscovery,
-            ],
+            selection,
             // Only fixed-store visibility depends on the session rows. Per-agent
             // topology changes with physical files or registry ownership, not activity.
             !isPerAgentSessionStoreConfig(request.config.session?.store),
           );
-          let inventory =
-            memo.read() ??
-            (await discovery.readTargetInventory({
-              ...prepared,
-              registeredDatabases: registeredDatabases ?? { status: "deferred" },
-            }));
+          if (memo.value) {
+            assertCurrent();
+            return operation(memo.value, assertCurrent);
+          }
+          let inventory = await discovery.readTargetInventory({
+            ...prepared,
+            registeredDatabases: registeredDatabases ?? { status: "deferred" },
+          });
           if (inventory.kind === "session-target-registry-required") {
             const { result } = await registry.read(signal);
             inventory = await discovery.readTargetInventory({
@@ -200,7 +194,7 @@ export async function withSessionStoreTarget<T>(
         request.defaultAgentId,
         request.storePath,
       ]);
-      const cached = memo.read();
+      const cached = memo.value;
       let read = cached
         ? { ok: true as const, value: cached }
         : await discovery.readStoreTargetResult({
@@ -225,7 +219,9 @@ export async function withSessionStoreTarget<T>(
       if (read.value.kind === "session-target-registry-required") {
         throw new Error("Session store target requested registry rows twice");
       }
-      memo.install(read.value);
+      if (!cached) {
+        memo.install(read.value);
+      }
       const target = read.value;
       const assertTargetCurrent = () => {
         assertCurrent();

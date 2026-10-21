@@ -63,7 +63,7 @@ import {
   runTelegramChannelInboundEventWithHarness,
 } from "./bot.test-helpers.js";
 import {
-  resolveTelegramConversationBaseSessionKey,
+  resolveTelegramTargetSession,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import type {
@@ -496,7 +496,7 @@ async function writeDirectTelegramTranscriptContext(params: {
     ...conversation,
     threadSpec: { scope: "none" },
   });
-  const sessionKey = resolveTelegramConversationBaseSessionKey({ ...conversation, route });
+  const sessionKey = resolveTelegramTargetSession({ ...conversation, route });
   await upsertSessionEntry({
     storePath: params.storePath,
     sessionKey,

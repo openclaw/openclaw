@@ -8,7 +8,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 
 export function createChatPageNavigationContext() {
   const router = createRouter({ routes: [] });

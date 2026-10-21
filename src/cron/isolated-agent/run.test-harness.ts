@@ -1,4 +1,3 @@
-// Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
 import {
@@ -15,6 +14,8 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
+import { resetCronAutomationMocks } from "./run-automation.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -101,7 +102,6 @@ export const cleanupBrowserSessionsForLifecycleEndMock = vi.fn();
 export const removeCronRunContinuationSessionIfIdleMock = vi.fn();
 export const callGatewayMock = vi.fn();
 export const hasUsableWebSearchProviderMock = vi.fn();
-export const readSessionMessagesAsyncMock = vi.fn();
 
 const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
 const resolveCronStyleNowMock = vi.fn();
@@ -338,11 +338,6 @@ vi.mock("../run-continuation-cleanup.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewayMock,
-}));
-
-vi.mock("../../gateway/session-transcript-readers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../gateway/session-transcript-readers.js")>()),
-  readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
@@ -606,6 +601,7 @@ function resetRunConfigMocks(): void {
 }
 
 function resetRunExecutionMocks(): void {
+  resetCronAutomationMocks();
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
@@ -849,8 +845,6 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
       Boolean(params?.runtimeWebSearch?.selectedProvider),
   );
-  readSessionMessagesAsyncMock.mockReset();
-  readSessionMessagesAsyncMock.mockResolvedValue([]);
 }
 
 export function clearFastTestEnv(): string | undefined {

@@ -1,16 +1,19 @@
 import { Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { SessionDiffActionIcon } from "./session-diff-menus.tsx";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { totalDiffStat } from "./session-diff-presentation.ts";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
   const {
     props,
-    collapsedPaths,
+    collapsedFiles,
     scope,
     split,
     wrap,
@@ -120,7 +123,8 @@ export function createSessionDiffChrome(bindings: SessionDiffViewBindings) {
   }
   function DesktopSummary(summary: { result: SessionsDiffResult }) {
     let secondary: HTMLDivElement | undefined;
-    const allExpanded = () => summary.result.files.length > 0 && collapsedPaths().size === 0;
+    const allExpanded = () =>
+      summary.result.files.length > 0 && Object.keys(collapsedFiles).length === 0;
     const modeLabel = () => t("chat.sessionDiff.cycleMode", { mode: mode() });
     return (
       <div class="session-diff__summary session-panel-rail" data-presentation="desktop">

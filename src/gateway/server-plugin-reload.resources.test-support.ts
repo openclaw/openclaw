@@ -8,14 +8,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   reloadFailure,
   firstReloaded,
   observeSettlement,
+  rejectWith,
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   expectSiblingUnchanged,
+  invokeReloadMethod,
   observeRetainedWork,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
@@ -23,18 +24,7 @@ import {
 type RecoveryFixture = Awaited<ReturnType<RecoveryFixtureFactory>>;
 
 async function readResource(fixture: RecoveryFixture) {
-  const method = "first.resource";
-  const handler = fixture.registryOwner.registry.gatewayHandlers[method];
-  assert(handler);
-  const respond = vi.fn();
-  await handler({
-    req: { type: "req", id: "resource-reload", method },
-    params: {},
-    client: null,
-    isWebchatConnect: () => false,
-    respond,
-    context: {} as GatewayRequestHandlerOptions["context"],
-  });
+  const respond = await invokeReloadMethod(fixture.registryOwner.registry, "first.resource");
   expect(respond).toHaveBeenCalledOnce();
   return respond.mock.calls[0]?.[1];
 }
@@ -106,9 +96,7 @@ export async function verifyCandidateResourceCleanup(createFixture: RecoveryFixt
   const resources: Array<{ closed: boolean; flushed: boolean }> = [];
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    beforePublish: async () => {
-      throw new Error("candidate publication refused");
-    },
+    beforePublish: rejectWith(new Error("candidate publication refused")),
     registerFirst(api) {
       const resource = { closed: false, flushed: false };
       resources.push(resource);

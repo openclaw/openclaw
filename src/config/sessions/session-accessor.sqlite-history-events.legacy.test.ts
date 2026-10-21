@@ -318,6 +318,42 @@ it("uses the last imported root type for custom then compaction history", async 
   ).toEqual([]);
 });
 
+it("counts imported compaction bytes using the last root type across an append", async () => {
+  const rows = [
+    JSON.stringify({ type: "session", version: 3, id: scope.sessionId }),
+    JSON.stringify(messageEvent("discarded", null, "Discard this older question.")),
+    JSON.stringify(messageEvent("kept-user", "discarded", "Retained question.")),
+    '{"type":"custom","type":"message","id":"kept-assistant","parentId":"kept-user","message":{"role":"assistant","content":"Retained answer."}}',
+    JSON.stringify({
+      type: "compaction",
+      id: "compaction",
+      parentId: "kept-assistant",
+      firstKeptEntryId: "kept-user",
+      summary: "Retained context.",
+    }),
+  ];
+  await seedRows(rows);
+  const retainedBytes = rows.slice(2).reduce((total, row) => total + Buffer.byteLength(row) + 1, 0);
+  expect(readActiveTranscriptStats(scope)).toEqual({ eventCount: 3, sizeBytes: retainedBytes });
+
+  await persistSessionTranscriptTurn(scope, {
+    messages: [
+      transcriptMessage("fresh", "compaction", { role: "user", content: "A fresh question." }),
+    ],
+    touchSessionEntry: false,
+  });
+  const stored = openDatabase()
+    .db.prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+    .all(scope.sessionId) as { event_json: string }[];
+  expect(stored.slice(0, rows.length)).toEqual(rows.map((event_json) => ({ event_json })));
+  expect(stored).toHaveLength(rows.length + 1);
+  const appended = stored.at(-1)!.event_json;
+  expect(readActiveTranscriptStats(scope)).toEqual({
+    eventCount: 4,
+    sizeBytes: retainedBytes + Buffer.byteLength(appended) + 1,
+  });
+});
+
 it("continues imported history when an append has no explicit parent", async () => {
   const events = [
     { type: "session", version: 3, id: scope.sessionId },

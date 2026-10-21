@@ -61,6 +61,11 @@ describe("config CLI database effects", () => {
     if (code === 1) {
       expect(result.stderr).toContain("exclusive offline state ownership");
       expect(result.stderr).toContain("stop the Gateway");
+      expect(result.stderr).toContain("This command is offline-only");
+      expect(result.stderr).toContain("openclaw gateway call config.patch");
+      expect(result.stderr).toContain("baseHash from openclaw gateway call config.get");
+      expect(result.stderr).not.toContain("fix authentication");
+      expect(result.stderr).not.toContain("Update the Gateway");
     }
     expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH!, "utf8")).toBe(originalConfig);
     expect(await readLatestConfigSnapshotAuditRecordAsync({ env })).toBeNull();

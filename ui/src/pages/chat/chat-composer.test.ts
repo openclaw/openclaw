@@ -347,6 +347,36 @@ it("lets queued rows own the offline outbox state", () => {
   expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 });
 
+it("releases layout observation when a banner replaces the input", async () => {
+  vi.useFakeTimers();
+  const { container, props: initial } = renderComposer({}, true);
+  const input = container.querySelector<HTMLElement>(".agent-chat__input")!;
+  let top = 100;
+  vi.spyOn(input, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, top, 400, 48));
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(20);
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+
+  renderComposerInto(container, {
+    ...initial,
+    disabledBanner: { kind: "composer-replacement", text: "This session is archived." },
+  });
+  expect(container.querySelector(".agent-chat__input")).toBeNull();
+  top = 200;
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(20);
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+
+  renderComposerInto(container, initial);
+  const replacement = container.querySelector<HTMLElement>(".agent-chat__input")!;
+  expect(replacement).not.toBe(input);
+  vi.spyOn(replacement, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 300, 400, 48));
+  window.dispatchEvent(new Event("resize"));
+  await vi.advanceTimersByTimeAsync(20);
+  expect(replacement.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("272px");
+  expect(input.style.getPropertyValue("--chat-composer-popover-max-height")).toBe("72px");
+});
+
 it("replaces the composer with the archived-session notice", () => {
   const onAction = vi.fn();
   const onAbort = vi.fn();

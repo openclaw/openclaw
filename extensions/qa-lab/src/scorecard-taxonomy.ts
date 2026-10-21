@@ -526,13 +526,13 @@ export function readValidatedQaMaturityScoreSources(params?: {
     YAML.parse(fs.readFileSync(scoresPath, "utf8")),
     scoresPath,
   );
-  const warnings = validateQaMaturityScoresAgainstTaxonomy({
+  validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
     taxonomy,
     scoresPath,
   });
-  return { scores, taxonomy, warnings };
+  return { scores, taxonomy };
 }
 
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
@@ -741,7 +741,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   scoresPath?: string;
 }) {
   const scoresPath = params.scoresPath ?? QA_MATURITY_SCORES_PATH;
-  const warnings: string[] = [];
   const scoreSurfaces = params.scores.surfaces;
   const taxonomyIndex = buildQaMaturityTaxonomyCategoryIndex(params.taxonomy);
   if (params.scores.counts.active_surfaces !== scoreSurfaces.length) {
@@ -855,7 +854,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
       }
     }
   }
-  return warnings;
 }
 
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {

@@ -71,7 +71,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   pendingCatalogArchives: ReadonlySet<string> = new Set();
   sessionCatalogRefreshStatus: PanelRefreshStatus = createPanelRefreshStatus();
   loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
-  visibleSessionLimits = new Map<string, number>();
+  visibleSessionLimits: ReadonlyMap<string, number> = new Map();
   sessionsResult: SessionsListResult | null = null;
   sessionsAgentId: string | null = null;
   sessionsLoading = false;

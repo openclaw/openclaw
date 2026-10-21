@@ -29,6 +29,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   };
   return {
     ...page.actions,
+    gateway: page.context().gateway,
     onRunMount: page.registerRun,
     loading: page.cron().cronLoading,
     /** True once a cron.list response has completed (initial load finished). */
@@ -60,7 +61,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       page.modelSuggestionsError(),
     busy: page.cron().cronBusy,
     form: page.cron().cronForm,
-    heartbeatScratch: canManage ? page.heartbeatScratch() : "",
     channels: channels.channelsSnapshot?.channelMeta?.length
       ? channels.channelsSnapshot.channelMeta.map((entry) => entry.id)
       : (channels.channelsSnapshot?.channelOrder ?? []),

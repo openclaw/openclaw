@@ -22,38 +22,6 @@ function escapeMarkdown(text: string): string {
   return text.replace(/[()[\]]/g, "\\$&");
 }
 
-function buildMarkdown(query: string, results: DocResult[]): string {
-  const lines: string[] = [`# Docs search: ${escapeMarkdown(query)}`, ""];
-  if (results.length === 0) {
-    lines.push("_No results._");
-    return lines.join("\n");
-  }
-  for (const item of results) {
-    const title = escapeMarkdown(item.title);
-    const snippet = item.snippet ? escapeMarkdown(item.snippet) : "";
-    const suffix = snippet ? ` - ${snippet}` : "";
-    lines.push(`- [${title}](${item.link})${suffix}`);
-  }
-  return lines.join("\n");
-}
-
-function renderRichResults(query: string, results: DocResult[], runtime: RuntimeEnv) {
-  runtime.log(`${theme.heading("Docs search:")} ${theme.info(query)}`);
-  if (results.length === 0) {
-    runtime.log(theme.muted("No results."));
-    return;
-  }
-  for (const item of results) {
-    const link = formatDocsLink(item.link, item.link.replace(/^https?:\/\//i, ""));
-    runtime.log(
-      `${theme.muted("-")} ${theme.command(item.title)} ${theme.muted("(")}${link}${theme.muted(")")}`,
-    );
-    if (item.snippet) {
-      runtime.log(`  ${theme.muted(item.snippet)}`);
-    }
-  }
-}
-
 async function fetchDocsSearch(query: string): Promise<DocResult[]> {
   const url = new URL(SEARCH_API);
   url.searchParams.set("q", query);
@@ -154,8 +122,31 @@ export async function docsSearchCommand(
   }
 
   if (isRich()) {
-    renderRichResults(query, results, runtime);
+    runtime.log(`${theme.heading("Docs search:")} ${theme.info(query)}`);
+    if (results.length === 0) {
+      runtime.log(theme.muted("No results."));
+      return;
+    }
+    for (const item of results) {
+      const link = formatDocsLink(item.link, item.link.replace(/^https?:\/\//i, ""));
+      runtime.log(
+        `${theme.muted("-")} ${theme.command(item.title)} ${theme.muted("(")}${link}${theme.muted(")")}`,
+      );
+      if (item.snippet) {
+        runtime.log(`  ${theme.muted(item.snippet)}`);
+      }
+    }
     return;
   }
-  runtime.log(buildMarkdown(query, results).trimEnd());
+  const lines: string[] = [`# Docs search: ${escapeMarkdown(query)}`, ""];
+  if (results.length === 0) {
+    lines.push("_No results._");
+  }
+  for (const item of results) {
+    const title = escapeMarkdown(item.title);
+    const snippet = item.snippet ? escapeMarkdown(item.snippet) : "";
+    const suffix = snippet ? ` - ${snippet}` : "";
+    lines.push(`- [${title}](${item.link})${suffix}`);
+  }
+  runtime.log(lines.join("\n").trimEnd());
 }

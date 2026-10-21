@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createSignal, onCleanup, onSettled } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -133,13 +133,17 @@ export function LogsPage() {
       }
       const nextEntries = payload.lines.map(parseLogLine);
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
-      setEntries((previous) =>
-        reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
+      const bufferedEntries = reset ? nextEntries : [...entries(), ...nextEntries];
+      // Truncation belongs to the displayed history until a complete tail replaces it.
+      setTruncated(
+        Boolean(payload.truncated) ||
+          (!reset && truncated()) ||
+          bufferedEntries.length > LOG_BUFFER_LIMIT,
       );
+      setEntries(bufferedEntries.slice(-LOG_BUFFER_LIMIT));
       cursor = payload.cursor;
       cursorBootId = bootId;
       setFile(payload.file);
-      setTruncated(Boolean(payload.truncated));
       setStatus(completePanelRefresh());
       follow.schedule();
       return true;
@@ -149,6 +153,7 @@ export function LogsPage() {
       }
       if (isMissingOperatorReadScopeError(error)) {
         setEntries([]);
+        setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
         setStatus(
           failed.error
@@ -172,10 +177,6 @@ export function LogsPage() {
     enabled: autoFollow,
     identity: () => gateway.epoch,
   });
-  onCleanup(() => {
-    disposed = true;
-    cancelRequest();
-  });
   onSettled(() => {
     const resetContentScroll = () => {
       const content = stream?.closest<HTMLElement>(".content");
@@ -186,7 +187,12 @@ export function LogsPage() {
     };
     resetContentScroll();
     const frame = requestAnimationFrame(resetContentScroll);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      disposed = true;
+      request?.abort();
+      request = null;
+      cancelAnimationFrame(frame);
+    };
   });
 
   return (

@@ -912,7 +912,7 @@ it.for(["transport", "agent", "context-overflow"] as const)(
           updatedAt: Date.now(),
         });
         // Inject only this transport failure; sibling cases retain normal silent delivery.
-        using routeReply = vi.spyOn(routedReplies, "routeReply").mockResolvedValue({
+        using routePreparedReply = vi.spyOn(routedReplies, "routePreparedReply").mockResolvedValue({
           ok: false,
           delivered: false,
           error: "transport unavailable",
@@ -1002,9 +1002,9 @@ it.for(["transport", "agent", "context-overflow"] as const)(
             expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
           }
           if (failureKind === "transport") {
-            expect(routeReply).toHaveBeenCalled();
+            expect(routePreparedReply).toHaveBeenCalled();
           } else {
-            expect(routeReply).not.toHaveBeenCalled();
+            expect(routePreparedReply).not.toHaveBeenCalled();
           }
         } finally {
           receipt.cancel();

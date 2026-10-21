@@ -119,11 +119,14 @@ const {
   isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
-// mock-isolation: Keep system events in the fixture; real enqueueing persists and wakes session work.
-vi.mock("../infra/system-events.js", async () => {
+// mock-isolation: Legacy enqueue wiring is synthetic; automation notice preparation stays real.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
   const { createCronSystemEventMocks } =
     await import("./server-cron.system-event-receipt.test-support.js");
-  return createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock);
+  return {
+    ...(await importOriginal<typeof import("../infra/system-events.js")>()),
+    ...createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock),
+  };
 });
 
 vi.mock("../infra/heartbeat-wake.js", async () => {

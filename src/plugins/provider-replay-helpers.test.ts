@@ -42,14 +42,14 @@ describe("provider replay helpers", () => {
     });
   });
 
-  it("omits tool-call id sanitization when opted out for openai-completions", () => {
-    const policy = openAI("openai-completions", {
-      sanitizeToolCallIds: false,
-    });
+  it.each(["openai-completions", "openai-responses"])("omits opted-out tool ids for %s", (api) => {
+    const policy = openAI(api, { sanitizeToolCallIds: false });
+    const completion = api === "openai-completions";
     expectFields(policy, {
-      applyAssistantFirstOrderingFix: true,
-      validateGeminiTurns: true,
-      validateAnthropicTurns: true,
+      applyAssistantFirstOrderingFix: completion,
+      validateGeminiTurns: completion,
+      validateAnthropicTurns: completion,
+      ...(!completion ? { allowSyntheticToolResults: true } : {}),
     });
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
@@ -77,18 +77,6 @@ describe("provider replay helpers", () => {
     expect(openAI("openai-responses", { modelId: "google/gemma-4-26b-a4b-it" })).not.toHaveProperty(
       "dropReasoningFromHistory",
     );
-  });
-
-  it("omits tool-call id sanitization when opted out for openai-responses", () => {
-    const policy = openAI("openai-responses", { sanitizeToolCallIds: false });
-    expectFields(policy, {
-      applyAssistantFirstOrderingFix: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
-      allowSyntheticToolResults: true,
-    });
-    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
-    expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
   it("builds strict anthropic replay policy", () => {

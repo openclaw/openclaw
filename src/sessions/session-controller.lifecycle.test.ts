@@ -22,7 +22,9 @@ import {
   trackSessionControllerSourceWork,
 } from "./session-controller.mailbox.js";
 import { createReplyOperation } from "./session-controller.operation.js";
+import { registerRpcSource } from "./session-controller.rpc-sources.js";
 import type { SessionTarget } from "./session-controller.target.js";
+import { onSessionLifecycleEvent, type SessionLifecycleEvent } from "./session-lifecycle-events.js";
 
 function targetFixture(name: string, incarnation?: string) {
   return captureSessionTarget({
@@ -659,3 +661,50 @@ it("keeps a queued turn behind compaction until the mutation finishes", async ()
     await Promise.allSettled([active, mutation, queued]);
   }
 });
+
+it.each(["maintenance", "autonomous", "rpc"] as const)(
+  "publishes settlement only for autonomous backend turns (%s)",
+  async (source) => {
+    const target = targetFixture(`settlement-${source}`, `settlement-${source}-id`);
+    const input =
+      source === "rpc" ? reserveSource(target, { protocolRunId: "rpc-run" }) : undefined;
+    if (input) {
+      registerRpcSource("rpc-run", { input, adapter: { kind: "chat-send" } });
+    }
+    const events: SessionLifecycleEvent[] = [];
+    const unsubscribe = onSessionLifecycleEvent((event) => events.push(event));
+    try {
+      await withSessionTurn(
+        { ...turnOptions(target), controllerInput: input },
+        async (operation) => {
+          if (source !== "maintenance") {
+            expectDefined(operation, "admitted operation").attachBackend({
+              kind: "embedded",
+              runId: "backend-run",
+              cancel: () => {},
+              isStreaming: () => false,
+            });
+          }
+        },
+      );
+      expect(events).toEqual(
+        source === "autonomous"
+          ? [
+              {
+                sessionKey: target.sessionKey,
+                agentId: "main",
+                reason: "agent.input.settled",
+                scope: "runtime",
+              },
+            ]
+          : [],
+      );
+    } finally {
+      unsubscribe();
+      if (input) {
+        retireSessionControllerInput(input);
+        await input.settlement.promise;
+      }
+    }
+  },
+);

@@ -9,7 +9,27 @@
 }
 
 .sidebar-pinned-agent {
+  position: relative;
   min-width: 0;
+}
+
+.sidebar-pinned-agent__actions {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 2px;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.sidebar-pinned-agent:is(:hover, :focus-within):has(.sidebar-agent-roster__menu),
+.sidebar-pinned-agent:has(.sidebar-agent-roster__menu [aria-expanded="true"]) {
+  & .sidebar-pinned-agent__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .sidebar-pinned-agent__link {
@@ -87,4 +107,11 @@
   overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--muted);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-pinned-agent__actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
