@@ -1206,7 +1206,7 @@ export const en: TranslationMap & {
       menuLabel: "Gateway: {gateway}",
       primaryTag: "primary",
       setPrimary: "Set as primary…",
-      openSettings: "Gateway settings…",
+      openSettings: "Gateway settings",
       connected: "Connected",
       unreachable: "Unreachable",
       unknown: "Unknown status",
