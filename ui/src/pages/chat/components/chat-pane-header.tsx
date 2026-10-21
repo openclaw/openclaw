@@ -47,6 +47,7 @@ import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
+import { ChatHeaderCreateClawAction } from "./chat-header-create-claw-action.tsx";
 import {
   ChatDashboardMenu,
   ChatPaneLayoutMenu,
@@ -628,20 +629,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
               <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
-            <Show when={props.onCreateClaw}>
-              <openclaw-tooltip
-                prop:content={`${t("clawsDraft.title")} · ${t("clawsDraft.railHint")}`}
-              >
-                <button
-                  class="btn btn--ghost btn--icon chat-icon-btn"
-                  type="button"
-                  aria-label={t("clawsDraft.title")}
-                  onClick={() => props.onCreateClaw?.()}
-                >
-                  <Icon name="share" />
-                </button>
-              </openclaw-tooltip>
-            </Show>
+            <ChatHeaderCreateClawAction onCreateClaw={props.onCreateClaw} />
             <Show when={props.sharingControl}>
               {(sharing) => <ChatSessionSharing {...sharing()} />}
             </Show>
