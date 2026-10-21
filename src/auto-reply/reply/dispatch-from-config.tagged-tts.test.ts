@@ -4,6 +4,7 @@ import { ttsMocks } from "./dispatch-from-config.shared.test-harness.js";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as ttsConfig from "../../tts/tts-config.js";
 import { maybeApplyTtsToPayloadCore } from "../../tts/tts-payload.js";
 import * as ttsProviderResolution from "../../tts/tts-provider-resolution.js";
 import * as ttsSynthesis from "../../tts/tts-synthesis.js";
@@ -106,6 +107,35 @@ it.each([
       "See you tomorrow.",
     ]);
     expect(delivered.filter((payload) => payload.mediaUrl)).toEqual([
+      expect.objectContaining({ mediaUrl: audioPath, audioAsVoice: true }),
+    ]);
+  },
+);
+
+it.each([true, false])(
+  "does not replay all-mode block speech (directive parsing: %s)",
+  async (enabled) => {
+    ttsMocks.state.statusSnapshot.autoMode = "always";
+    vi.spyOn(ttsConfig, "shouldCleanTtsDirectiveText").mockReturnValue(enabled);
+    const delivered: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload);
+      },
+    });
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: { tts: { auto: "always", mode: "all", modelOverrides: { enabled } } },
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "[[tts]]Welcome home.[[/tts]]" });
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(ttsSynthesis.textToSpeechCore).toHaveBeenCalledOnce();
+    expect(delivered).toEqual([
       expect.objectContaining({ mediaUrl: audioPath, audioAsVoice: true }),
     ]);
   },
