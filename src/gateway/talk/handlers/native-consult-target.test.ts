@@ -74,7 +74,10 @@ import {
   resolveTalkVoiceSession,
 } from "../voice-selection.js";
 import { talkClientHandlers } from "./client.js";
-import { registerNativeConsultExactControlTests } from "./native-consult-control.test-support.js";
+import {
+  createNativeTalkCall,
+  registerNativeConsultExactControlTests,
+} from "./native-consult-control.test-support.js";
 import { registerOwnedNativeConsultRun } from "./native-consult-target.test-support.js";
 import { talkSessionHandlers } from "./session.js";
 
@@ -347,15 +350,10 @@ afterEach(async () => {
 });
 
 async function createRelayCall(params: Record<string, unknown> = {}) {
-  const respond = await dispatch("talk.session.create", {
-    sessionKey: "main",
-    mode: "realtime",
-    transport: "gateway-relay",
-    brain: "agent-consult",
-    ...params,
-  });
-  expectOk(respond);
-  const sessionId = (respond.mock.calls[0]![1] as { sessionId: string }).sessionId;
+  const { sessionId } = await createNativeTalkCall(dispatch, false, params);
+  if (!sessionId) {
+    throw new Error("Expected a relay session ID");
+  }
   const record = getUnifiedTalkSession(sessionId);
   if (record.kind !== "realtime-relay") {
     throw new Error("Expected realtime relay");
@@ -618,14 +616,7 @@ it.each(["source", "claim"] as const)(
   "preserves status and cancellation for an owned queued chat.send reply with %s signal",
   async (signalOwner) => {
     config.session = { scope: "global" };
-    const respond = await dispatch("talk.client.create", {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: "webrtc",
-      brain: "agent-consult",
-      capabilities: ["gateway-control-v1"],
-    });
-    expectOk(respond);
+    const { voiceSessionId } = await createNativeTalkCall(dispatch, true);
     const sessionId = loadSessionEntry({ agentId: "voice", sessionKey: "global" })!.sessionId;
     const target = await prepareTalkSessionTarget(config, "main");
     const registration = registerChatAbortController({
@@ -670,14 +661,16 @@ it.each(["source", "claim"] as const)(
     const resolvedSessionId = "materialized-reply-session";
     updateRpcSourceSessionId(rpcSourceTesting.get("queued-talk")!, resolvedSessionId);
     operation.updateSessionId(resolvedSessionId);
-    const voiceSessionId = (respond.mock.calls[0]![1] as { voiceSessionId: string }).voiceSessionId;
     await registerClientVoiceConsultRun({
       agentId: "voice",
       sessionKey: "main",
-      voiceSessionId,
+      voiceSessionId: voiceSessionId!,
       runId: "queued-talk",
     });
-    const voiceTarget = runTarget(target, { kind: "voice-session", voiceSessionId });
+    const voiceTarget = runTarget(target, {
+      kind: "voice-session",
+      voiceSessionId: voiceSessionId!,
+    });
     try {
       expect(voiceTarget?.isCurrent()).toBe(true);
       registration.cleanup();
@@ -954,19 +947,10 @@ describe.each(["browser", "relay"] as const)("native %s Talk consultation", (tra
     config.session = { mainKey: "home", scope };
     config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
     const target = await prepareTalkSessionTarget(config, "main");
-    const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
-    const respond = await dispatch(method, {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: transport === "browser" ? "webrtc" : "gateway-relay",
-      brain: "agent-consult",
-      ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    const result = await createNativeTalkCall(dispatch, transport === "browser");
     expect(providerInstructions).toBe(
       `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
     );
-    const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
     const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
     const created = loadSessionEntry(storage);
     expect(created?.sessionId).toBeTruthy();

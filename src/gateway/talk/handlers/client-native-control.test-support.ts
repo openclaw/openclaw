@@ -166,8 +166,6 @@ export async function withNativePlugin(
   run: (fixture: NativePluginFixture) => Promise<void>,
   options: {
     model?: string;
-    nativeEffects?: boolean;
-    onConsult?: () => void;
     configure?: (config: OpenClawConfig) => void;
   } = {},
 ): Promise<void> {
@@ -187,7 +185,6 @@ export async function withNativePlugin(
             other: {},
           },
         },
-        ...(options.nativeEffects ? { tools: { exec: { host: "gateway", mode: "full" } } } : {}),
         talk: { agentId: AGENT_ID, realtime: realtimeConfig },
         plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
       };
@@ -208,11 +205,7 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: [
-            "operator.read",
-            "operator.talk",
-            ...(options.nativeEffects ? ["operator.write"] : []),
-          ],
+          scopes: ["operator.read", "operator.talk"],
         }),
         connId: CONNECTION_ID,
       };
@@ -246,22 +239,6 @@ export async function withNativePlugin(
                 entry,
                 () => capabilityCatalogContext,
               );
-              const createBrowserSession = provider.createBrowserSession;
-              if (createBrowserSession && options.onConsult) {
-                provider.createBrowserSession = (request) => {
-                  const original = request.runAgentConsult;
-                  if (original) {
-                    request.runAgentConsult = Object.assign(
-                      (...args: Parameters<typeof original>) => {
-                        options.onConsult?.();
-                        return original(...args);
-                      },
-                      original,
-                    );
-                  }
-                  return createBrowserSession(request);
-                };
-              }
               registry.realtimeVoiceProviders.push({
                 pluginId: "openai",
                 source: "test",
@@ -280,7 +257,6 @@ export async function withNativePlugin(
         }
         await replaceSessionEntry(nativeSessionScope, {
           sessionId: SESSION_ID,
-          ...(options.nativeEffects ? { permissionMode: "full", execHost: "gateway" } : {}),
           updatedAt: Date.now(),
           createdActor: { type: "human", source: "profile", id: profile.id },
         });

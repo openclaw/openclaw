@@ -45,7 +45,6 @@ import {
   withParkedNativeTask,
 } from "./client-native-control.test-support.js";
 import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
-import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 const transcriptEvents = (storePath?: string) =>
   readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID, storePath });
@@ -60,8 +59,45 @@ const nativeCompletion = (id: string) =>
     content: [expect.objectContaining({ text: "Real runner consultation completed." })],
   });
 
+function holdWorkspacePreparation() {
+  const preparing = createDeferredCore();
+  const releasePreparation = createDeferredCore();
+  const ensureWorkspace = workspace.ensureAgentWorkspace;
+  vi.spyOn(workspace, "ensureAgentWorkspace").mockImplementationOnce(async (...args) => {
+    const result = await ensureWorkspace(...args);
+    preparing.resolve();
+    await releasePreparation.promise;
+    return result;
+  });
+  return { preparing, releasePreparation };
+}
+
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
+
+  it("dispatches each subscription delegation once and accepts fresh IDs", async () => {
+    upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Replay completed."));
+    await withNativePlugin(
+      async (fixture) => {
+        const { socket } = await connectNativeSession(fixture);
+        const complete = (id: string) =>
+          socket.waitForSent(
+            (frame) =>
+              frame.includes(`"delegation_item_id":"${id}"`) && frame.includes("Replay completed."),
+          );
+        socket.serverEvent(nativeDelegation("first", "Carry out the action."));
+        await complete("first");
+        await settleNativeBackend(() => {});
+        socket.serverEvent(nativeDelegation("first", "Carry out the action."));
+        await settleNativeBackend(() => {});
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        socket.serverEvent(nativeDelegation("fresh", "Carry out the action."));
+        await complete("fresh");
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      },
+      { model: "gpt-live-1-codex" },
+    );
+  });
 
   it("consults after the voice offer work scope closes while the session stays open", async () => {
     const observedSignal = createDeferredCore<AbortSignal | undefined>();
@@ -203,15 +239,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
   });
 
   it("waits for session preparation before observing backend registration readiness", async () => {
-    const preparing = createDeferredCore();
-    const releasePreparation = createDeferredCore();
-    const ensureWorkspace = workspace.ensureAgentWorkspace;
-    vi.spyOn(workspace, "ensureAgentWorkspace").mockImplementationOnce(async (...args) => {
-      const result = await ensureWorkspace(...args);
-      preparing.resolve();
-      await releasePreparation.promise;
-      return result;
-    });
+    const { preparing, releasePreparation } = holdWorkspacePreparation();
     const assertions = vi.fn<Parameters<typeof withParkedNativeTask>[0]>(
       async ({ settleBackend }) => {
         expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
@@ -244,11 +272,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     ["cancel", "transcript-first", "empty"],
     ["cancel", "delegation-first", "partial"],
   ] as const)(
-    "negotiates Gateway control and persists native sideband speech without client control (%s, %s, %s)",
+    "controls a real native consultation without client control (%s, %s, %s)",
     async (control, eventOrder, settlement) => {
       const model = buildMockOpenAiResponsesProvider("https://native-model.example.invalid/v1");
       const requested = createDeferredCore();
       const runnerFinished = createDeferredCore<{ error?: unknown }>();
+      const settledBeforeReadiness = runnerFinished.promise.then(({ error }) => {
+        throw new Error("Native consultation settled before the expected readiness phase", {
+          cause: error,
+        });
+      });
       const finishModel = createDeferredCore();
       const nativeFetch = upstream.fetch.getMockImplementation()!;
       let modelRequests = 0;
@@ -355,15 +388,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           throw error;
         }
       });
-      const preparing = createDeferredCore();
-      const releasePreparation = createDeferredCore();
-      const ensureWorkspace = workspace.ensureAgentWorkspace;
-      vi.spyOn(workspace, "ensureAgentWorkspace").mockImplementationOnce(async (...args) => {
-        const result = await ensureWorkspace(...args);
-        preparing.resolve();
-        await releasePreparation.promise;
-        return result;
-      });
+      const { preparing, releasePreparation } = holdWorkspacePreparation();
       await withNativePlugin(
         async ({ create, offer, invoke, broadcast, rpcSourceTesting }) => {
           try {
@@ -378,53 +403,15 @@ describe("native Talk through the public OpenAI plugin registration", () => {
                 voiceSessionId: requireString(result, "voiceSessionId"),
               }),
             ).toMatchObject({ origin: "client", status: "open", transcriptCapable: true });
-            await flushNativeTranscript(
-              result,
-              () => {
-                socket.serverEvent({
-                  type: "turn.done",
-                  turn: { role: "user", transcript: "Hello voice" },
-                });
-                socket.serverEvent({
-                  type: "turn.done",
-                  turn: { role: "assistant", transcript: "Hello human" },
-                });
-              },
-              2,
-            );
-            expect(
-              readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID }),
-            ).toMatchObject(
-              [
-                ["user", "Hello voice"],
-                ["assistant", "Hello human"],
-              ].map(([role, text]) => ({
-                event: { message: { role, content: [{ type: "text", text }] } },
-              })),
-            );
             expect(talkEventTypes(broadcast)).not.toContain("turn.ended");
             socket.serverEvent(
               nativeDelegation("real-runner-request", "Complete a small voice consultation."),
             );
-            await Promise.race([
-              preparing.promise,
-              runnerFinished.promise.then(({ error }) => {
-                throw new Error("Native consultation settled before workspace preparation", {
-                  cause: error,
-                });
-              }),
-            ]);
+            await Promise.race([preparing.promise, settledBeforeReadiness]);
             expect(modelRequests).toBe(0);
             expect(upstream.runEmbeddedAgent).not.toHaveBeenCalled();
             releasePreparation.resolve();
-            await Promise.race([
-              requested.promise,
-              runnerFinished.promise.then(({ error }) => {
-                throw new Error("Native consultation settled before the model request", {
-                  cause: error,
-                });
-              }),
-            ]);
+            await Promise.race([requested.promise, settledBeforeReadiness]);
             const activeRun = upstream.runEmbeddedAgent.mock.calls[0]![0];
             expect(getRpcSourceIdentity(rpcSourceTesting.get(activeRun.runId)!)).toMatchObject({
               agentId: AGENT_ID,

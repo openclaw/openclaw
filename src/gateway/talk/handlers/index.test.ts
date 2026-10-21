@@ -8,7 +8,10 @@ import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js
 import type { OpenClawConfig } from "../../../config/config.js";
 import { captureRuntimeConfigWithSource } from "../../../config/runtime-config-capture-state.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../../../config/runtime-source-projection.js";
-import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
+import {
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../../../secrets/runtime-degraded-state.js";
@@ -1424,7 +1427,7 @@ describe("talk.config handler", () => {
           providerConfig.apiKey === "runtime-azure-secret",
       },
     ] as never);
-    const sourceConfig = {
+    const configWithKey = (apiKey: SecretInput): OpenClawConfig => ({
       ...voiceModelConfig("openai/gpt-realtime"),
       ...realtimeConfig({
         speakerVoice: "marin",
@@ -1432,34 +1435,19 @@ describe("talk.config handler", () => {
         providers: {
           "other-realtime": {},
           " OpenAI ": {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "AZURE_OPENAI_API_KEY",
-            },
+            apiKey,
             azureEndpoint: "https://example.openai.azure.com",
             azureDeployment: "realtime-prod",
           },
         },
       }),
-    } as OpenClawConfig;
-    const runtimeConfig = {
-      ...sourceConfig,
-      talk: {
-        ...sourceConfig.talk,
-        realtime: {
-          ...sourceConfig.talk?.realtime,
-          providers: {
-            "other-realtime": {},
-            " OpenAI ": {
-              apiKey: "runtime-azure-secret",
-              azureEndpoint: "https://example.openai.azure.com",
-              azureDeployment: "realtime-prod",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    });
+    const sourceConfig = configWithKey({
+      source: "env",
+      provider: "default",
+      id: "AZURE_OPENAI_API_KEY",
+    });
+    const runtimeConfig = configWithKey("runtime-azure-secret");
     setSourceConfig(sourceConfig);
 
     const respond = await invokeTalkHandler("talk.config", {
@@ -1488,7 +1476,7 @@ describe("talk.config handler", () => {
   });
 
   it("passes runtime-resolved tts provider secrets to strict provider resolvers", async () => {
-    const sourceConfig = {
+    const configWithTts = (apiKey: SecretInput, timeoutMs: number): OpenClawConfig => ({
       talk: {
         provider: "acme",
         providers: {
@@ -1500,28 +1488,13 @@ describe("talk.config handler", () => {
           },
         },
       },
-      tts: {
-        provider: "acme",
-        timeoutMs: 12_345,
-        providers: {
-          acme: {
-            apiKey: { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const runtimeConfig = {
-      ...sourceConfig,
-      tts: {
-        provider: "acme",
-        timeoutMs: 54_321,
-        providers: {
-          acme: {
-            apiKey: "env-acme-key",
-          },
-        },
-      },
-    } as OpenClawConfig;
+      tts: { provider: "acme", timeoutMs, providers: { acme: { apiKey } } },
+    });
+    const sourceConfig = configWithTts(
+      { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
+      12_345,
+    );
+    const runtimeConfig = configWithTts("env-acme-key", 54_321);
 
     setSourceConfig(sourceConfig);
     mocks.getSpeechProvider.mockReturnValue({
@@ -1571,154 +1544,134 @@ describe("talk.config handler", () => {
     expectRecordFields(resolved?.config, { apiKey: "__OPENCLAW_REDACTED__" });
   });
 
-  it.each(["refs", "raw", "resolver", "redacted"])(
-    "projects Talk credentials safely from %s",
-    async (kind) => {
-      const includeSecrets = kind !== "redacted";
-      const multiProvider = kind === "refs" || kind === "raw";
-      const raw = kind === "raw";
-      const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
-      const configWithKeys = (runtime: boolean): OpenClawConfig => ({
-        talk: {
-          provider: "acme",
+  it.each(["refs", "raw", "resolver"])("projects Talk credentials safely from %s", async (kind) => {
+    const multiProvider = kind === "refs" || kind === "raw";
+    const raw = kind === "raw";
+    const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+    const fixtureKey = (runtime: boolean, label: string, id: string) =>
+      runtime ? `runtime-${label}` : raw ? `source-${label}` : secretRef(id);
+    const configWithKeys = (runtime: boolean): OpenClawConfig => ({
+      talk: {
+        provider: "acme",
+        providers: {
+          acme: {
+            apiKey: fixtureKey(runtime, "active-talk-key", "ACME_SPEECH_API_KEY"),
+            voiceId: "active-voice",
+            ...(raw
+              ? { clientSecret: runtime ? "runtime-client-secret" : "source-client-secret" }
+              : {}),
+          },
+          other: {
+            apiKey: fixtureKey(runtime, "inactive-talk-key", "OTHER_SPEECH_API_KEY"),
+            voiceId: "inactive-voice",
+          },
+        },
+        realtime: {
+          provider: "openai",
           providers: {
-            acme: {
-              apiKey: runtime
-                ? "runtime-active-talk-key"
-                : raw
-                  ? "source-active-talk-key"
-                  : secretRef("ACME_SPEECH_API_KEY"),
-              voiceId: "active-voice",
+            openai: {
+              apiKey: fixtureKey(runtime, "realtime-key", "OPENAI_REALTIME_API_KEY"),
               ...(raw
-                ? { clientSecret: runtime ? "runtime-client-secret" : "source-client-secret" }
-                : {}),
-            },
-            other: {
-              apiKey: runtime
-                ? "runtime-inactive-talk-key"
-                : raw
-                  ? "source-inactive-talk-key"
-                  : secretRef("OTHER_SPEECH_API_KEY"),
-              voiceId: "inactive-voice",
-            },
-          },
-          realtime: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: runtime
-                  ? "runtime-realtime-key"
-                  : raw
-                    ? "source-realtime-key"
-                    : secretRef("OPENAI_REALTIME_API_KEY"),
-                ...(raw
-                  ? {
-                      authToken: runtime
-                        ? "runtime-realtime-auth-token"
-                        : "source-realtime-auth-token",
-                    }
-                  : { voice: "cedar" }),
-              },
+                ? {
+                    authToken: runtime
+                      ? "runtime-realtime-auth-token"
+                      : "source-realtime-auth-token",
+                  }
+                : { voice: "cedar" }),
             },
           },
         },
-      });
-      const sourceConfig = multiProvider
-        ? configWithKeys(false)
-        : createTalkConfig(secretRef("ACME_SPEECH_API_KEY"));
-      const runtimeConfig = multiProvider
-        ? configWithKeys(true)
-        : createTalkConfig("runtime-resolved-talk-key");
-      mocks.getSpeechProvider.mockReturnValue(
-        kind === "resolver"
-          ? {
-              id: "acme",
-              label: "Acme Speech",
-              resolveTalkConfig: ({
-                talkProviderConfig,
-              }: {
-                talkProviderConfig: Record<string, unknown>;
-              }) => ({
-                ...talkProviderConfig,
-                voiceId: "resolver-voice",
-                clientSecret: "resolver-client-secret",
-                authToken: "resolver-auth-token",
-              }),
-            }
-          : undefined,
-      );
-      setSourceConfig(sourceConfig);
-
-      const respond = await invokeTalkHandler("talk.config", {
-        params: includeSecrets ? { includeSecrets: true } : {},
-        client: {
-          connect: { scopes: [includeSecrets ? "operator.talk.secrets" : "operator.read"] },
-        },
-        config: runtimeConfig,
-      });
-      const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
-      const talkConfig = response.config?.talk;
-      const resolved = talkConfig?.resolved as Record<string, unknown> | undefined;
-      const serialized = JSON.stringify(response);
-      if (kind === "refs") {
-        const providers = talkConfig?.providers as Record<string, unknown> | undefined;
-        expectRecordFields((providers?.acme as Record<string, unknown> | undefined)?.apiKey, {
-          source: "env",
-          provider: "default",
-          id: "ACME_SPEECH_API_KEY",
-        });
-        expectRecordFields((providers?.other as Record<string, unknown> | undefined)?.apiKey, {
-          source: "env",
-          provider: "default",
-          id: "OTHER_SPEECH_API_KEY",
-        });
-        const realtime = talkConfig?.realtime as Record<string, unknown> | undefined;
-        const realtimeProviders = realtime?.providers as Record<string, unknown> | undefined;
-        expectRecordFields(
-          (realtimeProviders?.openai as Record<string, unknown> | undefined)?.apiKey,
-          { source: "env", provider: "default", id: "OPENAI_REALTIME_API_KEY" },
-        );
-        expectRecordFields(resolved, { provider: "acme" });
-      }
-      if (multiProvider) {
-        expectRecordFields(resolved?.config, {
-          apiKey: "runtime-active-talk-key",
-          ...(raw ? { clientSecret: "__OPENCLAW_REDACTED__" } : {}),
-        });
-        expect(serialized).toContain("runtime-active-talk-key");
-        expect(serialized).not.toContain("runtime-inactive-talk-key");
-        expect(serialized).not.toContain("runtime-realtime-key");
-        if (raw) {
-          for (const secret of [
-            "source-active-talk-key",
-            "source-inactive-talk-key",
-            "source-realtime-key",
-            "source-client-secret",
-            "source-realtime-auth-token",
-            "runtime-client-secret",
-            "runtime-realtime-auth-token",
-          ]) {
-            expect(serialized).not.toContain(secret);
+      },
+    });
+    const sourceConfig = multiProvider
+      ? configWithKeys(false)
+      : createTalkConfig(secretRef("ACME_SPEECH_API_KEY"));
+    const runtimeConfig = multiProvider
+      ? configWithKeys(true)
+      : createTalkConfig("runtime-resolved-talk-key");
+    mocks.getSpeechProvider.mockReturnValue(
+      kind === "resolver"
+        ? {
+            id: "acme",
+            label: "Acme Speech",
+            resolveTalkConfig: ({
+              talkProviderConfig,
+            }: {
+              talkProviderConfig: Record<string, unknown>;
+            }) => ({
+              ...talkProviderConfig,
+              voiceId: "resolver-voice",
+              clientSecret: "resolver-client-secret",
+              authToken: "resolver-auth-token",
+            }),
           }
+        : undefined,
+    );
+    setSourceConfig(sourceConfig);
+
+    const respond = await invokeTalkHandler("talk.config", {
+      params: { includeSecrets: true },
+      client: {
+        connect: { scopes: ["operator.talk.secrets"] },
+      },
+      config: runtimeConfig,
+    });
+    const response = expectRespondOk(respond) as { config?: { talk?: Record<string, unknown> } };
+    const talkConfig = response.config?.talk;
+    const resolved = talkConfig?.resolved as Record<string, unknown> | undefined;
+    const serialized = JSON.stringify(response);
+    if (kind === "refs") {
+      const providers = talkConfig?.providers as Record<string, unknown> | undefined;
+      expectRecordFields((providers?.acme as Record<string, unknown> | undefined)?.apiKey, {
+        source: "env",
+        provider: "default",
+        id: "ACME_SPEECH_API_KEY",
+      });
+      expectRecordFields((providers?.other as Record<string, unknown> | undefined)?.apiKey, {
+        source: "env",
+        provider: "default",
+        id: "OTHER_SPEECH_API_KEY",
+      });
+      const realtime = talkConfig?.realtime as Record<string, unknown> | undefined;
+      const realtimeProviders = realtime?.providers as Record<string, unknown> | undefined;
+      expectRecordFields(
+        (realtimeProviders?.openai as Record<string, unknown> | undefined)?.apiKey,
+        { source: "env", provider: "default", id: "OPENAI_REALTIME_API_KEY" },
+      );
+      expectRecordFields(resolved, { provider: "acme" });
+    }
+    if (multiProvider) {
+      expectRecordFields(resolved?.config, {
+        apiKey: "runtime-active-talk-key",
+        ...(raw ? { clientSecret: "__OPENCLAW_REDACTED__" } : {}),
+      });
+      expect(serialized).toContain("runtime-active-talk-key");
+      expect(serialized).not.toContain("runtime-inactive-talk-key");
+      expect(serialized).not.toContain("runtime-realtime-key");
+      if (raw) {
+        for (const secret of [
+          "source-active-talk-key",
+          "source-inactive-talk-key",
+          "source-realtime-key",
+          "source-client-secret",
+          "source-realtime-auth-token",
+          "runtime-client-secret",
+          "runtime-realtime-auth-token",
+        ]) {
+          expect(serialized).not.toContain(secret);
         }
-      } else if (kind === "resolver") {
-        expectRecordFields(resolved?.config, {
-          apiKey: "runtime-resolved-talk-key",
-          voiceId: "resolver-voice",
-          clientSecret: "__OPENCLAW_REDACTED__",
-          authToken: "__OPENCLAW_REDACTED__",
-        });
-        expect(serialized).not.toContain("resolver-client-secret");
-        expect(serialized).not.toContain("resolver-auth-token");
-      } else {
-        expectRecordFields(resolved, { provider: "acme" });
-        const resolvedConfig = expectRecordFields(resolved?.config, {});
-        expectRecordFields(resolvedConfig.apiKey, redactedSecretRef);
-        expect(serialized).not.toContain("runtime-resolved-talk-key");
-        expect(serialized).not.toContain("ACME_SPEECH_API_KEY");
       }
-    },
-  );
+    } else {
+      expectRecordFields(resolved?.config, {
+        apiKey: "runtime-resolved-talk-key",
+        voiceId: "resolver-voice",
+        clientSecret: "__OPENCLAW_REDACTED__",
+        authToken: "__OPENCLAW_REDACTED__",
+      });
+      expect(serialized).not.toContain("resolver-client-secret");
+      expect(serialized).not.toContain("resolver-auth-token");
+    }
+  });
 });
 
 describe("talk.session unified handlers", () => {

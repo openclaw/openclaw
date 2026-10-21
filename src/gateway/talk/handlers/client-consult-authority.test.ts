@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import {
@@ -153,6 +153,28 @@ function registerConsult(
   });
 }
 
+function toolCall(
+  params: Record<string, unknown>,
+  context: GatewayRequestHandlerOptions["context"],
+  authorization: SessionMutationAuthorization | undefined,
+  client: GatewayRequestHandlerOptions["client"] = null,
+  sessionMutationCommitGuard?: () => void,
+) {
+  const respond = vi.fn();
+  const pending = Promise.resolve(
+    talkClientHandlers["talk.client.toolCall"]!({
+      req: { type: "req", id: "consult-authority", method: "talk.client.toolCall" },
+      params,
+      context,
+      client,
+      respond,
+      sessionMutationAuthorization: authorization,
+      sessionMutationCommitGuard,
+    } as never),
+  );
+  return { respond, pending };
+}
+
 describe("voice consult registration authority", () => {
   const tempDirs = useAutoCleanupTempDirTracker((remove) =>
     afterEach(async () => {
@@ -273,17 +295,9 @@ describe("voice consult registration authority", () => {
             await resume.promise;
           });
         }
-        const respond = vi.fn();
-        pending = Promise.resolve(
-          talkClientHandlers["talk.client.toolCall"]!({
-            req: { type: "req", id: "delegated-source", method: "talk.client.toolCall" },
-            params,
-            context,
-            client,
-            respond,
-            sessionMutationAuthorization: authorized.authorization,
-          } as never),
-        );
+        const call = toolCall(params, context, authorized.authorization, client as never);
+        const { respond } = call;
+        pending = call.pending;
         await withinTest(
           Promise.race([
             waiting.promise,
@@ -362,15 +376,12 @@ describe("voice consult registration authority", () => {
         args: { question: "Report fixture status" },
       };
       const authorized = await authorizeConsult(params, context, client as never);
-      const respond = vi.fn();
-      const pending = talkClientHandlers["talk.client.toolCall"]!({
-        req: { type: "req", id: "replacement-registration", method: "talk.client.toolCall" },
+      const { respond, pending } = toolCall(
         params,
         context,
-        client,
-        respond,
-        sessionMutationAuthorization: authorized.authorization,
-      } as never);
+        authorized.authorization,
+        client as never,
+      );
       try {
         await withinTest(held.promise, signal);
         const replacement = {
@@ -434,8 +445,9 @@ describe("voice consult registration authority", () => {
         readDatabasePathIdentitySync(targetPath).canonicalPath,
       ]);
       const coldSchemaSql: string[] = [];
-      const observeColdSchemaSql = (database: DatabaseSync, sql: string) => {
+      observeHostDataSql((sql, database) => {
         if (
+          database &&
           targetPaths.has(database.location() ?? "") &&
           !getOpenClawAgentDatabaseIfOpen(scope) &&
           /\b(?:sqlite_master|sqlite_schema|(?:pragma_)?(?:table_(?:xinfo|info)|index_(?:list|xinfo|info)|foreign_key_(?:list|check)|quick_check|integrity_check)|create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view))\b/i.test(
@@ -444,43 +456,21 @@ describe("voice consult registration authority", () => {
         ) {
           coldSchemaSql.push(sql);
         }
-      };
-      // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted database receiver.
-      const prepare = DatabaseSync.prototype.prepare;
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        observeColdSchemaSql(this, sql);
-        return prepare.call(this, sql);
-      });
-      // oxlint-disable-next-line typescript/unbound-method -- Forward with the intercepted database receiver.
-      const execute = DatabaseSync.prototype.exec;
-      vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        observeColdSchemaSql(this, sql);
-        return execute.call(this, sql);
       });
       let checkedWhileCold = false;
-      const respond = vi.fn();
-      await talkClientHandlers["talk.client.toolCall"]!({
-        req: { type: "req", id: "cold-consult", method: "talk.client.toolCall" },
+      const { respond, pending } = toolCall(
         params,
         context,
-        client: null,
-        respond,
-        sessionMutationAuthorization: authorized.authorization,
-        ...(sdk
-          ? {
-              sessionMutationCommitGuard: () => {
-                expect(inWorkerGrant).toBe(false);
-                checkedWhileCold ||= getOpenClawAgentDatabaseIfOpen(scope) === undefined;
-              },
+        authorized.authorization,
+        null,
+        sdk
+          ? () => {
+              expect(inWorkerGrant).toBe(false);
+              checkedWhileCold ||= getOpenClawAgentDatabaseIfOpen(scope) === undefined;
             }
-          : {}),
-      } as never);
+          : undefined,
+      );
+      await pending;
       expect(respond.mock.lastCall?.[0], respond.mock.lastCall?.[2]?.message).toBe(true);
       expect(chat.dispatched).toHaveBeenCalledOnce();
       expect(coldSchemaSql).toEqual([]);
@@ -512,28 +502,23 @@ describe("voice consult registration authority", () => {
         queued.resolve();
         return await pending;
       });
-      const respond = vi.fn();
-      const running = talkClientHandlers["talk.client.toolCall"]!({
-        req: { type: "req", id: "consult-authority", method: "talk.client.toolCall" },
+      const { respond, pending: running } = toolCall(
         params,
         context,
-        client: null,
-        respond,
-        sessionMutationAuthorization: authorized.authorization,
-        ...(revoked === "sdk" || revoked === "current"
-          ? {
-              sessionMutationCommitGuard: () => {
-                expect(inWorkerGrant).toBe(false);
-                expect(loadSessionEntry(scope)?.sessionId).toBe("original-consult-session");
-                nativeSdkCommitObserved ||=
-                  getOpenClawAgentDatabaseIfOpen(scope)?.db.isTransaction === true;
-                if (!sdkCurrent) {
-                  throw new Error("SDK consult authority was revoked");
-                }
-              },
+        authorized.authorization,
+        null,
+        revoked === "sdk" || revoked === "current"
+          ? () => {
+              expect(inWorkerGrant).toBe(false);
+              expect(loadSessionEntry(scope)?.sessionId).toBe("original-consult-session");
+              nativeSdkCommitObserved ||=
+                getOpenClawAgentDatabaseIfOpen(scope)?.db.isTransaction === true;
+              if (!sdkCurrent) {
+                throw new Error("SDK consult authority was revoked");
+              }
             }
-          : {}),
-      } as never);
+          : undefined,
+      );
       try {
         await withinTest(
           Promise.race([
@@ -581,64 +566,13 @@ describe("voice consult registration authority", () => {
     },
   );
 
-  it("checks a memory source at durable voice write admission without session SQL", async () => {
-    const sessionKey = "agent:main:dashboard:incognito-native-voice";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey },
-      { sessionId: "native-voice-source", updatedAt: 1, incognito: true },
-    );
-    const authorization = await authorizeConsult(
-      { sessionKey },
-      { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
-      null,
-      "talk.client.create",
-    );
-    const target = authorization.authorization?.talkSessionTarget;
-    if (!target) {
-      throw new Error("Expected a prepared incognito Talk source");
-    }
-    let nativeAuthorityObserved = false;
-    let workerAuthorityObserved = false;
-    sqlReads?.restore();
-    sqlReads = undefined;
-    const reads = observeHostDataSql();
-    try {
-      await voiceSessions.createOrResumeClientVoiceSession({
-        agentId: "main",
-        sessionKey,
-        voiceSessionId: "native-source-voice",
-        origin: "client",
-        source: {
-          storePath: target.storePath,
-          assertCurrent: composeSessionSourceAssertion(
-            [authorization.authorization!.assertCurrent],
-            (assertSource) => {
-              assertSource();
-              workerAuthorityObserved ||= inWorkerGrant;
-              nativeAuthorityObserved ||=
-                getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction === true;
-            },
-          ),
-        },
-      });
-      expect(reads.queries.filter(isSessionEntryDataSql)).toEqual([]);
-      expect(workerAuthorityObserved).toBe(true);
-      expect(nativeAuthorityObserved).toBe(false);
-      expect(clientVoiceSessionTesting.readRecord("main", "native-source-voice")).toMatchObject({
-        sessionKey,
-        status: "open",
-      });
-    } finally {
-      reads.restore();
-    }
-  });
-
-  it.each(["foreign", "incognito"] as const)(
-    "prepares a cold durable target for a %s requester without caller-thread schema work",
+  it.each(["memory-source", "foreign", "incognito"] as const)(
+    "checks %s authority at durable voice admission without caller-thread storage work",
     async (kind) => {
+      const memorySource = kind === "memory-source";
       const sourceKey =
-        kind === "incognito" ? "agent:main:dashboard:incognito-cold-native" : scope.sessionKey;
-      if (kind === "incognito") {
+        kind !== "foreign" ? "agent:main:dashboard:incognito-native" : scope.sessionKey;
+      if (kind !== "foreign") {
         await replaceSessionEntry(
           { agentId: "main", sessionKey: sourceKey },
           { sessionId: "cold-native-source", updatedAt: 1, incognito: true },
@@ -650,16 +584,17 @@ describe("voice consult registration authority", () => {
         null,
         "talk.client.create",
       );
-      const target = {
-        agentId: `cold-native-${kind}`,
-        sessionKey: `agent:cold-native-${kind}:main`,
-      };
+      const target = memorySource
+        ? { agentId: "main", sessionKey: sourceKey }
+        : { agentId: `cold-native-${kind}`, sessionKey: `agent:cold-native-${kind}:main` };
       const targetPath = resolveOpenClawAgentSqlitePath(target);
       const targetPaths = new Set([
         targetPath,
         readDatabasePathIdentitySync(targetPath).canonicalPath,
       ]);
-      expect(existsSync(targetPath)).toBe(false);
+      if (!memorySource) {
+        expect(existsSync(targetPath)).toBe(false);
+      }
       let nativeAuthorityObserved = false;
       let workerAuthorityObserved = false;
       const schemaSql: string[] = [];
@@ -677,24 +612,34 @@ describe("voice consult registration authority", () => {
         }
       });
       try {
+        const assertCurrent = composeSessionSourceAssertion(
+          [authorized.authorization!.assertCurrent],
+          (assertSource) => {
+            assertSource();
+            workerAuthorityObserved ||= inWorkerGrant;
+            nativeAuthorityObserved ||=
+              getOpenClawAgentDatabaseIfOpen(target)?.db.isTransaction === true;
+          },
+          memorySource ? undefined : { preparedCheck: (assertSource) => assertSource() },
+        );
         await voiceSessions.createOrResumeClientVoiceSession({
           ...target,
           voiceSessionId: "cold-native-voice",
           origin: "client",
-          requester: composeSessionSourceAssertion(
-            [authorized.authorization!.assertCurrent],
-            (assertSource) => {
-              assertSource();
-              workerAuthorityObserved ||= inWorkerGrant;
-              nativeAuthorityObserved ||=
-                getOpenClawAgentDatabaseIfOpen(target)?.db.isTransaction === true;
-            },
-            {
-              preparedCheck: (assertSource) => assertSource(),
-            },
-          ),
+          ...(memorySource
+            ? {
+                source: {
+                  storePath: authorized.authorization!.talkSessionTarget!.storePath,
+                  assertCurrent,
+                },
+              }
+            : { requester: assertCurrent }),
         });
-        expect(schemaSql).toEqual([]);
+        if (memorySource) {
+          expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+        } else {
+          expect(schemaSql).toEqual([]);
+        }
         expect(workerAuthorityObserved).toBe(true);
         expect(nativeAuthorityObserved).toBe(false);
         expect(
