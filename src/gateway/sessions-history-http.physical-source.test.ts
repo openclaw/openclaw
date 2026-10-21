@@ -10,11 +10,7 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
-import {
-  appendHistoryMessage,
-  historyStream,
-  readHistoryEvent,
-} from "./sessions-history-http-read.test-support.js";
+import { appendHistoryMessage, historyStream } from "./sessions-history-http-read.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -87,7 +83,6 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       throw new Error("expected the committed inline transcript update");
     }
     const harness = await createGatewaySuiteHarness();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const abort = new AbortController();
     let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -96,9 +91,10 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         headers: { ...headers, accept: "text/event-stream" },
         signal: abort.signal,
       });
-      const stream = historyStream(response);
-      reader = stream.reader;
-      expect(await readHistoryEvent(stream)).toMatchObject({
+      await using stream = historyStream(response);
+      using _ = { [Symbol.dispose]: () => clearTimeout(deadline) };
+      const { reader } = stream;
+      expect(await stream.next()).toMatchObject({
         messages: [historyMessage("bound initial message")],
       });
       if (mismatch === "lifecycle owner") {
@@ -183,12 +179,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         messages: [historyMessage("bound initial message"), historyMessage(visibleText)],
       });
     } finally {
-      clearTimeout(deadline);
-      try {
-        await reader?.cancel();
-      } finally {
-        await harness.close();
-      }
+      await harness.close();
     }
   },
 );

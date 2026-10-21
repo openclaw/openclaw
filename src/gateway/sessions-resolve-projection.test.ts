@@ -59,6 +59,18 @@ import {
   resolveSessionKeyFromResolveParams,
 } from "./sessions-resolve.js";
 
+const resolved = (key: string, agentId = "main") => ({ ok: true, key, agentId });
+const runOwner = (sessionKey: string, agentId = "main") => ({ sessionKey, agentId });
+const missing = { ok: true, missing: true };
+
+function preparedResolve(
+  projection: SessionRowProjection,
+  p: SessionsResolveParams,
+  client: Parameters<typeof withPreparedSessionResolve>[0]["client"] = null,
+) {
+  return withPreparedSessionResolve({ client, projection, p }, (result) => result);
+}
+
 describe("prepared resident resolution", () => {
   const scope = { agentId: "main", sessionKey: "agent:main:target" };
   const entry = { sessionId: "target-id", updatedAt: 1, label: "original" };
@@ -128,7 +140,7 @@ describe("prepared resident resolution", () => {
     });
   }
 
-  const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
+  const targetResult = resolved(scope.sessionKey);
 
   it.for(["shortId", "reference"] as const)(
     "resolves a %s link without waiting for unrelated native runtime ownership",
@@ -241,12 +253,11 @@ describe("prepared resident resolution", () => {
         return result;
       });
       try {
-        await expect(
-          withPreparedSessionResolve(
-            { client: null, projection, p: { label: entry.label } },
-            (result) => result,
-          ),
-        ).resolves.toEqual({ ok: true, key: replacementKey, agentId: "main" });
+        await expect(preparedResolve(projection, { label: entry.label })).resolves.toEqual({
+          ok: true,
+          key: replacementKey,
+          agentId: "main",
+        });
       } finally {
         projection.dispose();
       }
@@ -265,7 +276,7 @@ describe("prepared resident resolution", () => {
       const projection = await projectionFor();
       await projection.ensureMaterialized();
       const readOwnership = runtimeOwnership.readSessionRuntimeOwnershipAsync;
-      const ownership = vi
+      using _ = vi
         .spyOn(runtimeOwnership, "readSessionRuntimeOwnershipAsync")
         .mockImplementation((params) => {
           if (params.sessionKey === sibling) {
@@ -273,22 +284,22 @@ describe("prepared resident resolution", () => {
           }
           return readOwnership(params);
         });
-      try {
-        const context = contextFor(projection);
-        using parse = vi.spyOn(JSON, "parse");
-        for (const params of selectors) {
-          sessionChanges.emit({
-            all: true,
-            scope: { storePath: openOpenClawAgentDatabase(scope).path },
-          });
-          const respond = vi.fn();
-          await request(context, params, respond);
-          expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
-        }
-        expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
-      } finally {
-        ownership.mockRestore();
+      const context = contextFor(projection);
+      using parse = vi.spyOn(JSON, "parse");
+      for (const params of selectors) {
+        sessionChanges.emit({
+          all: true,
+          scope: { storePath: openOpenClawAgentDatabase(scope).path },
+        });
+        const respond = vi.fn();
+        await request(context, params, respond);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining(targetResult),
+          undefined,
+        );
       }
+      expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
     });
   });
 
@@ -300,26 +311,26 @@ describe("prepared resident resolution", () => {
       const projection = await projectionFor();
       await projection.ensureMaterialized();
       const readInputs = rowInputs.readSessionRowInputs;
-      const display = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+      using _ = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
         if (params.key === sibling) {
           throw new Error("Unrelated display unavailable");
         }
         return readInputs(params);
       });
-      try {
-        sessionChanges.emit({ all: true, scope: "catalog" });
-        const context = contextFor(projection);
-        for (const params of [
-          { sessionId: entry.sessionId },
-          { label: entry.label },
-          { reference: { key: scope.sessionKey } },
-        ]) {
-          const respond = vi.fn();
-          await request(context, params, respond);
-          expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
-        }
-      } finally {
-        display.mockRestore();
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      const context = contextFor(projection);
+      for (const params of [
+        { sessionId: entry.sessionId },
+        { label: entry.label },
+        { reference: { key: scope.sessionKey } },
+      ]) {
+        const respond = vi.fn();
+        await request(context, params, respond);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining(targetResult),
+          undefined,
+        );
       }
     });
   });
@@ -333,13 +344,10 @@ describe("prepared resident resolution", () => {
       const visible = { ...entry, visibility: "shared" as const };
       seed(scope.sessionKey, visible);
       const lookup = async (p: SessionsResolveParams) =>
-        withPreparedSessionResolve(
-          { client, p, projection: await projectionFor(roleCfg) },
-          (result) => result,
-        );
+        preparedResolve(await projectionFor(roleCfg), p, client);
       for (let repeat = 0; repeat < 2; repeat++) {
-        expect(await lookup({ key: scope.sessionKey })).toEqual(resolved);
-        expect(await lookup({ label: entry.label })).toEqual(resolved);
+        expect(await lookup({ key: scope.sessionKey })).toEqual(targetResult);
+        expect(await lookup({ label: entry.label })).toEqual(targetResult);
       }
       const external = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
       try {
@@ -349,26 +357,18 @@ describe("prepared resident resolution", () => {
           .run(JSON.stringify(hidden), hidden.label, scope.sessionKey);
         (await projectionFor(roleCfg)).dispose();
         projections.delete(roleCfg);
-        expect(await lookup({ key: scope.sessionKey, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
-        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
-        expect(await lookup({ label: entry.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
+        for (const selector of [
+          { key: scope.sessionKey },
+          { label: hidden.label },
+          { label: entry.label },
+        ]) {
+          expect(await lookup({ ...selector, allowMissing: true })).toEqual(missing);
+        }
         const tracked = { ...visible, label: "tracked" };
         replaceSessionEntrySync(scope, tracked);
-        expect(await lookup({ key: scope.sessionKey })).toEqual(resolved);
-        expect(await lookup({ label: tracked.label })).toEqual(resolved);
-        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual({
-          ok: true,
-          missing: true,
-        });
+        expect(await lookup({ key: scope.sessionKey })).toEqual(targetResult);
+        expect(await lookup({ label: tracked.label })).toEqual(targetResult);
+        expect(await lookup({ label: hidden.label, allowMissing: true })).toEqual(missing);
       } finally {
         external.close();
       }
@@ -416,12 +416,12 @@ describe("prepared resident resolution", () => {
       await pending;
       await publish();
 
-      const found = [true, { ...resolved, displayName: entry.label }, undefined];
-      const missing = [true, { ok: false }, undefined];
+      const found = [true, { ...targetResult, displayName: entry.label }, undefined];
+      const hidden = [true, { ok: false }, undefined];
       expect(publications).toEqual([
         { visibility: "shared", response: found },
         { visibility: "shared", response: found },
-        { visibility: "draft", response: missing },
+        { visibility: "draft", response: hidden },
       ]);
     });
   });
@@ -504,17 +504,15 @@ describe("prepared resident resolution", () => {
       expect(
         projection.findBySessionId({ sessionId: "shared-run", agentId: "main", federated: true }),
       ).toMatchObject([{ agentId: "ops", key: "global", storeTarget: { agentId: "main" } }]);
-      expect(resolveSessionForRun("shared-run", { agentId: "ops", projection })).toEqual({
-        sessionKey: "global",
-        agentId: "ops",
-      });
+      expect(resolveSessionForRun("shared-run", { agentId: "ops", projection })).toEqual(
+        runOwner("global", "ops"),
+      );
       expect
         .soft(resolveSessionForRun("shared-run", { agentId: "main", projection }))
         .toBeUndefined();
-      expect.soft(resolveSessionForRun("shared-run", { projection })).toEqual({
-        sessionKey: "global",
-        agentId: "ops",
-      });
+      expect
+        .soft(resolveSessionForRun("shared-run", { projection }))
+        .toEqual(runOwner("global", "ops"));
       const resolveArtifacts = await prepareArtifactSessionResolution(
         { runId: "shared-run" },
         projection,
@@ -523,10 +521,7 @@ describe("prepared resident resolution", () => {
         getRuntimeConfig: () => sharedConfig,
         client: null,
       });
-      expect(await resolveArtifacts(access)).toMatchObject({
-        sessionKey: "global",
-        agentId: "ops",
-      });
+      expect(await resolveArtifacts(access)).toMatchObject(runOwner("global", "ops"));
     });
   });
 
@@ -551,30 +546,24 @@ describe("prepared resident resolution", () => {
         for (let run = 0; run < 20; run++) {
           expect(resolveSessionForRun(`orphan-${run}`, { projection })).toBeUndefined();
         }
-        expect(resolveSessionForRun("shared-id", { agentId: "main", projection })).toEqual({
-          sessionKey: "agent:main:fresh",
-          agentId: "main",
-        });
+        expect(resolveSessionForRun("shared-id", { agentId: "main", projection })).toEqual(
+          runOwner("agent:main:fresh"),
+        );
         expect(statements).not.toHaveBeenCalled();
         expect(parse.mock.calls.some(([json]) => json.includes(SIBLING_MARKER))).toBe(false);
       }
       seed("agent:main:stale", { sessionId: "shared-id", updatedAt: 100 });
-      expect(resolveSessionForRun("shared-id", { projection })).toEqual({
-        sessionKey: "agent:main:stale",
-        agentId: "main",
-      });
+      expect(resolveSessionForRun("shared-id", { projection })).toEqual(
+        runOwner("agent:main:stale"),
+      );
       expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
       seed("agent:main:late", { sessionId: "late-id", updatedAt: 1 });
-      expect(resolveSessionForRun("late-id", { projection })).toEqual({
-        sessionKey: "agent:main:late",
-        agentId: "main",
-      });
+      expect(resolveSessionForRun("late-id", { projection })).toEqual(runOwner("agent:main:late"));
       seed("agent:main:late", { sessionId: "rolled-id", updatedAt: 2 });
       expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
-      expect(resolveSessionForRun("rolled-id", { projection })).toEqual({
-        sessionKey: "agent:main:late",
-        agentId: "main",
-      });
+      expect(resolveSessionForRun("rolled-id", { projection })).toEqual(
+        runOwner("agent:main:late"),
+      );
       projection.dispose();
       expect(resolveSessionForRun("rolled-id", { projection })).toBeUndefined();
     });
@@ -593,19 +582,6 @@ describe("resident lookup indexes", () => {
     const projection = await createSessionRowProjection({ cfg: config });
     return { projection, [Symbol.dispose]: () => projection.dispose() };
   }
-
-  function preparedResolve(
-    projection: Awaited<ReturnType<typeof createSessionRowProjection>>,
-    p: SessionsResolveParams,
-    client: Parameters<typeof withPreparedSessionResolve>[0]["client"] = null,
-  ) {
-    return withPreparedSessionResolve({ client, projection, p }, (result) => result);
-  }
-
-  function resolved(key: string, agentId = "main") {
-    return { ok: true, key, agentId };
-  }
-  const missing = { ok: true, missing: true };
 
   function observeReads() {
     const reads = observeMainThreadReads();

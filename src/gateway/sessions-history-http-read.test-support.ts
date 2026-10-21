@@ -45,34 +45,56 @@ export type SessionHistoryBody = {
   hasMore?: boolean;
 };
 
-export type SessionHistorySseStream = {
-  reader: ReadableStreamDefaultReader<Uint8Array>;
-  streamState: { buffer: string };
-};
+export const historyTexts = (body: SessionHistoryBody) =>
+  body.messages?.map((message) => message.content?.[0]?.text);
 
-export function historyStream(response: Response): SessionHistorySseStream {
-  expect(response.status).toBe(200);
-  return {
-    reader: expectDefined(response.body?.getReader(), "session-history SSE reader"),
-    streamState: { buffer: "" },
-  };
+export class SessionHistorySseStream {
+  readonly reader: ReadableStreamDefaultReader<Uint8Array>;
+  readonly streamState = { buffer: "" };
+
+  constructor(response: Response) {
+    expect(response.status).toBe(200);
+    this.reader = expectDefined(response.body?.getReader(), "session-history SSE reader");
+  }
+
+  next(expectedEvent?: "history"): Promise<SessionHistoryBody>;
+  next(expectedEvent: string): Promise<unknown>;
+  async next(expectedEvent = "history"): Promise<unknown> {
+    const event = await readSseEvent(this.reader, this.streamState);
+    expect(event.event).toBe(expectedEvent);
+    return event.data;
+  }
+
+  async expectTexts(texts: string[]) {
+    expect(historyTexts(await this.next())).toEqual(texts);
+  }
+
+  async expectMessage(text: string, seq: number, id?: string) {
+    const data = (await this.next("message")) as {
+      message?: SessionHistoryMessage;
+      messageSeq?: number;
+    };
+    expect(data.message?.content?.[0]?.text).toBe(text);
+    expect(data.messageSeq).toBe(seq);
+    if (id !== undefined) {
+      expect(data.message?.["__openclaw"]).toMatchObject({ id, seq });
+    }
+  }
+
+  async [Symbol.asyncDispose]() {
+    await this.reader.cancel();
+  }
 }
 
-export function readHistoryEvent(
-  stream: SessionHistorySseStream,
-  expectedEvent?: "history",
-): Promise<SessionHistoryBody>;
-export function readHistoryEvent(
-  stream: SessionHistorySseStream,
-  expectedEvent: string,
-): Promise<unknown>;
-export async function readHistoryEvent(
-  stream: SessionHistorySseStream,
-  expectedEvent = "history",
-): Promise<unknown> {
-  const event = await readSseEvent(stream.reader, stream.streamState);
-  expect(event.event).toBe(expectedEvent);
-  return event.data;
+export const historyStream = (response: Response) => new SessionHistorySseStream(response);
+
+export async function openHistoryStream(port: number, sessionKey: string, query?: string) {
+  return historyStream(
+    await fetchSessionHistory(port, sessionKey, {
+      query,
+      headers: { Accept: "text/event-stream" },
+    }),
+  );
 }
 
 export async function readSessionHistoryBody(

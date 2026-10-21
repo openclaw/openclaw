@@ -28,11 +28,7 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import * as historyState from "./session-history-state.js";
-import {
-  appendHistoryMessage,
-  historyStream,
-  readHistoryEvent,
-} from "./sessions-history-http-read.test-support.js";
+import { appendHistoryMessage, historyStream } from "./sessions-history-http-read.test-support.js";
 
 const readerEmail = "history-reader@example.test";
 const staffEmail = "history-staff@example.test";
@@ -108,7 +104,6 @@ describe("HTTP historical model disclosure", () => {
   let releaseProfileCatalog: (() => void) | undefined;
   let sequence = 0;
   let scope: { agentId: string; sessionKey: string; sessionId: string };
-  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
 
   const publishConfig = (next: OpenClawConfig, commit = true) => {
     current = next;
@@ -176,11 +171,7 @@ describe("HTTP historical model disclosure", () => {
     }
   });
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await Promise.all([...readers].map(async (reader) => await reader.cancel()));
-    readers.clear();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   afterAll(async () => {
     try {
@@ -219,9 +210,7 @@ describe("HTTP historical model disclosure", () => {
   }
 
   async function openStream(params: Parameters<typeof requestHistory>[0] = {}) {
-    const stream = historyStream(await requestHistory({ ...params, sse: true }));
-    readers.add(stream.reader);
-    return { next: (event = "history") => readHistoryEvent(stream, event) };
+    return historyStream(await requestHistory({ ...params, sse: true }));
   }
 
   const jsonHistory = (params?: Parameters<typeof requestHistory>[0]) =>
@@ -256,7 +245,7 @@ describe("HTTP historical model disclosure", () => {
     const saved = await loadTranscriptEvents(scope);
     const json = await jsonHistory();
     const rows = expectRestrictedSnapshot(json, 4);
-    const stream = await openStream();
+    await using stream = await openStream();
     expect(await stream.next()).toEqual(json);
 
     const updates: InternalSessionTranscriptUpdate[] = [];
@@ -304,7 +293,7 @@ describe("HTTP historical model disclosure", () => {
     async (kind) => {
       publishConfig(config(["example/*"]));
       const fromSnapshot = vi.spyOn(historyState.SessionHistorySseState, "fromSnapshot");
-      const stream = kind === "refresh SSE" ? await openStream() : undefined;
+      await using stream = kind === "refresh SSE" ? await openStream() : undefined;
       if (stream) {
         expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
       }
@@ -327,7 +316,10 @@ describe("HTTP historical model disclosure", () => {
         ? append("held refresh reply", "file-only").then(() => stream.next())
         : kind === "JSON"
           ? jsonHistory()
-          : openStream().then((opened) => opened.next());
+          : (async () => {
+              await using opened = await openStream();
+              return await opened.next();
+            })();
       try {
         await awaitGateBeforeSettlement(entered.promise, pending, "History read not held");
         publishConfig(config());
@@ -342,7 +334,7 @@ describe("HTTP historical model disclosure", () => {
 
   it("uses a policy committed during final current-profile acquisition", async () => {
     publishConfig(config(["example/*"]));
-    const stream = await openStream();
+    await using stream = await openStream();
     expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
     publishConfig(config(), false);
     const { entered, release, hold } = heldRead();
@@ -366,7 +358,7 @@ describe("HTTP historical model disclosure", () => {
   });
 
   it("keeps committed restriction during tentative widening, then publishes committed widening", async () => {
-    const stream = await openStream();
+    await using stream = await openStream();
     expectRestrictedSnapshot(await stream.next(), 4);
     publishConfig(config(["example/*"]), false);
     expectRestrictedSnapshot(await jsonHistory(), 4);
@@ -382,7 +374,7 @@ describe("HTTP historical model disclosure", () => {
     next.gateway = { ...next.gateway, auth: { mode: "token", token: secret } };
     publishConfig(next);
     expect(messages(await jsonHistory({ owner: true }), 4)[0]).toMatchObject(historical);
-    const stream = await openStream({ owner: true });
+    await using stream = await openStream({ owner: true });
     expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
     const text = "bearer sse update";
     const id = await append(text);

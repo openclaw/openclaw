@@ -106,8 +106,14 @@ async function patchOk(options: PatchFixture) {
 }
 
 type ModelDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+function agentConfig(
+  defaults: ModelDefaults | undefined,
+  entries?: NonNullable<OpenClawConfig["agents"]>["entries"],
+): OpenClawConfig {
+  return { agents: { ...(defaults ? { defaults } : {}), ...(entries ? { entries } : {}) } };
+}
 function modelConfig(primary: string, defaults: ModelDefaults = {}): OpenClawConfig {
-  return { agents: { defaults: { model: { primary }, ...defaults } } };
+  return agentConfig({ model: { primary }, ...defaults });
 }
 
 function mainAuthOverrideStore(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
@@ -201,27 +207,23 @@ function makeKimiSubagentCfg(params: {
   agentSubagentModel?: string;
   defaultsSubagentModel?: string;
 }): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: "anthropic/claude-sonnet-4-6" },
-        modelPolicy: { allow: [ANTHROPIC_SONNET_MODEL] },
-        subagents: params.defaultsSubagentModel
-          ? { model: params.defaultsSubagentModel }
-          : undefined,
-        models: {
-          "anthropic/claude-sonnet-4-6": { alias: "default" },
-        },
-      },
-      entries: {
-        kimi: {
-          ...(params.allowModel ? { modelPolicy: { allow: [SUBAGENT_MODEL] } } : {}),
-          model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
-          subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
-        },
+  return agentConfig(
+    {
+      model: { primary: "anthropic/claude-sonnet-4-6" },
+      modelPolicy: { allow: [ANTHROPIC_SONNET_MODEL] },
+      subagents: params.defaultsSubagentModel ? { model: params.defaultsSubagentModel } : undefined,
+      models: {
+        "anthropic/claude-sonnet-4-6": { alias: "default" },
       },
     },
-  };
+    {
+      kimi: {
+        ...(params.allowModel ? { modelPolicy: { allow: [SUBAGENT_MODEL] } } : {}),
+        model: params.agentPrimaryModel ? { primary: params.agentPrimaryModel } : undefined,
+        subagents: params.agentSubagentModel ? { model: params.agentSubagentModel } : undefined,
+      },
+    },
+  );
 }
 
 function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
@@ -244,21 +246,16 @@ describe("gateway sessions patch", () => {
         if (provider !== "openai") {
           return undefined;
         }
-        if (context.modelId === "gpt-5.5") {
-          return {
-            levels: (["off", "minimal", "low", "medium", "high", "xhigh"] as const).map((id) => ({
-              id,
-            })),
-          };
-        }
-        if (context.modelId === "gpt-5.6-luna") {
-          const levels =
-            context.agentRuntime === "openclaw"
-              ? (["off", "minimal", "low", "medium", "high", "max", "ultra"] as const)
-              : (["off", "minimal", "low", "medium", "high", "max"] as const);
-          return { levels: levels.map((id) => ({ id })) };
-        }
-        return undefined;
+        const base = ["off", "minimal", "low", "medium", "high"] as const;
+        const levels =
+          context.modelId === "gpt-5.5"
+            ? ([...base, "xhigh"] as const)
+            : context.modelId === "gpt-5.6-luna"
+              ? context.agentRuntime === "openclaw"
+                ? ([...base, "max", "ultra"] as const)
+                : ([...base, "max"] as const)
+              : undefined;
+        return levels && { levels: levels.map((id) => ({ id })) };
       },
     );
   });
@@ -913,7 +910,7 @@ describe("gateway sessions patch", () => {
         },
       ]);
       const entry = await patchOk({
-        cfg: { agents: { defaults: { model: ANTHROPIC_SONNET_MODEL } } },
+        cfg: agentConfig({ model: ANTHROPIC_SONNET_MODEL }),
         mainEntry: {
           providerOverride: "anthropic",
           modelOverride: ANTHROPIC_OPUS_ID,
@@ -982,15 +979,13 @@ describe("gateway sessions patch", () => {
     const explicitAllowlist = agentPolicy === undefined;
     const cfg = explicitAllowlist
       ? createAllowlistedAnthropicModelCfg()
-      : ({
-          agents: {
-            defaults: {
-              model: { primary: "synthetic/primary" },
-              modelPolicy: { allow: agentPolicy ? ["synthetic/primary"] : [] },
-            },
-            entries: { main: agentPolicy ? { modelPolicy: { allow: [] } } : {} },
+      : (agentConfig(
+          {
+            model: { primary: "synthetic/primary" },
+            modelPolicy: { allow: agentPolicy ? ["synthetic/primary"] : [] },
           },
-        } satisfies OpenClawConfig);
+          { main: agentPolicy ? { modelPolicy: { allow: [] } } : {} },
+        ) satisfies OpenClawConfig);
     const key = explicitAllowlist ? MAIN_SESSION_KEY : "global";
     const entry = await patchOk({
       cfg,
@@ -1011,12 +1006,10 @@ describe("gateway sessions patch", () => {
     const existing: SessionEntry = { sessionId: "default-policy", updatedAt: 1, label: "Original" };
     const store = { [key]: existing };
     const result = await runPatch({
-      cfg: {
-        agents: {
-          defaults: { model: "synthetic/primary", modelPolicy: { allow: [] } },
-          entries: { main: { modelPolicy: { allow: ["synthetic/allowed"] } } },
-        },
-      },
+      cfg: agentConfig(
+        { model: "synthetic/primary", modelPolicy: { allow: [] } },
+        { main: { modelPolicy: { allow: ["synthetic/allowed"] } } },
+      ),
       store,
       storeKey: key,
       model: "synthetic/outside",
@@ -1093,18 +1086,14 @@ describe("gateway sessions patch", () => {
 
   test("validates global patches against the selected agent", async () => {
     const entry = await patchOk({
-      cfg: {
-        agents: {
-          entries: {
-            main: {
-              model: { primary: "gmn/gpt-5.4" },
-            },
-            work: {
-              model: { primary: "openai/gpt-5.5" },
-            },
-          },
+      cfg: agentConfig(undefined, {
+        main: {
+          model: { primary: "gmn/gpt-5.4" },
         },
-      } as OpenClawConfig,
+        work: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      }) as OpenClawConfig,
       storeKey: "global",
       agentId: "work",
       thinkingLevel: "xhigh",
@@ -1158,7 +1147,7 @@ describe("gateway sessions patch", () => {
 
   test("clearing a runtime pin preserves supported thinking and invalidates derived context", async () => {
     const entry = await patchOk({
-      cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
+      cfg: agentConfig({ model: "openai/gpt-5.6-luna" }),
       mainEntry: {
         agentRuntimeOverride: "openclaw",
         thinkingLevel: "ultra",
@@ -1448,4 +1437,5 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverride).toBe("work");
   });
 });
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

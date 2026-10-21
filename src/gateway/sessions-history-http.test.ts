@@ -21,7 +21,6 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent
 import { setAvatar, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
-import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import {
@@ -29,7 +28,8 @@ import {
   expectErrorResponse,
   fetchSessionHistory,
   historyStream,
-  readHistoryEvent,
+  historyTexts,
+  openHistoryStream,
   readSessionHistoryBody,
   type SessionHistoryBody,
   type SessionHistoryMessage,
@@ -139,38 +139,14 @@ function currentProfileAvatarUrl(profileId: string): string {
   return display.avatarUrl;
 }
 
-async function withHistoryStream(
-  port: number,
-  run: (stream: SessionHistorySseStream) => Promise<void>,
-  query?: string,
-) {
-  const stream = historyStream(
-    await fetchSessionHistory(port, SESSION_KEY, {
-      query,
-      headers: { Accept: "text/event-stream" },
-    }),
-  );
-  try {
-    await run(stream);
-  } finally {
-    await stream.reader.cancel();
-  }
-}
-
-async function expectHistoryEventTexts(stream: SessionHistorySseStream, expectedTexts: string[]) {
-  expect(historyTexts(await readHistoryEvent(stream))).toEqual(expectedTexts);
-}
-
-const historyTexts = (body: SessionHistoryBody) =>
-  body.messages?.map((message) => message.content?.[0]?.text);
-
 function withGatewayHistoryStream(
   run: (stream: SessionHistorySseStream, port: number) => Promise<void>,
   query?: string,
 ) {
-  return withGatewayHarness(({ port }) =>
-    withHistoryStream(port, (stream) => run(stream, port), query),
-  );
+  return withGatewayHarness(async ({ port }) => {
+    await using stream = await openHistoryStream(port, SESSION_KEY, query);
+    await run(stream, port);
+  });
 }
 
 async function withBearerServer(
@@ -184,21 +160,6 @@ async function withBearerServer(
     await started.server.close();
     started.envSnapshot.restore();
   }
-}
-
-async function expectMessageEventMatch(
-  stream: SessionHistorySseStream,
-  params: { text: string; seq: number; id?: string },
-) {
-  const event = await readSseEvent(stream.reader, stream.streamState);
-  expect(event.event).toBe("message");
-  const data = event.data as { message?: SessionHistoryMessage; messageSeq?: number };
-  expect(data.message?.content?.[0]?.text).toBe(params.text);
-  expect(data.messageSeq).toBe(params.seq);
-  if (params.id !== undefined) {
-    expect(data.message?.["__openclaw"]).toMatchObject({ id: params.id, seq: params.seq });
-  }
-  return event;
 }
 
 describe("session history HTTP endpoints", () => {
@@ -321,9 +282,8 @@ describe("session history HTTP endpoints", () => {
           expect(response.headers.get("content-type"), accept).toContain(contentType);
           let body: SessionHistoryBody;
           if (contentType === "text/event-stream") {
-            const stream = historyStream(response);
-            body = await readHistoryEvent(stream);
-            await stream.reader.cancel();
+            await using stream = historyStream(response);
+            body = await stream.next();
           } else {
             body = (await response.json()) as SessionHistoryBody;
           }
@@ -404,33 +364,29 @@ describe("session history HTTP endpoints", () => {
 
     await withGatewayHarness(async (harness) => {
       const initialRest = await readSessionHistoryBody(harness.port, SESSION_KEY);
-      await withHistoryStream(harness.port, async (stream) => {
-        const initialSse = await readHistoryEvent(stream);
-        const oldExpected = turn(first.messageId, 1, "Historical Ada", "first turn", oldAvatarUrl);
-        expect(initialRest.messages?.[0]).toMatchObject(oldExpected);
-        expect(initialSse.messages?.[0]).toMatchObject(oldExpected);
+      await using stream = await openHistoryStream(harness.port, SESSION_KEY);
+      const initialSse = await stream.next();
+      const oldExpected = turn(first.messageId, 1, "Historical Ada", "first turn", oldAvatarUrl);
+      expect(initialRest.messages?.[0]).toMatchObject(oldExpected);
+      expect(initialSse.messages?.[0]).toMatchObject(oldExpected);
 
-        withMockedDateNow(1_900_000_000_000, () => {
-          setDisplayName(profile.id, "Current Ada");
-          expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
-        });
-        const newAvatarUrl = currentProfileAvatarUrl(profile.id);
-        expect(newAvatarUrl).not.toBe(oldAvatarUrl);
-
-        const inlineEventPromise = readHistoryEvent(stream);
-        const second = await persistAttributedTurn("second", "Current Ada", "second turn");
-        const refreshEvent = await inlineEventPromise;
-        const expected = [
-          turn(first.messageId, 1, "Historical Ada", "first turn", newAvatarUrl),
-          turn(second.messageId, 2, "Current Ada", "second turn", newAvatarUrl),
-        ];
-        for (const body of [
-          refreshEvent,
-          await readSessionHistoryBody(harness.port, SESSION_KEY),
-        ]) {
-          expect(body.messages).toMatchObject(expected);
-        }
+      withMockedDateNow(1_900_000_000_000, () => {
+        setDisplayName(profile.id, "Current Ada");
+        expect(setAvatar(profile.id, new Uint8Array([4, 5, 6]), "image/png").ok).toBe(true);
       });
+      const newAvatarUrl = currentProfileAvatarUrl(profile.id);
+      expect(newAvatarUrl).not.toBe(oldAvatarUrl);
+
+      const inlineEventPromise = stream.next();
+      const second = await persistAttributedTurn("second", "Current Ada", "second turn");
+      const refreshEvent = await inlineEventPromise;
+      const expected = [
+        turn(first.messageId, 1, "Historical Ada", "first turn", newAvatarUrl),
+        turn(second.messageId, 2, "Current Ada", "second turn", newAvatarUrl),
+      ];
+      for (const body of [refreshEvent, await readSessionHistoryBody(harness.port, SESSION_KEY)]) {
+        expect(body.messages).toMatchObject(expected);
+      }
     });
   });
 
@@ -522,7 +478,7 @@ describe("session history HTTP endpoints", () => {
     await writeSessionStore({ entries: { [SESSION_KEY]: { sessionId, updatedAt: 1 } }, storePath });
 
     await withGatewayHistoryStream(async (stream) => {
-      await expectHistoryEventTexts(stream, ["archived before reset"]);
+      await stream.expectTexts(["archived before reset"]);
 
       const appended = await appendMessage(storePath, "active after reset", "none");
       emitSessionTranscriptUpdate({
@@ -538,7 +494,7 @@ describe("session history HTTP endpoints", () => {
         messageSeq: 2,
       });
 
-      await expectHistoryEventTexts(stream, ["active after reset"]);
+      await stream.expectTexts(["active after reset"]);
     });
   });
 
@@ -680,10 +636,9 @@ describe("session history HTTP endpoints", () => {
         true,
       ]);
 
-      await withHistoryStream(harness.port, async (stream) => {
-        const streamedHistory = await readHistoryEvent(stream);
-        expect(streamedHistory.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
-      });
+      await using stream = await openHistoryStream(harness.port, SESSION_KEY);
+      const streamedHistory = await stream.next();
+      expect(streamedHistory.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
     });
   });
 
@@ -788,15 +743,10 @@ describe("session history HTTP endpoints", () => {
           await appendText(storePath, "during startup");
           return snapshot;
         });
-      await withHistoryStream(
-        harness.port,
-        async (stream) => {
-          await expectHistoryEventTexts(stream, ["first message", "during startup"]);
-          await appendText(storePath, "after startup");
-          await expectHistoryEventTexts(stream, ["during startup", "after startup"]);
-        },
-        "?limit=2",
-      );
+      await using stream = await openHistoryStream(harness.port, SESSION_KEY, "?limit=2");
+      await stream.expectTexts(["first message", "during startup"]);
+      await appendText(storePath, "after startup");
+      await stream.expectTexts(["during startup", "after startup"]);
     });
   });
 
@@ -830,45 +780,35 @@ describe("session history HTTP endpoints", () => {
     };
     const retainedSnapshot = () => snapshotSpy.mock.results.at(-1)?.value;
     await withGatewayHistoryStream(async (stream, port) => {
-      const initial = await readHistoryEvent(stream);
+      const initial = await stream.next();
       expectWindow(initial, initialCount, "history message 1");
       expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
-      await withHistoryStream(
+      await using cursorStream = await openHistoryStream(
         port,
-        async (cursorStream) => {
-          expectWindow(await readHistoryEvent(cursorStream), initialCount);
-          expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
-
-          const messageId = await appendText(storePath, "live history message");
-          const lastSequence = initial.messages?.at(-1)?.["__openclaw"]?.seq;
-          expect(lastSequence).toEqual(expect.any(Number));
-          await expectMessageEventMatch(stream, {
-            text: "live history message",
-            seq: (lastSequence ?? 0) + 1,
-            id: messageId,
-          });
-
-          const liveRetained = snapshotSpy.mock.results.findLast((result) => {
-            const snapshot = result.value;
-            return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
-          })?.value;
-          expectWindow(liveRetained, retainedLimit, undefined, "live history message");
-          expectWindow(await readHistoryEvent(cursorStream), initialCount, "history message 1");
-          expectWindow(retainedSnapshot(), retainedLimit);
-
-          const completeHistory = await vi.waitFor(
-            () => readSessionHistoryBody(port, SESSION_KEY),
-            { interval: 25, timeout: 5_000 },
-          );
-          expectWindow(
-            completeHistory,
-            initialCount + 1,
-            "history message 1",
-            "live history message",
-          );
-        },
+        SESSION_KEY,
         `?cursor=${initialCount + 1}`,
       );
+      expectWindow(await cursorStream.next(), initialCount);
+      expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
+
+      const messageId = await appendText(storePath, "live history message");
+      const lastSequence = initial.messages?.at(-1)?.["__openclaw"]?.seq;
+      expect(lastSequence).toEqual(expect.any(Number));
+      await stream.expectMessage("live history message", (lastSequence ?? 0) + 1, messageId);
+
+      const liveRetained = snapshotSpy.mock.results.findLast((result) => {
+        const snapshot = result.value;
+        return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
+      })?.value;
+      expectWindow(liveRetained, retainedLimit, undefined, "live history message");
+      expectWindow(await cursorStream.next(), initialCount, "history message 1");
+      expectWindow(retainedSnapshot(), retainedLimit);
+
+      const completeHistory = await vi.waitFor(() => readSessionHistoryBody(port, SESSION_KEY), {
+        interval: 25,
+        timeout: 5_000,
+      });
+      expectWindow(completeHistory, initialCount + 1, "history message 1", "live history message");
     });
   });
 
@@ -876,23 +816,16 @@ describe("session history HTTP endpoints", () => {
     const { storePath } = await seedSession({ text: "first message" });
 
     await withGatewayHistoryStream(async (stream) => {
-      await expectHistoryEventTexts(stream, ["first message"]);
+      await stream.expectTexts(["first message"]);
       await appendText(storePath, "second visible message");
 
-      await expectMessageEventMatch(stream, {
-        text: "second visible message",
-        seq: 2,
-      });
+      await stream.expectMessage("second visible message", 2);
       await appendText(storePath, "NO_REPLY", false);
 
-      await expectHistoryEventTexts(stream, ["first message", "second visible message"]);
+      await stream.expectTexts(["first message", "second visible message"]);
 
       const thirdId = await appendText(storePath, "third visible message");
-      await expectMessageEventMatch(stream, {
-        text: "third visible message",
-        seq: 4,
-        id: thirdId,
-      });
+      await stream.expectMessage("third visible message", 4, thirdId);
     });
   });
 

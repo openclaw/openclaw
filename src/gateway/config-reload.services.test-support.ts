@@ -58,6 +58,35 @@ export async function createReadyReloader(...args: Parameters<typeof createReloa
   return harness;
 }
 
+export function snapshotOf(config: OpenClawConfig, hash?: string) {
+  return makeSnapshot({ config, ...(hash === undefined ? {} : { hash }) });
+}
+
+export function configWithReload<T extends OpenClawConfig>(config: T) {
+  return { gateway: { reload: {} }, ...config };
+}
+
+export function expectCalls(count: number, ...callbacks: Array<{ mock: { calls: unknown[] } }>) {
+  for (const callback of callbacks) {
+    expect(callback).toHaveBeenCalledTimes(count);
+  }
+}
+
+type Harness = ReturnType<typeof createReloaderHarness>;
+type PluginChange = Parameters<Harness["reloader"]["applyPluginLifecycleChange"]>[0];
+export function applyPluginChange(
+  harness: Harness,
+  config: OpenClawConfig,
+  options: Partial<Omit<PluginChange, "config">> = {},
+) {
+  return harness.reloader.applyPluginLifecycleChange({
+    config,
+    pluginIds: ["notes"],
+    reason: "reload",
+    ...options,
+  });
+}
+
 function serviceRegistrar(registry: ReturnType<typeof createTestRegistry>, pluginId: string) {
   return (service: Parameters<typeof createServiceRegistration>[0]) => {
     registry.services.push(createServiceRegistration(service, { pluginId, origin: "bundled" }));
@@ -226,27 +255,13 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         { ...codexRuntime(operationId), phase: "drain", committed: false },
         { cause },
       );
-    type Harness = ReturnType<typeof createReloaderHarness>;
-    type PluginChange = Parameters<Harness["reloader"]["applyPluginLifecycleChange"]>[0];
-    function applyPluginChange(
-      harness: Harness,
-      config: OpenClawConfig,
-      options: Partial<PluginChange> = {},
-    ) {
-      return harness.reloader.applyPluginLifecycleChange({
-        config,
-        pluginIds: ["notes"],
-        reason: "reload",
-        ...options,
-      });
-    }
     describe("plugin drain recovery", () => {
       it("hot-applies model settings without replacing the Codex generation", async () => {
         const initialConfig: OpenClawConfig = {
           plugins: { entries: { codex: { enabled: true } } },
         };
         let config = initialConfig;
-        const harness = await createReadyReloader(async () => makeSnapshot({ config }), {
+        const harness = await createReadyReloader(async () => snapshotOf(config), {
           initialConfig,
         });
 
@@ -285,7 +300,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         const releaseWork = instance.retainWork();
         const cleanup = createDeferredCore();
         let cleanupCall: Promise<void> | undefined;
-        const harness = createReloaderHarness(async () => makeSnapshot({ config }), {
+        const harness = createReloaderHarness(async () => snapshotOf(config), {
           initialConfig,
           // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
           onHotReload: async (plan) => {
@@ -341,16 +356,19 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           agents: { entries: { main: {} } },
         };
         let config: OpenClawConfig = { ...initialConfig, ...codexConfig("workspace-write") };
-        const harness = await createReadyReloader(async () => makeSnapshot({ config }), {
+        const harness = await createReadyReloader(async () => snapshotOf(config), {
           initialConfig,
         });
         harness.onHotReload.mockRejectedValueOnce(drainFailure("failed-automatic-drain"));
         await flushWatcherChange(harness);
         expect(harness.onHotReload).toHaveBeenCalledOnce();
-        expect(harness.onConfigApplied).not.toHaveBeenCalled();
-        expect(harness.onConfigAccepted).not.toHaveBeenCalled();
-        expect(harness.onConfigCandidateCommitted).not.toHaveBeenCalled();
-        expect(harness.onConfigRevisionApplied).not.toHaveBeenCalled();
+        expectCalls(
+          0,
+          harness.onConfigApplied,
+          harness.onConfigAccepted,
+          harness.onConfigCandidateCommitted,
+          harness.onConfigRevisionApplied,
+        );
 
         config = {
           ...codexConfig("workspace-write"),
@@ -377,8 +395,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           "plugins.entries.codex.config.sandbox",
           "agents.entries.main.skills",
         ]);
-        expect(harness.onConfigRevisionApplied).toHaveBeenCalledOnce();
-        expect(harness.log.error).toHaveBeenCalledOnce();
+        expectCalls(1, harness.onConfigRevisionApplied, harness.log.error);
       });
 
       it.each(["explicit wait", "revert", "revert with model edit"] as const)(
@@ -388,7 +405,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           let config = codexConfig("workspace-write");
           const failure = drainFailure("failed-automatic-drain");
           const runtime = codexRuntime("explicit-wait-recovery");
-          const harness = await createReadyReloader(async () => makeSnapshot({ config }), {
+          const harness = await createReadyReloader(async () => snapshotOf(config), {
             initialConfig,
             onHotReload: async (plan) => {
               if (plan.reloadPlugins && !plan.pluginLifecycle?.waitForDrain) {
@@ -398,8 +415,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
             },
           });
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledOnce();
-          expect(harness.log.error).toHaveBeenCalledOnce();
+          expectCalls(1, harness.onHotReload, harness.log.error);
           expect(harness.onConfigApplied).not.toHaveBeenCalled();
 
           if (recovery !== "explicit wait") {
@@ -458,7 +474,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
             codex: pendingCodex,
             ...(existingEntries ? { other } : {}),
           });
-          const harness = await createReadyReloader(async () => makeSnapshot({ config }), {
+          const harness = await createReadyReloader(async () => snapshotOf(config), {
             initialConfig,
           });
           harness.onHotReload.mockRejectedValueOnce(drainFailure("failed-codex-drain"));
@@ -504,7 +520,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         async (event) => {
           const config: OpenClawConfig = {};
           const write = makeZeroDebounceHookWrite("next");
-          let snapshot = makeSnapshot({ config, hash: "initial" });
+          let snapshot = snapshotOf(config, "initial");
           const entered = createDeferred();
           const release = createDeferred();
           const error = failure();
@@ -565,7 +581,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         async (outcome) => {
           const initialRead = createDeferred<ConfigFileSnapshot>();
           const config: OpenClawConfig = {};
-          const snapshot = makeSnapshot({ config, hash: "same" });
+          const snapshot = snapshotOf(config, "same");
           const readSnapshot = vi
             .fn<() => Promise<ConfigFileSnapshot>>()
             .mockImplementationOnce(() => initialRead.promise)
@@ -606,17 +622,14 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           generation: 2,
           pluginIds: ["notes"],
         };
-        const harness = await createReadyReloader(
-          async () => makeSnapshot({ config: nextConfig, hash: "next" }),
-          {
-            initialConfig: config,
-            initialCompareConfig: config,
-            onHotReload: async (plan, next, ownership) => {
-              ownership.markRuntimeCommitted(next, plan);
-              return { status: "applied", runtime: appliedRuntime };
-            },
+        const harness = await createReadyReloader(async () => snapshotOf(nextConfig, "next"), {
+          initialConfig: config,
+          initialCompareConfig: config,
+          onHotReload: async (plan, next, ownership) => {
+            ownership.markRuntimeCommitted(next, plan);
+            return { status: "applied", runtime: appliedRuntime };
           },
-        );
+        });
         const applied = applyPluginChange(harness, nextConfig, { waitForDrain: true, drainSignal });
         await expect(applied).resolves.toEqual(appliedRuntime);
         expect(harness.onHotReload).toHaveBeenCalledOnce();
