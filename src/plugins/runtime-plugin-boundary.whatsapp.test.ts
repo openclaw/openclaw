@@ -14,13 +14,6 @@ type HeavyModule = {
   ) => void;
 };
 
-function loadRuntime<T extends object>(root: string, file: string): T {
-  return loadFacadeModuleAtLocationSync<T>({
-    location: { modulePath: path.join(root, file), boundaryRoot: root },
-    boundary: { boundaryLabel: "bundled plugin root", rejectHardlinks: false },
-  });
-}
-
 const tempDirs: string[] = [];
 
 function writeRuntimeFixture(prefix: string, files: Record<string, string>) {
@@ -99,10 +92,23 @@ afterEach(() => {
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
-    const light = loadRuntime<{
+    const boundary = { boundaryLabel: "bundled plugin root", rejectHardlinks: false };
+    const light = loadFacadeModuleAtLocationSync<{
       getActiveWebListener: (accountId?: string | null) => unknown;
-    }>(runtimePluginDir, "light-runtime-api.js");
-    const heavy = loadRuntime<HeavyModule>(runtimePluginDir, "runtime-api.js");
+    }>({
+      location: {
+        modulePath: path.join(runtimePluginDir, "light-runtime-api.js"),
+        boundaryRoot: runtimePluginDir,
+      },
+      boundary,
+    });
+    const heavy = loadFacadeModuleAtLocationSync<HeavyModule>({
+      location: {
+        modulePath: path.join(runtimePluginDir, "runtime-api.js"),
+        boundaryRoot: runtimePluginDir,
+      },
+      boundary,
+    });
     const listener = { sendMessage: async () => ({ messageId: "msg-1" }) };
     heavy.registerControllerForTest("work", listener);
     expect(light.getActiveWebListener("work")).toBe(listener);
