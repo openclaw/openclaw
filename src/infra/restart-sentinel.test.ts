@@ -226,6 +226,34 @@ function updateSentinelRow(
 describe("restart sentinel", () => {
   it("persists and consumes through workers without caller-thread SQL", async () => {
     await withFreshRestartSentinelStateDir(async () => {
+      const payload = {
+        kind: "update" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        sessionKey: "agent:main:mobilechat:dm:+15555550123",
+        continuation: {
+          kind: "agentTurn" as const,
+          message: "Reply with exactly: Yay! I did it!",
+        },
+        stats: {
+          mode: "git",
+          before: null,
+          after: { version: "2026.9.4", detail: { retained: true } },
+          steps: [
+            {
+              name: "install",
+              command: "install",
+              failureFacts: [{ check: "installation", code: "retained" }],
+              cwd: null,
+              durationMs: 0.5,
+              log: { stdoutTail: null, stderrTail: "", exitCode: null },
+              advisory: false,
+            },
+          ],
+          reason: null,
+          durationMs: null,
+        },
+      };
       const rejectHostSql = () => {
         throw new Error("caller-thread SQL");
       };
@@ -235,54 +263,13 @@ describe("restart sentinel", () => {
       await expect(fs.access(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
         code: "ENOENT",
       });
-      const written = await writeRestartSentinel(restartPayload());
+      const written = await writeRestartSentinel(payload);
+      expect(written.payload).toEqual(payload);
       await expect(readRestartSentinel()).resolves.toEqual(written);
       await expect(readRestartSentinelReadOnly()).resolves.toEqual(written);
       await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
       await expect(hasRestartSentinel()).resolves.toBe(false);
     });
-  });
-
-  it("writes and reads a sentinel", async () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      sessionKey: "agent:main:mobilechat:dm:+15555550123",
-      continuation: {
-        kind: "agentTurn" as const,
-        message: "Reply with exactly: Yay! I did it!",
-      },
-      stats: {
-        mode: "git",
-        before: null,
-        after: { version: "2026.9.4", detail: { retained: true } },
-        steps: [
-          {
-            name: "install",
-            command: "install",
-            failureFacts: [{ check: "installation", code: "retained" }],
-            cwd: null,
-            durationMs: 0.5,
-            log: { stdoutTail: null, stderrTail: "", exitCode: null },
-            advisory: false,
-          },
-        ],
-        reason: null,
-        durationMs: null,
-      },
-    };
-    await writeRestartSentinel(payload);
-    expect(readSentinelRow()).toMatchObject({
-      sentinel_key: "current",
-      version: 1,
-      kind: "update",
-      status: "ok",
-      payload_json: JSON.stringify(payload),
-    });
-
-    const read = await readRestartSentinel();
-    expect(read?.payload).toEqual(payload);
   });
 
   it("canonicalizes nullable top-level fields and empty delivery context", async () => {

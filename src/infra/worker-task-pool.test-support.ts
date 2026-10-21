@@ -14,7 +14,6 @@ export type PoolFixtureInput = {
   notifications?: number;
   counters?: SharedArrayBuffer;
   wait?: boolean;
-  exitCode?: number;
   buffer?: ArrayBuffer;
 };
 export type PoolFixtureResult = Awaited<ReturnType<typeof runFixture>>;
@@ -23,10 +22,6 @@ let previousBuffer: ArrayBuffer | undefined;
 async function runFixture(input: unknown, channel?: WorkerTaskChannel) {
   assert.ok(isRecord(input));
   assert.ok(typeof input.label === "string");
-  if (input.exitCode !== undefined) {
-    assert.ok(typeof input.exitCode === "number");
-    process.exit(input.exitCode);
-  }
   let counters: Int32Array | undefined;
   if (input.counters) {
     assert.ok(input.counters instanceof SharedArrayBuffer);

@@ -643,6 +643,8 @@ describe("scheduled restart during gateway suspension", () => {
       await vi.advanceTimersByTimeAsync(0);
       expectSignals(0);
       resetGatewaySuspendCoordinatorForLifecycleRestart();
+      expect(resumeScheduling).toHaveBeenCalledOnce();
+      expect(getGatewaySuspendStatus("suspension")).toEqual({ status: "running" });
       resetGatewayWorkAdmission();
     }
     resetGatewayRestartStateForInProcessRestart();
@@ -664,18 +666,6 @@ describe("scheduled restart during gateway suspension", () => {
 
     expect(afterEmitRejected).toHaveBeenCalledOnce();
     expectSignals(0);
-    expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  });
-
-  it("resumes and clears a prepared suspension during lifecycle reset", () => {
-    expect(prepareSuspension()).toMatchObject({ status: "ready" });
-
-    markGatewayRestartDraining();
-    expect(resumeScheduling).not.toHaveBeenCalled();
-    resetGatewayLifecycleState();
-
-    expect(resumeScheduling).toHaveBeenCalledOnce();
-    expect(getGatewaySuspendStatus("suspension")).toEqual({ status: "running" });
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 });

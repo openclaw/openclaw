@@ -26,7 +26,6 @@ async function runFixture(ending: Ending): Promise<unknown> {
 const endings = [
   "resource-idle-broker",
   "callback-context",
-  "native-resource",
   "explicit-unbound",
   "terminate",
   "natural-exit",

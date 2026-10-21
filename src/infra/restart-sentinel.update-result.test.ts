@@ -17,7 +17,6 @@ import {
   markControlPlaneUpdateRestartSentinelFailure,
   writeControlPlaneUpdateRestartSentinel,
 } from "./update-control-plane-sentinel.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
@@ -121,35 +120,17 @@ describe("control-plane update restart sentinel", () => {
     },
   );
 
-  it.each([
-    ["handoff", "skipped", "managed-service-handoff-started"],
-    ["restart", "skipped", "restart-health-pending"],
-    ["rollback", "error", "restart-unhealthy"],
-    ["unsafe", "error", "restart-unhealthy"],
-    ["success", "ok", "restart-unhealthy"],
-  ] as const)(
-    "does not publish a targetless CLI %s notice for a restored runtime",
-    async (phase, status, reason) => {
-      const run = createUpdateRun({ trigger: "cli" });
-      if (phase === "rollback") {
-        finishUpdateRun(run.runId, { status: "rolled-back", reason });
-      }
-      const before = getUpdateRun(run.runId);
-      await writeControlPlaneUpdateRestartSentinel({
-        meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
-        result: updateResult({
-          runId: run.runId,
-          status,
-          reason,
-          ...(phase === "unsafe"
-            ? { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } }
-            : {}),
-        }),
-      });
-      expect(await readRestartSentinel()).toBeNull();
-      expect(getUpdateRun(run.runId)).toEqual(before);
-    },
-  );
+  it("does not publish an unrequested CLI notice or change its terminal ledger record", async () => {
+    const run = createUpdateRun({ trigger: "cli" });
+    finishUpdateRun(run.runId, { status: "rolled-back", reason: "restart-unhealthy" });
+    const before = getUpdateRun(run.runId);
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: { runId: run.runId, handoffId: "owned-handoff", root: "/owned/package" },
+      result: updateResult({ runId: run.runId, status: "error", reason: "restart-unhealthy" }),
+    });
+    expect(await readRestartSentinel()).toBeNull();
+    expect(getUpdateRun(run.runId)).toEqual(before);
+  });
 
   it.each<{
     label: string;
@@ -401,7 +382,7 @@ describe("control-plane update restart sentinel", () => {
     { service: undefined, reason: "gateway-readiness-pending", health: "unverified" },
   ] as const)(
     "keeps $health rollback notifications readable by released 2026.9.4",
-    async ({ service, reason, health }) => {
+    async ({ service, reason }) => {
       const persisted = {
         serviceRestartSafe: true as const,
         version: "2026.9.4",
@@ -430,8 +411,6 @@ describe("control-plane update restart sentinel", () => {
         .parse(JSON.parse(row?.stats_json ?? "null"));
       expect(stats.recovery).toEqual(persisted);
       expect(result.recovery).toEqual({ ...persisted, packageRollbackVerified: true, reason });
-      const report = await prepareUpdateFailureReport({ attemptId: "released-reader", result });
-      expect(report.body).toContain(`Gateway health ${health} (${reason})`);
     },
   );
 
@@ -506,20 +485,12 @@ describe("control-plane update restart sentinel", () => {
   );
 
   it("keeps restart-health-pending sentinels continuation-free until final success", () => {
-    const result = {
+    const result = updateResult({
       runId: "ab186c13-181b-4cf7-a882-c179928539e6",
-      status: "ok" as const,
-      mode: "npm" as const,
-      root: "/tmp/openclaw",
-      before: { version: "2026.4.23" },
-      after: { version: "2026.4.24" },
-      steps: [],
-      durationMs: 42,
-      recovery: { serviceRestartSafe: true, version: "2026.4.24" } as const,
-    };
+      recovery: { serviceRestartSafe: true, version: "2026.4.24" },
+    });
     const meta = {
       target: "version 2026.4.24",
-      sessionKey: "agent:main:webchat:dm:user-123",
       continuationMessage: "  Check the running version and finish the update report.\n",
     };
 

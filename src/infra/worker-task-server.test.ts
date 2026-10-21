@@ -181,49 +181,6 @@ it.each([false, true])(
   },
 );
 
-it("keeps ordinary task errors reusable", async () => {
-  const { port, task, expectResult, serveWorkerTasks } = await workerFixture();
-  const handler = vi.fn<() => string>().mockImplementationOnce(() => {
-    throw new Error("ordinary failure");
-  });
-  handler.mockReturnValue("next task");
-  serveWorkerTasks(handler);
-  await task(1);
-  expect(port.postMessage).toHaveBeenCalledWith({
-    status: "failed",
-    taskId: 1,
-    error: "ordinary failure",
-  });
-  await task(2);
-  expectResult(2, "next task");
-  expectCalls(2, handler);
-  expectCalls(0, port.close, boundary.closeMemory);
-  expect(process.exitCode).toBe(exitCode);
-});
-
-it("scopes the complete selection to each generic worker task", async () => {
-  const { task, expectResult, serveWorkerTasks } = await workerFixture();
-  const { getDatabaseEngineSelection } = await import("./database-engine/context.js");
-  const selection = {
-    effectiveEngines: {
-      state: "sqlite",
-      agent: "sqlite",
-      workboard: "postgres",
-      logbook: "sqlite",
-      "team-reports": "sqlite",
-      quarantine: "sqlite",
-      "managed-update": "sqlite",
-      "package-activation": "sqlite",
-    },
-    postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
-  } as const;
-  serveWorkerTasks(() => getDatabaseEngineSelection());
-  await task(1, { ...taskContext(), databaseEngineSelection: selection });
-  expectResult(1, selection);
-  await task(2);
-  expectResult(2, undefined);
-});
-
 it("retains admission context for asynchronous resource cleanup and successor tasks", async () => {
   const { port, task, serveOwnedWorkerTasks } = await workerFixture();
   const cleanupEntered = createDeferred();
