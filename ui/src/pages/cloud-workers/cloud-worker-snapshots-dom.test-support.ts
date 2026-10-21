@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createComponent } from "solid-js";
-import { afterEach, beforeEach, vi } from "vitest";
+import { beforeEach, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -22,16 +22,11 @@ export function button(container: Element, label: string) {
   );
 }
 
-/** Each suite mocks the dialog and toast modules itself; this only resets them. */
 export function setupSnapshotsDomSuite() {
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     await i18n.setLocale("en");
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.useRealTimers();
   });
 }
 
@@ -100,12 +95,11 @@ export function mountPage(
       },
     }),
   );
-  const page = expectDefined(
-    mounted.container.querySelector("openclaw-cloud-workers-page"),
-    "Cloud workers page",
-  );
   return {
-    page,
+    page: expectDefined(
+      mounted.container.querySelector("openclaw-cloud-workers-page"),
+      "Cloud workers page",
+    ),
     request,
     harness,
     client,

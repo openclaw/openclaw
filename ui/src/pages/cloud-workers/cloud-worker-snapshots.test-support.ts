@@ -23,7 +23,6 @@ export function buildEnvironmentFixture(state = "provisioning", error?: string) 
     worker: {
       profileId: "linux-build",
       providerId: "crabbox",
-      leaseId: "lease-app",
       state,
       ageMs: 60_000,
       attachedSessionIds: [],
@@ -34,54 +33,51 @@ export function buildEnvironmentFixture(state = "provisioning", error?: string) 
 }
 
 export function snapshotListFixture(): SnapshotsResult {
-  const images: SnapshotsResult["images"] = [
-    {
-      profileKey: "profile-key-project",
-      profileId: "linux-build",
-      backend: "aws",
-      machineClass: "standard",
-      os: "linux",
-      projectKey: "project-key-app",
-      projectLabel: "github.com/acme/app",
-      checkpointId: "image-app",
-      state: "available",
-      createdAtMs: Date.now() - 3_600_000,
-      lastDemandAtMs: Date.now() - 60_000,
-      baseCommit: "0123456789abcdef",
-      allocationCount: 21,
-      held: true,
-      retirement: { checkpointId: "image-app-predecessor" },
-    },
-    {
-      profileKey: "profile-key-retiring",
-      profileId: "retiring-build",
-      projectKey: "project-key-retiring",
-      projectLabel: "github.com/acme/retiring",
-      checkpointId: "image-retiring",
-      state: "available",
-      allocationCount: 0,
-      held: false,
-      retirement: { checkpointId: "image-retiring" },
-    },
-    {
-      profileKey: "profile-key-legacy",
-      projectKey: "project-key-legacy",
-      state: "no-image",
-      allocationCount: 0,
-      held: false,
-      capture: { selector: "capture-uncertain", phase: "uncertain", stale: false },
-    },
-    {
-      profileKey: "profile-key-machine",
-      profileId: "linux-build",
-      state: "no-image",
-      allocationCount: 1,
-      held: false,
-      capture: { selector: "capture-building", phase: "creating", stale: true },
-    },
-  ];
   return {
-    images,
+    images: [
+      {
+        profileKey: "profile-key-project",
+        profileId: "linux-build",
+        backend: "aws",
+        machineClass: "standard",
+        os: "linux",
+        projectLabel: "github.com/acme/app",
+        checkpointId: "image-app",
+        state: "available",
+        createdAtMs: Date.now() - 3_600_000,
+        lastDemandAtMs: Date.now() - 60_000,
+        baseCommit: "0123456789abcdef",
+        allocationCount: 21,
+        held: true,
+        retirement: { checkpointId: "image-app-predecessor" },
+      },
+      {
+        profileKey: "profile-key-retiring",
+        profileId: "retiring-build",
+        projectLabel: "github.com/acme/retiring",
+        checkpointId: "image-retiring",
+        state: "available",
+        allocationCount: 0,
+        held: false,
+        retirement: { checkpointId: "image-retiring" },
+      },
+      {
+        profileKey: "profile-key-legacy",
+        projectKey: "project-key-legacy",
+        state: "no-image",
+        allocationCount: 0,
+        held: false,
+        capture: { selector: "capture-uncertain", phase: "uncertain", stale: false },
+      },
+      {
+        profileKey: "profile-key-machine",
+        profileId: "linux-build",
+        state: "no-image",
+        allocationCount: 1,
+        held: false,
+        capture: { selector: "capture-building", phase: "creating", stale: true },
+      },
+    ],
     profiles: [
       {
         id: "linux-build",
@@ -96,8 +92,7 @@ export function snapshotListFixture(): SnapshotsResult {
       {
         leaseId: "legacy-worker",
         selector: "legacy-lease-selector",
-        recoveryHint:
-          "Stop the owning Gateway and capture processes, confirm the worker is stopped, then run openclaw doctor --fix.",
+        recoveryHint: "Stop the worker, then run openclaw doctor --fix.",
       },
     ],
   };
