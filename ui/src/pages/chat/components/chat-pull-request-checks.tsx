@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { createEffect, createUniqueId, onSettled } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -26,7 +26,6 @@ export function ChatPullRequestChecks(props: {
     dismissOutsideFocus: false,
     acquireOcclusion: acquireNativeOverlaySurface,
   });
-  onCleanup(() => overlay.dispose());
   const sync = (nextPresented: boolean, dismissed?: boolean) => {
     presented = nextPresented;
     if (mounted) {
@@ -60,6 +59,7 @@ export function ChatPullRequestChecks(props: {
       mounted = false;
       stop();
       anchor.dispose();
+      overlay.dispose();
     };
   });
   return (

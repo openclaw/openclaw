@@ -1,4 +1,3 @@
-// Tlon tests cover send plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildMediaStory, sendDm, sendGroupMessage } from "./send.js";
 
@@ -55,26 +54,19 @@ describe("sendDm", () => {
     });
 
     expect(scot).toHaveBeenCalledWith("ud", 1_700_000_000_000n);
+    const reply = {
+      id: "~2024.1.1",
+      action: {
+        add: { content: [{ inline: ["threaded"] }], author: "~zod", sent: 1_700_000_000_000 },
+      },
+    };
     expect(poke).toHaveBeenCalledWith({
       app: "channels",
       mark: "channel-action-1",
       json: {
         channel: {
           nest: "chat/~nec/general",
-          action: {
-            post: {
-              reply: {
-                id: "~2024.1.1",
-                action: {
-                  add: {
-                    content: [{ inline: ["threaded"] }],
-                    author: "~zod",
-                    sent: 1_700_000_000_000,
-                  },
-                },
-              },
-            },
-          },
+          action: { post: { reply } },
         },
       },
     });
@@ -83,50 +75,25 @@ describe("sendDm", () => {
 });
 
 describe("buildMediaStory", () => {
+  const image = (src: string) => ({ block: { image: { src, height: 0, width: 0, alt: "" } } });
   it("keeps image URLs with fragments as image blocks", () => {
     expect(buildMediaStory("caption", "https://cdn.example/image.png#preview")).toEqual([
       { inline: ["caption"] },
-      {
-        block: {
-          image: {
-            src: "https://cdn.example/image.png#preview",
-            height: 0,
-            width: 0,
-            alt: "",
-          },
-        },
-      },
+      image("https://cdn.example/image.png#preview"),
     ]);
   });
 
   it("keeps image URLs with queries as image blocks", () => {
     expect(buildMediaStory(undefined, "https://cdn.example/image.png?token=1")).toEqual([
-      {
-        block: {
-          image: {
-            src: "https://cdn.example/image.png?token=1",
-            height: 0,
-            width: 0,
-            alt: "",
-          },
-        },
-      },
+      image("https://cdn.example/image.png?token=1"),
     ]);
   });
 
   it("keeps non-image URL paths with image-looking fragments as links", () => {
-    expect(buildMediaStory("caption", "https://cdn.example/page#preview.png")).toEqual([
+    const url = "https://cdn.example/page#preview.png";
+    expect(buildMediaStory("caption", url)).toEqual([
       { inline: ["caption"] },
-      {
-        inline: [
-          {
-            link: {
-              href: "https://cdn.example/page#preview.png",
-              content: "https://cdn.example/page#preview.png",
-            },
-          },
-        ],
-      },
+      { inline: [{ link: { href: url, content: url } }] },
     ]);
   });
 });

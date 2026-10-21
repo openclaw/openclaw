@@ -59,7 +59,7 @@ function OptionalSection(props: {
                 <span>{item().label}</span>
               </label>
               <details>
-                <summary>{t("clawsDraft.inspect")}</summary>
+                <summary>{t("clawsDraft.view")}</summary>
                 <pre>{item().detail}</pre>
               </details>
             </div>
@@ -91,11 +91,11 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             <span>{t("clawsDraft.name")}</span>
             <input
               class="settings-input"
-              value={choices()?.name ?? ""}
+              value={choices()?.displayName ?? ""}
               onInput={(event) => {
                 const current = choices();
                 if (current) {
-                  props.flow.updateChoices({ ...current, name: event.currentTarget.value });
+                  props.flow.updateChoices({ ...current, displayName: event.currentTarget.value });
                 }
               }}
             />
@@ -115,12 +115,6 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             />
           </label>
         </div>
-        <p class="claw-creator__publisher">
-          {t("clawsDraft.publisher", {
-            publisher: review().publisher.replace(/^@/, ""),
-            version: review().version,
-          })}
-        </p>
         <section class="claw-creator__section">
           <h3>{t("clawsDraft.behavior")}</h3>
           <details class="claw-creator__summary">

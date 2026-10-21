@@ -40,6 +40,31 @@ export const GitHubPublicationTitleSchema = Type.String({
 });
 export const GitHubPublicationBodySchema = Type.String({ minLength: 1, maxLength: 8 * 1024 });
 
+export const GitHubPullRequestInspectSchema = closedObject({
+  action: Type.Literal("inspect_pr"),
+  pullRequestUrl: Type.String({ minLength: 1, maxLength: 2048 }),
+});
+// API-observed owners include Enterprise Managed Users; linked-profile schemas stay separate.
+export const GITHUB_PULL_REQUEST_LOGIN_PATTERN = "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,37}[A-Za-z0-9])?$";
+const GitHubPullRequestRefSchema = closedObject({
+  repository: NonEmptyString,
+  repositoryId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  branch: NonEmptyString,
+  commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+});
+export const SessionGitHubPullRequestInspectResultSchema = closedObject({
+  url: NonEmptyString,
+  host: NonEmptyString,
+  number: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  author: closedObject({
+    accountId: PersonalGitHubAccountSchema.properties.accountId,
+    login: Type.String({ minLength: 1, maxLength: 39, pattern: GITHUB_PULL_REQUEST_LOGIN_PATTERN }),
+  }),
+  state: stringLiteralUnion(["open", "draft", "closed", "merged"]),
+  base: GitHubPullRequestRefSchema,
+  head: Type.Union([GitHubPullRequestRefSchema, Type.Null()]),
+});
+
 export const SessionGitHubPublishParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
@@ -97,6 +122,11 @@ export const GitHubPublicationEvidenceUploadSchema = closedObject({
   evidence: GitHubPublicationEvidenceSchema,
 });
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPullRequestInspectSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationReviewRequestSchema.properties,
     sessionKey: NonEmptyString,
@@ -292,6 +322,9 @@ export const SessionGitHubOptionsResultSchema = closedObject({
 });
 
 export type SessionGitHubBaseRefreshResult = Static<typeof SessionGitHubBaseRefreshResultSchema>;
+export type SessionGitHubPullRequestInspectResult = Static<
+  typeof SessionGitHubPullRequestInspectResultSchema
+>;
 export type GitHubPublicationPublisher = Static<typeof GitHubPublicationPublisherSchema>;
 export type GitHubPublicationAction = Static<typeof GitHubPublicationActionSchema>;
 export type GitHubPublicationEdit = Static<typeof GitHubPublicationEditSchema>;

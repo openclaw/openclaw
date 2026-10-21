@@ -10,6 +10,10 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import {
+  resolveClientCredentialStorePath,
+  resolveStateClientCredentialEnvironment,
+} from "../infra/client-credential-paths.js";
 import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
@@ -74,6 +78,7 @@ import {
   withDatabasePortConfigStateReceipt,
 } from "./doctor-database-port-publication.js";
 import {
+  assertLocalCredentialPortCompanion,
   prepareSharedStatePortSource,
   selectDatabasePortEngine,
   withDatabasePortStateOwner,
@@ -135,10 +140,25 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     families.find((family) =>
       family.roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
     )?.id;
-  const stores = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const selected = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const localCompanions = new Map<string, string>();
+  for (const file of selected) {
+    const env =
+      owner(file) === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (env) {
+      const local = resolveClientCredentialStorePath(env);
+      if (all.includes(local)) {
+        localCompanions.set(local, file);
+      }
+    }
+  }
+  const stores = selected.filter((file) => !localCompanions.has(file));
   const outOfScope: { path: string; engine: DatabaseEngineId }[] = [];
   const inspected = new Map<string, DatabasePortInspection>();
-  for (const file of all) {
+  // Admit the shared target before its exact local companion can leave the portable set.
+  for (const file of all.filter((candidate) => !localCompanions.has(candidate))) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
@@ -167,6 +187,10 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
       refuse(ctx, `${facts.engine} store with ${from} config`, "matching physical/config engines");
     }
     inspected.set(file, facts);
+  }
+  for (const [file, sharedPath] of localCompanions) {
+    assertLocalCredentialPortCompanion(ctx, file, sharedPath, inspected.get(sharedPath)?.family);
+    outOfScope.push({ path: file, engine: "sqlite" });
   }
   capacity(
     ctx,
@@ -275,32 +299,30 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
       originalCapture: await captureDatabaseArtifact(anchor),
       verification: null,
     });
+    const credentialEnv =
+      info.family === "state"
+        ? resolveStateClientCredentialEnvironment({ path: file, env: ctx.env })
+        : undefined;
+    if (credentialEnv) {
+      const credentialBinding = capturePortClientCredentialBinding({
+        env: credentialEnv,
+        sourcePath: anchor,
+        sourceFile: { path: original.path, dev: String(stat.dev), ino: String(stat.ino) },
+      });
+      const bindingFile = path.join(directory, "client-credential-binding.json");
+      writeDatabasePortArtifact(
+        bindingFile,
+        `${JSON.stringify(credentialBinding)}\n`,
+        ctx.assertCurrent,
+      );
+      artifacts.push(await captureDatabaseArtifact(bindingFile));
+    }
   }
   for (const [index, input] of facts.configInputs.entries()) {
     await assertDatabaseArtifact(input);
     const file = path.join(ctx.directory, `config-${index}.json`);
     writeDatabasePortArtifact(file, fs.readFileSync(input.path), ctx.assertCurrent);
     artifacts.push(await captureDatabaseArtifact(file));
-  }
-  const sharedIndex = targets.findIndex(
-    (target) => livePath(target) === path.join(ctx.stateDir, "state", "openclaw.sqlite"),
-  );
-  const sharedInput = ctx.inputs.stores[sharedIndex];
-  const credentialBinding = sharedInput
-    ? capturePortClientCredentialBinding({
-        env: ctx.env,
-        sourcePath: targets[sharedIndex]!.originalCapture.path,
-        sourceFile: { path: sharedInput.original.path, dev: sharedInput.dev, ino: sharedInput.ino },
-      })
-    : undefined;
-  if (credentialBinding !== undefined) {
-    const bindingFile = path.join(ctx.directory, "client-credential-binding.json");
-    writeDatabasePortArtifact(
-      bindingFile,
-      `${JSON.stringify(credentialBinding)}\n`,
-      ctx.assertCurrent,
-    );
-    artifacts.push(await captureDatabaseArtifact(bindingFile));
   }
   const inputFile = path.join(ctx.directory, "inputs.json");
   writeDatabasePortArtifact(inputFile, `${JSON.stringify(ctx.inputs)}\n`, ctx.assertCurrent);

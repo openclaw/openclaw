@@ -127,8 +127,9 @@ export class ConnectionSessionRows {
       const previous = updates.has(identity) ? updates.get(identity) : this.#wireRows.get(identity);
       const sameGeneration =
         previous &&
-        previous.fields.hashes.get("sessionId") === fields.hashes.get("sessionId") &&
-        previous.fields.hashes.get("lifecycleRevision") === fields.hashes.get("lifecycleRevision");
+        previous.fields.fingerprints.get("sessionId") === fields.fingerprints.get("sessionId") &&
+        previous.fields.fingerprints.get("lifecycleRevision") ===
+          fields.fingerprints.get("lifecycleRevision");
       bases.push(previous?.fields);
       const charge = 64 + 16 * fields.fieldCount + 2 * identity.length;
       let eviction: string | undefined;

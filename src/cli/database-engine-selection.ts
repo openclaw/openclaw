@@ -145,7 +145,7 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     command = "uninstall service";
   }
   if (invocation.primary === "doctor" && !invocation.hasHelpOrVersion) {
-    if (hasFlag(argv, "--session-sqlite-store")) {
+    if (hasFlag(argv, "--session-sqlite-store") || hasFlag(argv, "--client-credentials")) {
       command = "doctor explicit-store";
     } else if (process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH?.trim()) {
       command = "doctor update";
