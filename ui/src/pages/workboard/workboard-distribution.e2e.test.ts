@@ -111,13 +111,9 @@ suite.define(() => {
       const assets = requests
         .map((request) => new URL(request))
         .filter((asset) => asset.pathname.includes(prefix));
-      expect(assets.length).toBeGreaterThan(0);
       expect(assets.every((asset) => asset.origin === url.origin)).toBe(true);
-      expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${build.entryName}`))).toBe(
-        true,
-      );
-      for (const style of build.styles) {
-        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${style}`))).toBe(true);
+      for (const filename of [build.entryName, ...build.styles]) {
+        expect(assets.some((asset) => asset.pathname.endsWith(`${prefix}${filename}`))).toBe(true);
       }
       expect(
         assets.some(

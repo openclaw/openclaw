@@ -26,15 +26,9 @@ suite.define(() => {
       await page.setViewportSize({ height: 700, width: 390 });
       await installMockGateway(page, {
         ...workboardUi,
+        sessions: [],
         methodResponses: {
           "config.get": configSnapshot("workboard-mobile-scroll-e2e-config"),
-          "sessions.list": {
-            count: 0,
-            defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-            path: "",
-            sessions: [],
-            ts: baseTime,
-          },
           "workboard.cards.list": {
             boards: [makeBoard("default", { total: cards.length, active: cards.length })],
             cards,
