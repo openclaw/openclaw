@@ -69,8 +69,11 @@ export function captureFixture(
     caller: { kind: "operator", source: "local" },
     ...context,
   };
-  const tool = (extra: Partial<TranscriptsRuntimeContext> = {}) =>
-    createTranscriptsTool({ ...ctx, ...extra });
+  const tool = (extra: Partial<Parameters<typeof createTranscriptsTool>[0]> = {}) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { config, agentId, caller, assertCallerActive } = ctx;
+    return createTranscriptsTool({ config, agentId, caller, assertCallerActive, ...extra });
+  };
   const instance = tool();
   const execute = (params: Record<string, unknown>, signal?: AbortSignal) =>
     instance.execute("capture-fixture", params, signal);

@@ -8,7 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { parseTeamReportsConfig } from "./config.js";
+import { parseTeamReportsConfig, resolveTeamReportsConfig } from "./config.js";
 import { describePeriod } from "./periods.js";
 import {
   createReportRunFixtureFetch,
@@ -17,11 +17,7 @@ import {
   fixturePeople,
 } from "./report-run.benchmark-fixtures.test-support.js";
 import { TeamReportsRunner } from "./run-worker.js";
-import {
-  createReportSources,
-  generateReportPeriods,
-  type ResolvedTeamReportsConfig,
-} from "./run.js";
+import { createReportSources, generateReportPeriods } from "./run.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./store.js";
 
@@ -36,15 +32,7 @@ const config = parseTeamReportsConfig({
   people: fixturePeople,
   summaries: { enabled: false },
 });
-const resolved: ResolvedTeamReportsConfig = {
-  github: { ...config.github, token: "synthetic-fixture", ignoreCommentPatterns: [] },
-  discord: {
-    ...config.discord!,
-    token: "synthetic-fixture",
-    apiBaseUrl: "https://discord.com/api/v10",
-  },
-  people: fixturePeople,
-};
+const resolved = await resolveTeamReportsConfig(config, {});
 const periods = [describePeriod("day", fixtureDay), describePeriod("month", fixtureDay)];
 const workerMode = process.argv.includes("--worker");
 let runner: TeamReportsRunner | undefined;
@@ -104,10 +92,7 @@ try {
         throw new Error("Benchmark must not invoke a model");
       },
     },
-    runtime: {
-      logger,
-      fetchImpl: createReportRunFixtureFetch(),
-    },
+    runtime: { logger, fetchImpl: createReportRunFixtureFetch() },
     onRoster: () => {},
   };
   const statuses = runner
@@ -123,6 +108,7 @@ try {
     JSON.stringify(statuses),
   );
   const reports = [];
+  const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
   for (const period of periods) {
     const document = await store.getPeriod(period.period, period.key);
     assert.ok(document);
@@ -134,37 +120,23 @@ try {
       period: `${period.period}/${period.key}`,
       github: report.totals.github.total,
       discord: report.totals.discord.messages,
-      reportSha256: createHash("sha256").update(JSON.stringify(report)).digest("hex"),
-      markdownSha256: createHash("sha256")
-        .update(document.markdown.replace(/^Generated: .*$/m, "Generated: <time>."))
-        .digest("hex"),
+      reportSha256: sha256(JSON.stringify(report)),
+      markdownSha256: sha256(document.markdown.replace(/^Generated: .*$/m, "Generated: <time>.")),
     });
   }
-  console.log(
-    JSON.stringify(
-      {
-        fixture: {
-          issues: 2000,
-          commits: 1000,
-          messages: 1500,
-          repos: 93,
-          channels: 12,
-          threads: 692,
-        },
-        measurement: {
-          mode: workerMode ? "worker (startup included)" : "direct",
-          durationMs,
-          peakMainHeapDeltaMiB: (peakHeap - initialHeap) / 1024 ** 2,
-          maxSyncCallbackMs,
-          maxMainThreadTurnMs,
-          callbackCount,
-        },
-        reports,
-      },
-      null,
-      2,
-    ),
-  );
+  const result = {
+    fixture: { issues: 2000, commits: 1000, messages: 1500, repos: 93, channels: 12, threads: 692 },
+    measurement: {
+      mode: workerMode ? "worker (startup included)" : "direct",
+      durationMs,
+      peakMainHeapDeltaMiB: (peakHeap - initialHeap) / 1024 ** 2,
+      maxSyncCallbackMs,
+      maxMainThreadTurnMs,
+      callbackCount,
+    },
+    reports,
+  };
+  console.log(JSON.stringify(result, null, 2));
 } finally {
   monitoring.abort();
   hook.disable();

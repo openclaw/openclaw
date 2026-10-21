@@ -23,13 +23,11 @@ import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   clearPluginDoctorContractRegistryCache();
@@ -127,20 +125,17 @@ it.each(["direct", "automatic", "post-session"] as const)(
       ],
     });
     const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
+    const common = { config, env, inventory };
     const run = () =>
       runner === "automatic"
         ? autoMigrateLegacyPluginDoctorState({ config, env, homedir: () => stateDir })
         : runner === "post-session"
           ? runPostSessionPluginDoctorStateRepairs({
-              config,
-              env,
-              inventory,
+              ...common,
               maintenanceAuthority: { assertCurrent() {} },
             })
           : runPluginDoctorStateMigrationPlans({
-              config,
-              env,
-              inventory,
+              ...common,
               detected: {
                 stateDir,
                 oauthDir: path.join(stateDir, "credentials"),

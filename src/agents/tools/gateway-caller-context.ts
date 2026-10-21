@@ -38,7 +38,11 @@ import {
   captureActiveEmbeddedRunPersonalToolParticipants,
   type EmbeddedRunToolAuthorityBinding,
 } from "../embedded-agent-runner/run-state.js";
-import { captureRequesterOrigin, type RequesterOrigin } from "../requester-origin.js";
+import {
+  captureRequesterOrigin,
+  requesterCreatorProfileId,
+  type RequesterOrigin,
+} from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
@@ -311,9 +315,16 @@ export function resolveGatewayToolOperatorSelection(options?: {
     const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
     selection = Object.freeze({
       operatorAuthority,
-      requesterOrigin: selectedParticipant
-        ? selectedParticipant.requesterOrigin
-        : caller?.requesterOrigin,
+      requesterOrigin: selectedParticipant?.requesterOrigin
+        ? captureRequesterOrigin({
+            requesterOrigin: {
+              ...selectedParticipant.requesterOrigin,
+              delegatedCreatorProfileId: requesterCreatorProfileId(caller?.requesterOrigin) ?? null,
+            },
+          })
+        : selectedParticipant
+          ? undefined
+          : caller?.requesterOrigin,
       assertCurrent: composeSessionSourceAssertion([
         participant?.assertCurrent,
         operatorAuthority?.assertCurrent,

@@ -144,7 +144,19 @@ describe("gateway log sentinels", () => {
     });
   });
 
-  it("detects OpenAI function_call-shaped direct reply transcripts", () => {
+  it.each([
+    [{ action: "send", target: "current", text: "hello" }, true],
+    ['{"action":"send","target":"current","text":"hello"}', true],
+    ['{"action":"send","target":"other-chat"}', false],
+    [null, false],
+    [[], false],
+    ["null", false],
+    ["[]", false],
+    ["42", false],
+    ['"text"', false],
+    [" ", false],
+    ["{", false],
+  ])("classifies function_call message arguments %j", (args, shouldFind) => {
     const findings = scanDirectReplyTranscriptSentinels(
       [
         JSON.stringify({
@@ -154,11 +166,7 @@ describe("gateway log sentinels", () => {
               {
                 type: "function_call",
                 name: "message",
-                arguments: JSON.stringify({
-                  action: "send",
-                  target: "current",
-                  text: "hello",
-                }),
+                arguments: args,
               },
             ],
           },
@@ -167,6 +175,8 @@ describe("gateway log sentinels", () => {
       ].join("\n"),
     );
 
-    expect(findings.map((finding) => finding.kind)).toEqual(["direct-reply-self-message"]);
+    expect(findings.map((finding) => finding.kind)).toEqual(
+      shouldFind ? ["direct-reply-self-message"] : [],
+    );
   });
 });

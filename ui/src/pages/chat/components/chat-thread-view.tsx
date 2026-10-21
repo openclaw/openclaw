@@ -1,4 +1,4 @@
-import { Show, createMemo, onCleanup, onSettled } from "solid-js";
+import { Show, createMemo, onCleanup, onSettled, useContext } from "solid-js";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -31,6 +31,8 @@ import {
   subscribeExpansionState,
 } from "../chat-thread.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
+import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
+import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
@@ -62,6 +64,7 @@ export function ChatThread(input: {
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
 }) {
+  const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   let stopHistory: (() => void)[] = [];
@@ -148,7 +151,7 @@ export function ChatThread(input: {
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
     if (routeLoading()) {
-      return <LoadingState />;
+      return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
@@ -158,7 +161,11 @@ export function ChatThread(input: {
             <ChatHistoryBoundary {...input.props.historyPagination} />
           ) : undefined}
           {showLoadingSkeleton() ? (
-            <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+            mobile() ? (
+              <ChatConversationLoading route={false} />
+            ) : (
+              <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+            )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
             <ChatWelcome {...input.props} onModelSetup={undefined} />
@@ -177,17 +184,20 @@ export function ChatThread(input: {
     return current().session.liveAnnouncementText;
   });
   return (
-    <div class="chat-thread-viewport">
+    <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
       <div
-        ref={(element) => {
-          root = element;
-          releaseViewport = input.bindViewport?.(element);
-          markdownRef(element);
-          prefetchRef(element);
-          stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
-            listen(element, type, historyIntent, { passive: true }),
-          );
-        }}
+        ref={[
+          (element) => {
+            root = element;
+            releaseViewport = input.bindViewport?.(element);
+            markdownRef(element);
+            prefetchRef(element);
+            stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+              listen(element, type, historyIntent, { passive: true }),
+            );
+          },
+          elementRef(input.props.onScrollPortRef),
+        ]}
         class={[
           "chat-thread",
           {

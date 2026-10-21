@@ -8,7 +8,6 @@ import {
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -130,7 +129,23 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             historyMessages: [
               { role: "assistant", content: "The conversation remains available." },
+              { role: "assistant", content: "[Recovery file](notes.txt)" },
             ],
+            methodResponses: {
+              "sessions.files.get": {
+                sessionKey: "agent:main:main",
+                root: "/workspace",
+                file: {
+                  path: "notes.txt",
+                  name: "notes.txt",
+                  kind: "read",
+                  previewKind: "text",
+                  contentEncoding: "utf8",
+                  content: "The file remains available after recovery.",
+                  missing: false,
+                },
+              },
+            },
           });
           if (dirtyConfig) {
             await page.goto(suite.server.baseUrl + "settings/advanced");
@@ -146,7 +161,7 @@ suite.define(() => {
           }
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.fill("Keep this draft while the panel is unavailable.");
-          await openChatSidePanelType(page, "Files");
+          await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
           const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
           await failure.getByText("Panel failed to load", { exact: true }).waitFor();
           expect(failedImports).toBe(1);
@@ -185,7 +200,7 @@ suite.define(() => {
           expect(documents).toBe(1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           if (!dirtyConfig) {
-            await openChatSidePanelType(page, "Files");
+            await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
             await failure.waitFor();
             await page.unroute(sidebarModule);
             await failure.getByRole("button", { name: "Retry", exact: true }).click();

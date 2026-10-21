@@ -617,20 +617,14 @@ async function withBrowserSessionTabNativeIdentities<T>(
     dashboardTargets.length > 0
       ? withDashboardTabAdmission(dashboardTargets, authority, operation)
       : operation();
-  const identities = [
-    ...new Set(
-      records.flatMap((record) =>
-        record?.interactionTargetKind === "native" ? [browserSessionTabNativeIdentity(record)] : [],
-      ),
-    ),
-  ].toSorted();
-  const run = async (index: number): Promise<T> => {
-    const identity = identities[index];
-    return identity === undefined
-      ? await runOperation()
-      : await withBrowserSessionTabNativeActivity(identity, authority, () => run(index + 1));
-  };
-  return await run(0);
+  const nativeKeys = records.flatMap((record) =>
+    record?.interactionTargetKind === "native"
+      ? [`native:${browserSessionTabNativeIdentity(record)}`]
+      : [],
+  );
+  return nativeKeys.length > 0
+    ? await withBrowserSessionTabOperation(nativeKeys, authority, runOperation)
+    : await runOperation();
 }
 
 async function mutateBrowserSessionTabInOperation(

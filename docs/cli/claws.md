@@ -211,6 +211,10 @@ and starts with "What can you do?" after a successful Add.
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
 
+Gateway Add review responses describe schedules as either `{ cron, timezone }`
+or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
+values are `none`, `last-channel`, or `owner`.
+
 Add reuses matching shared dependencies, installs missing requirements,
 creates the agent and its workspace, and assigns its automations. An existing
 agent or workspace is never overwritten. If Add fails, inspect the specific

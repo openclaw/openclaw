@@ -39,8 +39,6 @@ type QaScenarioCommandTerminalResult = Pick<
 
 const QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS = 2_000;
 const QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS = 500;
-let timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
-let timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
 
 export function runQaScenarioCommandLifecycle(
   execution: QaScenarioCommandExecution,
@@ -61,7 +59,7 @@ export function runQaScenarioCommandLifecycle(
     createQaPosixCommandSettlement({
       child,
       settlementFailureMessage: `${commandLabel} settlement failed`,
-      forceKillAfterMs: timeoutKillGraceMs,
+      forceKillAfterMs: QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS,
       ...(isWindows
         ? {
             windowsCleanup: {
@@ -140,7 +138,7 @@ export function runQaScenarioCommandLifecycle(
         execution.onOutput?.("stdout", buffered);
       },
       processGroupId: isWindows ? undefined : child.pid,
-      verifyAfterMs: timeoutForceSettleMs,
+      verifyAfterMs: QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS,
     });
   });
 }
@@ -156,17 +154,4 @@ export function formatQaScenarioCommandOutput(result: QaScenarioCommandResult): 
       : "",
     result.stderr,
   ].join("");
-}
-
-export function resetQaScenarioCommandCleanupTimings() {
-  timeoutKillGraceMs = QA_SCENARIO_COMMAND_TIMEOUT_KILL_GRACE_MS;
-  timeoutForceSettleMs = QA_SCENARIO_COMMAND_TIMEOUT_FORCE_SETTLE_MS;
-}
-
-export function setQaScenarioCommandCleanupTimings(params: {
-  forceSettleMs: number;
-  killGraceMs: number;
-}) {
-  timeoutKillGraceMs = params.killGraceMs;
-  timeoutForceSettleMs = params.forceSettleMs;
 }

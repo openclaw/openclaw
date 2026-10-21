@@ -480,17 +480,23 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        }
         await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
           .toBe("Riley");
-        await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        }
         await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
         const terminal = page.locator("openclaw-terminal-panel");
         await terminal.locator(".tabstrip-tab.is-live").waitFor();
         await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        }
         expect(
           escaped,
           "standalone mock must not attempt Gateway HTTP or external requests",
@@ -608,7 +614,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           body: { error: "Standalone mock has no HTTP fixture for this route." },
         });
         outcomes.missing = missing;
-        await page.screenshot({ path: path.join(artifacts, "board.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "board.png") });
+        }
         expect(escaped).toEqual([]);
         expect(received).toEqual([]);
         expect(connections).toBe(0);
@@ -661,7 +669,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           width: 640,
           policy: expect.stringContaining("worker-src 'self'"),
         });
-        await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        }
         expect(escaped).toEqual([]);
         await writeFile(
           path.join(artifacts, "network.json"),
@@ -900,7 +910,9 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
             expect.objectContaining({ pluginId: "workboard", status: "activated" }),
           ]),
         );
-      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      }
 
       await page.goto(
         controlUiSessionUrl(
@@ -912,7 +924,12 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
       const widget = page.locator('[data-test-id="workboard-board-widget"]');
       await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
       expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, "native-widget.png"),
+          fullPage: true,
+        });
+      }
     } finally {
       await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
       await context.close();

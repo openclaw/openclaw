@@ -18,9 +18,9 @@ import {
   Switch,
   For,
 } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
@@ -481,15 +481,12 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
 
   return (
     <Show when={Boolean(route() && location())} fallback={<LoadingState />}>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true, activityPage: true }}>
-        <section class="content-header">
-          <div>
-            <div class="page-title">{titleForRoute("activity")}</div>
-            <Show when={route()?.mode !== "live"}>
-              <div class="page-sub">{t("subtitles.activity")}</div>
-            </Show>
-          </div>
-        </section>
+      <ShellLayoutBoundary traits={{ activityPage: true }}>
+        <HubPageHeader
+          active="activity"
+          wide
+          docsUrl="https://docs.openclaw.ai/web/control-ui/settings#activity-tab"
+        />
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
         <Show when={route()?.mode !== "run"}>

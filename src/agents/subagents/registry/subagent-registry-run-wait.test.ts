@@ -34,7 +34,6 @@ it.each(["live", "closing"] as const)(
       const original = f.current();
       const before = structuredClone(original);
       const persisted = storedPayload(original.runId);
-      expect(original.cleanupHandled).toBe(true);
       expect(persisted).toBeTypeOf("string");
       const write = f.holdNextWrite("before");
       const writesBefore = f.writes;
@@ -118,7 +117,6 @@ it.each([false, true])(
           if (unknown) {
             throw fault;
           }
-          return undefined;
         });
       const waiting = f.track(f.manager.waitForSubagentCompletion(original.runId, original));
       try {

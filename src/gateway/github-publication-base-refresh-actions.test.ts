@@ -1,6 +1,9 @@
 // Install the existing synthetic GitHub transport before loading publication owners.
 // oxfmt-ignore
-import { publicationCheckpoint as checkpoint } from "./github-publication-actions.test-support.js";
+import {
+  publicationCheckpoint as checkpoint,
+  withPublicationToolTransport,
+} from "./github-publication-actions.test-support.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -280,13 +283,13 @@ it("recovers one guest integration, retains saved data and publishes the resolve
       }
       return result as T;
     };
-    const result = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: f.session.sessionKey },
-      () =>
-        createGitHubPublishTool({ callGateway, sandbox: prepared }).execute("refresh", {
+    const result = await withPublicationToolTransport(callGateway, () =>
+      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: f.session.sessionKey }, () =>
+        createGitHubPublishTool({ sandbox: prepared }).execute("refresh", {
           action: "refresh_base",
           ...args,
         }),
+      ),
     );
     return result.details;
   };

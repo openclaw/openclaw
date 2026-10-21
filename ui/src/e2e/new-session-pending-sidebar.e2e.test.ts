@@ -153,7 +153,13 @@ suite.define(() => {
             expect(await provisional.locator("button, a[href]").count()).toBe(0);
             expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
           }
-          const bars = page.locator(".session-title-placeholder > span");
+          const bars = provisional
+            .locator(".session-title-placeholder > span")
+            .or(
+              page
+                .locator("openclaw-pending-session-create .session-title-placeholder > span")
+                .filter({ visible: true }),
+            );
           expect(await bars.count()).toBe(mode === "chip" ? 2 : 1);
           for (const bar of await bars.all()) {
             const style = await bar.evaluate((element) => {

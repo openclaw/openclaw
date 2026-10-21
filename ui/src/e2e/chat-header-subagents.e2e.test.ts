@@ -1,17 +1,14 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { assert, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
@@ -19,161 +16,6 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it.each([1440, 390])(
-    "opens the Subagents list from header status by pointer and keyboard at %ipx",
-    async (width) => {
-      await suite.withPage(
-        { viewport: { width, height: 900 }, colorScheme: "dark", locale: "en-US" },
-        async ({ page }) => {
-          const now = 1_800_000_000_000;
-          await page.clock.setFixedTime(now);
-          const parent = {
-            key: "agent:main:header-shortcut",
-            sessionId: "header-shortcut",
-            kind: "direct",
-            label: "Review the backend",
-            updatedAt: now,
-            hasActiveSubagentRun: true,
-          } satisfies GatewaySessionRow;
-          const child = {
-            key: "agent:main:subagent:backend-review",
-            sessionId: "backend-review",
-            kind: "direct",
-            classification: "subagent",
-            label: "Backend review",
-            parentSessionKey: parent.key,
-            spawnedBy: parent.key,
-            updatedAt: now,
-            startedAt: now - 18_000,
-            status: "running",
-            hasActiveRun: true,
-            activeRunIds: ["backend-run"],
-          } satisfies GatewaySessionRow;
-          const gateway = await installMockGateway(page, {
-            sessionKey: parent.key,
-            communityInvite: false,
-            sessions: [parent, child],
-            historyMessages: [{ role: "assistant", content: "The backend review is underway." }],
-            sessionTranscripts: {
-              [child.key]: {
-                messages: [{ role: "assistant", content: "Checking request validation." }],
-              },
-            },
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-          const pane = page.locator(".chat-pane-cache__pane--active");
-          const status = pane.locator(".chat-pane__subagents-running");
-          const panel = pane.locator("openclaw-chat-subagents-panel");
-          const message = pane.getByText("The backend review is underway.", { exact: true });
-          await message.waitFor();
-          await status.waitFor();
-          const capture = async (stage: string) => {
-            if (!process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-              return;
-            }
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              pane,
-              [
-                status,
-                ...((await message.isVisible()) ? [message] : []),
-                ...((await panel.isVisible())
-                  ? [panel.getByRole("button", { name: child.label, exact: true })]
-                  : []),
-              ],
-              { animations: "disabled" },
-            );
-            await writeFile(
-              path.join(suite.artifactDir, "header-" + width + "-" + stage + ".png"),
-              frame.png,
-            );
-          };
-          await capture("closed");
-          expect(await panel.isVisible()).toBe(false);
-          await status.click();
-          // The status must lead to the existing list, not just look interactive.
-          await panel
-            .getByRole("button", { name: child.label, exact: true })
-            .waitFor({ timeout: 5_000 });
-          await capture("opened");
-          await panel.getByRole("button", { name: child.label, exact: true }).click();
-          await panel.getByText("Checking request validation.", { exact: true }).waitFor();
-          await status.focus();
-          await page.keyboard.press("Enter");
-          await panel.getByRole("button", { name: child.label, exact: true }).waitFor();
-          const tab = pane.locator(
-            '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
-          );
-          await expect
-            .poll(() => tab.evaluate((node) => node === document.activeElement))
-            .toBe(true);
-          await pane.getByRole("button", { name: "Close Subagents", exact: true }).click();
-          await panel.waitFor({ state: "hidden" });
-          await status.focus();
-          await page.keyboard.press("Space");
-          await panel.getByRole("button", { name: child.label, exact: true }).waitFor();
-          await expect
-            .poll(() => tab.evaluate((node) => node === document.activeElement))
-            .toBe(true);
-          expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        },
-      );
-    },
-  );
-
-  it.each([
-    { key: "agent:main:acp:coder", mixed: false },
-    { key: "agent:main:acp:coder", mixed: true },
-    { key: "agent:main:worker:unknown", mixed: false },
-  ])("keeps unlisted child counts static for $key (mixed: $mixed)", async ({ key, mixed }) => {
-    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const now = Date.now();
-      const parent = {
-        key: "agent:main:unlisted-parent",
-        sessionId: "unlisted-parent",
-        kind: "direct",
-        label: "Review delegated work",
-        updatedAt: now,
-        hasActiveSubagentRun: true,
-      } satisfies GatewaySessionRow;
-      const child = {
-        key,
-        sessionId: "unlisted-child",
-        kind: "direct",
-        label: "External worker",
-        parentSessionKey: parent.key,
-        spawnedBy: parent.key,
-        updatedAt: now,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["external-run"],
-      } satisfies GatewaySessionRow;
-      const listed = {
-        ...child,
-        key: "agent:main:subagent:listed",
-        sessionId: "listed-child",
-        classification: "subagent",
-        label: "Listed worker",
-      } satisfies GatewaySessionRow;
-      await installMockGateway(page, {
-        sessionKey: parent.key,
-        communityInvite: false,
-        sessions: [parent, child, ...(mixed ? [listed] : [])],
-        historyMessages: [{ role: "assistant", content: "Delegated work is underway." }],
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-      const pane = page.locator(".chat-pane-cache__pane--active");
-      await pane.getByText("Delegated work is underway.", { exact: true }).waitFor();
-      const status = pane.locator(".chat-pane__subagents-running");
-      await status.waitFor();
-      expect(await status.textContent()).toContain(mixed ? "2 running" : "1 running");
-      expect(await status.evaluate((node) => node.tagName)).toBe("SPAN");
-      await status.click();
-      expect(await pane.locator("openclaw-chat-subagents-panel").isVisible()).toBe(false);
-    });
-  });
-
   it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
     await suite.withPage(
       {
@@ -256,12 +98,19 @@ suite.define(() => {
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
         expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
-        expect(await activePane.locator(".chat-pane__actions").getByRole("button").count()).toBe(3);
+        const actions = activePane.locator(".chat-pane__actions");
+        expect(
+          await actions
+            .getByRole("button")
+            .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+        ).toEqual(["Session sharing", "Details"]);
+        expect(
+          await activePane
+            .locator(".chat-pane__identity-actions .chat-header-session-menu__trigger")
+            .count(),
+        ).toBe(1);
 
-        const details = activePane.locator(".chat-pane__header-trailing > openclaw-chat-details");
-        const detailsDialog = activePane.getByRole("dialog", { name: "Details", exact: true });
-        await details.getByRole("button", { name: "Details", exact: true }).click();
-        await detailsDialog.waitFor();
+        const detailsDialog = await openChatDetails(activePane);
         await detailsDialog.getByRole("status").filter({ hasText: "Loading…" }).waitFor();
         detailsChunk.resolve();
         await detailsDialog.locator(".chat-details-session").waitFor();
@@ -317,15 +166,14 @@ suite.define(() => {
           session: child,
           ancestorSessions: [runningParent],
         });
-        const runningCount = activePane.locator(".chat-pane__subagents-running");
-        await runningCount.waitFor();
+        const detailsWithAgents = await openChatDetails(activePane);
+        await detailsWithAgents.getByText("Backend review", { exact: true }).waitFor();
+        await closeChatDetails(activePane);
         expect(await panel.isVisible()).toBe(false);
         await selectChatLayoutAction(activePane, "Subagents");
         const panelRow = panel.locator(`[data-session-key="${child.key}"]`);
         await panelRow.getByText("Backend review", { exact: true }).waitFor();
-        expect(await activePane.locator(".chat-pane__subagents-running").textContent()).toContain(
-          "1 running",
-        );
+        expect(await panelRow.textContent()).toContain("Backend review");
         expect(await waitLine.isVisible()).toBe(false);
         const transcriptHeight = () =>
           activePane.locator(".chat-thread").evaluate((element) => element.clientHeight);
@@ -411,6 +259,8 @@ suite.define(() => {
         );
         await activeSubagentsTab.focus();
         await page.keyboard.press("Enter");
+        expect(await activePane.locator(".sidebar-region--expanded-side").isVisible()).toBe(true);
+        await selectChatLayoutAction(activePane, "Restore split");
         await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
         expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
         await mountedPanel?.dispose();

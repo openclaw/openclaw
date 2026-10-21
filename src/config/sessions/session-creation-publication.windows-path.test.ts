@@ -55,8 +55,10 @@ it.each([
     };
     if (runtimePath) {
       const metadata = statSync(databasePath, { bigint: true });
+      // On Windows, path and path.win32 share the method that spyOn replaces.
+      const resolveWindowsPath = path.win32.resolve;
       mockProcessPlatform("win32");
-      vi.spyOn(path, "resolve").mockImplementation(path.win32.resolve);
+      vi.spyOn(path, "resolve").mockImplementation(resolveWindowsPath);
       vi.spyOn(db, "location").mockReturnValue(
         path.win32.toNamespacedPath(openedPath ?? runtimePath),
       );

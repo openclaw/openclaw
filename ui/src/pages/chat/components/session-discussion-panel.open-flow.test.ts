@@ -41,6 +41,7 @@ describe("session discussion panel", () => {
       loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
       openDiscussion,
       canOpen: false,
+      presentation: "desktop",
     });
     await vi.waitFor(async () => {
       expect(emptyStateText(panel)).toContain("Operator write access is required");

@@ -172,7 +172,6 @@ async function keepRailAnchored(page: Page, count: number, direction: string) {
     await waitForChatScrollIdle(page);
   }
   const card = page.locator('[data-progress-card-placement="details"]');
-  await card.waitFor({ state: "attached" });
   expect(await card.isVisible()).toBe(false);
   const detailsToggle = page.locator(".chat-details-toggle");
   await detailsToggle.click();

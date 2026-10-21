@@ -8,9 +8,8 @@ import {
 } from "openclaw/plugin-sdk/native-command-registry";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import {
@@ -113,14 +112,6 @@ async function resolveEventMessage(params: {
       return null;
     }
     throw error;
-  }
-}
-
-function parseSocketEvent(data: RawData): ClickClackEvent | null {
-  try {
-    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
-  } catch {
-    return null;
   }
 }
 
@@ -340,7 +331,7 @@ export async function startClickClackGatewayAccount(
             if (ctx.abortSignal.aborted) {
               return;
             }
-            const event = parseSocketEvent(data);
+            const event = safeParseJson<ClickClackEvent>(rawDataToString(data));
             if (!event) {
               ctx.log?.warn?.(
                 `[${account.accountId}] skipped malformed ClickClack websocket event`,

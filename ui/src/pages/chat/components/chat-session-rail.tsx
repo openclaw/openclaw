@@ -54,6 +54,7 @@ const COMPANION_HINT_KEYS = {
 >;
 
 type ChatSessionRailProps = {
+  presentation?: "desktop" | "mobile";
   sessionKey: string;
   digest: SessionObserverDigest | null;
   running: boolean;
@@ -216,6 +217,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
+            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
+            presentation={props.presentation === "mobile" ? "mobile" : undefined}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -362,6 +365,7 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     }
   },
   properties: {
+    presentation: { default: undefined, attribute: false },
     sessionKey: { default: "", attribute: false },
     digest: { default: null, attribute: false },
     running: { default: false, attribute: false },

@@ -119,10 +119,13 @@ suite.define(() => {
 
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--bottom");
           await captureLayout(page, theme, "bottom");
+          expect(await fill.count()).toBe(0);
+          await right.click();
+          await expect.poll(() => surface.getAttribute("class")).toContain("tp--right");
           await fill.click();
           await expect.poll(() => surface.getAttribute("class")).toContain("tp--main");
           await expect.poll(() => fill.count()).toBe(0);
-          await captureLayout(page, theme, "bottom-fill");
+          await captureLayout(page, theme, "right-to-main");
           await bottom.click();
           const bottomRestored = await surface.getAttribute("class");
           await captureLayout(page, theme, "bottom-restored");
