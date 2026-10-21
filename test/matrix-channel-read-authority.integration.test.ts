@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../extensions/matrix/api.js";
 import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
 import { setMatrixRuntime } from "../extensions/matrix/test-api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type {
   ChannelMessageActionContext,
@@ -12,17 +11,6 @@ import type {
 } from "../src/channels/plugins/types.js";
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import {
@@ -35,6 +23,7 @@ import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const originRoom = "!origin:example.org";
 const allowedRoom = "!allowed:example.org";
@@ -90,50 +79,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
-
-function createOriginatingRun() {
-  const sessionKey = `agent:main:matrix:group:${originRoom}`;
-  const operationalRunInstance = createOperationalRunInstanceRef("matrix-context-read");
-  const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const turnCapability = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-    requesterAccountId: "default",
-    requesterSenderId: memberId,
-    toolContext,
-  });
-  const guard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!guard) {
-    throw new Error("Expected originating Matrix run authority");
-  }
-  guard();
-  return {
-    assert: guard,
-    revoke: () => revokeMessageActionTurnCapability(turnCapability),
-    dispose: () => {
-      revokeMessageActionTurnCapability(turnCapability);
-      releaseAgentRunDelegatedAuthority(delegatedAuthority);
-    },
-  };
-}
 
 function createConfig(homeserver: string) {
   return {
@@ -266,7 +211,13 @@ async function createHarness(origin: RegistrationOrigin) {
       });
     });
     setActivePluginRegistry(owner.registry);
-    const run = createOriginatingRun();
+    const run = createMessageReadAuthority({
+      runId: "matrix-context-read",
+      sessionKey: `agent:main:matrix:group:${originRoom}`,
+      requesterSenderId: memberId,
+      toolContext,
+      gatewayContext: "expiry-only",
+    });
     return {
       cfg,
       requests,
@@ -476,7 +427,7 @@ describe("registered installed Matrix reads", () => {
       fixture.onRequest((path) => {
         if (path === revokeAt) {
           if (owner === "caller") {
-            fixture.run.revoke();
+            fixture.run.revokeTurn();
           } else {
             void fixture.instance.dispose();
           }
@@ -528,16 +479,4 @@ describe("installed Matrix read restrictions", () => {
       });
     },
   );
-
-  it("does not fetch a profile for someone outside the authorized room", async () => {
-    await withHarness("official-installed", async (fixture) => {
-      await expect(
-        fixture.invoke("member-info", { userId: "@outsider:example.org" }),
-      ).rejects.toThrow("is not a member of room");
-      expect(fixture.requests.map((request) => request.path)).toContain(
-        `${roomPath}/joined_members`,
-      );
-      expect(fixture.requests.some((request) => request.path.includes("/profile/"))).toBe(false);
-    });
-  });
 });

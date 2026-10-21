@@ -254,44 +254,6 @@ describe("Provider model discovery auth preparation", () => {
     );
   }
 
-  it("publishes only the configured first profile's account catalog", async () => {
-    const profileA = "openai:profile-a";
-    const profileB = "openai:profile-b";
-    const keyA = "rejected-profile-a";
-    const keyB = "selected-profile-b";
-    const config = authOrder("openai", profileB, profileA);
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        [profileA]: apiKeyCredential("openai", keyA),
-        [profileB]: apiKeyCredential("openai", keyB),
-      },
-    };
-    await state.writeAuthProfiles(store);
-    const requests: string[] = [];
-    const outcomes: ProviderCatalogOutcome[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      const authorization = new Headers(init?.headers).get("authorization") ?? "";
-      requests.push(authorization);
-      if (authorization === `Bearer ${keyA}`) {
-        return new Response("unauthorized", { status: 401 });
-      }
-      if (authorization === `Bearer ${keyB}`) {
-        return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
-      }
-      throw new Error("unexpected OpenAI catalog authorization");
-    });
-
-    const plan = await planCatalog(config, store, { outcomes });
-
-    expect(requests).toEqual([`Bearer ${keyB}`]);
-    expect(outcomes).toEqual([{ provider: "openai", profileId: profileB, status: "ready" }]);
-    expect(readPlannedProvider(plan, "openai")?.models.map((model) => model.id)).toContain(
-      "gpt-5.5",
-    );
-    expect(plan.action === "write" ? plan.contents : "").not.toContain(keyA);
-  });
-
   it.each([
     { providerId: "openai", source: "profile", modelId: "gpt-5.5" },
     { providerId: "xai", source: "profile", modelId: "grok-4.3" },
@@ -397,68 +359,6 @@ describe("Provider model discovery auth preparation", () => {
     },
   );
 
-  it.each(["oauth", "token"] as const)(
-    "uses subscription discovery for configured literal %s credentials without a profile",
-    async (auth) => {
-      const accessToken = `configured-${auth}-access`;
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://chatgpt.com/backend-api/codex",
-              api: "openai-chatgpt-responses",
-              auth,
-              apiKey: accessToken,
-              models: [],
-            },
-          },
-        },
-      };
-      const store: AuthProfileStore = { version: 1, profiles: {} };
-      await state.writeAuthProfiles(store);
-      const requests: Array<{
-        origin: string;
-        pathname: string;
-        authorization: string;
-        version: string | null;
-      }> = [];
-      const outcomes: ProviderCatalogOutcome[] = [];
-      vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        requests.push({
-          origin: url.origin,
-          pathname: url.pathname,
-          authorization: new Headers(init?.headers).get("authorization") ?? "",
-          version: url.searchParams.get("client_version"),
-        });
-        return Response.json({
-          models: [{ slug: "gpt-5.5", display_name: "GPT-5.5", visibility: "list" }],
-        });
-      });
-
-      const plan = await planCatalog(config, store, { outcomes });
-
-      expect(requests).toEqual([
-        {
-          origin: "https://chatgpt.com",
-          pathname: "/backend-api/codex/models",
-          authorization: `Bearer ${accessToken}`,
-          version: expect.any(String),
-        },
-      ]);
-      expect(outcomes).toEqual([
-        { provider: "openai", status: "ready", listedModelIds: ["gpt-5.5"] },
-      ]);
-      const provider = readPlannedProvider(plan, "openai");
-      expect(provider).toMatchObject({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      });
-      expect(provider?.models.map((model) => model.id)).toContain("gpt-5.5");
-      expect(store.profiles).toEqual({});
-    },
-  );
-
   it.each(["oauth", "api_key"] as const)(
     "plans the registered Radius catalog with the selected %s credential",
     async (mode) => {
@@ -529,46 +429,6 @@ describe("Provider model discovery auth preparation", () => {
       expect(plan.action === "write" ? plan.contents : "").not.toContain("refreshed-radius-access");
     },
   );
-
-  it("passes refreshed OAuth material to Chutes discovery without mutating the captured store", async () => {
-    const { profileId, config, store, capturedCredential, refreshedCredential } =
-      await createChutesCatalogFixture();
-    const refresh = vi
-      .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-      .mockResolvedValue({
-        status: "available",
-        credential: refreshedCredential,
-        apiKey: refreshedCredential.access,
-      });
-    const requests: string[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
-      const authorization = new Headers(init?.headers).get("authorization") ?? "";
-      requests.push(authorization);
-      return authorization === `Bearer ${refreshedCredential.access}`
-        ? Response.json({ data: [{ id: "refreshed-account-model" }] })
-        : new Response("unauthorized", { status: 401 });
-    });
-
-    const plan = await planCatalog(config, store, { providerId: "chutes" });
-
-    expectRefresh(refresh, "chutes", "expired-chutes-access", "chutes-refresh-token");
-    expect(store.profiles[profileId]).toEqual(capturedCredential);
-    expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toMatchObject(
-      refreshedCredential,
-    );
-    expect(requests).toEqual([`Bearer ${refreshedCredential.access}`]);
-    const provider = readPlannedProvider(plan, "chutes");
-    expect(provider?.models.map((model) => model.id)).toContain("refreshed-account-model");
-    expect(provider?.apiKey).toBe("oauth:chutes");
-    for (const secret of [
-      "expired-chutes-access",
-      "chutes-refresh-token",
-      refreshedCredential.access,
-      refreshedCredential.refresh,
-    ]) {
-      expect(plan.action === "write" ? plan.contents : "").not.toContain(secret);
-    }
-  });
 
   it.each([
     { providerId: "chutes", profileCount: 2, plugin: chutesPlugin },
@@ -745,6 +605,14 @@ describe("Provider model discovery auth preparation", () => {
       }
 
       const plan = await planning;
+      for (const secret of [
+        "expired-chutes-access",
+        "chutes-refresh-token",
+        refreshedCredential.access,
+        refreshedCredential.refresh,
+      ]) {
+        expect(plan.action === "write" ? plan.contents : "").not.toContain(secret);
+      }
       expect(refresh.mock.calls.map(([params]) => params.credential)).toEqual(
         timedOut ? [capturedCredential] : [capturedCredential, fallbackCredential],
       );

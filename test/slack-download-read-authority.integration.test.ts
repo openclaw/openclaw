@@ -7,31 +7,13 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { Agent, EnvHttpProxyAgent, FormData, ProxyAgent } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../extensions/slack/api.js";
-import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
-import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
-import {
-  mintMessageActionTurnCapability,
-  resolveMessageActionTurnCapability,
-  revokeMessageActionTurnCapability,
-} from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  RespondFn,
-} from "../src/gateway/server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "../src/gateway/server-methods/types.js";
 import type { DedupeEntry } from "../src/gateway/server-shared.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  releaseAgentRunDelegatedAuthority,
-  validateAgentRunDelegatedAuthority,
-} from "../src/infra/agent-run-registry.js";
 import { getImageMetadata } from "../src/media/media-services.js";
 import { withServer } from "../src/plugin-sdk/test-helpers/http-test-server.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
@@ -42,6 +24,7 @@ import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js"
 import { observeFsSafeRootMoves } from "./helpers/fs-safe-root.test-support.js";
 import { createSolidPngBuffer } from "./helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
+import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
 const interleaving = vi.hoisted(() => ({
   lookup: undefined as ((hostname: string) => Promise<LookupAddress[]>) | undefined,
@@ -153,89 +136,23 @@ type GatewayMirrorSnapshot = {
 };
 
 function createOriginatingRun(currentProvider: string, currentChannelId: string) {
-  const operationalRunInstance = createOperationalRunInstanceRef(`slack-download-${++sequence}`);
-  const delegated = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const sessionKey = `agent:main:${currentProvider}:channel:${currentChannelId}`;
-  const toolContext = {
-    currentChannelProvider: currentProvider,
-    currentChannelId,
-    currentMessagingTarget: `channel:${currentChannelId}`,
-    currentChatType: "channel" as const,
-    // An ambient thread does not add an explicit file-share requirement.
-    currentThreadTs: "9999999999.999999",
-  };
-  const capability = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-    requesterAccountId: "default",
+  const run = createMessageReadAuthority({
+    runId: `slack-download-${++sequence}`,
+    sessionKey: `agent:main:${currentProvider}:channel:${currentChannelId}`,
     requesterSenderId: "synthetic-requester",
-    toolContext,
-  });
-  const messageActionContext = resolveMessageActionTurnCapability({
-    token: capability,
-    agentId: "main",
-    runId: operationalRunInstance.runId,
-    sessionKey,
-  });
-  if (!messageActionContext) {
-    throw new Error("Missing admitted download turn context");
-  }
-  const client = {
-    internal: {
-      agentRuntimeIdentity: {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        delegatedAuthority: { kind: "local", ...delegated },
-        messageActionContext: { ...messageActionContext, turnCapability: capability },
-      },
+    gatewayContext: "resolved",
+    toolContext: {
+      currentChannelProvider: currentProvider,
+      currentChannelId,
+      currentMessagingTarget: `channel:${currentChannelId}`,
+      currentChatType: "channel",
+      // An ambient thread does not add an explicit file-share requirement.
+      currentThreadTs: "9999999999.999999",
     },
-  } as GatewayClient;
-  const validate = createAgentRuntimeApprovalAuthorityValidator();
-  const assert = createAgentRuntimeAuthorityGuard(
-    client,
-    {
-      validateAgentRuntimeApprovalAuthority: validate,
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!assert) {
-    throw new Error("Missing originating download authority");
-  }
-  assert();
+  });
   return {
-    assert,
-    client,
-    validate,
-    toolContext,
-    options: {
-      agentId: "main",
-      agentAccountId: "default",
-      agentSessionKey: sessionKey,
-      runId: operationalRunInstance.runId,
-      messageActionTurnCapability: capability,
-      ...toolContext,
-    },
-    wrap: (tool: ReturnType<typeof createMessageTool>) =>
-      wrapToolWithGatewayCallerIdentity(tool, {
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
-      }),
-    revoke: (kind: Revocation) => {
-      if (kind === "claim") {
-        releaseAgentRunDelegatedAuthority(delegated);
-      } else {
-        revokeMessageActionTurnCapability(capability);
-      }
-    },
-    dispose: () => {
-      revokeMessageActionTurnCapability(capability);
-      releaseAgentRunDelegatedAuthority(delegated);
-    },
+    ...run,
+    revoke: (kind: Revocation) => (kind === "claim" ? run.releaseClaim() : run.revokeTurn()),
   };
 }
 
