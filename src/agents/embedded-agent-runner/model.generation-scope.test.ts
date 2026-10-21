@@ -27,6 +27,7 @@ import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/
 import { withAuthProfileStoreAgentDir } from "../auth-profiles/store.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
@@ -93,6 +94,24 @@ async function resolveGeneration(
       authProfileId,
     },
   );
+}
+
+function resolveTieredGeneration(generation: ReturnType<typeof generationFixture>) {
+  return resolveTieredModel({
+    provider: generation.provider,
+    modelId: generation.modelId,
+    agentDir: state.agentDir(),
+    config: generation.preparedModelRuntime.config,
+    workspaceDir: state.workspaceDir,
+    preparedModelRuntime: generation.preparedModelRuntime,
+  });
+}
+
+function writeSelectedProfile(provider: string, key = "synthetic-key") {
+  return state.writeAuthProfiles({
+    version: 1,
+    profiles: { [`${provider}:selected`]: { type: "api_key", provider, key } },
+  });
 }
 
 async function createExternalCodexGeneration() {
@@ -179,12 +198,7 @@ describe("model runtime generation scope", () => {
       label: "revoked",
     });
     const profileId = `${generation.provider}:selected`;
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        [profileId]: { type: "api_key", provider: generation.provider, key: "synthetic-key" },
-      },
-    });
+    await writeSelectedProfile(generation.provider);
     expect((await resolveGeneration(generation, profileId)).model?.id).toBe(generation.modelId);
     await state.writeAuthProfiles({ version: 1, profiles: {} });
     generation.resolveDynamicModel.mockClear();
@@ -263,15 +277,14 @@ describe("model runtime generation scope", () => {
         api: "openai-completions",
         baseUrl: "https://stores.example.test/v1",
         models: [
-          {
+          makeProviderModelFixture({
+            provider,
             id: modelId,
             name: label,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            api: "openai-completions",
+            baseUrl: "https://stores.example.test/v1",
             contextWindow: 32_768,
-            maxTokens: 4_096,
-          },
+          }),
         ],
       });
       return { authStorage, modelRegistry };
@@ -343,16 +356,7 @@ describe("model runtime generation scope", () => {
       label: "cold-owned",
     });
     await state.writeConfig({ gateway: { mode: "local" } });
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        [`${generation.provider}:selected`]: {
-          type: "api_key",
-          provider: generation.provider,
-          key: "synthetic-owned-generation-key",
-        },
-      },
-    });
+    await writeSelectedProfile(generation.provider, "synthetic-owned-generation-key");
     const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
     await closeOpenClawStateDatabaseAsync();
     const preparedPaths: Array<string | null> = [];
@@ -394,14 +398,7 @@ describe("model runtime generation scope", () => {
     const before = await fs.readFile(databasePath);
     expect(getRuntimeConfigSnapshot()).toBeNull();
     try {
-      const { resolution } = await resolveTieredModel({
-        provider: generation.provider,
-        modelId: generation.modelId,
-        agentDir: state.agentDir(),
-        config: generation.preparedModelRuntime.config,
-        workspaceDir: state.workspaceDir,
-        preparedModelRuntime: generation.preparedModelRuntime,
-      });
+      const { resolution } = await resolveTieredGeneration(generation);
       expect(resolution.model).toMatchObject({
         provider: generation.provider,
         id: generation.modelId,
@@ -465,14 +462,7 @@ describe("model runtime generation scope", () => {
     vi.spyOn(stores.modelRegistry, "find").mockReturnValue(generation.resolveDynamicModel());
     generation.preparedModelRuntime.createStores = () => stores;
 
-    const { resolution } = await resolveTieredModel({
-      provider: generation.provider,
-      modelId: generation.modelId,
-      agentDir: state.agentDir(),
-      config: generation.preparedModelRuntime.config,
-      workspaceDir: state.workspaceDir,
-      preparedModelRuntime: generation.preparedModelRuntime,
-    });
+    const { resolution } = await resolveTieredGeneration(generation);
 
     expect(resolution.model).toBeUndefined();
     expect(resolution.error).toContain("openclaw doctor --fix");

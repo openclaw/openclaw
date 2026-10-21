@@ -29,7 +29,6 @@ import {
 } from "../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
-import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { getEmbeddedRunAttachment, type EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
   detachActiveEmbeddedRun as retireActiveEmbeddedRun,
@@ -333,47 +332,6 @@ describe("embedded run registry lifecycle generations", () => {
     expect(listActiveSessionRunKeys()).not.toContain(pendingRef.sessionKey);
     expect(resolveActiveEmbeddedRunOwnerByRunId("prior-native-run")).toBeUndefined();
     expect(getDiagnosticSessionState(pendingRef)).toMatchObject({ state: "idle", queueDepth: 1 });
-  });
-
-  it("publishes backend completion authority and replaces two-argument claims", async () => {
-    const handle = createRunHandle({ runId: "claim-run" });
-    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
-    let settled = false;
-    void prepared.registered.then(() => {
-      settled = true;
-    });
-
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        embeddedRunToolAuthorityBinding: () => ({
-          source: "reply",
-          acceptsRequesterOrigin: () => false,
-          project: () => "authority",
-          projectAsync: async () => "authority",
-          assertRegistrationActive: () => {},
-          assertActive: () => {},
-        }),
-      },
-      () => setActiveEmbeddedRun("claim-session", handle, "agent:main:main"),
-    );
-
-    await expect(prepared.registered).resolves.toEqual({
-      toolAuthority: expect.objectContaining({ source: "reply" }),
-    });
-    clearActiveEmbeddedRun("claim-session", handle, "agent:main:main");
-    const replacement = prepareEmbeddedAgentRunCompletionClaim("claim-session", "next-run");
-    expect(prepared.claimCompletion()).toBe(false);
-    const nextHandle = createRunHandle({ runId: "next-run" });
-    setActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
-    clearActiveEmbeddedRun("claim-session", nextHandle, "agent:main:main");
-    await expect(replacement.registered).resolves.toBeUndefined();
-    expect(replacement.claimCompletion()).toBe(true);
-    expect(replacement.claimCompletion()).toBe(false);
   });
 
   it.each(["completed", "unbound", "unpublished"] as const)(
