@@ -1,6 +1,11 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { selectAgentFileWorkspace } from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -283,6 +288,70 @@ suite.define(() => {
             },
           },
         },
+      },
+    );
+  });
+
+  it("requires explicit recovery before saving a draft to a replacement workspace", async () => {
+    const draft = "Draft from workspace A";
+    await withFilePage(
+      "Shared starter instructions",
+      async ({ page, gateway, editor, refresh, save }) => {
+        await expect.poll(() => editor.inputValue()).toBe("Shared starter instructions");
+        await editor.fill(draft);
+        const replacement = {
+          ...fileGet("main", "Shared starter instructions"),
+          workspace: "/tmp/openclaw-e2e/workspace-b",
+          file: {
+            ...fileGet("main", "Shared starter instructions").file,
+            path: "/tmp/openclaw-e2e/workspace-b/AGENTS.md",
+          },
+        };
+        await gateway.setMethodResponse("agents.files.list", {
+          ...replacement,
+          files: [replacement.file],
+        });
+        await gateway.setMethodResponse("agents.files.get", replacement);
+        await gateway.setMethodResponse("agents.files.set", {
+          cases: [
+            {
+              match: { expectedWorkspace: fileList("main").workspace },
+              response: {
+                __mockError: {
+                  code: "INVALID_REQUEST",
+                  message:
+                    'Agent workspace changed since "AGENTS.md" was read. Reload to use the current workspace file, or Overwrite to save this draft there.',
+                  details: { type: "agent_file_conflict", name: "AGENTS.md" },
+                },
+              },
+            },
+            {
+              response: { ok: true, ...replacement, file: { ...replacement.file, content: draft } },
+            },
+          ],
+        });
+        await refresh.click();
+        await page.locator(".agent-file-sub").filter({ hasText: "workspace-b" }).waitFor();
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        await save.click();
+        const conflict = page.locator(".callout.danger");
+        await expect
+          .poll(async () => (await conflict.count()) > 0 || (await save.isDisabled()))
+          .toBe(true);
+        const frame = await takeControlUiScreenshotFrame(page, editor, [editor], {
+          animations: "disabled",
+        });
+        writeFileSync(path.join(suite.artifactDir, "workspace-change.png"), frame.png);
+        await conflict.filter({ hasText: "workspace changed" }).waitFor();
+        expect(await editor.inputValue()).toBe(draft);
+        await conflict.getByRole("button", { name: "Overwrite", exact: true }).click();
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        expect(await conflict.count()).toBe(0);
+        const writes = await gateway.getRequests("agents.files.set");
+        expect(writes.map((request) => request.params)).toMatchObject([
+          { expectedWorkspace: fileList("main").workspace, content: draft },
+          { expectedWorkspace: replacement.workspace, content: draft },
+        ]);
       },
     );
   });
