@@ -79,22 +79,12 @@ export type BeamTestSession = {
 };
 
 export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
-  return {
-    plugins: {
-      entries: {
-        beam: {
-          enabled: true,
-          config: {
-            mirror: {
-              endpoint: "https://team.example/api/v1/beam/sessions",
-              catalogs: ["claude", "codex", "beam"],
-              ...overrides,
-            },
-          },
-        },
-      },
-    },
+  const mirror = {
+    endpoint: "https://team.example/api/v1/beam/sessions",
+    catalogs: ["claude", "codex", "beam"],
+    ...overrides,
   };
+  return { plugins: { entries: { beam: { enabled: true, config: { mirror } } } } };
 }
 
 export function createBeamTestRuntime(config: unknown): PluginRuntime {

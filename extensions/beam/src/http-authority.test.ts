@@ -1,7 +1,7 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamRequestHandler } from "./http.js";
 import type { BeamStoredSession } from "./types.js";
@@ -22,6 +22,11 @@ function uploadRequest(store: ReturnType<typeof memoryStore>) {
   req.push(JSON.stringify(sampleUpload()));
   req.push(null);
   const res = new ServerResponse(req);
+  onTestFinished(() => {
+    req.destroy();
+    res.destroy();
+  });
+  requestScope.revalidate.mockReset().mockResolvedValue(undefined);
   const handler = createBeamRequestHandler({
     store,
     now: () => 100,
@@ -34,19 +39,13 @@ describe("Beam publisher authority continuation", () => {
   it("commits an upload while its request owner remains current", async () => {
     const store = memoryStore();
     const request = uploadRequest(store);
-    requestScope.revalidate.mockReset().mockResolvedValue(undefined);
-    try {
-      expect(await request.run()).toBe(true);
-      expect(request.res.statusCode).toBe(200);
-      expect(await store.get(sampleUpload().beamId)).toEqual({
-        ...sampleUpload(),
-        createdAt: 100,
-        receivedAt: 100,
-      });
-    } finally {
-      request.req.destroy();
-      request.res.destroy();
-    }
+    expect(await request.run()).toBe(true);
+    expect(request.res.statusCode).toBe(200);
+    expect(await store.get(sampleUpload().beamId)).toEqual({
+      ...sampleUpload(),
+      createdAt: 100,
+      receivedAt: 100,
+    });
   });
 
   it.each(["observation", "conflict"] as const)(
@@ -115,8 +114,6 @@ describe("Beam publisher authority continuation", () => {
       } finally {
         resume.resolve();
         await outcome;
-        request.req.destroy();
-        request.res.destroy();
       }
     },
   );
