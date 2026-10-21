@@ -18,13 +18,12 @@ import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DebugOverlayElement } from "../debug/debug-overlay-state.ts";
 import { ConnectionPage } from "./connection-page.tsx";
 import "../debug/debug-overlay.ts";
-const mounts: Array<() => void> = [];
 const contains = (value: string) => expect.stringContaining(value);
 const excludes = (value: string) => expect.not.stringContaining(value);
 
@@ -40,7 +39,6 @@ const gatewayActivity = {
     delayP99Ms: 12,
     delayMaxMs: 87,
     degraded: false,
-    degradedSinceMs: null,
     reasons: [],
     intervalMs: 1_000,
   },
@@ -95,9 +93,9 @@ function input(page: HTMLElement, label: string) {
 
 function source(
   client: GatewayBrowserClient = makeClient(),
-  pingRequest: (...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown> = vi
-    .fn()
-    .mockResolvedValue(null),
+  pingRequest: (
+    ...args: Parameters<GatewayBrowserClient["request"]>
+  ) => Promise<unknown> = async () => null,
 ) {
   const request = client.request.bind(client);
   client.request = ((method, ...args) =>
@@ -133,7 +131,6 @@ async function mount(
     view.unmount();
     provider.remove();
   };
-  mounts.push(unmount);
   await waitForPage(() =>
     expect(provider.querySelector("openclaw-connection-page")).not.toBeNull(),
   );
@@ -207,7 +204,7 @@ function control(page: HTMLElement, selector: string) {
 }
 
 afterEach(async () => {
-  mounts.splice(0).forEach((dispose) => dispose());
+  cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
   flush();
@@ -416,9 +413,10 @@ it.each(["reconnect", "source", "client"] as const)(
       })
       .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(fresh.promise);
-    const { page, check, client, context, setContext, ...first } = await setup(systemInfoRequest, {
-      ping: pingRequest,
-    });
+    const { page, check, client, context, setContext, ...first } = await setup(
+      systemInfoRequest,
+      pingRequest,
+    );
     await check({ average: "20.0 ms" });
     await check({ activity: contains("432 MB") });
     await vi.advanceTimersByTimeAsync(10_000);
@@ -565,23 +563,20 @@ it.each([
     expect(page.querySelector('[role="radiogroup"]')).toBeNull();
     control(page, ".connection-details button").click();
     expect(connect).toHaveBeenLastCalledWith();
-    if (change === "url") {
-      editInput(page, "Gateway URL", "wss://other-gateway.example/openclaw");
-      await waitForPage(() => expect(secret().value).toBe(""));
-    } else {
-      editInput(page, "Gateway secret", "");
-      await waitForPage(() => expect(secret().value).toBe(""));
+    const changedUrl = change === "url";
+    const gatewayUrl = "wss://gateway.example/openclaw";
+    const otherUrl = "wss://other-gateway.example/openclaw";
+    editInput(page, changedUrl ? "Gateway URL" : "Gateway secret", changedUrl ? otherUrl : "");
+    await waitForPage(() => expect(secret().value).toBe(""));
+    if (!changedUrl) {
       editInput(page, "Gateway secret", "edited-secret");
       flush();
     }
     control(page, "button.btn.primary").click();
     expect(connect).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        gatewayUrl:
-          change === "url"
-            ? "wss://other-gateway.example/openclaw"
-            : "wss://gateway.example/openclaw",
-        token: change === "url" ? "" : "edited-secret",
+        gatewayUrl: changedUrl ? otherUrl : gatewayUrl,
+        token: changedUrl ? "" : "edited-secret",
         password: "",
       }),
     );
