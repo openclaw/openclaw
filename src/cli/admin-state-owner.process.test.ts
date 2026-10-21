@@ -81,6 +81,12 @@ const operations = [
     args: ["pairing", "approve", channel, "ABCDEFGH"],
   },
   {
+    kind: "pairing-dismiss",
+    method: "channels.pairing.dismiss",
+    capability: GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_DISMISS_OWNER,
+    args: ["pairing", "dismiss", channel, "ABCDEFGH"],
+  },
+  {
     kind: "approvals-get",
     method: "exec.approvals.get",
     capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
@@ -310,9 +316,13 @@ describe("administrative CLI state owner routing", () => {
     operations.flatMap((operation) => {
       const scenarios: Scenario[] = ["live", "offline", "missing-capability"];
       if (
-        ["pairing-list", "pairing-approve", "approvals-set", "native-commit"].includes(
-          operation.kind,
-        )
+        [
+          "pairing-list",
+          "pairing-approve",
+          "pairing-dismiss",
+          "approvals-set",
+          "native-commit",
+        ].includes(operation.kind)
       ) {
         scenarios.push("refused", "lost-reply");
       }
@@ -397,6 +407,10 @@ describe("administrative CLI state owner routing", () => {
       }
       if (succeeded && operation.kind === "pairing-approve") {
         expect(result.stdout).toContain(`Approved ${channel} sender sender.`);
+      }
+      if (succeeded && operation.kind === "pairing-dismiss") {
+        expect(result.stdout).toContain(`Dismissed ${channel} sender sender.`);
+        expect(result.stdout).not.toContain("Approved");
       }
     } else if (operation.kind === "native-commit") {
       const allowlist = readExecApprovalsSnapshot().file.agents?.["*"]?.allowlist;

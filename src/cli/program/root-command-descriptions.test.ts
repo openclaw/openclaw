@@ -186,6 +186,7 @@ const JSON_NOT_APPLICABLE = {
       "dns setup",
       "proxy purge",
       "pairing approve",
+      "pairing dismiss",
       "plugins enable",
       "plugins disable",
       "plugins uninstall",

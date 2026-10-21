@@ -23,6 +23,7 @@ import {
 } from "./pairing-store-sqlite.test-helpers.js";
 import {
   approveChannelPairingCode,
+  dismissChannelPairingCode,
   dismissChannelPairingRequest,
   listChannelPairingRequests,
   readChannelAllowFromStoreSync,
@@ -221,6 +222,24 @@ it("keeps allowFrom and pending requests isolated by account", async () => {
     changed: true,
     allowFrom: ["shared"],
   });
+});
+
+it("dismisses one pending code and leaves the sender unapproved", async () => {
+  const env = pairingEnv;
+  const kept = await upsert("kept", "alpha");
+  const dropped = await upsert("dropped", "alpha");
+  expect(dropped.code).not.toBe(kept.code);
+
+  await expect(
+    dismissChannelPairingCode({ channel: "telegram", code: dropped.code.toLowerCase(), env }),
+  ).resolves.toMatchObject({ id: "dropped" });
+  await expect(
+    dismissChannelPairingCode({ channel: "telegram", code: "missing1", env }),
+  ).resolves.toBeNull();
+  await expect(store.allow("alpha")).resolves.toEqual([]);
+  await expect(store.list("alpha")).resolves.toEqual([
+    expect.objectContaining({ id: "kept", code: kept.code }),
+  ]);
 });
 
 it("reads current SQLite entries without a process-local file cache", async () => {

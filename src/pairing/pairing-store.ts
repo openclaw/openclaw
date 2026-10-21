@@ -250,6 +250,14 @@ export async function approveChannelPairingCode(
   return code ? resolveChannelPairingRequest(params, { code }, true) : null;
 }
 
+/** Dismisses a pending request by its pairing code without allowing the sender. */
+export async function dismissChannelPairingCode(
+  params: PairingOptions & { code: string; accountId?: string },
+): Promise<{ id: string; entry: PairingRequest } | null> {
+  const code = (normalizeNullableString(params.code) ?? "").toUpperCase();
+  return code ? resolveChannelPairingRequest(params, { code }, false) : null;
+}
+
 /** Approves a pending request by opaque id without exposing its pairing code. */
 export async function approveChannelPairingRequest(params: {
   channel: PairingChannel;

@@ -71,6 +71,14 @@ Manually allowlisted senders are not automatically command owners. If an
 authorized sender has no owner access, owner-only commands reply with the exact
 `openclaw config set commands.ownerAllowFrom` command for the operator to run.
 
+### Dismiss from the CLI
+
+```bash
+openclaw pairing dismiss telegram <CODE>
+```
+
+This removes that pending request and leaves every other request in place. It does not approve the sender, notify them, or bootstrap a command owner. An unknown code fails and points at `openclaw pairing list`.
+
 ### Set up an owner without DM pairing
 
 Run `openclaw channels add` and complete the channel setup. When no command owner

@@ -95,11 +95,19 @@ export const ChannelsPairingApproveResultSchema = closedObject({
 });
 
 /** Dismisses one pending request without permanently blocking the sender. */
-export const ChannelsPairingDismissParamsSchema = closedObject({
-  channel: NonEmptyString,
-  accountId: NonEmptyString,
-  requestId: NonEmptyString,
-});
+export const ChannelsPairingDismissParamsSchema = Type.Union([
+  closedObject({
+    channel: NonEmptyString,
+    accountId: NonEmptyString,
+    requestId: NonEmptyString,
+  }),
+  closedObject({
+    channel: NonEmptyString,
+    accountId: Type.Optional(CliPairingAccountIdSchema),
+    code: NonEmptyString,
+    expectedOwnerId: NonEmptyString,
+  }),
+]);
 
 export const ChannelsPairingDismissResultSchema = closedObject({
   requestId: NonEmptyString,
@@ -112,6 +120,7 @@ export type ChannelsPairingCliListResult = Static<typeof ChannelsPairingCliListR
 export type ChannelsPairingCodeApproveResult = Static<
   typeof ChannelsPairingCodeApproveResultSchema
 >;
+export type ChannelsPairingCodeDismissResult = ChannelsPairingCodeApproveResult;
 export type ChannelsPairingApproveParams = Static<typeof ChannelsPairingApproveParamsSchema>;
 export type ChannelsPairingApproveResult = Static<typeof ChannelsPairingApproveResultSchema>;
 export type ChannelsPairingDismissParams = Static<typeof ChannelsPairingDismissParamsSchema>;

@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
   approveCode: vi.fn(),
+  dismissCode: vi.fn(),
   captureOwnerGuard: vi.fn(),
   bootstrapOwner: vi.fn(),
   dismiss: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   approveChannelPairingRequest: mocks.approve,
   CHANNEL_PAIRING_PENDING_MAX: 3,
   CHANNEL_PAIRING_PENDING_TTL_MS: 3_600_000,
+  dismissChannelPairingCode: mocks.dismissCode,
   dismissChannelPairingRequest: mocks.dismiss,
   listChannelPairingRequests: mocks.listRequests,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
@@ -123,10 +125,16 @@ beforeEach(() => {
 it.each([
   ["channels.pairing.list", listSelector],
   ["channels.pairing.approve", codeSelector],
+  ["channels.pairing.dismiss", codeSelector],
   ["channels.pairing.list", { ...listSelector, accountId: " ", expectedOwnerId: "owner" }],
   ["channels.pairing.approve", { ...codeSelector, accountId: " ", expectedOwnerId: "owner" }],
+  ["channels.pairing.dismiss", { ...codeSelector, accountId: " ", expectedOwnerId: "owner" }],
   [
     "channels.pairing.approve",
+    { ...codeSelector, requestId: "opaque", accountId: "personal", expectedOwnerId: "owner" },
+  ],
+  [
+    "channels.pairing.dismiss",
     { ...codeSelector, requestId: "opaque", accountId: "personal", expectedOwnerId: "owner" },
   ],
 ] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
@@ -135,11 +143,14 @@ it.each([
   expect(mocks.listRequests).not.toHaveBeenCalled();
   expect(mocks.approveCode).not.toHaveBeenCalled();
   expect(mocks.approve).not.toHaveBeenCalled();
+  expect(mocks.dismissCode).not.toHaveBeenCalled();
+  expect(mocks.dismiss).not.toHaveBeenCalled();
 });
 
 it.each([
   ["channels.pairing.list", { ...listSelector, expectedOwnerId: "owner" }],
   ["channels.pairing.approve", { ...codeSelector, expectedOwnerId: "owner" }],
+  ["channels.pairing.dismiss", { ...codeSelector, expectedOwnerId: "owner" }],
 ] as const)("requires current admin owner authority for %s", async (method, params) => {
   const denied = await invoke(method, params, ["operator.pairing"]);
   expectError(denied, { code: "FORBIDDEN", details: { mutationAccepted: false } });
@@ -152,6 +163,7 @@ it.each([
   expectError(replaced, { details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" } });
   expect(mocks.listRequests).not.toHaveBeenCalled();
   expect(mocks.approveCode).not.toHaveBeenCalled();
+  expect(mocks.dismissCode).not.toHaveBeenCalled();
 });
 
 it.each(["sync", "async"] as const)(
@@ -254,6 +266,24 @@ it.each(["notification", "command-owner"])(
     });
   },
 );
+
+it("dismisses a CLI code without approving the sender", async () => {
+  mocks.dismissCode.mockResolvedValue(approved());
+  const respond = await invoke(
+    "channels.pairing.dismiss",
+    { ...codeSelector, expectedOwnerId: "owner" },
+    ["operator.admin"],
+  );
+  expect(mocks.dismissCode).toHaveBeenCalledWith({
+    channel: "whatsapp",
+    code: "SECRET12",
+    accountId: undefined,
+    assertCurrent: expect.any(Function),
+  });
+  expect(mocks.approveCode).not.toHaveBeenCalled();
+  expect(mocks.approve).not.toHaveBeenCalled();
+  expectSuccess(respond, approved());
+});
 
 it("dismisses a request without approving the sender", async () => {
   mocks.dismiss.mockResolvedValue(approved());

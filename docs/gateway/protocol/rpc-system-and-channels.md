@@ -82,6 +82,7 @@ negotiating the corresponding
 | -------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `channels.pairing.list`    | `format: "cli"`, `channel`, `expectedOwnerId`; optional `accountId` | Raw request array containing `id`, `code`, `createdAt`, `lastSeenAt`, and optional `meta`.          |
 | `channels.pairing.approve` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw approved request, or `null` when no pending code matches. |
+| `channels.pairing.dismiss` | `channel`, `code`, `expectedOwnerId`; optional `accountId`          | `{ id, entry }`, where `entry` is the raw dismissed request, or `null` when no pending code matches. Dismissal does not allow the sender. |
 
 The code selector and existing request-ID selector are mutually exclusive.
 Omitting `accountId` in the CLI branch preserves cross-account listing and code

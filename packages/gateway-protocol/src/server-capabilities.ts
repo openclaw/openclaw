@@ -10,6 +10,7 @@ export const GATEWAY_SERVER_CAPS = {
   MODELS_AUTH_LOGIN_OWNER: "models-auth-login-owner-v1",
   CHANNELS_PAIRING_LIST_OWNER: "channels-pairing-list-owner-v1",
   CHANNELS_PAIRING_APPROVE_OWNER: "channels-pairing-approve-owner-v1",
+  CHANNELS_PAIRING_DISMISS_OWNER: "channels-pairing-dismiss-owner-v1",
   EXEC_APPROVALS_GET_OWNER: "exec-approvals-get-owner-v1",
   EXEC_APPROVALS_SET_OWNER: "exec-approvals-set-owner-v1",
   EXEC_APPROVALS_NATIVE_COMMIT: "exec-approvals-native-commit-v1",

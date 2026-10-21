@@ -29,6 +29,7 @@ import {
   approveChannelPairingRequest,
   CHANNEL_PAIRING_PENDING_MAX,
   CHANNEL_PAIRING_PENDING_TTL_MS,
+  dismissChannelPairingCode,
   dismissChannelPairingRequest,
   listChannelPairingRequests,
   resolveChannelPairingRequestId,
@@ -359,7 +360,24 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
   "channels.pairing.dismiss": defineValidatedGatewayHandler(
     "channels.pairing.dismiss",
     validateChannelsPairingDismissParams,
-    async ({ params, respond, context }) => {
+    async (opts) => {
+      const { params, respond, context } = opts;
+      if ("code" in params) {
+        const assertCurrent = capturePairingCliGuard(params.expectedOwnerId, opts);
+        if (!assertCurrent) {
+          return;
+        }
+        await respondUnavailableOnThrow(respond, async () => {
+          const dismissed = await dismissChannelPairingCode({
+            channel: params.channel,
+            code: params.code,
+            accountId: params.accountId,
+            assertCurrent,
+          });
+          respond(true, dismissed, undefined);
+        });
+        return;
+      }
       const account = await resolvePairingAccount({
         ...params,
         cfg: context.getRuntimeConfig(),

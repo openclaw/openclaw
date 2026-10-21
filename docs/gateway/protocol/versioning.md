@@ -95,6 +95,7 @@ requires its own capability:
 | `worktrees retire-snapshot`                                  | `worktrees.retireSnapshot` | `worktrees-retire-snapshot-owner-v1` |
 | `pairing list`                                               | `channels.pairing.list`    | `channels-pairing-list-owner-v1`     |
 | `pairing approve`                                            | `channels.pairing.approve` | `channels-pairing-approve-owner-v1`  |
+| `pairing dismiss`                                            | `channels.pairing.dismiss` | `channels-pairing-dismiss-owner-v1`  |
 | Default `approvals get`                                      | `exec.approvals.get`       | `exec-approvals-get-owner-v1`        |
 | Default `approvals set` and allowlist edits                  | `exec.approvals.set`       | `exec-approvals-set-owner-v1`        |
 
