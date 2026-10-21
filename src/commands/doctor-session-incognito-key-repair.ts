@@ -22,6 +22,7 @@ import {
   DoctorStateMigrationRefusalError,
 } from "../infra/state-migrations.messages.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -31,6 +32,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import {
@@ -50,9 +52,9 @@ export type ReservedIncognitoKeyRepairReport = {
 class ReservedIncognitoSessionKeyRepairError extends DoctorStateMigrationRefusalError {
   readonly code = "RESERVED_INCOGNITO_SESSION_KEYS";
 
-  constructor() {
-    const message =
-      "Reserved-incognito session keys cannot be repaired in PostgreSQL. Re-adopt from a repaired SQLite source: run openclaw doctor --fix on the SQLite installation, then retry adoption.";
+  constructor(
+    message = "Reserved-incognito session keys cannot be repaired in PostgreSQL. Re-adopt from a repaired SQLite source: run openclaw doctor --fix on the SQLite installation, then retry adoption.",
+  ) {
     const endpoints = [{ kind: "owner" as const, id: "reserved-incognito-session-keys" }];
     super([
       createLegacyStateMigrationStepReceipt(
@@ -88,31 +90,29 @@ export async function repairReservedIncognitoSessionKeys(params: {
     (database) => readReservedIncognitoKeyRepairState(database.db),
     { env: params.env },
   );
-  const reservedKeys = new Set(sharedState?.reservedKeys);
   const journalRenames = sharedState?.renames ?? [];
-  let hasPostgresAgent = false;
-  const collectAgentKeys = (
-    keys: Set<string>,
-    read: (database: EngineConnection) => Iterable<string>,
-  ) => {
-    for (const { target, databaseOptions } of targets) {
-      const operation = runDoctorAgentDatabaseOperation({
-        agentId: target.agentId,
-        path: target.sqlitePath,
-        run: () =>
-          withOpenClawAgentDatabaseReadOnly((database) => {
-            hasPostgresAgent ||= isPostgresSqlConnection(database.db);
-            return read(database.db);
-          }, databaseOptions),
-      });
-      if (operation.ok && operation.value.found) {
-        for (const key of operation.value.value) {
-          keys.add(key);
-        }
+  const occupiedKeys = sharedState?.occupiedKeys ?? new Set<string>();
+  let hasPostgresAgent = agentEngineInput() !== undefined;
+  let inspectionFailed = false;
+  for (const { target, databaseOptions } of targets) {
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly((database) => {
+          hasPostgresAgent ||= isPostgresSqlConnection(database.db);
+          return collectOccupiedSessionKeys(database.db);
+        }, databaseOptions),
+    });
+    if (!operation.ok) {
+      inspectionFailed = true;
+    } else if (operation.value.found) {
+      for (const key of operation.value.value) {
+        occupiedKeys.add(key);
       }
     }
-  };
-  collectAgentKeys(reservedKeys, listReservedIncognitoKeys);
+  }
+  const reservedKeys = new Set([...occupiedKeys].filter(isIncognitoSessionKey));
   const pendingKeys = new Set(reservedKeys);
   for (const rename of journalRenames) {
     pendingKeys.add(rename.from);
@@ -121,6 +121,11 @@ export async function repairReservedIncognitoSessionKeys(params: {
   if (pendingKeys.size > 0 && hasPostgresAgent) {
     throw new ReservedIncognitoSessionKeyRepairError();
   }
+  if (pendingKeys.size > 0 && inspectionFailed) {
+    throw new ReservedIncognitoSessionKeyRepairError(
+      "Reserved-incognito session-key repair could not inspect every agent database. Resolve the reported Doctor database warnings, then retry openclaw doctor --fix.",
+    );
+  }
   if (!params.apply) {
     return { found: pendingKeys.size, repaired: 0 };
   }
@@ -128,8 +133,6 @@ export async function repairReservedIncognitoSessionKeys(params: {
     return { found: 0, repaired: 0 };
   }
 
-  const occupiedKeys = sharedState?.occupiedKeys ?? new Set<string>();
-  collectAgentKeys(occupiedKeys, collectOccupiedSessionKeys);
   for (const rename of journalRenames) {
     occupiedKeys.add(rename.to);
   }
@@ -260,19 +263,12 @@ function legacyIncognitoSessionKey(sessionKey: string): string {
 }
 
 export function listReservedIncognitoKeys(database: EngineConnection): string[] {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
-  const keys = new Set<string>();
-  for (const table of ["session_nodes", "session_windows"] as const) {
-    for (const row of executeSqliteQuerySync(database, db.selectFrom(table).select("session_key"))
-      .rows) {
-      keys.add(row.session_key);
-    }
-  }
-  return [...keys].filter(isIncognitoSessionKey).toSorted();
+  return [...collectOccupiedSessionKeys(database)].filter(isIncognitoSessionKey).toSorted();
 }
 
 function collectOccupiedSessionKeys(database: EngineConnection): Set<string> {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
+  const hasSnapshots = tableExists(database, "session_entry_snapshots");
   const keys = new Set<string>();
   const collectColumns = (query: Compilable<Record<string, string | null>>) => {
     for (const row of executeSqliteQuerySync(database, query).rows) {
@@ -292,9 +288,16 @@ function collectOccupiedSessionKeys(database: EngineConnection): Set<string> {
       .select(["session_key", "parent_session_key", "spawned_by", "fork_source_session_key"]),
   );
   collectColumns(db.selectFrom("conversation_deliveries").select("source_session_key"));
+  collectColumns(db.selectFrom("session_members").select("session_key"));
+  if (hasSnapshots) {
+    collectColumns(db.selectFrom("session_entry_snapshots").select("session_key"));
+  }
   for (const row of iterateSqliteQuerySync(
     database,
-    db.selectFrom("session_nodes").select("entry_json").select(sessionEntrySnapshotColumns),
+    db
+      .selectFrom("session_nodes")
+      .select("entry_json")
+      .$if(hasSnapshots, (query) => query.select(sessionEntrySnapshotColumns)),
   )) {
     try {
       const entry: unknown = JSON.parse(row.entry_json);
