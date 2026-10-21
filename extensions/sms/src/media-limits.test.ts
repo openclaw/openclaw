@@ -65,13 +65,13 @@ describe("SMS configured media limits", () => {
     await state.cleanup();
   });
 
-  it.each([
+  it.each<[string, SmsChannelConfig, number?, string?]>([
     ["channel root", capped],
     ["normalized account", { mediaMaxMb: 1, accounts: { Support: capped } }, 1, " SUPPORT "],
     ["default account", { defaultAccount: "support", accounts: { support: capped } }],
     ["inherited root", { ...capped, accounts: { support: { enabled: true } } }, 1, "support"],
     ["agent default", {}, 1 / MB],
-  ] satisfies [string, SmsChannelConfig, number?, string?][])(
+  ])(
     "rejects a local attachment above the %s cap before staging",
     async (_name, sms, agentLimit, accountId) => {
       await expect(prepare(accountFor(sms, agentLimit ?? 1, accountId))).rejects.toThrow(

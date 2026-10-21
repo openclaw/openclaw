@@ -46,7 +46,9 @@ it.skipIf(!connection)("ensures schema and paginates PostgreSQL chronology", ({ 
           );
         }),
       ]);
-      const result = messages.findLast((message) => !("namespace" in message));
+      const result = messages.findLast(
+        (message): message is ChronologyProof | { error: string } => !("namespace" in message),
+      );
       assert(code === 0 && result, `Meeting chronology host exited ${code} without a result`);
       if ("error" in result) {
         throw new Error(result.error);
