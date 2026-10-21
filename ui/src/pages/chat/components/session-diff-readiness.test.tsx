@@ -142,7 +142,9 @@ describe("SessionDiffPanel readiness", () => {
     "defers an inactive owner read without holding its sibling's transition: %s",
     async (outcome) => {
       vi.useFakeTimers();
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       const pending = deferred<SessionsDiffResult>();
       const loader = vi
         .fn<NonNullable<SessionDiffProps["loader"]>>()
