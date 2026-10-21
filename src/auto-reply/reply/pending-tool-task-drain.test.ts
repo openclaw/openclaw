@@ -4,7 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { logVerbose } from "../../globals.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 
-vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
+vi.mock("../../globals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../globals.js")>()),
+  logVerbose: vi.fn(),
+}));
 
 async function flushPromises() {
   await Promise.resolve();
