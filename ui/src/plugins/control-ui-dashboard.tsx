@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Errored, Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { Errored, Loading, Show, createMemo, createSignal, isPending, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { Icon } from "../components/solid/icon.tsx";
@@ -178,12 +178,12 @@ function PluginSessionDashboardContent(
               return failure instanceof Error ? failure.message : String(failure);
             };
             return (
-              <>
+              <Show when={!isPending(() => boardView())}>
                 <p role="alert">{message()}</p>
                 <button type="button" onClick={reset}>
                   {t("common.retry")}
                 </button>
-              </>
+              </Show>
             );
           }}
         >
