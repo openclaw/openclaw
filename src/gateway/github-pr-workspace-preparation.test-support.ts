@@ -301,7 +301,9 @@ export async function fixture(
         ),
       ),
     );
-    expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);
+    if ((args.action ?? "prepare_pr") === "prepare_pr") {
+      expect(Value.Check(SessionGitHubPullRequestPrepareResultSchema, result.details)).toBe(true);
+    }
     return result.details;
   };
   const advanceHead = async (files: Record<string, string>) => {

@@ -271,7 +271,11 @@ it("offers current-PR preparation without privileged actions", () => {
   for (const action of ["ready", "edit"]) {
     check({ action, publishingSessionKey: "another" }, false);
   }
+  expect(tool.description).toContain("omit action to append accepted changes to the original PR");
+  expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");
+  expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
+  expect(tool.description).toContain("do not submit another publication to recover it");
   expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,

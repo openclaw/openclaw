@@ -153,9 +153,14 @@ describe("existing PR preparation through the registered agent action", () => {
           "newer remote PR work\n",
         );
       }
-      await expect(f.invoke({ action: "publish", pullRequestUrl: undefined })).rejects.toThrow(
-        "original branch",
-      );
+      // Publication accepts only the head this preparation integrated.
+      await f.advanceHead({ "newest-pr.txt": "unaccepted remote PR work\n" });
+      await expect(
+        f.invoke({ action: "publish", pullRequestUrl: undefined }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "push_rejected",
+      });
       await expect(f.invoke({ action: "refresh_base", pullRequestUrl: undefined })).rejects.toThrow(
         "prepare_pr",
       );
