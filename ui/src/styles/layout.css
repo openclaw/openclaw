@@ -1985,13 +1985,22 @@ openclaw-settings-save-indicator:empty {
 
 /* A single selected owner's sessions sit directly under the owner picker:
    titles start at the picker's leading edge, so the link inset only offsets
-   the list's negative inline margin and an empty status slot takes no room.
-   Running and draft rows keep their leading indicator. */
+   the list's negative inline margin. Status moves to the trailing edge
+   instead of shifting titles, and an empty status slot takes no room. */
 .sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link
-  > .sidebar-session-indicator:empty {
-  display: none;
+  > .sidebar-session-indicator {
+  order: 1;
+
+  &:empty {
+    display: none;
+  }
+}
+
+/* No section header separates the rows from the owner picker. */
+.sidebar-recent-sessions > .sidebar-recent-sessions__group--inline-owner:first-child {
+  margin-top: calc(4px - var(--sidebar-group-gap));
 }
 
 .shell:not(.shell--mobile-nav)
@@ -1999,6 +2008,25 @@ openclaw-settings-save-indicator:empty {
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link {
   padding-inline-start: 6px;
+}
+
+/* Row actions overlay the link's trailing edge (on hover, or always on the
+   mobile drawer); reserve that space on the link instead of the title so the
+   trailing status slides left of them rather than hiding beneath them. */
+.shell:not(.shell--mobile-nav)
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
+.shell--mobile-nav
+  .sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child) {
+  > .sidebar-recent-session__link {
+    padding-inline-end: var(--session-row-actions-reserve);
+  }
+
+  .sidebar-recent-session__text,
+  .sidebar-recent-session__title-row {
+    padding-right: 0;
+  }
 }
 
 .sidebar-child-session-toggle {
