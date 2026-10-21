@@ -10,6 +10,12 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
+  expectRow,
+  expectRows,
+  readRow,
+  readRows,
+} from "./openclaw-state-db-fixtures.test-support.js";
+import {
   ensureGitHubPublicationSchema,
   ensureGitHubPublicationSessionLifecycleSchema,
   ensureRepositoryGitHubPublicationSchema,
@@ -38,17 +44,17 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function readSnapshot(db: EngineConnection) {
   return {
-    version: db.prepare("PRAGMA user_version").get(),
-    metadata: db.prepare("SELECT * FROM schema_meta").all(),
-    machineState: db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all(),
-    schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
+    version: readRow(db, "PRAGMA user_version"),
+    metadata: readRows(db, "SELECT * FROM schema_meta"),
+    machineState: readRows(db, "SELECT * FROM config_machine_state ORDER BY state_key"),
+    schema: readRows(db, "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
     receipts: Object.fromEntries(
       ["github_publication_requests", ...authorityTables].map(
         (table) =>
           [
             table,
             tableExists(db, table)
-              ? db.prepare(`SELECT rowid, * FROM ${table} ORDER BY request_id`).all()
+              ? readRows(db, `SELECT rowid, * FROM ${table} ORDER BY request_id`)
               : [],
           ] as const,
       ),
@@ -71,19 +77,18 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
   }
   const databasePath = initial.path;
   closeOpenClawStateDatabaseForTest();
-  const legacy = openNodeSqliteDatabase(databasePath);
-  try {
-    addPreCutoverClientCredentialTablesForTest(legacy);
-    if (options.populated !== false) {
-      for (const table of authorityTables) {
-        if (tableHasColumn(legacy, table, "requester_authority_json")) {
-          legacy.exec(`ALTER TABLE ${table} DROP COLUMN requester_authority_json;`);
-        }
+  using legacy = openNodeSqliteDatabase(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
+  if (options.populated !== false) {
+    for (const table of authorityTables) {
+      if (tableHasColumn(legacy, table, "requester_authority_json")) {
+        legacy.exec(`ALTER TABLE ${table} DROP COLUMN requester_authority_json;`);
       }
-      for (const status of ["requested", "published"] as const) {
-        const url = status === "published" ? "https://github.com/example/project/pull/1" : null;
-        legacy
-          .prepare(`INSERT INTO github_publication_requests (
+    }
+    for (const status of ["requested", "published"] as const) {
+      const url = status === "published" ? "https://github.com/example/project/pull/1" : null;
+      legacy
+        .prepare(`INSERT INTO github_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
           worktree_id, repository_fingerprint, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, repository, branch, base_branch,
@@ -91,14 +96,14 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
         ) VALUES (?, ?, 'digest', 'session', 'agent:main:publication', 'main',
           'worktree', 'fingerprint', 'system-configured', 'publisher-profile',
           42, 'publisher', ?, 'example/project', 'changes', 'main', ?, ?, 10, 20)`)
-          .run(`local-${status}`, status, status, "a".repeat(40), url);
-        legacy
-          .prepare(`INSERT INTO github_publication_session_lifecycles
+        .run(`local-${status}`, status, status, "a".repeat(40), url);
+      legacy
+        .prepare(`INSERT INTO github_publication_session_lifecycles
           (publication_kind, request_id, lifecycle_revision)
           VALUES ('shared', ?, 'original-lifecycle')`)
-          .run(`local-${status}`);
-        legacy
-          .prepare(`INSERT INTO github_repository_publication_requests (
+        .run(`local-${status}`);
+      legacy
+        .prepare(`INSERT INTO github_repository_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_lifecycle_revision,
           session_key, agent_id, workspace_id, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, push_repository, repository,
@@ -108,32 +113,29 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
           'agent:main:publication', 'main', 'workspace', 'system-configured', 'publisher-profile',
           42, 'publisher', ?, 'example/project', 'example/project',
           'changes', 'main', ?, ?, ?, ?, 10, 20)`)
-          .run(
-            `repository-${status}`,
-            status,
-            status,
-            "a".repeat(40),
-            url,
-            url ? "pull_request" : null,
-            url ? "observed" : null,
-          );
-      }
-      legacy.exec(`INSERT INTO github_publication_session_lifecycles
-        (publication_kind, request_id, lifecycle_revision) VALUES ('personal', 'personal-history', NULL);`);
+        .run(
+          `repository-${status}`,
+          status,
+          status,
+          "a".repeat(40),
+          url,
+          url ? "pull_request" : null,
+          url ? "observed" : null,
+        );
     }
-    legacy.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
-    if (options.deferred) {
-      legacy.exec(`
+    legacy.exec(`INSERT INTO github_publication_session_lifecycles
+        (publication_kind, request_id, lifecycle_revision) VALUES ('personal', 'personal-history', NULL);`);
+  }
+  legacy.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
+  if (options.deferred) {
+    legacy.exec(`
         PRAGMA user_version = 15;
         UPDATE schema_meta SET schema_version = 15;
         INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
           VALUES ('state.schema.contentVersion', '17', 1);
       `);
-    }
-    return { options: databaseOptions, databasePath, before: readSnapshot(legacy) };
-  } finally {
-    legacy.close();
   }
+  return { options: databaseOptions, databasePath, before: readSnapshot(legacy) };
 }
 
 describe("GitHub publication requester authority schema migration", () => {
@@ -155,11 +157,9 @@ describe("GitHub publication requester authority schema migration", () => {
     fs.writeFileSync(projectionPath, previousOwner, { flag: "wx" });
     try {
       expect(loadOrCreateDeviceIdentity(options).deviceId).toMatch(/^[a-f0-9]{64}$/u);
-      const unchanged = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
+      {
+        using unchanged = openNodeSqliteDatabase(databasePath, { readOnly: true });
         expect(readSnapshot(unchanged)).toEqual(before);
-      } finally {
-        unchanged.close();
       }
       expect(fs.readFileSync(projectionPath, "utf8")).toBe(previousOwner);
       expect(fs.existsSync(resolveGatewayStateOwnerPath(databasePath))).toBe(false);
@@ -169,7 +169,7 @@ describe("GitHub publication requester authority schema migration", () => {
     expect(loadOrCreateDeviceIdentity(options).deviceId).toMatch(/^[a-f0-9]{64}$/u);
     await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const migrated = openOpenClawStateDatabase(options);
-    expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
+    expectRow(migrated.db, "PRAGMA user_version", {
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
     expect(fs.existsSync(projectionPath)).toBe(false);
@@ -194,6 +194,7 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "state-write-indexes-v27", path: databasePath },
         { kind: "github-publication-draft-v28", path: databasePath },
         { kind: "local-client-credentials-v29", path: databasePath },
+        { kind: "automation-policy-fence-v30", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(
@@ -224,20 +225,20 @@ describe("GitHub publication requester authority schema migration", () => {
         ),
       );
       const publishedVersion = deferred ? 15 : OPENCLAW_STATE_SCHEMA_VERSION;
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: publishedVersion });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+      expectRow(db, "PRAGMA user_version", { user_version: publishedVersion });
+      expectRow(db, "SELECT schema_version FROM schema_meta", {
         schema_version: publishedVersion,
       });
       if (deferred) {
-        expect(
-          db
-            .prepare(`SELECT value_json FROM config_machine_state
-              WHERE state_key = 'state.schema.contentVersion'`)
-            .get(),
-        ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
+        expectRow(
+          db,
+          "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+          { value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) },
+          "state.schema.contentVersion",
+        );
       }
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expectRows(db, "PRAGMA foreign_key_check", []);
+      expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
       const after = readSnapshot(db);
       closeOpenClawStateDatabaseForTest();
       expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
@@ -267,12 +268,8 @@ describe("GitHub publication requester authority schema migration", () => {
           warnings: [expect.stringContaining("publication authority migration rollback")],
         });
       }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
+      using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expect(readSnapshot(preserved)).toEqual(before);
     },
   );
 

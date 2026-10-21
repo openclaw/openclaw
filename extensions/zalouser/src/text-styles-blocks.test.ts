@@ -1,140 +1,82 @@
 import { describe, expect, it } from "vitest";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import { TextStyle } from "./zca-constants.js";
+import { TextStyle, type Style } from "./zca-constants.js";
+
+function range(start: number, len: number, st: Style["st"], indentSize?: number) {
+  return { start, len, st, ...(indentSize === undefined ? {} : { indentSize }) };
+}
+
+function expectParsed(input: string, text: string, styles: ReturnType<typeof range>[] = []) {
+  expect(parseZalouserTextStyles(input)).toEqual({ text, styles });
+}
 
 describe("parseZalouserTextStyles blocks", () => {
   it("maps headings, block quotes, and lists into line styles", () => {
-    expect(parseZalouserTextStyles(["# Title", "> quoted", "  - nested"].join("\n"))).toEqual({
-      text: "Title\nquoted\nnested",
-      styles: [
-        { start: 0, len: 5, st: TextStyle.Bold },
-        { start: 0, len: 5, st: TextStyle.Big },
-        { start: 6, len: 6, st: TextStyle.Indent, indentSize: 1 },
-        { start: 13, len: 6, st: TextStyle.UnorderedList },
-      ],
-    });
-    expect(parseZalouserTextStyles("#   title")).toEqual({
-      text: "  title",
-      styles: [
-        { start: 0, len: 7, st: TextStyle.Bold },
-        { start: 0, len: 7, st: TextStyle.Big },
-      ],
-    });
-    expect(parseZalouserTextStyles(">   quoted")).toEqual({
-      text: "  quoted",
-      styles: [{ start: 0, len: 8, st: TextStyle.Indent, indentSize: 1 }],
-    });
+    expectParsed(["# Title", "> quoted", "  - nested"].join("\n"), "Title\nquoted\nnested", [
+      range(0, 5, TextStyle.Bold),
+      range(0, 5, TextStyle.Big),
+      range(6, 6, TextStyle.Indent, 1),
+      range(13, 6, TextStyle.UnorderedList),
+    ]);
+    expectParsed("#   title", "  title", [range(0, 7, TextStyle.Bold), range(0, 7, TextStyle.Big)]);
+    expectParsed(">   quoted", "  quoted", [range(0, 8, TextStyle.Indent, 1)]);
   });
 
   it("preserves optional closing ATX hashes as heading text", () => {
-    expect(parseZalouserTextStyles("# title #")).toEqual({
-      text: "title #",
-      styles: [
-        { start: 0, len: 7, st: TextStyle.Bold },
-        { start: 0, len: 7, st: TextStyle.Big },
-      ],
-    });
-    expect(parseZalouserTextStyles("# ![](/img)")).toEqual({
-      text: "![](/img)",
-      styles: [
-        { start: 0, len: 9, st: TextStyle.Bold },
-        { start: 0, len: 9, st: TextStyle.Big },
-      ],
-    });
-    expect(parseZalouserTextStyles("![](/img)\n---")).toEqual({
-      text: "![](/img)\n---",
-      styles: [],
-    });
+    expectParsed("# title #", "title #", [range(0, 7, TextStyle.Bold), range(0, 7, TextStyle.Big)]);
+    expectParsed("# ![](/img)", "![](/img)", [
+      range(0, 9, TextStyle.Bold),
+      range(0, 9, TextStyle.Big),
+    ]);
+    expectParsed("![](/img)\n---", "![](/img)\n---");
   });
 
   it("keeps container-only nested blockquotes empty", () => {
-    expect(parseZalouserTextStyles("> >")).toEqual({ text: "", styles: [] });
-    expect(parseZalouserTextStyles("- >")).toEqual({
-      text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 1 }],
-    });
-    expect(parseZalouserTextStyles("> -")).toEqual({
-      text: "-",
-      styles: [{ start: 0, len: 1, st: TextStyle.Indent, indentSize: 1 }],
-    });
+    expectParsed("> >", "");
+    expectParsed("- >", "-", [range(0, 1, TextStyle.Indent, 1)]);
+    expectParsed("> -", "-", [range(0, 1, TextStyle.Indent, 1)]);
     expect(parseZalouserTextStyles("> first\n>").text).toBe("first\n");
     expect(parseZalouserTextStyles("> first\n>\n").text).toBe("first\n\n");
   });
 
   it("keeps closed-fence whitespace-only payload lines byte-for-byte", () => {
-    expect(parseZalouserTextStyles("```\n   \n```")).toEqual({
-      text: "\u00A0\u00A0\u00A0",
-      styles: [],
-    });
-    expect(parseZalouserTextStyles("```\ncode\n\n```")).toEqual({
-      text: "code\n",
-      styles: [],
-    });
-    expect(parseZalouserTextStyles("```\ncode\n\n```\n**next**")).toEqual({
-      text: "code\n\nnext",
-      styles: [{ start: 6, len: 4, st: TextStyle.Bold }],
-    });
-    expect(parseZalouserTextStyles("- ```\n  ```")).toEqual({ text: "", styles: [] });
-    expect(parseZalouserTextStyles("> ```\n> ```")).toEqual({ text: "", styles: [] });
+    expectParsed("```\n   \n```", "\u00A0\u00A0\u00A0");
+    expectParsed("```\ncode\n\n```", "code\n");
+    expectParsed("```\ncode\n\n```\n**next**", "code\n\nnext", [range(6, 4, TextStyle.Bold)]);
+    expectParsed("- ```\n  ```", "");
+    expectParsed("> ```\n> ```", "");
     expect(parseZalouserTextStyles("- ```\n    \n  ```").text).not.toContain("```");
   });
 
   it("keeps unclosed fenced text inside its parser-owned containers", () => {
-    expect(parseZalouserTextStyles("- ```\n  code")).toEqual({
-      text: "```\ncode",
-      styles: [{ start: 0, len: 8, st: TextStyle.UnorderedList }],
-    });
-    expect(parseZalouserTextStyles("> ```\n> code")).toEqual({
-      text: "```\ncode",
-      styles: [
-        { start: 0, len: 3, st: TextStyle.Indent, indentSize: 1 },
-        { start: 4, len: 4, st: TextStyle.Indent, indentSize: 1 },
-      ],
-    });
-    expect(parseZalouserTextStyles("```\n> literal")).toEqual({
-      text: "```\n> literal",
-      styles: [],
-    });
-    expect(parseZalouserTextStyles("-\t```\n    code")).toEqual({
-      text: "```\ncode",
-      styles: [{ start: 0, len: 8, st: TextStyle.UnorderedList }],
-    });
+    expectParsed("- ```\n  code", "```\ncode", [range(0, 8, TextStyle.UnorderedList)]);
+    expectParsed("> ```\n> code", "```\ncode", [
+      range(0, 3, TextStyle.Indent, 1),
+      range(4, 4, TextStyle.Indent, 1),
+    ]);
+    expectParsed("```\n> literal", "```\n> literal");
+    expectParsed("-\t```\n    code", "```\ncode", [range(0, 8, TextStyle.UnorderedList)]);
     expect(parseZalouserTextStyles("- ```\n  - literal").text).toBe("```\n- literal");
     expect(parseZalouserTextStyles("   - ```\n     code").text).toBe("```\ncode");
     expect(parseZalouserTextStyles(">   ```\n>   code").text).toBe("  ```\ncode");
     expect(parseZalouserTextStyles(">\t```\n>\tcode").text).toBe("  ```\ncode");
-    expect(parseZalouserTextStyles("- ```")).toEqual({
-      text: "```",
-      styles: [{ start: 0, len: 3, st: TextStyle.UnorderedList }],
-    });
-    expect(parseZalouserTextStyles("```\n")).toEqual({ text: "```\n", styles: [] });
-    expect(parseZalouserTextStyles("> ```")).toEqual({
-      text: "```",
-      styles: [{ start: 0, len: 3, st: TextStyle.Indent, indentSize: 1 }],
-    });
-    expect(parseZalouserTextStyles("- parent\n  - ```")).toEqual({
-      text: "parent\n```",
-      styles: [
-        { start: 0, len: 6, st: TextStyle.UnorderedList },
-        { start: 7, len: 3, st: TextStyle.Indent, indentSize: 1 },
-        { start: 7, len: 3, st: TextStyle.UnorderedList },
-      ],
-    });
-    expect(parseZalouserTextStyles("> ```\n>    ")).toEqual({
-      text: `\`\`\`\n${"\u00A0".repeat(3)}`,
-      styles: [
-        { start: 0, len: 3, st: TextStyle.Indent, indentSize: 1 },
-        { start: 4, len: 3, st: TextStyle.Indent, indentSize: 1 },
-      ],
-    });
-    expect(parseZalouserTextStyles("> ```\n> a\n> b")).toEqual({
-      text: "```\na\nb",
-      styles: [
-        { start: 0, len: 3, st: TextStyle.Indent, indentSize: 1 },
-        { start: 4, len: 1, st: TextStyle.Indent, indentSize: 1 },
-        { start: 6, len: 1, st: TextStyle.Indent, indentSize: 1 },
-      ],
-    });
+    expectParsed("- ```", "```", [range(0, 3, TextStyle.UnorderedList)]);
+    expectParsed("```\n", "```\n");
+    expectParsed("> ```", "```", [range(0, 3, TextStyle.Indent, 1)]);
+    expectParsed("- parent\n  - ```", "parent\n```", [
+      range(0, 6, TextStyle.UnorderedList),
+      range(7, 3, TextStyle.Indent, 1),
+      range(7, 3, TextStyle.UnorderedList),
+    ]);
+    expectParsed("> ```\n>    ", `\`\`\`\n${"\u00A0".repeat(3)}`, [
+      range(0, 3, TextStyle.Indent, 1),
+      range(4, 3, TextStyle.Indent, 1),
+    ]);
+    expectParsed("> ```\n> a\n> b", "```\na\nb", [
+      range(0, 3, TextStyle.Indent, 1),
+      range(4, 1, TextStyle.Indent, 1),
+      range(6, 1, TextStyle.Indent, 1),
+    ]);
     const nestedNbsp = parseZalouserTextStyles("- parent\n  - ```\n    \u00A0");
     expect(
       nestedNbsp.styles

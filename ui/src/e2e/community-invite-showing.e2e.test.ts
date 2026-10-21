@@ -7,7 +7,6 @@ import {
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
   installMockGateway,
-  startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
@@ -16,7 +15,6 @@ import { waitForMobileSidebarDrawerOpen } from "./session-management.test-suppor
 
 const suite = createControlUiE2eSuite({
   name: "Control UI community card E2E",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
 });
 const dismissalKey = "openclaw:control-ui:community-invite:v2";

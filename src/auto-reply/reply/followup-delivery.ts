@@ -24,7 +24,6 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
-  retainSilentFinalPayloads,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -38,6 +37,11 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import {
+  resolveAutomationReplyState,
+  retainAutomationReasoningWithFinal,
+  selectAutomationReplyPayloads,
+} from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -215,17 +219,11 @@ export async function resolveFollowupDeliveryDecision(params: {
     trigger: turn.queued.run.internalEventExecution ? "event" : "user",
     currentInboundEventKind: turn.queued.currentInboundEventKind,
   });
-  const authoredSilence =
-    !terminalRunFailed &&
-    result.meta?.aborted !== true &&
-    !result.meta?.error &&
-    result.didSendDeterministicApprovalPrompt !== true &&
-    !accounting.terminalFailurePayload &&
-    result.meta?.terminalReply?.disposition === "silent";
-  const pendingContinuation =
-    result.meta?.yielded === true ||
-    result.meta?.continuationPending === true ||
-    (result.meta?.pendingToolCalls?.length ?? 0) > 0;
+  const { authoredSilence, pendingContinuation, automationNoChange, reasoningPayloadsEnabled } =
+    resolveAutomationReplyState(execution.outcome, {
+      opts,
+      terminalFailurePayload: accounting.terminalFailurePayload,
+    });
   const directBlockDeliveries = execution.outcome.directBlockDeliveries;
   const sourceReplyDelivery = resolveSourceReplyDelivery(
     result,
@@ -243,15 +241,19 @@ export async function resolveFollowupDeliveryDecision(params: {
         ? "silent"
         : sourceReplyDelivery !== "missing"
           ? sourceReplyDelivery
-          : pendingContinuation
-            ? "pending"
-            : "empty",
+          : automationNoChange
+            ? "silent"
+            : pendingContinuation
+              ? "pending"
+              : "empty",
   );
   const explicitSilence = completion.outcome === "silent";
-  const sourcePayloads = authoredSilence
-    ? retainSilentFinalPayloads(accounting.payloadArray)
-    : accounting.payloadArray;
-  if (explicitSilence && sourcePayloads.length === 0) {
+  const sourcePayloads = selectAutomationReplyPayloads(
+    accounting.payloadArray,
+    automationNoChange,
+    authoredSilence,
+  );
+  if ((explicitSilence || automationNoChange) && sourcePayloads.length === 0) {
     return { kind: "suppress", reason: "silent" };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
@@ -262,7 +264,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     result.meta?.finalAssistantVisibleText ?? "",
   );
   let payloads = preparePayloads(sourcePayloads, {
-    reasoningPayloadsEnabled: opts?.reasoningPayloadsEnabled === true,
+    reasoningPayloadsEnabled,
     commentaryPayloadsEnabled: opts?.commentaryPayloadsEnabled === true,
     sentMediaUrls: result.messagingToolSentMediaUrls,
     sentTargets: result.messagingToolSentTargets,
@@ -377,10 +379,24 @@ export async function resolveFollowupDeliveryDecision(params: {
     preserveUserFacingSessionState: accounting.preserveUserFacingSessionState,
     replyUsageState: accounting.replyUsageState,
   });
+  let sourceUsageFooter: ReplyPayload | undefined;
   if (responseUsageLine) {
-    payloads = appendUsageLine(payloads, responseUsageLine);
+    if (
+      sourcePolicy.sourceReplyDeliveryMode === "message_tool_only" &&
+      hasCompletedSourceReplyDeliveryEvidence(result)
+    ) {
+      sourceUsageFooter = markReplyPayloadForSourceSuppressionDelivery({
+        text: responseUsageLine,
+        isStatusNotice: true,
+      });
+    } else {
+      payloads = appendUsageLine(payloads, responseUsageLine);
+    }
   }
   payloads = renderFailurePayloads(payloads);
+  if (sourceUsageFooter) {
+    payloads = [...payloads, sourceUsageFooter];
+  }
   if (sourcePolicy.sourceReplyDeliveryMode === "message_tool_only") {
     payloads = payloads.filter(
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
@@ -388,6 +404,9 @@ export async function resolveFollowupDeliveryDecision(params: {
     if (payloads.length === 0) {
       return { kind: "suppress", reason: "message-tool-only" };
     }
+  }
+  if (execution.outcome.automation) {
+    payloads = retainAutomationReasoningWithFinal(payloads);
   }
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }

@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -12,6 +13,8 @@ import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
+
+registerChatSessionEnglish();
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<

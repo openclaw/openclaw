@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
+import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createTestSessionCapability,
@@ -750,6 +751,48 @@ describe("sessions page plugin actions", () => {
     await menu.updateComplete;
     expect(page.querySelector("openclaw-session-menu")).toBe(menu);
     expect(menu.pluginActions[0]?.label).toBe("Review Latest");
+  });
+
+  it("keeps the menu mounted and masks stale destinations while a reopened lookup resolves", async () => {
+    type Work = Awaited<ReturnType<typeof sessionMenuWork.fetchSessionMenuWork>>;
+    const earlier = createDeferred<Work>();
+    const current = createDeferred<Work>();
+    const reopened = createDeferred<Work>();
+    const load = vi
+      .spyOn(sessionMenuWork, "fetchSessionMenuWork")
+      .mockReturnValueOnce(earlier.promise)
+      .mockReturnValueOnce(current.promise)
+      .mockReturnValueOnce(reopened.promise);
+    const rows = ["earlier", "current"].map((id) =>
+      sessionRow(id, {
+        worktree: { id, branch: `feature/${id}`, repoRoot: "/synthetic/repo" },
+      }),
+    );
+    const managed = createManagedSessions();
+    const context = createContext(createGateway().gateway, managed.sessions);
+    const page = await createRenderedPage(context, sessionsResult(rows, 1), "all");
+    const menu = await openRowMenu(page, rows[0]!);
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+    expect(await openRowMenu(page, rows[1]!)).toBe(menu);
+
+    earlier.resolve({ pullRequestUrl: "https://example.test/earlier", worktreePath: null });
+    await earlier.promise;
+    await page.updateComplete;
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+
+    current.resolve({ pullRequestUrl: "https://example.test/current", worktreePath: null });
+    await waitForFast(() => expect(menu.work?.pullRequestUrl).toBe("https://example.test/current"));
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.querySelector('[value="open-pr"]')).not.toBeNull();
+
+    expect(await openRowMenu(page, rows[0]!)).toBe(menu);
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+    reopened.resolve({ pullRequestUrl: "https://example.test/reopened", worktreePath: null });
+    await waitForFast(() =>
+      expect(menu.work?.pullRequestUrl).toBe("https://example.test/reopened"),
+    );
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(load).toHaveBeenCalledTimes(3);
   });
 
   it("uses current scoped session state when invoking plugin menu actions", async () => {

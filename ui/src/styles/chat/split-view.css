@@ -806,6 +806,12 @@
   height: 16px;
 }
 
+/* Preserve the button geometry while keeping the disclosure glyph secondary. */
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger .chat-pane__sharing-chevron {
+  opacity: 0.8;
+  transform: scale(0.875);
+}
+
 .chat-pane__sharing-menu--desktop
   .chat-pane__sharing-trigger[data-public="true"]
   .chat-pane__sharing-trigger-state {

@@ -22,7 +22,6 @@ import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
-  assertSetupTarget,
   projectInferenceRoute,
   sameSetupConfiguredRoute,
   sameSetupInferenceRoute,
@@ -201,15 +200,28 @@ export async function applySystemAgentSetup(
     if (!guardModules) {
       return;
     }
-    assertSetupTarget({
-      config,
-      expectedAgentId: guardedExpectedAgentId,
-      expectedAgentDir: guardedExpectedAgentDir,
-      expectedModelRef,
-      resolveAgentDir: guardModules[0].resolveAgentDir,
-      resolveDefaultAgentId: (currentConfig) => resolveSetupTarget(currentConfig).agentId,
-      resolveDefaultModelForAgent: guardModules[1].resolveDefaultModelForAgent,
-    });
+    const agentId = resolveSetupTarget(config).agentId;
+    if (guardedExpectedAgentId && agentId !== guardedExpectedAgentId) {
+      throw new Error(
+        "The default agent changed while AI access was being tested. Try setup again.",
+      );
+    }
+    if (
+      guardedExpectedAgentDir &&
+      guardModules[0].resolveAgentDir(config, agentId) !== guardedExpectedAgentDir
+    ) {
+      throw new Error(
+        "The agent credential location changed while AI access was being tested. Try setup again.",
+      );
+    }
+    if (expectedModelRef) {
+      const current = guardModules[1].resolveDefaultModelForAgent({ cfg: config, agentId });
+      if (`${current.provider}/${current.model}` !== expectedModelRef) {
+        throw new Error(
+          "The default model changed while AI access was being tested. Try setup again.",
+        );
+      }
+    }
   };
   assertExpectedTarget(snapshotConfig.runtimeConfig);
 

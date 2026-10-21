@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
+  assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   readCronCallerScope,
@@ -67,6 +68,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   const callerScope = readCronCallerScope(client);
   // SAFETY: cron.add validates this shape; createJob normalizes its nullable selectors.
   const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
+  const cfg = context.getRuntimeConfig();
   const creator = await prepareCronCreatorSession({
     context,
     client,
@@ -78,6 +80,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   let execPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
   let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
   try {
+    assertCronModelJobAllowed(client, cfg, jobCreate);
     capture = resolveCronCreatorAuthorityCapture(callerScope);
     execPolicy = resolveCronStreamExecPolicy(
       client,
@@ -95,7 +98,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   });
-  const cfg = context.getRuntimeConfig();
   if (
     !cronCreateMatchesCallerScope({
       job: jobCreate,
@@ -132,6 +134,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     assertMutationCurrent?.();
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
+    assertCronModelJobAllowed(client, cfg, jobCreate);
     creatorOptions?.assertOperatorSourceCurrent?.();
     creator.assertCurrent();
     execPolicy?.assertCurrentSource?.();

@@ -28,6 +28,9 @@ function renderTranscriptCard(
   );
 }
 
+// Identify the approved CircleDashed glyph independently of the production icon registry.
+const pendingMarkerSelector = 'path[d="M10.1 2.182a10 10 0 0 1 3.8 0"]';
+
 const runWindow = { startedAt: RUN_STARTED_MS, endedAt: RUN_ENDED_MS };
 
 describe("renderSessionProgressCard", () => {
@@ -130,7 +133,7 @@ describe("renderSessionProgressCard", () => {
         ".session-run-spinner",
         "session-run-spinner",
       ],
-      ["Run focused tests, pending", "pending", "polyline", "<polyline"],
+      ["Run focused tests, pending", "pending", pendingMarkerSelector, "<path"],
     ] as const;
     expected.forEach(([label, status, selector, markup], index) => {
       const step = steps[index]!;
@@ -146,7 +149,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["in_progress", ".session-run-spinner"],
-    ["pending", "polyline"],
+    ["pending", pendingMarkerSelector],
   ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
     const container = createContainer();
     const card = { ...progressCard, steps: [{ step: "Current step", status }] };

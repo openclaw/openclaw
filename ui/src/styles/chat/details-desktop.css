@@ -537,3 +537,8 @@
   > span:is(.chat-environment__added, .chat-environment__removed) {
   font-weight: 500;
 }
+
+.chat-details-desktop-context > .chat-details-desktop-section,
+.chat-details-desktop-environment:not(:first-child) > .chat-details-desktop-section {
+  border-top: 1px solid var(--details-separator);
+}

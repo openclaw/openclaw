@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
@@ -11,6 +12,8 @@ import {
   composerWebSearchBaseEnabled,
 } from "../chat/composer-capability-catalog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
+
+registerChatComposerEnglish();
 
 /** Synchronous tool intent survives renderer changes and is read directly at submission. */
 export class NewSessionCapabilities {

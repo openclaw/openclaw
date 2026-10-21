@@ -1,8 +1,8 @@
 /** Auth cache identity and native CLI credential reads, without login or refresh. */
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -51,10 +51,7 @@ export function fingerprintTokenAuthProfileCacheKey(accessToken: string): string
 }
 
 function fingerprintAuthCacheKey(prefix: string, domain: string, ...parts: string[]): string {
-  const hash = createHash("sha256")
-    .update(`openclaw:codex:app-server-${domain}:v1\0`)
-    .update(parts.join("\0"))
-    .digest("hex");
+  const hash = sha256Hex(`openclaw:codex:app-server-${domain}:v1\0${parts.join("\0")}`);
   return `${prefix}:sha256:${hash}`;
 }
 

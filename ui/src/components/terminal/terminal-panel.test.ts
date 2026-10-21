@@ -624,8 +624,17 @@ describe("OpenClawTerminalPanel", () => {
       await waitForFast(() => expect(listCount).toBe(1));
       (panel.querySelector('[aria-label="Terminal sessions"]') as HTMLButtonElement).click();
       await waitForFast(() => expect(listCount).toBe(2));
-      (panel.querySelector(".tp-session-refresh") as HTMLButtonElement).click();
+      const refresh = panel.querySelector<HTMLButtonElement>(".tp-session-refresh")!;
+      const loading = () =>
+        panel.querySelector('.tp-session-menu [data-panel-skeleton="terminal"]');
+      await waitForFast(() => {
+        expect(loading()?.getAttribute("aria-label")).toBe("Loading sessions…");
+        expect(document.activeElement).toBe(refresh);
+      });
+      refresh.click();
       await waitForFast(() => expect(listCount).toBe(3));
+      expect(loading()).not.toBeNull();
+      expect(document.activeElement).toBe(refresh);
 
       secondList.resolve({
         sessions: [
@@ -637,9 +646,11 @@ describe("OpenClawTerminalPanel", () => {
           },
         ],
       });
-      await waitForFast(() =>
-        expect(panel.querySelector(".tp-session-menu")?.textContent).toContain("new-agent"),
-      );
+      await waitForFast(() => {
+        expect(panel.querySelector(".tp-session-menu")?.textContent).toContain("new-agent");
+        expect(loading()).toBeNull();
+      });
+      expect(document.activeElement).toBe(refresh);
       if (outcome === "reject") {
         firstList.reject(new Error("superseded list failure"));
       } else {
@@ -660,6 +671,8 @@ describe("OpenClawTerminalPanel", () => {
       const menu = panel.querySelector(".tp-session-menu")?.textContent;
       expect(menu).toContain("new-agent");
       expect(menu).not.toContain("old-agent");
+      expect(loading()).toBeNull();
+      expect(document.activeElement).toBe(refresh);
       expect(panel.querySelector('[role="alert"]')).toBeNull();
     },
   );

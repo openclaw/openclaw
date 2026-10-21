@@ -23,6 +23,22 @@ const tool = createCronTool();
 const schema = tool.parameters;
 
 describe("cron model schema regressions", () => {
+  it("omits command edits when management is retained but command jobs are prohibited", () => {
+    const restricted = createCronToolSchema({ management: "also", allowCommandJobs: false });
+    expect(propertyAt(restricted, "job.payload.kind")?.enum).not.toContain("command");
+    expect(propertyAt(restricted, "job.schedule.kind")?.enum).not.toContain("on-exit");
+    expect(propertyAt(restricted, "job.payload.argv")).toBeUndefined();
+    expect(propertyAt(restricted, "job.schedule.kind")?.enum).toContain("stream");
+    expect(propertyAt(restricted, "job.schedule.command")).toBeDefined();
+    expect(
+      Value.Check(restricted, {
+        action: "update",
+        jobId: "agent-job",
+        job: { payload: { kind: "agentTurn", message: "updated" } },
+      }),
+    ).toBe(true);
+  });
+
   it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
     const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
     expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);
@@ -62,7 +78,6 @@ describe("cron model schema regressions", () => {
       "get",
       "remove",
       "runs",
-      "next_check",
     ]);
     for (const field of ["job", "text", "mode", "runMode", "sessionKey", "contextMessages"]) {
       expect(restricted.parameters).not.toHaveProperty(`properties.${field}`);
@@ -73,6 +88,26 @@ describe("cron model schema regressions", () => {
     expect(restricted.description).not.toContain("ADD: job");
     expect(restricted.description).not.toContain("delayed self-wakeups");
     expect(restricted.description).toContain("remove");
+    const active = createCronToolSchema({ selfRemoveOnly: true, activeRun: true });
+    const paced = createCronToolSchema({
+      selfRemoveOnly: true,
+      activeRun: true,
+      nextCheckEnabled: true,
+    });
+    const recovery = createCronToolSchema({
+      selfRemoveOnly: true,
+      activeRun: true,
+      nextCheckEnabled: true,
+      readOnly: true,
+    });
+    for (const action of ["scratch_get", "scratch_set", "record_result"]) {
+      expect(Value.Check(restricted.parameters, { action })).toBe(false);
+      expect(Value.Check(active, { action })).toBe(true);
+      expect(Value.Check(recovery, { action })).toBe(false);
+    }
+    expect(Value.Check(active, { action: "next_check" })).toBe(false);
+    expect(Value.Check(paced, { action: "next_check" })).toBe(true);
+    expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
   });
 
   it("advertises timeout clears while retaining numeric bounds", () => {

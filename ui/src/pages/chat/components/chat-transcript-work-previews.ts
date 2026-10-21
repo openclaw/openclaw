@@ -12,7 +12,6 @@ export function projectTranscriptWorkPreviews(
   options: Parameters<typeof selectWorkGroupBrowserTabPreviews>[1] & {
     expanded: Map<string, boolean>;
     bubbleMode?: boolean;
-    latestBrowserTabsKey: string;
   },
 ) {
   return workPreviewCache(
@@ -21,7 +20,7 @@ export function projectTranscriptWorkPreviews(
       options.expanded,
       getExpansionStateVersion(options.expanded),
       options.sessionKey,
-      options.latestBrowserTabsKey,
+      options.latestBrowserTabs,
       options.bubbleMode,
     ],
     () =>

@@ -1,4 +1,4 @@
-import { Errored, Loading, Show, lazy, onCleanup, useContext } from "solid-js";
+import { Errored, Loading, Show, lazy, onSettled, useContext } from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -22,7 +22,7 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
       <Errored
         fallback={(error, reset) => {
           let active = true;
-          onCleanup(() => {
+          onSettled(() => () => {
             active = false;
           });
           const retry = () => {

@@ -382,6 +382,33 @@ export async function runClawsAddCommand(sourcePath: string, opts: ClawsAddOptio
                 list: async (agentId) =>
                   await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
                 get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),
+                writeScratch: async (id, content, commitGuard) => {
+                  commitGuard();
+                  const scratchResult = await callGatewayFromCli(
+                    "cron.scratch.set",
+                    {},
+                    {
+                      id,
+                      content,
+                      expectedRevision: 0,
+                    },
+                  );
+                  if (!scratchResult.ok) {
+                    throw new Error("Claw automation scratch changed before import.");
+                  }
+                },
+                enable: async (id, expectedConfigRevision, commitGuard) => {
+                  commitGuard();
+                  await callGatewayFromCli(
+                    "cron.update",
+                    {},
+                    {
+                      id,
+                      patch: { enabled: true },
+                      expectedConfigRevision,
+                    },
+                  );
+                },
                 remove: async (id, options) =>
                   await callGatewayFromCli(
                     "cron.remove",

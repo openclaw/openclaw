@@ -136,7 +136,7 @@ export function createSessionsPage(
     sessionMenu: null,
     sessionMenuWork: null,
     expandedSessionKey: null,
-    transcriptSearch: { status: "idle" },
+    transcriptSearch: null,
   });
   const state = observation.state;
   const publish = observation.invalidate;
@@ -207,38 +207,27 @@ export function createSessionsPage(
     transcriptSearchAbort = lifetime;
     const scope = captureRequestScope();
     if (!scope) {
-      state.transcriptSearch = { status: "idle" };
+      state.transcriptSearch = null;
       return;
     }
-    state.transcriptSearch = { status: "loading" };
-    try {
-      const {
-        sessions,
-        results,
-        indexing = false,
-        truncated = false,
-        archivedTranscriptsExcluded = 0,
-      } = await searchVisibleSessionTranscripts({
-        client: scope.client,
-        query,
-        listOptions: sessionListOptions(scope.context, ""),
-        isCurrent: () => !lifetime.signal.aborted && isRequestScopeCurrent(scope),
-      });
-      if (!lifetime.signal.aborted && isRequestScopeCurrent(scope)) {
-        state.transcriptSearch = {
-          status: "results",
-          sessions,
-          results,
-          indexing,
-          truncated,
-          archivedTranscriptsExcluded,
-        };
-      }
-    } catch (error) {
-      if (!lifetime.signal.aborted && isRequestScopeCurrent(scope)) {
-        state.transcriptSearch = { status: "error", message: formatUiError(error) };
-      }
-    }
+    const isCurrent = () => !lifetime.signal.aborted && isRequestScopeCurrent(scope);
+    const result = searchVisibleSessionTranscripts({
+      client: scope.client,
+      query,
+      listOptions: sessionListOptions(scope.context, ""),
+      isCurrent,
+    }).then(
+      (searchResult) => (isCurrent() ? searchResult : null),
+      (error: unknown) => {
+        if (isCurrent()) {
+          throw error;
+        }
+        return null;
+      },
+    );
+    state.transcriptSearch = result;
+    // Rendering owns errors; command callers still await the admitted request.
+    await result.catch(() => undefined);
   }
 
   function synchronize() {
@@ -540,7 +529,7 @@ export function createSessionsPage(
   function resetTranscriptSearchState(query: string) {
     state.transcriptSearchQuery = query;
     transcriptSearchAbort?.abort();
-    state.transcriptSearch = { status: "idle" };
+    state.transcriptSearch = null;
   }
 
   function updateTranscriptSearchQuery(query: string) {
@@ -1115,16 +1104,13 @@ export function createSessionsPage(
   }
 
   function loadSessionMenuWork(row: GatewaySessionRow) {
-    // Every opening has its own identity, including reopening the same row.
-    const menu = state.sessionMenu;
     if (!row.worktree) {
       state.sessionMenuWork = null;
       return;
     }
-    state.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
     const scope = captureRequestScope();
     if (!scope) {
-      state.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      state.sessionMenuWork = null;
       return;
     }
     const store = sessionPullRequestsForGateway(scope.context.gateway);
@@ -1132,7 +1118,7 @@ export function createSessionsPage(
       row.key,
       sessionAgentId(row.key, scope.context),
     );
-    void fetchSessionMenuWork({
+    state.sessionMenuWork = fetchSessionMenuWork({
       client: scope.client,
       loadPullRequests: canCallGatewayMethod(
         scope.context.gateway.snapshot,
@@ -1143,11 +1129,7 @@ export function createSessionsPage(
         : undefined,
       worktreeId: row.worktree.id,
       execNode: row.execNode,
-    }).then((work) => {
-      if (state.sessionMenu === menu) {
-        state.sessionMenuWork = { loading: false, ...work };
-      }
-    });
+    }).then((work) => (isRequestScopeCurrent(scope) ? work : null));
   }
 
   function sessionMenuProps(): SessionsPageMenuProps | null {

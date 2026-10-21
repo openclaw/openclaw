@@ -447,4 +447,46 @@ describe("stageSandboxMedia", () => {
       );
     });
   });
+
+  it.each([
+    { agentMb: 51, channelMb: undefined, accountMb: undefined, fileMb: 50, staged: true },
+    { agentMb: undefined, channelMb: 51, accountMb: undefined, fileMb: 50, staged: true },
+    { agentMb: undefined, channelMb: 50, accountMb: 51, fileMb: 50, staged: true },
+    { agentMb: undefined, channelMb: 51, accountMb: 50, fileMb: 50, staged: false },
+    { agentMb: 5, channelMb: undefined, accountMb: undefined, fileMb: 10, staged: true },
+  ])(
+    "stages admitted media with limits %j",
+    async ({ agentMb, channelMb, accountMb, fileMb, staged }) => {
+      await withSandboxMediaTempHome("openclaw-media-limits-", async (home) => {
+        const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+        cfg.agents!.defaults!.mediaMaxMb = agentMb;
+        cfg.channels = {
+          telegram: {
+            mediaMaxMb: channelMb,
+            accounts: { roomy: { mediaMaxMb: accountMb } },
+          },
+        };
+        const mediaPath = await writeInboundMedia(home, "large.bin", "");
+        const size = fileMb * 1024 * 1024 + 1;
+        await fs.truncate(mediaPath, size);
+        const { ctx, sessionCtx } = createSandboxMediaContexts(mediaPath);
+        ctx.Surface = "telegram";
+        ctx.AccountId = "roomy";
+        const result = await stage({ ctx, sessionCtx }, cfg, workspaceDir);
+
+        expect(result.staged.size).toBe(staged ? 1 : 0);
+        if (staged) {
+          const stagedPath = result.staged.get(0)!;
+          expect(ctx.media?.[0]?.path).toBe(stagedPath);
+          expect(sessionCtx.media).toEqual(ctx.media);
+          await expect(fs.stat(join(sandboxDir, stagedPath))).resolves.toMatchObject({ size });
+        } else {
+          expect(ctx.media?.[0]?.path).toBe(mediaPath);
+          await expect(fs.stat(join(sandboxDir, "media", "inbound"))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+      });
+    },
+  );
 });

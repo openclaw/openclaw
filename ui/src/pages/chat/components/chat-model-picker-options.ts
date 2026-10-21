@@ -53,12 +53,15 @@ export function formatModelContextMeta(option: ChatModelPickerOption): string {
   return maximum ? formatContextTokenCapacity(maximum) : "";
 }
 
+/** Owners omit completed empty groups; a published group has rows or an active receipt. */
 export type ChatModelPickerTargetGroup = {
   errorLabel: string;
   id: string;
   label: string;
+  /** Accepted rows stay synchronous for search, shortcuts, and account offsets. */
   options: readonly { label: string; value: string }[];
-  status: "loading" | "ready" | "error";
+  /** The box keys the boundary without unwrapping its promise outside Loading. */
+  completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
 export function formatModelLabel(option: ChatModelPickerOption): string {

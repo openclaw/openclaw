@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -65,6 +67,101 @@ const optionValues = (select: HTMLSelectElement | undefined | null) =>
   Array.from(select?.options ?? [], (option) => option.value);
 
 describe("sessions view", () => {
+  it("uses current bulk, pagination, and archive callbacks on retained buttons", async () => {
+    const result = {
+      ...buildResult(createRow("archived", { archived: true })),
+      hasMore: true,
+      nextOffset: 1,
+    };
+    const callbacks = () => ({
+      onDeselectAll: vi.fn(),
+      onDeleteSelected: vi.fn(),
+      onLoadMore: vi.fn(),
+      onDeleteAllArchived: vi.fn(),
+    });
+    const initial = callbacks();
+    const current = callbacks();
+    const selectors = [
+      ["onDeselectAll", ".data-table-bulk-bar button:not(.danger)"],
+      ["onDeleteSelected", ".data-table-bulk-bar button.danger"],
+      ["onLoadMore", ".data-table-pagination__controls > button:first-of-type"],
+      ["onDeleteAllArchived", "#sessions-filter-popover button.danger"],
+    ] as const;
+    const shared = { statusFilter: "archived", selectedKeys: new Set(["archived"]) } as const;
+    const [handlers, setHandlers] = createRoot((dispose) => {
+      onTestFinished(dispose);
+      return createSignal(initial);
+    });
+    renderSessionsView(
+      {
+        ...buildProps(result),
+        ...shared,
+        get onDeselectAll() {
+          return handlers().onDeselectAll;
+        },
+        get onDeleteSelected() {
+          return handlers().onDeleteSelected;
+        },
+        get onLoadMore() {
+          return handlers().onLoadMore;
+        },
+        get onDeleteAllArchived() {
+          return handlers().onDeleteAllArchived;
+        },
+      },
+      container,
+    );
+    await Promise.resolve();
+    const buttons = selectors.map(([name, selector]) => ({
+      name,
+      selector,
+      button: expectDefined(container.querySelector<HTMLButtonElement>(selector), name),
+    }));
+
+    setHandlers(current);
+    flush();
+
+    for (const { name, selector, button } of buttons) {
+      expect(container.querySelector(selector)).toBe(button);
+      button.click();
+      expect(current[name]).toHaveBeenCalledOnce();
+      expect(initial[name]).not.toHaveBeenCalled();
+    }
+  });
+
+  it("uses the current clear-filter callback on the retained empty-state button", async () => {
+    const result = buildMultiResult([]);
+    const initial = vi.fn();
+    const current = vi.fn();
+    const [handlers, setHandlers] = createRoot((dispose) => {
+      onTestFinished(dispose);
+      return createSignal({ onClearFilters: initial });
+    });
+    renderSessionsView(
+      {
+        ...buildProps(result),
+        searchQuery: "missing",
+        get onClearFilters() {
+          return handlers().onClearFilters;
+        },
+      },
+      container,
+    );
+    await Promise.resolve();
+    const button = expectDefined(
+      container.querySelector<HTMLButtonElement>(".data-table-empty-state button"),
+      "clear-filter button",
+    );
+
+    setHandlers({ onClearFilters: current });
+    flush();
+
+    expect(container.querySelector(".data-table-empty-state button")).toBe(button);
+    button.click();
+    expect(current).toHaveBeenCalledOnce();
+    expect(initial).not.toHaveBeenCalled();
+  });
+
   it("identifies agents on plain chat sessions in a mixed-agent list", () => {
     renderView([
       createRow("agent:main:chat-one"),

@@ -5,7 +5,6 @@ import {
   createSignal,
   flush,
   merge,
-  onCleanup,
   onSettled,
   Show,
 } from "solid-js";
@@ -34,7 +33,8 @@ import {
   type MenuItem,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
@@ -55,6 +55,8 @@ import {
   selectChatSessionSharingItem,
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type HeaderMenuAction =
   | SessionManagementAction
@@ -137,7 +139,7 @@ function ChatHeaderSessionMenuContent(
   const preparation = () => liveProps.prewarm;
   const presented = () => open() || (liveProps.mobilePageOpen ?? false);
   const presentation = createParkedProjection(() => ({ ...liveProps }), presented, preparation);
-  const props = createProjection(presentation, {}, { key: "id" });
+  const props = createProjection(presentation, presentation(), { key: "id" });
   const controls = createMenuControls();
   let menu: MenuHandle | undefined;
   let stopShortcut: (() => void) | undefined;
@@ -204,15 +206,17 @@ function ChatHeaderSessionMenuContent(
     ),
     controls,
   );
-  menus.set(host, () => menu);
   const shortcut = (event: KeyboardEvent) => {
     if (props.paneTitle !== undefined || !actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(menu?.overlay.surface, event);
     }
   };
-  onCleanup(() => {
-    menus.delete(host);
-    stopShortcut?.();
+  onSettled(() => {
+    menus.set(host, () => menu);
+    return () => {
+      menus.delete(host);
+      stopShortcut?.();
+    };
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",

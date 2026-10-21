@@ -188,7 +188,34 @@ describe("whole-archive credential relocation", () => {
         }
         {
           using local = openClientCredentialCustody(state.env, { migration: true })!;
-          expect(readClientCredentialReceipt(local.database)!.receipt.source).toBeNull();
+          const sharedIdentity = fs.statSync(sharedPath, { bigint: true });
+          expect(readClientCredentialReceipt(local.database)).toEqual({
+            phase: "complete",
+            receipt: {
+              format: 1,
+              source: {
+                kind: "canonical",
+                engine: "postgres",
+                identity: "b3046bb3-bca5-444e-a760-7e6190afc0fd",
+                generation: "bootstrap:b3046bb3-bca5-444e-a760-7e6190afc0fd",
+                sha256: "2a7509c68153d6badd47f49bb24209c90adbaee4793ad36669984982f8711ec1",
+                destinationVersion: 1,
+              },
+              sharedFile: {
+                path: fs.realpathSync.native(sharedPath),
+                dev: String(sharedIdentity.dev),
+                ino: String(sharedIdentity.ino),
+              },
+              legacyImports: {
+                "identity:primary": { sha256: null },
+                "identity:node": { sha256: null },
+                "identity:shareExtension": { sha256: null },
+                "auth:primary": { sha256: null },
+                "auth:node": { sha256: null },
+                "auth:shareExtension": { sha256: null },
+              },
+            },
+          });
         }
         const original = fs.readFileSync(state.statePath("client", "credentials.sqlite"));
         const targetPath = state.path("restored");

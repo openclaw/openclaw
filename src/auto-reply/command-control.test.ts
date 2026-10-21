@@ -6,6 +6,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization, resolveCommandAuthorizationAsync } from "./command-auth.js";
 import {
+  hasCommandSyntax,
   hasControlCommand,
   hasInlineCommandTokens,
   shouldComputeCommandAuthorized,
@@ -678,6 +679,24 @@ describe("control command parsing", () => {
     expect(hasInlineCommandTokens("plain text")).toBe(false);
     expect(hasInlineCommandTokens("http://example.com/path")).toBe(false);
     expect(hasInlineCommandTokens("stop")).toBe(false);
+  });
+
+  it.each(["!", "! poll", "!(echo fixture)", "@bot ! poll", "@bot !(echo fixture)"])(
+    "requests authorization for bash input without granting mention bypass: %s",
+    (body) => {
+      expect(shouldComputeCommandAuthorized(body)).toBe(true);
+      expect(hasControlCommand(body)).toBe(false);
+    },
+  );
+
+  it.each([
+    "![diagram](https://example.com/diagram.png)",
+    "![nested [diagram]][figure]",
+    "@bot ![diagram](https://example.com/diagram.png)",
+  ])("keeps Markdown images out of command classification: %s", (body) => {
+    expect(hasCommandSyntax(body)).toBe(false);
+    expect(shouldComputeCommandAuthorized(body)).toBe(false);
+    expect(hasControlCommand(body)).toBe(false);
   });
 
   it("detects spaced syntax only for active registered plugin commands", () => {

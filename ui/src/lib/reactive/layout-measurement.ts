@@ -8,6 +8,7 @@ export function createLayoutMeasurement<T>(
   options: {
     targets: () => readonly Element[];
     mutations?: () => Node;
+    fonts?: boolean;
     /** Keyboard and disclosure commits need geometry before the next animation frame. */
     changeTiming?: "sync";
   },
@@ -60,6 +61,10 @@ export function createLayoutMeasurement<T>(
   });
   onSettled(() => {
     ready = true;
+    // Font metrics can settle without resizing the measured viewport.
+    if (options.fonts) {
+      void document.fonts.ready.then(schedule);
+    }
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(schedule);
     }

@@ -1,7 +1,8 @@
 import { MessageProcessor } from "@a2ui/web_core/processing";
 import { getValue } from "@a2ui/web_core/reactivity";
 import { NodeResolver } from "@a2ui/web_core/resolution";
-import { For, Show, createSignal, onCleanup, untrack } from "solid-js";
+import { For, Show, onCleanup, untrack } from "solid-js";
+import { observeSource } from "./catalog-primitives.jsx";
 import { basicCatalog, CatalogNode, CatalogStyles, observeValue } from "./catalog-v0.9.jsx";
 import { defineHost } from "./host.jsx";
 
@@ -88,15 +89,15 @@ function Surface(props) {
 
 function A2UIApp(props) {
   const model = untrack(() => props.model);
-  const [revision, setRevision] = createSignal(0);
-  model.notify = () => setRevision((value) => value + 1);
-  onCleanup(() => {
-    model.notify = () => {};
-  });
-  const read = () => {
-    revision();
-    return model;
-  };
+  const { read } = observeSource(
+    () => model,
+    (notify) => {
+      model.notify = notify;
+      return () => {
+        model.notify = () => {};
+      };
+    },
+  );
   return (
     <>
       <CatalogStyles />

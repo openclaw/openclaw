@@ -30,6 +30,12 @@ export type ReplyDeliveryFactsObserver = (minimumAssistantMessageIndex?: number)
 type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "empty" | "silent";
 
 export const MISSING_REPLY_NOTICE_TEXT = "No answer was returned. Ask again if you still need one.";
+export const MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT = `${MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
+
+/** Only host-authored missing-reply copy may cross the terminal error egress boundary. */
+export function isHostMissingReplyNoticeText(text: string | undefined): boolean {
+  return text === MISSING_REPLY_NOTICE_TEXT || text === MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT;
+}
 
 export function createMissingReplyNotice(text = MISSING_REPLY_NOTICE_TEXT): ReplyPayload {
   return setReplyPayloadMetadata(

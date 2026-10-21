@@ -5,7 +5,7 @@ import {
   restoreBridgedRouteLocation,
   routePageSpec,
 } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 
 function sessionActivityRouteLocation(location: RouteLocation): RouteLocation {

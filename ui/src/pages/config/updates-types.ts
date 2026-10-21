@@ -6,6 +6,7 @@ export type UpdatesChannel = (typeof UPDATES_CHANNELS)[number];
 
 export type UpdatesViewProps = {
   update: ApplicationUpdateOverlaySnapshot;
+  commandScope?: object;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   configObject: Record<string, unknown>;
   gatewayVersion: string | null;
@@ -25,7 +26,7 @@ export type UpdatesViewProps = {
   onChannelChange: (channel: UpdatesChannel) => void;
   onUpdateChecksChange: (enabled: boolean) => void;
   onAutomaticUpdatesChange: (enabled: boolean) => void;
-  onUpdateNow: () => void;
+  onUpdateNow: () => Promise<void>;
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<boolean>;
   onReportFailure: (attemptId: string) => Promise<void>;

@@ -302,6 +302,7 @@ export function prepareTeamScaleSessionOwnership(
         id: owner.id,
         identity: { type: "profile", id: owner.id },
         label: owner.name,
+        avatarUrl: owner.avatarUrl,
       },
     };
     row.hiddenFromInvolvingMe = false;

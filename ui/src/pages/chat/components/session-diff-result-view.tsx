@@ -3,12 +3,15 @@ import { createSignal, For, onSettled, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { SessionDiffTree } from "./session-diff-tree.tsx";
 import type { DiffValue, FileView } from "./session-diff-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function createSessionDiffResultViews(
   bindings: SessionDiffViewBindings,
@@ -22,7 +25,7 @@ export function createSessionDiffResultViews(
   const {
     props,
     desktop,
-    collapsedPaths,
+    collapsedFiles,
     scope,
     split,
     mobileWrap,
@@ -47,7 +50,13 @@ export function createSessionDiffResultViews(
     const [edges, setEdges] = createSignal({ atStart: true, atEnd: true });
     const viewportRef = createScrollStateRef((_, state) => setEdges(state), {
       presented: () => props.active !== false,
-      content: () => [body.value, collapsedPaths(), mobileWrap(), split(), gapRevision()],
+      content: () => [
+        body.value,
+        Object.keys(collapsedFiles),
+        mobileWrap(),
+        split(),
+        gapRevision(),
+      ],
     });
     const result = () => body.value.result;
     return (

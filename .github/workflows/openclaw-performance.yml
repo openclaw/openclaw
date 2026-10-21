@@ -979,9 +979,15 @@ jobs:
           if rg -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
             catalog_refresh_config='    "models": { "catalogRefresh": { "enabled": false } },'
           fi
+          # Candidates before heartbeat moved to Automations still schedule one
+          # unless the retired agents.defaults.heartbeat key disables it.
+          heartbeat_config=""
+          if rg -q 'heartbeat:' src/config/zod-schema.agent-defaults.ts; then
+            heartbeat_config='    "agents": { "defaults": { "heartbeat": { "every": "0m" } } },'
+          fi
           cat > "$gateway_config" <<EOF
           {
-            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
+          ${heartbeat_config}
             "browser": { "enabled": false },
           ${catalog_refresh_config}
             "update": { "checkOnStart": false },

@@ -46,6 +46,7 @@ import {
   selectedFiles,
   expectCanonicalGroupedConcurrency,
   expectProtectedOwnerExpansion,
+  isSerialNodeTestProjection,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -71,7 +72,11 @@ function canonicalOwner(jobs: CompactNodeTestShard[], shardName: string) {
   };
 }
 
-function expectSameFields<T>(actual: T, expected: T, keys: readonly (keyof T)[]) {
+function expectSameFields<K extends PropertyKey>(
+  actual: Partial<Record<K, unknown>>,
+  expected: Partial<Record<K, unknown>>,
+  keys: readonly K[],
+) {
   for (const key of keys) {
     expect(actual[key], String(key)).toEqual(expected[key]);
   }
@@ -1133,10 +1138,10 @@ describe("CI changed Node test plan", () => {
               "minTotalMemoryBytes",
               "pretestBuildMode",
             ]);
-            const singleton = job.groups.length === 1 && ownerJob.planConcurrency === 2;
-            expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+            const serialProjection = isSerialNodeTestProjection(job.groups, ownerJob);
+            expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
             expect(job.env).toEqual(
-              singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+              serialProjection && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
                 ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
                 : ownerJob.env,
             );
@@ -1381,14 +1386,14 @@ describe("CI changed Node test plan", () => {
         expect(group.env).toEqual(owner.env);
         expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-        const singleton = job.groups?.length === 1 && ownerJob.planConcurrency === 2;
+        const serialProjection = isSerialNodeTestProjection(job.groups, ownerJob);
         expect(job.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
+          serialProjection && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
             ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
             : ownerJob.env,
         );
         expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
+        expect(job.planConcurrency).toBe(serialProjection ? 1 : ownerJob.planConcurrency);
       }
     }
     const cheapFiles = vi

@@ -51,7 +51,7 @@ it("rejects a replaced file before final I/O", { timeout: E2E_TIMEOUT_MS }, asyn
         return {
           gateway: { nodes: { commands: { allow: [FILE_FETCH_COMMAND] } } },
           agents: {
-            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            defaults: { skipBootstrap: true },
           },
           plugins: {
             allow: ["file-transfer"],

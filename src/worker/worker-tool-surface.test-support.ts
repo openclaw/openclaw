@@ -26,39 +26,41 @@ import { createWorkerComputerTool } from "./computer-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 
-export function createWorkerToolSurfaceForTest(params: {
+type WorkerToolFixture = {
   assignment: WorkerLaunchDescriptor["assignment"];
   config?: OpenClawConfig;
   sessionId: string;
-}): WorkerToolSurface {
+  runId?: string;
+};
+
+export function prepareWorkerPlacementForTest(params: WorkerToolFixture) {
   const { assignment, config, sessionId } = params;
+  const { agentId, permissionMode, workspaceDir: cwd } = assignment;
   const policy = prepareCoreToolPolicy({
     config,
-    agentId: assignment.agentId,
+    agentId,
     modelProvider: assignment.modelRef.provider,
     modelId: assignment.modelRef.model,
-    ...(assignment.permissionMode
-      ? {
-          sessionPermissionPolicy: {
-            mode: assignment.permissionMode,
-            root: assignment.workspaceDir,
-          },
-        }
-      : {}),
+    sessionPermissionPolicy: permissionMode ? { mode: permissionMode, root: cwd } : undefined,
   });
-  const definitions = new Map(
-    createWorkerPlacementTools({
-      policy,
-      cwd: assignment.workspaceDir,
-      containmentRoot: assignment.workerContainmentRoot ?? assignment.workspaceDir,
-      execAuthority: assignment.toolAuthority.exec,
-      permissionMode: assignment.permissionMode,
-      agentId: assignment.agentId,
-      sessionKey: `worker:${sessionId}`,
-      sessionId,
-      runId: assignment.runId,
-    }).map((tool) => [tool.name, projectAgentToolDefinition(tool)]),
-  );
+  const tools = createWorkerPlacementTools({
+    policy,
+    cwd,
+    containmentRoot: assignment.workerContainmentRoot ?? cwd,
+    execAuthority: assignment.toolAuthority.exec,
+    permissionMode,
+    agentId,
+    sessionKey: `worker:${sessionId}`,
+    sessionId,
+    runId: params.runId ?? assignment.runId,
+  });
+  return { policy, tools };
+}
+
+export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): WorkerToolSurface {
+  const { assignment } = params;
+  const { policy, tools } = prepareWorkerPlacementForTest(params);
+  const definitions = new Map(tools.map((tool) => [tool.name, projectAgentToolDefinition(tool)]));
   if (assignment.browser) {
     definitions.set("browser", {
       name: "browser",

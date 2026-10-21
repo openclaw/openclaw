@@ -247,6 +247,7 @@ describe("sidebar rail pin menu", () => {
   ] as const)(
     "closes the rail pin menu before %s dispatch at position %i",
     async (action, index, target) => {
+      const warnings = vi.spyOn(console, "warn");
       const entries: readonly [string, string, string] = [
         "route:usage",
         "route:sessions",
@@ -310,6 +311,11 @@ describe("sidebar rail pin menu", () => {
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
       await waitForSolid(() => expect(action === "remove" ? remove : move).toHaveBeenCalledOnce());
+      expect(
+        warnings.mock.calls.filter(
+          ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+        ),
+      ).toEqual([]);
       if (action === "remove") {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();
