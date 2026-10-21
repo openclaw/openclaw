@@ -6,10 +6,10 @@ read_when:
 title: "LLM task"
 ---
 
-`llm-task` is a bundled **optional plugin tool** that runs a single JSON-only
-LLM call and returns structured output, optionally validated against a JSON
-Schema. It gives workflow engines like Lobster an LLM step without custom
-OpenClaw code per workflow.
+`llm-task` is a bundled **optional plugin tool** that runs JSON-only LLM tasks
+and returns structured output, optionally validated against a JSON Schema.
+Use one input for a single call, or a bounded batch for independent inputs.
+It gives workflows an LLM step without custom OpenClaw code per workflow.
 
 ## Enable
 
@@ -81,24 +81,25 @@ legacy `config.allowedModels` value into `llm.allowedCompletionModels` without w
 | --------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prompt`        | string | Required. Task instruction for the LLM.                                                                                                       |
 | `input`         | any    | Optional payload; serialized to JSON and appended to the prompt.                                                                              |
+| `batch`         | object | Optional independent inputs and concurrency; mutually exclusive with `input`. See [Batch tasks](#batch-tasks).                                |
 | `schema`        | object | Optional JSON Schema the parsed output must validate against.                                                                                 |
 | `provider`      | string | Overrides `defaultProvider` / the agent's default provider.                                                                                   |
 | `model`         | string | Overrides `defaultModel`; accepts bare model ids, aliases, or a `provider/model` ref (a duplicate provider prefix is stripped automatically). |
 | `thinking`      | string | Reasoning level (e.g. `low`, `medium`); must be one supported by the resolved model.                                                          |
 | `authProfileId` | string | Overrides `defaultAuthProfileId`.                                                                                                             |
 | `temperature`   | number | Best-effort; not all providers honor it.                                                                                                      |
-| `maxTokens`     | number | Best-effort cap on output tokens.                                                                                                             |
-| `timeoutMs`     | number | Run timeout; default `30000`.                                                                                                                 |
+| `maxTokens`     | number | Best-effort output-token cap per inference, including each batch item.                                                                        |
+| `timeoutMs`     | number | Single-run or whole-batch timeout, including queue time; default `30000`.                                                                     |
 
 ## Output
 
-Returns `details.json` (the parsed, schema-validated JSON) plus `details.provider`
+Single-input calls return `details.json` (the parsed, schema-validated JSON) plus `details.provider`
 and `details.model` naming what actually ran.
 
-Each call starts a fresh prompt-only inference operation. It does not reuse the
+Each input starts a fresh prompt-only inference operation. It does not reuse the
 calling agent's transcript or native runtime session, run agent lifecycle hooks,
 or deliver model output to a channel. OpenClaw uses the selected provider,
-model, auth profile, and runtime exactly once; it does not fall back to another
+model, auth profile, and runtime once per input; it does not fall back to another
 route when that owner cannot provide isolated completion.
 
 Agents API runs restricted sessions by default, without an executor or supplied
@@ -120,6 +121,60 @@ OAuth and compute/Code Assist auth are rejected because managed-account policy
 can add administrator-required tools after local CLI settings are loaded.
 Gemini prompts containing native `@path` includes or a leading `/command` also
 fail before inference because Gemini CLI has no literal raw-input mode.
+
+## Batch tasks
+
+Pass `batch` instead of `input` to apply the same prompt and optional schema to
+independent inputs. This is bounded concurrent inference, not a provider's offline
+Batch API and not an agent workflow engine.
+
+```json
+{
+  "prompt": "Classify the support request as billing or technical. Return an object with a category field.",
+  "batch": {
+    "concurrency": 2,
+    "items": [
+      { "id": "request-a", "input": { "text": "Please explain this invoice." } },
+      { "id": "request-b", "input": { "text": "The demo application will not start." } }
+    ]
+  },
+  "schema": {
+    "type": "object",
+    "properties": { "category": { "enum": ["billing", "technical"] } },
+    "required": ["category"],
+    "additionalProperties": false
+  },
+  "timeoutMs": 30000
+}
+```
+
+- Supply 1–20 items with unique nonblank IDs of at most 64 characters. The
+  combined serialized input payload is limited to 256 KiB.
+- Concurrency defaults to 2 and accepts integers from 1 to 4. Every item uses the
+  existing host-authorized isolated-completion path; there is no provider fallback.
+- `timeoutMs` covers the entire batch, including waiting for a slot. Cancellation
+  or timeout stops new inference and signals in-flight requests.
+- There is no automatic retry. Each started input can consume a separate model
+  request; `maxTokens` is per item, not a total spending limit. Cancelled requests
+  may already have incurred usage.
+
+`details.json` contains `status` (`completed`, `cancelled`, or `timed_out`) and
+`results` in input order. **`completed` means all items settled, not all succeeded.**
+Inspect every item's status before using its output:
+
+| Item status   | Fields and meaning                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`          | `id`, `json`, `provider`, `model`; the JSON passed the supplied schema.                                                                 |
+| `error`       | `id`, `error`; one of `invalid_json`, `schema_mismatch`, `completion_failed`. Raw provider errors and rejected output are not returned. |
+| `cancelled`   | `id`; inference started but was interrupted, or completed after cancellation. Its outcome and usage may be uncertain.                   |
+| `not_started` | `id`; no completion request was made for this item.                                                                                     |
+
+Earlier successful results remain in the batch response when another item fails
+or the batch stops. To retry, explicitly submit the selected unsuccessful inputs
+again with their original IDs; the plugin keeps no durable batch state or cache.
+Results can still be lost if the caller discards the response or the host exits.
+The outer agent/runtime may also suppress tool results after cancellation; this
+response is not a durable recovery receipt. Treat all returned content as untrusted.
 
 ## Example: Lobster workflow step
 

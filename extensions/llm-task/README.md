@@ -73,19 +73,31 @@ Doctor grants the shipped selection permissions and moves legacy
 
 - `prompt` (string, required)
 - `input` (any, optional)
+- `batch` (optional object, mutually exclusive with `input`): `items` (1–20
+  `{ id, input }` entries with unique nonblank IDs) and `concurrency` (1–4,
+  default 2). Combined serialized inputs must not exceed 256 KiB.
 - `schema` (object, optional JSON Schema)
 - `provider` (string, optional)
 - `model` (string, optional)
 - `thinking` (string, optional)
 - `authProfileId` (string, optional)
 - `temperature` (number, optional)
-- `maxTokens` (number, optional)
-- `timeoutMs` (number, optional)
+- `maxTokens` (number, optional, per input)
+- `timeoutMs` (number, optional, whole-batch deadline when using `batch`)
 
 ### Output
 
 Returns `details.json` containing the parsed JSON (and validates against
 `schema` when provided).
+
+Batch calls return `details.json = { status, results }`. Results retain input
+order and have an `id` plus `status`: `ok` (with `json`, `provider`, `model`),
+`error` (with a stable error category), `cancelled`, or `not_started`.
+The batch status `completed` does not mean every item succeeded. Successful
+items are retained when siblings fail. No item is automatically retried;
+resubmit selected unsuccessful inputs explicitly. There is no durable batch
+store, and cancelled in-flight requests may already have consumed model usage.
+See the [batch task reference](https://docs.openclaw.ai/tools/llm-task#batch-tasks).
 
 ## Notes
 
