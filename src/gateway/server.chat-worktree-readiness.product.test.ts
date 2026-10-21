@@ -19,6 +19,11 @@ import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-w
 import { waitForSessionRunEnd } from "../sessions/session-controller.native-runtime.js";
 import type { Deferred } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -239,12 +244,7 @@ it(
       });
     const providerServer = createServer((request, response) => {
       void (async () => {
-        request.setEncoding("utf8");
-        let json = "";
-        for await (const chunk of request) {
-          json += chunk;
-        }
-        const body: unknown = JSON.parse(json);
+        const body: unknown = JSON.parse(await readProviderBody(request));
         if (!isRecord(body)) {
           throw new Error("Synthetic provider received an invalid request");
         }
@@ -273,21 +273,11 @@ it(
       await fs.writeFile(path.join(repo, "src/remaining.txt"), fileContents);
       await requireGit(repo, ["add", "."]);
       await requireGit(repo, ["commit", "-qm", "synthetic project"]);
-      await new Promise<void>((resolve, reject) => {
-        providerServer.once("error", reject);
-        providerServer.listen(0, "127.0.0.1", resolve);
-      });
-      const address = providerServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Synthetic provider did not bind");
-      }
-      const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
-        "worktree-proof",
-      );
+      const providerUrl = await listenProvider(providerServer);
+      const provider = buildMockOpenAiResponsesProvider(providerUrl, "worktree-proof");
       const channelPath = await writeRecordingChannel(
         state.path("recording-channel"),
-        `http://127.0.0.1:${address.port}/capture`,
+        new URL("/capture", providerUrl).href,
       );
       const cfg = {
         agents: {
@@ -536,10 +526,7 @@ it(
       expect(failures).toEqual([]);
     } finally {
       activeGate?.release.resolve();
-      providerServer.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        providerServer.close(() => resolve());
-      });
+      await closeProvider(providerServer);
       try {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);

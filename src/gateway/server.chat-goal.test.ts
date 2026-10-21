@@ -278,6 +278,37 @@ async function waitForModelRun(count = 1) {
   expect(runEmbeddedAgent.mock.calls, failureDiagnostic).toHaveLength(count);
 }
 
+function sendOptions(
+  params: Record<string, unknown>,
+  respond: RespondFn,
+  overrides: Partial<GatewayRequestHandlerOptions> = {},
+): GatewayRequestHandlerOptions {
+  return {
+    req: { type: "req", id: "goal-chat-direct", method: "chat.send", params },
+    params,
+    client,
+    context,
+    respond,
+    isWebchatConnect: () => true,
+    ...overrides,
+  };
+}
+
+function holdGoalReceipt() {
+  const lookup = goalOperationReads.lookupSessionGoalOperation;
+  const entered = createDeferred<Awaited<ReturnType<typeof lookup>>>();
+  const release = createDeferred();
+  const spy = vi
+    .spyOn(goalOperationReads, "lookupSessionGoalOperation")
+    .mockImplementationOnce(async (options) => {
+      const receipt = await lookup(options);
+      entered.resolve(receipt);
+      await release.promise;
+      return receipt;
+    });
+  return { entered, release, spy };
+}
+
 describe("Goal chat admission and continuation", () => {
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
 
@@ -462,20 +493,10 @@ describe("Goal chat admission and continuation", () => {
       };
       const params = freshGoalStart("Only start under the current creator policy");
       const respond = vi.fn<RespondFn>();
-      await handleChatSend(
-        {
-          req: { type: "req", id: "goal-creation-policy", method: "chat.send", params },
-          params,
-          client: requestClient,
-          context,
-          respond,
-          isWebchatConnect: () => true,
-        },
-        async () => {
-          context.getRuntimeConfig = () => nextConfig;
-          return true;
-        },
-      );
+      await handleChatSend(sendOptions(params, respond, { client: requestClient }), async () => {
+        context.getRuntimeConfig = () => nextConfig;
+        return true;
+      });
       expect(respond.mock.calls[0]?.[0]).toBe(false);
       expect(respond.mock.calls[0]?.[2]?.message).toMatch(
         change === "creation revoked" ? /cannot create sessions/ : /creation policy changed/,
@@ -543,15 +564,7 @@ describe("Goal chat admission and continuation", () => {
   it("releases rejected admission and accepts an unchanged retry", async () => {
     const params = goalStart("Finish the release checklist");
     const respond = vi.fn<RespondFn>();
-    const options: GatewayRequestHandlerOptions = {
-      req: { type: "req", id: "goal-admission-rejected", method: "chat.send", params },
-      params,
-      client,
-      context,
-      respond,
-      isWebchatConnect: () => true,
-    };
-    await handleChatSend(options, async () => false);
+    await handleChatSend(sendOptions(params, respond), async () => false);
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     await expectNoDispatch();
     const retried = await rpc("chat.send", params);
@@ -579,15 +592,9 @@ describe("Goal chat admission and continuation", () => {
       let current = true;
       const params = goalStart("Wait for the receipt before reserving this Goal");
       const respond = vi.fn<RespondFn>();
-      const pending = handleChatSend({
-        req: { type: "req", id: "goal-lookup-yield", method: "chat.send", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => true,
-        hasCurrentClientAuthority: () => current,
-      });
+      const pending = handleChatSend(
+        sendOptions(params, respond, { hasCurrentClientAuthority: () => current }),
+      );
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -682,17 +689,7 @@ describe("Goal chat admission and continuation", () => {
     await waitForDispatchEnd();
     context.dedupe.clear();
 
-    const lookup = goalOperationReads.lookupSessionGoalOperation;
-    const entered = createDeferred<Awaited<ReturnType<typeof lookup>>>();
-    const release = createDeferred();
-    const lookupSpy = vi
-      .spyOn(goalOperationReads, "lookupSessionGoalOperation")
-      .mockImplementationOnce(async (options) => {
-        const receipt = await lookup(options);
-        entered.resolve(receipt);
-        await release.promise;
-        return receipt;
-      });
+    const { entered, release, spy } = holdGoalReceipt();
     const pending = rpc("chat.send", request);
     try {
       const receipt = await awaitGateBeforeSettlement(
@@ -719,7 +716,7 @@ describe("Goal chat admission and continuation", () => {
     } finally {
       release.resolve();
       await pending.catch(() => undefined);
-      lookupSpy.mockRestore();
+      spy.mockRestore();
     }
   });
 
@@ -740,17 +737,7 @@ describe("Goal chat admission and continuation", () => {
 
   it("keeps a receipt miss retryable when an identical request completes during lookup", async () => {
     const request = goalStart("Replay the Goal committed while this lookup was pending");
-    const lookup = goalOperationReads.lookupSessionGoalOperation;
-    const entered = createDeferred<Awaited<ReturnType<typeof lookup>>>();
-    const release = createDeferred();
-    const lookupSpy = vi
-      .spyOn(goalOperationReads, "lookupSessionGoalOperation")
-      .mockImplementationOnce(async (options) => {
-        const receipt = await lookup(options);
-        entered.resolve(receipt);
-        await release.promise;
-        return receipt;
-      });
+    const { entered, release, spy } = holdGoalReceipt();
     const pending = rpc("chat.send", request);
     try {
       expect(
@@ -785,7 +772,7 @@ describe("Goal chat admission and continuation", () => {
     } finally {
       release.resolve();
       await pending.catch(() => undefined);
-      lookupSpy.mockRestore();
+      spy.mockRestore();
     }
   });
 
@@ -793,21 +780,11 @@ describe("Goal chat admission and continuation", () => {
     const params = goalStart("Cancel this Goal before its durable receipt exists");
     const respond = vi.fn<RespondFn>();
     await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      handleChatSend(
-        {
-          req: { type: "req", id: "goal-precommit-abort", method: "chat.send", params },
-          params,
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => true,
-        },
-        async () => {
-          const aborted = await rpc("chat.abort", { sessionKey, runId: params.idempotencyKey });
-          expect(aborted.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
-          return true;
-        },
-      ),
+      handleChatSend(sendOptions(params, respond), async () => {
+        const aborted = await rpc("chat.abort", { sessionKey, runId: params.idempotencyKey });
+        expect(aborted.mock.calls[0]?.[1]).toMatchObject({ aborted: true });
+        return true;
+      }),
     );
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
     const retry = await rpc("chat.send", params);

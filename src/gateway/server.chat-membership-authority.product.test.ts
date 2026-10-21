@@ -1,9 +1,7 @@
 // Load the deferred Gateway and model runtime during collection, outside the authority deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { text as readStreamText } from "node:stream/consumers";
@@ -32,6 +30,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import * as sessionSharingAuthorization from "./session-sharing-authorization-async.js";
 import {
   connectGatewayClient,
@@ -209,18 +208,10 @@ it(
           response.writeHead(500).end("fixture provider failed");
         });
       });
-      cleanups.push(async () => {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
-      });
-      await once(providerServer.listen(0, "127.0.0.1"), "listening");
-      const address = providerServer.address();
-      assert(address && typeof address !== "string", "fixture provider did not bind");
+      cleanups.push(() => closeProvider(providerServer));
       const agentExecutions: Array<{ release(): Promise<void> }> = [];
       const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        await listenProvider(providerServer),
         "membership-authority",
       );
       const proxyUser = "member@example.test";

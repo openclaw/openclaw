@@ -128,6 +128,17 @@ function messageIds(messages: readonly unknown[]) {
   return messages.map((message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id);
 }
 
+function expectSenderDisplay(messages: unknown[], profileId: string, avatarUrl: string) {
+  for (const message of messages) {
+    expect(message).toMatchObject({
+      __openclaw: {
+        senderIdentity: { type: "profile", id: profileId },
+        senderProfileAvatarUrl: avatarUrl,
+      },
+    });
+  }
+}
+
 afterEach(async () => {
   await disposeSessionReadContexts();
   for (const directory of tempDirs.dirs) {
@@ -387,15 +398,8 @@ describe("chat.history cursor catch-up", () => {
         expect(history.ok).toBe(true);
         expect(lookup).not.toHaveBeenCalled();
         expect(history.payload?.messages).toHaveLength(4);
-        for (const message of history.payload?.messages.slice(-3) ?? []) {
-          expect(message).toMatchObject({
-            __openclaw: {
-              senderIdentity: { type: "profile", id: profile.id },
-              senderProfileAvatarUrl: avatarUrl,
-            },
-          });
-        }
-        const delta = await callChat<{ kind: string; messages: unknown[] }>(
+        expectSenderDisplay(history.payload?.messages.slice(-3) ?? [], profile.id, avatarUrl);
+        const delta = await callChat<{ kind: string; messages: Array<{ message: unknown }> }>(
           context,
           "chat.history",
           { cursor: cached.payload?.deltaCursor },
@@ -404,16 +408,11 @@ describe("chat.history cursor catch-up", () => {
         expect(delta.payload?.kind).toBe("delta");
         expect(lookup.mock.calls).toEqual([[profile.id]]);
         expect(delta.payload?.messages).toHaveLength(3);
-        for (const envelope of delta.payload?.messages ?? []) {
-          expect(envelope).toMatchObject({
-            message: {
-              __openclaw: {
-                senderIdentity: { type: "profile", id: profile.id },
-                senderProfileAvatarUrl: avatarUrl,
-              },
-            },
-          });
-        }
+        expectSenderDisplay(
+          delta.payload?.messages.map(({ message }) => message) ?? [],
+          profile.id,
+          avatarUrl,
+        );
       }
       expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
     } finally {

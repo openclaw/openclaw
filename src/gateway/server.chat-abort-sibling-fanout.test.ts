@@ -454,7 +454,6 @@ for (const [suffix, name] of [
         } finally {
           await Promise.all(reservationReleases);
         }
-        socket.close();
         expect(getSessionMutationCount()).toBe(0);
         expect(getSessionControllerWorkCount()).toBe(0);
       },
