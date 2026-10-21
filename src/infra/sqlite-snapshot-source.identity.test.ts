@@ -3,7 +3,6 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import type { RetainedSqliteSnapshotPreparation } from "./sqlite-readonly-location.types.js";
@@ -11,6 +10,7 @@ import {
   prepareSqliteReadOnlyLocationSync,
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
+import * as probe from "./sqlite-snapshot-staging-owner.test-support.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 let cleanupJoined = true;
@@ -26,11 +26,6 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-function readValue(pathname: string) {
-  using database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
-  return database.prepare("SELECT value FROM probe").get();
-}
-
 it("keeps queued stale and current source admissions independent through the real copy child", async () => {
   const root = directories.make("sqlite-snapshot-source-identity-");
   const source = path.join(root, "source.sqlite");
@@ -39,14 +34,8 @@ it("keeps queued stale and current source admissions independent through the rea
   const cache = path.join(root, "cache");
   fs.mkdirSync(cache);
   vi.stubEnv("XDG_CACHE_HOME", cache);
-  for (const [pathname, value] of [
-    [source, "original"],
-    [successor, "successor"],
-  ] as const) {
-    using database = new (requireNodeSqlite().DatabaseSync)(pathname);
-    database.exec("PRAGMA journal_mode=DELETE; CREATE TABLE probe(value TEXT);");
-    database.prepare("INSERT INTO probe VALUES (?)").run(value);
-  }
+  probe.seedProbe(root, "source", "original", "PRAGMA journal_mode=DELETE;");
+  probe.seedProbe(root, "successor", "successor", "PRAGMA journal_mode=DELETE;");
   const originalIdentity = readDatabasePathIdentitySync(source);
   const originalBytes = fs.readFileSync(source);
   const successorBytes = fs.readFileSync(successor);
@@ -61,7 +50,7 @@ it("keeps queued stale and current source admissions independent through the rea
   );
   const synchronous = prepareSqliteReadOnlyLocationSync(source, currentIdentity);
   try {
-    expect(readValue(synchronous.location)).toEqual({ value: "successor" });
+    expect(probe.readProbe(synchronous.location)).toEqual({ value: "successor" });
   } finally {
     expect(synchronous.cleanup()).toBe(true);
   }
@@ -84,7 +73,7 @@ it("keeps queued stale and current source admissions independent through the rea
     if (currentOutcome.status !== "fulfilled") {
       throw currentOutcome.reason;
     }
-    expect(readValue(currentOutcome.value.location)).toEqual({ value: "successor" });
+    expect(probe.readProbe(currentOutcome.value.location)).toEqual({ value: "successor" });
     expect(staleOutcome.status).toBe("rejected");
     if (staleOutcome.status !== "rejected") {
       throw new Error("The stale admission copied the successor database");
@@ -110,8 +99,8 @@ it("keeps queued stale and current source admissions independent through the rea
     expect(fs.readdirSync(stagingRoot).toSorted()).toEqual(stagingBefore);
     cleanupJoined = true;
   }
-  expect(readValue(archived)).toEqual({ value: "original" });
-  expect(readValue(source)).toEqual({ value: "successor" });
+  expect(probe.readProbe(archived)).toEqual({ value: "original" });
+  expect(probe.readProbe(source)).toEqual({ value: "successor" });
   expect(fs.readFileSync(archived)).toEqual(originalBytes);
   expect(fs.readFileSync(source)).toEqual(successorBytes);
   expect(readDatabasePathIdentitySync(source)).toEqual(currentIdentity);
