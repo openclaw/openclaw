@@ -2,9 +2,10 @@ import { For, Show, createMemo, createSignal, createStore, onSettled } from "sol
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { getLocale, t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { createSessionDiffSummary } from "../../../lib/session-diff-summary.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
@@ -30,6 +31,8 @@ import { hasChatPullRequests } from "./chat-pull-requests.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = {
   props?: ChatDetailsProps;

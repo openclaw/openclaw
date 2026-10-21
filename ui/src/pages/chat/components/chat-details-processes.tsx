@@ -3,10 +3,13 @@ import type { SessionProcessSummary } from "../../../../../packages/gateway-prot
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
-import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import "./chat-details-processes.css";
+import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Props = {
   /** Read the native host's projection; it owns observation, refresh and stop authority. */

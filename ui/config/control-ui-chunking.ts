@@ -59,6 +59,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "node_modules/@solidjs/signals/dist/prod/deferred.js":
+      // Only lazy resource consumers need this scheduler hook.
+      return "solid-deferred-runtime";
     case "node_modules/@solidjs/signals/dist/prod/core/action.js":
     case "node_modules/@solidjs/signals/dist/dev/core/action.js":
     case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
@@ -77,6 +80,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
+    case "ui/src/i18n/locales/en-chat-composer.ts":
+    case "ui/src/i18n/locales/en-chat-session.ts":
+      // Share deferred English compression without combining either route's renderers.
+      return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
@@ -186,6 +193,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         : [
             ...(["shared", "new", "chat"] as const).map((route, index) => {
               const modules = new Set(controlUiBootModules[route]);
+              if (route === "shared") {
+                // Plugin contributions can initialize after the New Session boot capture.
+                modules.add("ui/src/plugins/control-ui-actions.ts");
+              }
               return {
                 name: `control-ui-boot-${route}`,
                 test: (id: string) => modules.has(controlUiBootManifestKey(id)),
@@ -195,10 +206,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 includeDependenciesRecursively: true,
                 // Shared boot needs a smaller partition cap because its dense chat
                 // modules can exceed the compressed-size budget after regrouping.
-                // Keep disclosure JSX in its chat partition instead of splitting
-                // compression dictionaries. Shipped byte/request budgets still apply.
+                // Chat-only code can share a larger compression dictionary;
+                // shipped byte/request budgets still bound the output.
                 minSize: 128 * 1024,
-                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1440 : 1408) * 1024,
+                maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
               };
             }),
             ...(["shared", "new", "chat"] as const).map((route) => {

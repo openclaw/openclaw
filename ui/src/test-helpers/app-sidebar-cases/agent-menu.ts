@@ -300,11 +300,12 @@ describe("AppSidebar agent chip", () => {
   it.each([
     { viewport: "normal", width: undefined, left: 12, right: 252, x: 12 },
     { viewport: "narrow", width: 280, left: 100, right: 340, x: 8 },
-  ])("positions the menu ($viewport viewport)", async ({ width, left, right, x }) => {
+  ])("positions the mobile menu ($viewport viewport)", async ({ width, left, right, x }) => {
     if (width !== undefined) {
       vi.stubGlobal("innerWidth", width);
     }
-    const { sidebar, dom } = await mountAgent();
+    const { sidebar, dom, provider } = await mountAgent();
+    provider.classList.add("shell--mobile-nav");
     sidebar.connected = true;
     await sidebar.updateComplete;
     const card = dom.query<HTMLButtonElement>(".sidebar-agent-card__main")!;

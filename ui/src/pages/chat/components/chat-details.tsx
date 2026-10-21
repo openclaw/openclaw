@@ -12,17 +12,20 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
-import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const ChatDetailsSession = lazy(() => import("./chat-details-session.tsx"), {
   export: "ChatDetailsSession",
@@ -410,13 +413,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         open !== previous[1];
       manualChange = false;
       panel.toggleAttribute("data-restoring", isDesktop && !manual);
-      if (
-        isDesktop &&
-        presented &&
-        (!previous || identity !== previous[0] || presented !== previous[9])
-      ) {
-        position(layout);
-      }
       if (
         !open ||
         (previous &&

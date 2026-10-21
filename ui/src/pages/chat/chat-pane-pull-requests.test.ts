@@ -431,11 +431,12 @@ it.each(["shared", "personal"] as const)(
   },
 );
 
-it.each(["truncated history", "merged", "empty rate-limited"])(
+it.each(["truncated history", "merged", "empty rate-limited", "withdrawn rate-limited"])(
   "publishes pushed PR summaries: %s",
   async (mode) => {
     const refresh = mode === "truncated history";
-    const rateLimited = mode === "empty rate-limited";
+    const discardPrevious = mode === "withdrawn rate-limited";
+    const rateLimited = mode === "empty rate-limited" || discardPrevious;
     const pullRequests = refresh
       ? [
           pullRequest(999, "draft"),
@@ -444,9 +445,11 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       : rateLimited
         ? []
         : [pullRequest(111532, "merged")];
-    const summary = refresh
-      ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
-      : { numbers: [111532], state: "merged" };
+    const summary = discardPrevious
+      ? undefined
+      : refresh
+        ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
+        : { numbers: [111532], state: "merged" };
     const { pane, request, push, epoch, setPullRequestSummary } = createPullRequestPane();
     pane.refreshSessionPullRequests({ refresh });
     await Promise.resolve();
@@ -462,9 +465,10 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       pullRequests,
       rateLimited,
       status: rateLimited ? "rate-limited" : "ready",
+      discardPrevious: discardPrevious ? true : undefined,
     });
     await Promise.resolve();
-    if (rateLimited) {
+    if (rateLimited && !discardPrevious) {
       expect(setPullRequestSummary).not.toHaveBeenCalled();
     } else {
       expect(setPullRequestSummary).toHaveBeenCalledWith("agent:main:current", summary, epoch);

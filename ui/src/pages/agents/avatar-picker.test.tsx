@@ -4,14 +4,18 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import * as avatarImage from "./avatar-image.ts";
-import { AvatarPicker, type GeneratedAvatar } from "./avatar-picker.tsx";
+import { AvatarPicker, type AvatarPickerProps, type GeneratedAvatar } from "./avatar-picker.tsx";
 
 const avatar = "data:image/webp;base64,YXZhdGFy";
 const generated = { name: "Garden keeper", description: "A tiny gardener.", svg: "<svg/>" };
 
 afterEach(() => vi.restoreAllMocks());
 
-function mount(prompt: string | null = "Explorer", error?: Error) {
+function mount(
+  prompt: string | null = "Explorer",
+  error?: Error,
+  generate?: AvatarPickerProps["onGenerate"],
+) {
   vi.spyOn(avatarImage, "svgToAvatarDataUrl").mockResolvedValue({ ok: true, dataUrl: avatar });
   const pending = createDeferred<GeneratedAvatar>();
   const props = {
@@ -20,7 +24,7 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     disabled: false,
     onSelect: vi.fn(),
     onUpload: vi.fn(),
-    onGenerate: vi.fn(() => (error ? Promise.reject(error) : pending.promise)),
+    onGenerate: vi.fn(generate ?? (() => (error ? Promise.reject(error) : pending.promise))),
   };
   const view = mountSolid(AvatarPicker, props);
   const text = () => view.container.textContent;
@@ -32,12 +36,15 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     button.click();
     flush();
   };
-  if (prompt !== null) {
+  const describe = (value: string) => {
     click("Generate");
     const input = view.container.querySelector("textarea")!;
-    input.value = prompt;
+    input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+  };
+  if (prompt !== null) {
+    describe(prompt);
     click("Generate");
   }
   const finish = async () => {
@@ -46,7 +53,7 @@ function mount(prompt: string | null = "Explorer", error?: Error) {
     await Promise.resolve();
     flush();
   };
-  return { ...view, props, click, text, query, finish };
+  return { ...view, props, click, text, query, finish, describe };
 }
 
 it("offers bundled character presets without a Lobsterdex collection", () => {
@@ -94,4 +101,89 @@ it("shows generation failures without changing the selected avatar", async () =>
   const view = mount("Explorer", new Error("No model"));
   await waitForFast(() => expect(view.query('[role="alert"]')?.textContent).toContain("No model"));
   expect(view.props.onSelect).not.toHaveBeenCalled();
+});
+
+it.each(["success", "failure"] as const)(
+  "lets a replacement generation settle before retired work (%s)",
+  async (outcome) => {
+    const retired = createDeferred<GeneratedAvatar>();
+    const replacement = { ...generated, name: "New garden keeper" };
+    const generate = vi.fn().mockReturnValueOnce(retired.promise).mockResolvedValue(replacement);
+    const view = mount(null, undefined, generate);
+    view.describe("Old explorer");
+    view.click("Generate");
+    view.click("Blobster");
+    view.describe("New gardener");
+    view.click("Generate");
+    await waitForFast(() => expect(view.container.textContent).toContain(replacement.name));
+    if (outcome === "success") {
+      retired.resolve(generated);
+    } else {
+      retired.reject(new Error("Retired generation failed."));
+    }
+    await retired.promise.catch(() => undefined);
+    await Promise.resolve();
+    flush();
+    expect(view.container.textContent).toContain(replacement.name);
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(view.props.onSelect).not.toHaveBeenCalled();
+    view.click("Use avatar");
+    expect(view.props.onSelect).toHaveBeenCalledExactlyOnceWith(avatar);
+  },
+);
+
+it("prepares a confirmed preset without publishing a retired preparation", async () => {
+  const lobsterImage = await import("../../components/lobster-image.ts");
+  const prepared = createDeferred<HTMLImageElement | null>();
+  const retired = createDeferred<HTMLImageElement | null>();
+  vi.spyOn(lobsterImage, "loadLobsterImage")
+    .mockReturnValueOnce(prepared.promise)
+    .mockReturnValueOnce(retired.promise);
+  vi.spyOn(avatarImage, "imageToAvatarDataUrl").mockReturnValue({ ok: true, dataUrl: avatar });
+  const view = mount(null);
+  const selectPreset = () => {
+    view.container.querySelector<HTMLButtonElement>(".avatar-picker__preset")!.click();
+    flush();
+  };
+  selectPreset();
+  expect(view.container.querySelector('[role="status"]')).not.toBeNull();
+  expect(view.props.onSelect).not.toHaveBeenCalled();
+  prepared.resolve(document.createElement("img"));
+  await waitForFast(() => expect(view.props.onSelect).toHaveBeenCalledExactlyOnceWith(avatar));
+  selectPreset();
+  view.describe("A gardener");
+  view.click("Generate");
+  await view.finish();
+  await waitForFast(() => expect(view.container.textContent).toContain("Use avatar"));
+  retired.resolve(document.createElement("img"));
+  await retired.promise;
+  await Promise.resolve();
+  flush();
+  expect(view.props.onSelect).toHaveBeenCalledTimes(1);
+  expect(view.container.textContent).toContain(generated.name);
+});
+
+it("clears a failed preparation while a retry is pending and keeps its controls", async () => {
+  const retry = createDeferred<GeneratedAvatar>();
+  const generate = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Synthetic failure."))
+    .mockReturnValue(retry.promise);
+  const view = mount(null, undefined, generate);
+  view.describe("A gardener");
+  view.click("Generate");
+  await waitForFast(() =>
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic failure",
+    ),
+  );
+  const prompt = view.container.querySelector("textarea");
+  view.click("Generate");
+  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(view.container.querySelector("textarea")).toBe(prompt);
+  expect(view.container.textContent).toContain("Generating...");
+  retry.resolve(generated);
+  await waitForFast(() => expect(view.container.textContent).toContain("Use avatar"));
+  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(view.container.querySelector("textarea")).toBe(prompt);
 });

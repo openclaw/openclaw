@@ -1,6 +1,7 @@
 import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { EnvironmentAction, EnvironmentChangeCounts } from "./chat-details-environment.tsx";
 import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
@@ -8,6 +9,8 @@ import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatDetailsEnvironmentMobileProps = Omit<
   ChatDetailsEnvironmentProps,

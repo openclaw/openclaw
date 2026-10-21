@@ -4,6 +4,7 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -108,6 +109,79 @@ it("updates Explore results when the search changes", async () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(count));
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("claws.catalog.search", { query }));
   }
+});
+
+it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
+  const { request, setPhase, find } = createDetail();
+  await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+  const addButton = find("[data-claws-confirm] button");
+  const original = request.getMockImplementation()!;
+  const retry = createDeferredCore<unknown>();
+  let attempts = 0;
+  request.mockImplementation((method, params, options) => {
+    if (method === "claws.catalog.detail") {
+      if (++attempts === 1) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "Detail temporarily unavailable",
+        });
+      }
+      return retry.promise;
+    }
+    return original(method, params, options);
+  });
+  setPhase("reconnecting");
+  flush();
+  setPhase("connected");
+  await waitForSolid(() =>
+    expect(find("[role=alert]")?.textContent).toContain("Detail temporarily unavailable"),
+  );
+  expect(find("[role=alert]")?.textContent).not.toContain("INVALID_REQUEST");
+  expect(find("[data-claws-confirm] button")).toBe(addButton);
+  expect(addButton).toHaveProperty("disabled", true);
+  expect(find(".plugin-capabilities")).toBeNull();
+  find("[role=alert] button")!.click();
+  await waitForSolid(() => expect(find(".claws-content-skeleton")).not.toBeNull());
+  expect(find("[role=alert]")).toBeNull();
+  expect(addButton).toHaveProperty("disabled", true);
+  retry.resolve(await original("claws.catalog.detail", {}));
+  await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+  expect(attempts).toBe(2);
+  expect(find("[data-claws-confirm] button")).toBe(addButton);
+  expect(addButton).toHaveProperty("disabled", false);
+});
+
+it("retires pending detail loading immediately on disconnect and ignores its late failure", async () => {
+  const { request, setPhase, find } = createDetail();
+  await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+  const original = request.getMockImplementation()!;
+  const stale = createDeferredCore<unknown>();
+  let reads = 0;
+  request.mockImplementation((method, params, options) => {
+    if (method === "claws.catalog.detail" && ++reads === 1) {
+      return stale.promise;
+    }
+    return original(method, params, options);
+  });
+  setPhase("reconnecting");
+  flush();
+  expect(find(".plugin-capabilities")).not.toBeNull();
+  setPhase("connected");
+  await waitForSolid(() => expect(find(".claws-content-skeleton")).not.toBeNull());
+  expect(find("[data-claws-confirm] button")).toHaveProperty("disabled", true);
+  setPhase("reconnecting");
+  await waitForSolid(() => expect(find(".claws-content-skeleton")).toBeNull());
+  expect(find(".plugin-capabilities")).toBeNull();
+  expect(find("[data-claws-confirm] button")).toHaveProperty("disabled", true);
+  setPhase("connected");
+  await waitForSolid(() => expect(find(".plugin-capabilities")).not.toBeNull());
+  stale.reject(new Error("Retired detail failed"));
+  await stale.promise.catch(() => {});
+  flush();
+  expect(reads).toBe(2);
+  expect(find("[role=alert]")).toBeNull();
+  expect(find(".plugin-capabilities")).not.toBeNull();
+  expect(find("[data-claws-confirm] button")).toHaveProperty("disabled", false);
 });
 
 it("cancels superseded Explore debounce and ignores an older search result", async () => {

@@ -10,8 +10,9 @@ import {
   type MenuHandle,
   type MenuItem,
 } from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionDiffScope, SessionDiffFileView } from "./chat-sidebar-content-types.ts";
 import { CopyRow, desktopCopyPath } from "./session-diff-copy.tsx";
@@ -23,6 +24,8 @@ import {
   SessionDiffCollapseIcon,
 } from "./session-diff-icons.tsx";
 import type { SessionDiffMode } from "./session-diff-preferences.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 export { SessionDiffActionIcon } from "./session-diff-icons.tsx";
 
 export type SessionDiffMenuDraft =

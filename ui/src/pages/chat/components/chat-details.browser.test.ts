@@ -38,7 +38,12 @@ function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
     ...overrides,
   };
 }
-async function fixture(value = props(), width = 600, fullscreen = false) {
+async function fixture(
+  value = props(),
+  width = 600,
+  fullscreen = false,
+  nativePresentation?: ChatDetailsViewProps["nativePresentation"],
+) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
   document.head.append(styles);
@@ -68,6 +73,7 @@ async function fixture(value = props(), width = 600, fullscreen = false) {
     elements: { pane, frame, footer, header: fullscreen ? header : undefined },
     presentation: true,
     mobile: false,
+    nativePresentation,
     conversationVisible: !fullscreen,
     externalTrigger: fullscreen,
     setRef: (handle) => (details = handle),
@@ -120,6 +126,17 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
+  it("measures a closed desktop frame once during mounting", async () => {
+    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
+    try {
+      const { frame, panel } = await fixture(props(), 600, false, "desktop");
+      expect(panel.hidden).toBe(true);
+      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(1);
+    } finally {
+      measurement.mockRestore();
+    }
+  });
+
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
     const { update, updateChat, frame, conversation, footer, trigger, panel } = await fixture(

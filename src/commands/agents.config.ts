@@ -260,20 +260,9 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
-  const deletedAgentOwnedHeartbeat =
-    normalizeOptionalString(prunedDefaults?.heartbeat?.agentId) !== undefined &&
-    normalizeAgentId(prunedDefaults?.heartbeat?.agentId) === id;
-  const nextHeartbeat =
-    deletedAgentOwnedHeartbeat && nextAgentsList.length > 1
-      ? undefined
-      : clearOwnerRef(prunedDefaults?.heartbeat, "agents.defaults.heartbeat.agentId");
-  if (deletedAgentOwnedHeartbeat && nextAgentsList.length > 1) {
-    clearedOwnerRefs.push("agents.defaults.heartbeat");
-  }
   const nextDefaults = prunedDefaults
     ? {
         ...prunedDefaults,
-        heartbeat: nextHeartbeat,
         systemAgent: clearOwnerRef(
           prunedDefaults.systemAgent,
           "agents.defaults.systemAgent.agentId",

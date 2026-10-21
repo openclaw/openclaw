@@ -10,6 +10,7 @@ import { observeScrollState } from "../../../components/scroll-state-observer.ts
 import { progressCardPresentation } from "../../../components/session-progress-card.ts";
 import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
@@ -23,6 +24,8 @@ import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import { chatPullRequestId } from "./chat-pull-requests.ts";
 import type { ComposerActivityLayout } from "./chat-transcript-layout-owner.ts";
 import "./chat-activity-pills.css";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 registerEnglishCatalog(registerChatGoalsEnglish);
 registerEnglishCatalog(registerGitHubEnglish);

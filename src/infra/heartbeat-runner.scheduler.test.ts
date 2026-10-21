@@ -6,9 +6,6 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { createCronServiceState } from "../cron/service/state.js";
-import { wake as wakeCronService } from "../cron/service/wake.js";
-import { GatewayScheduler } from "./gateway-scheduler.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { heartbeatLog } from "./heartbeat-log.js";
 import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
@@ -385,41 +382,6 @@ describe("startHeartbeatRunner", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toContain("agents.defaults.heartbeat.agentId");
     expect(warn.mock.calls[0]?.[0]).toContain("agents.defaults.systemAgent.agentId");
-  });
-  it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async () => {
-    start(config("0m", { main: {} }));
-    const enqueueEvent = vi.fn();
-    const scheduler = new GatewayScheduler();
-    const state = createCronServiceState({
-      scheduler,
-      storePath: "/unused/cron.json",
-      cronEnabled: true,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent: enqueueEvent,
-      requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
-    });
-    expect(
-      await wakeCronService(state, {
-        mode: "next-heartbeat",
-        text: "Operator requested a session update.",
-        agentId: "main",
-        sessionKey,
-      }),
-    ).toEqual({ ok: true });
-    expect(enqueueEvent).toHaveBeenCalledWith("Operator requested a session update.", {
-      agentId: "main",
-      sessionKey,
-    });
-    await advance(1, 1);
-    expectRun(0, {
-      agentId: "main",
-      source: "manual",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey,
-    });
-    await scheduler.stop();
   });
 
   it.each([

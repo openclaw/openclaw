@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
@@ -55,13 +56,15 @@ function ReadAloudControl(props: ReadAloudProps) {
   createEffect(playbackIdentity, () => {
     stop();
     setError("");
-    // The config capability coalesces this with the other chat consumers.
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
+    // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
+    if (!runtime || !Object.hasOwn(runtime, "tts")) {
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
   });
   onSettled(() => cancelPlayback);
   const available = () => {
-    const snapshot = config.read().state.configSnapshot;
-    const runtime = snapshot?.runtimeConfig ?? snapshot?.config;
+    const runtime = currentDisplaySpeechConfig(config.read().state);
     return (
       Boolean(asOptionalRecord(runtime)?.tts) &&
       canCallGatewayMethod(gateway.read().snapshot, "tts.speak", "operator.write")
@@ -82,13 +85,12 @@ function ReadAloudControl(props: ReadAloudProps) {
     setPlaying(true);
     setError("");
     try {
-      const snapshot = context.runtimeConfig.state.configSnapshot;
       await playback.speak(
         client,
         props.text,
         "tts.speak",
         () => isCurrent() && available() && client.connectionGeneration === connectionGeneration,
-        resolveSpeechTextLimit(snapshot?.runtimeConfig ?? snapshot?.config),
+        resolveSpeechTextLimit(currentDisplaySpeechConfig(context.runtimeConfig.state)),
       );
     } catch (cause) {
       if (isCurrent()) {

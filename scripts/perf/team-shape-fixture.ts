@@ -145,7 +145,6 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       cron: { enabled: false },
       update: { checkOnStart: false },
       agents: {
-        defaults: { heartbeat: { every: "0m" } },
         entries: { main: { workspace: path.join(stateDir, "workspace") } },
       },
       logging: { file: path.join(stateDir, "gateway.log") },

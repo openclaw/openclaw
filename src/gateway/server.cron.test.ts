@@ -26,6 +26,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import {
+  cleanupCronTestRun,
   expectEnqueuedRunPayload,
   installCronSystemEventConsumer,
   makeCronJob,
@@ -89,25 +90,6 @@ async function rmTempDir(dir: string) {
     }
   }
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-async function cleanupCronTestRun(params: {
-  ws?: { close: () => void };
-  server?: { close: () => Promise<void> };
-  cronState?: DirectCronState;
-  prevSkipCron: string | undefined;
-}) {
-  params.ws?.close();
-  await params.server?.close();
-  params.cronState?.cron.stop();
-  testState.cronStorePath = undefined;
-  testState.cronEnabled = undefined;
-  testState.cronTriggersEnabled = undefined;
-  if (params.prevSkipCron === undefined) {
-    delete process.env.OPENCLAW_SKIP_CRON;
-    return;
-  }
-  process.env.OPENCLAW_SKIP_CRON = params.prevSkipCron;
 }
 
 let activeCronRun: Parameters<typeof cleanupCronTestRun>[0] | undefined;
@@ -342,12 +324,15 @@ describe("gateway server cron", () => {
   });
 
   afterEach(async () => {
-    disposeCronEventConsumer?.();
-    disposeCronEventConsumer = undefined;
     const run = activeCronRun;
     activeCronRun = undefined;
-    if (run) {
-      await cleanupCronTestRun(run);
+    try {
+      if (run) {
+        await cleanupCronTestRun(run);
+      }
+    } finally {
+      disposeCronEventConsumer?.();
+      disposeCronEventConsumer = undefined;
     }
     testState.sessionStorePath = undefined;
     testState.sessionConfig = undefined;
@@ -480,7 +465,7 @@ describe("gateway server cron", () => {
     });
   });
 
-  test("atomically rejects chat delivery after gateway config changes the default agent", async () => {
+  test("preserves an explicit main-session owner and rejects invalid chat delivery after default drift", async () => {
     await writeCronConfig({
       session: { mainKey: "main" },
       agents: { entries: { ops: {} } },
@@ -523,7 +508,6 @@ describe("gateway server cron", () => {
     expect(renamed.ok).toBe(true);
     expect(renamed.payload).toMatchObject({ name: "renamed after default drift", agentId: "ops" });
 
-    const afterRename = await cronState.request("cron.get", { id: jobId });
     for (const bindingPatch of [
       { agentId: "ops" },
       { sessionTarget: "main" },
@@ -531,11 +515,15 @@ describe("gateway server cron", () => {
     ]) {
       const retargeted = await cronState.request("cron.update", {
         id: jobId,
-        patch: { name: "must not persist binding", ...bindingPatch },
+        patch: { name: "retained explicit owner", ...bindingPatch },
       });
-      expect(retargeted.ok).toBe(false);
-      expect(retargeted.error?.message).toContain('sessionTarget "main" is only valid');
-      expect(await cronState.request("cron.get", { id: jobId })).toEqual(afterRename);
+      expect(retargeted.ok, retargeted.error?.message).toBe(true);
+      expect(retargeted.payload).toMatchObject({
+        name: "retained explicit owner",
+        agentId: "ops",
+        sessionTarget: "main",
+      });
+      expect(await cronState.request("cron.get", { id: jobId })).toEqual(retargeted);
     }
   });
 
@@ -624,6 +612,8 @@ describe("gateway server cron", () => {
       storePath: expect.stringContaining("openclaw.sqlite"),
     });
 
+    // Exercise live dispatch; overdue work at startup intentionally waits for recovery pacing.
+    await cronState.cron.start();
     const autoRes = await cronState.addJob("auto run test", {
       schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
       payload: { kind: "systemEvent", text: "auto" },
@@ -633,7 +623,6 @@ describe("gateway server cron", () => {
     const autoFinished = events.wait(
       (payload) => payload?.jobId === autoJobId && payload?.action === "finished",
     );
-    await cronState.cron.start();
     await autoFinished;
     const autoRuns = rows(await cronState.request("cron.runs", { id: autoJobId, limit: 10 }));
     expect(autoRuns.at(-1)).toMatchObject({ jobId: autoJobId });
@@ -795,7 +784,7 @@ describe("gateway server cron", () => {
 
     const { request, add, run } = await startCronClient();
 
-    disposeCronEventConsumer = await installCronSystemEventConsumer();
+    disposeCronEventConsumer = await installCronSystemEventConsumer("send webhook");
 
     const notifyJobId = await add("webhook enabled", {
       delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
@@ -1004,21 +993,7 @@ describe("gateway server cron", () => {
       const group = "-100155462274";
       const ownerSessionKey = `agent:main:telegram:group:${group}:topic:42`;
       const hour = new Date().getUTCHours();
-      // Our production heartbeat shape: none of it may apply to the repair turn.
-      testState.agentConfig = {
-        timeoutSeconds: 91,
-        heartbeat: {
-          every: "1h",
-          target: "none",
-          isolatedSession: true,
-          lightContext: true,
-          activeHours: {
-            start: `${String((hour + 2) % 24).padStart(2, "0")}:00`,
-            end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
-            timezone: "UTC",
-          },
-        },
-      };
+      testState.agentConfig = { timeoutSeconds: 91 };
       testState.sessionStorePath = path.join(caseDir, "sessions.json");
       await writeSessionStore({
         agentId: "main",
@@ -1035,6 +1010,24 @@ describe("gateway server cron", () => {
         },
       });
       const { request, run } = await startCronClient();
+      // The retired heartbeat is an ordinary automation; its window and target must
+      // not constrain an independent repair turn in the owner's conversation.
+      const proactive = await request(
+        "cron.add",
+        makeCronJob("Independent periodic check", {
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "Check pending work." },
+          delivery: { mode: "none" },
+          activeHours: {
+            start: `${String((hour + 2) % 24).padStart(2, "0")}:00`,
+            end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
+            timezone: "UTC",
+          },
+          idleOnly: true,
+        }),
+      );
+      expect(proactive.ok, JSON.stringify(proactive.error ?? null)).toBe(true);
       await prepareGatewayReplyRuntimeForTest({ force: true });
       const repairTurnStarted = createDeferred();
       const finishRepairTurn = createDeferred();
@@ -1065,7 +1058,7 @@ describe("gateway server cron", () => {
 
         await withinTest(repairTurnStarted.promise, signal);
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        // The owner topic's own session and route: no heartbeat side session or runtime warnings.
+        // The owner topic's own session and route: no periodic-job session or runtime warnings.
         expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({
           sessionKey: ownerSessionKey,
           deliver: true,
@@ -1104,4 +1097,3 @@ describe("gateway server cron", () => {
     },
   );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

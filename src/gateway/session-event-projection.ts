@@ -74,7 +74,6 @@ export function prepareSessionEventProjection(
           ...buildGatewaySessionSnapshot({
             sessionRow: rows.present(record),
             agentId: scope[0],
-            includeSession: true,
           }),
           ...source,
         };

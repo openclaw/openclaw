@@ -423,6 +423,30 @@ describe("Talk device and voice wake settings", () => {
     },
   );
 
+  it.each(["retry", "replacement"])("isolates trigger reads on %s", async (mode) => {
+    const pending = createDeferred<{ triggers: string[] }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ triggers: ["new trigger"] });
+    const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest: request });
+    const alert = () => page.querySelector("[role='alert']");
+    await waitForSolid(() => expect(page.querySelector(".model-picker")).not.toBeNull());
+    expect(page.querySelector("textarea")).toBeNull();
+    if (mode === "retry") {
+      pending.reject(new Error("trigger read unavailable"));
+      await waitForSolid(() => expect(alert()?.textContent).toContain("trigger read unavailable"));
+      alert()?.querySelector<HTMLButtonElement>("button")?.click();
+    } else {
+      setGatewayConnection(false);
+      setGatewayConnection(true, "wss://replacement-gateway.example.test");
+      pending.reject(new Error("retired Gateway read"));
+    }
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("new trigger"));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(alert()).toBeNull();
+  });
+
   it("retains rejected trigger edits and gives a visible retry action", async () => {
     const voiceWakeRequest = vi.fn(async (method: string) => {
       if (method === "voicewake.set") {

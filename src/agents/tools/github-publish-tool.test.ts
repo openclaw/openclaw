@@ -9,7 +9,10 @@ import type { SandboxContext } from "../sandbox/types.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createCronToolSchema } from "./cron-tool-schema.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { createGitHubPublishTool, githubPublishToolDefinition } from "./github-publish-tool.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
@@ -70,6 +73,22 @@ it("applies deployment action limits when publication and operator actions are a
     expect(Value.Check(expectDefined(allowed, "inspection tool").parameters, inspection)).toBe(
       true,
     );
+  }
+  const preparation = { ...inspection, action: "prepare_pr" };
+  expect(Value.Check(expectDefined(tool, "restricted tool").parameters, preparation)).toBe(false);
+  for (const definition of [githubPublishToolDefinition, createGitHubPublishTool()]) {
+    const [allowed] = applyGatewayToolPolicy([definition], {
+      tools: {
+        gatewayPolicy: {
+          allow: ["github_publish"],
+          actions: { github_publish: ["prepare_pr"] },
+        },
+      },
+    });
+    const parameters = expectDefined(allowed, "preparation tool").parameters;
+    expect(Value.Check(parameters, preparation)).toBe(true);
+    expect(Value.Check(parameters, inspection)).toBe(false);
+    expect(Value.Check(parameters, { pullRequestUrl: preparation.pullRequestUrl })).toBe(false);
   }
 });
 
@@ -160,9 +179,10 @@ it.each<{
         pullRequestUrl: "https://github.com/example/repository/pull/1",
       }),
     ).toBe(true);
-    for (const action of ["publish", "edit", "ready", "request_review"]) {
+    for (const action of ["publish", "prepare_pr", "edit", "ready", "request_review"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(true);
     }
+    expect(tool.description).toContain("prepare_pr");
     for (const action of ["inspect", "merge", "close"]) {
       expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
     }
@@ -175,14 +195,45 @@ it.each<{
   }
 });
 
-it.each(["inspect_pr", "edit", "refresh_base", "ready", "request_review", "upload_evidence"])(
-  "rejects draft on %s without changing PR state",
-  async (action) => {
-    const { callGateway, execute } = setup(true);
-    await expect(execute({ action, draft: false })).rejects.toThrow(
-      "draft only selects the state when publishing a new PR",
+it.each([
+  "inspect_pr",
+  "prepare_pr",
+  "edit",
+  "refresh_base",
+  "ready",
+  "request_review",
+  "upload_evidence",
+])("rejects draft on %s without changing PR state", async (action) => {
+  const { callGateway, execute } = setup(true);
+  await expect(execute({ action, draft: false })).rejects.toThrow(
+    "draft only selects the state when publishing a new PR",
+  );
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
+it.each(["managed-worktree", undefined] as const)(
+  "dispatches preparation with its current %s sandbox before owner qualification",
+  async (workspaceSource) => {
+    const sandbox = publicationSandbox({ workspaceSource });
+    const callGateway = vi
+      .mocked(callInProcessGatewayTool)
+      .mockReset()
+      .mockImplementation(async () => {
+        expect(getGatewayToolCallerIdentity()?.workspaceBaseRefreshSandbox).toBe(sandbox);
+        return publication;
+      });
+    const tool = createGitHubPublishTool({ sandbox });
+    const input = {
+      action: "prepare_pr",
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    };
+    expect(Value.Check(tool.parameters, input)).toBe(true);
+    await withGatewayToolCallerIdentity(caller, () => tool.execute("prepare", input));
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      "sessions.github.action",
+      { sessionKey: caller.sessionKey, ...input },
+      { timeoutMs: 600_000 },
     );
-    expect(callGateway).not.toHaveBeenCalled();
   },
 );
 
@@ -194,6 +245,11 @@ it("offers current-PR preparation without privileged actions", () => {
     action: "inspect_pr",
     pullRequestUrl: "https://github.com/example/repository/pull/1",
   });
+  const prepare = {
+    action: "prepare_pr",
+    pullRequestUrl: "https://github.com/example/repository/pull/1",
+  };
+  check(prepare);
   const request = {
     requestId: "a1111111-1111-4111-8111-111111111111",
     expectedHeadCommit: "a".repeat(40),
@@ -222,6 +278,7 @@ it("offers current-PR preparation without privileged actions", () => {
     actionsAvailable: true,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
+  expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
 });
 
 it.each(["available", "absent", "self-scoped", "denied"] as const)(

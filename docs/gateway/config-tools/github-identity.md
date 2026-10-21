@@ -120,6 +120,64 @@ and does not bind or prepare the PR in the conversation. Its result is data,
 not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
+To continue that PR in a local managed sandbox, use `github_publish` with
+`action: "prepare_pr"` and `pullRequestUrl`. A separate inspection call is
+optional: preparation verifies the current linked author, repository access,
+original head and publisher write eligibility again. The request can be made in
+one message or established earlier in the conversation before the URL arrives.
+An explicitly empty managed workspace can receive the PR without selecting a
+project first. Existing managed projects must match the PR's head or base
+repository. Ordinary unbound workspaces are not adopted by this action.
+
+Initial preparation requires a clean workspace without dirty, untracked, or
+unpublished work. Otherwise it preserves that work and asks you to keep or finish
+it separately before continuing. A clean workspace receives exactly the verified
+PR head's files, even when the selected project's base is newer. Preparation
+keeps the current directory and sandbox scope and records the original PR
+association. The sandbox's current branch and HEAD remain intact; the source
+files are staged for work on the PR.
+
+The conversation's PR display follows the prepared original PR, even before a
+new publication. It reads the PR's current status without implying that a newer
+remote head has been imported. A changed or inaccessible association clears the
+previous card. Guests can read only their own prepared PR in their own authorized
+conversation, using their current verified GitHub identity and repository access.
+This does not grant general GitHub browsing or additional write actions. Private
+PR metadata and CI details use the same trusted identity as the own-PR check.
+Ordinary temporary GitHub failures retain the same association's last verified
+status with a warning; a failed own-PR authorization clears it.
+
+Repeating a completed preparation of the same head preserves later edits without
+resetting or synchronizing source files. If the remote PR head has advanced,
+preparation refuses clearly; updating an already prepared workspace is not yet
+supported. The returned review base is the common ancestor of the accepted PR
+head and its base, so an older PR head does not make newer base work appear to be
+deleted.
+
+An interrupted initial preparation retains the same accepted source for retry.
+If recovery returns `headChanged: true`, it completed that original accepted
+head while GitHub has since advanced. Preparation makes no GitHub writes
+and is not a publication receipt. Source publication for an imported association
+remains unavailable; it refuses instead of creating a replacement PR.
+
+After preparation, existing metadata, readiness, fixed re-review and evidence
+actions select the original bound PR, including before any new push and when an
+older publication exists in the conversation. Read it with `edit` first. Its
+result includes `pullRequest` (URL, repository and branch), rather than claiming
+that preparation produced a `publication` receipt. For these imported actions,
+send the observed `expectedHeadCommit` without `requestId`; receipt-backed actions
+still require their publication's `requestId`. Every guest action rechecks the
+current linked author and private repository access. Writes also recheck current
+head and publisher eligibility; a changed target or authority refuses the action.
+
+Full-write operators can inspect, close or merge the bound original PR through
+the same existing actions and head preconditions, without linking the guest's
+GitHub identity to their own account. Existing child-session selection and guest
+restrictions remain in force. Preparation does not grant merge or close access,
+and an administrator joining does not elevate later guest turns.
+Keep the updated Gateway when continuing an imported workspace; older versions
+do not understand this association.
+
 Use `github_publish` with `action: "edit"` to change the current session's shared
 PR title or description without publishing source. Call it without `title`/`body`
 to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
@@ -179,7 +237,7 @@ reconcile the original attachment before requesting another transfer.
 If upload authority changes after the request begins, the denial also warns that
 an attachment may already exist.
 
-A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
+A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `expectedHeadCommit` and, for a publication receipt, its `requestId`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.
 

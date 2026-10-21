@@ -159,62 +159,6 @@ describe("config validation metadata", () => {
     ).toBe("pairing");
   });
 
-  it("normalizes composed local references without changing shared definitions", () => {
-    const schema = objectSchema({
-      accounts: {
-        type: "object",
-        properties: { default: { $ref: "#/$defs/Account" } },
-        patternProperties: { "^work-": { $ref: "#/$defs/Account" } },
-        additionalProperties: { $ref: "#/$defs/Account" },
-      },
-    });
-    const external = {
-      $ref: "#/$defs/Root",
-      $defs: { Root: { anyOf: [schema] }, Account: objectSchema({}) },
-    };
-    const original = structuredClone(external);
-    install(feishuPlugin(external));
-    const config = {
-      heartbeatVisibility: { showOk: true },
-      accounts: {
-        default: { heartbeatVisibility: { showOk: true } },
-        "work-qa": { heartbeatVisibility: { useIndicator: false } },
-        work: { heartbeatVisibility: { showAlerts: false } },
-      },
-    };
-    expect(validateFeishu(config).ok).toBe(true);
-    expect(
-      validateFeishu({
-        ...config,
-        accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } },
-      }).ok,
-    ).toBe(false);
-    expect(external).toEqual(original);
-  });
-
-  it("replaces stale heartbeat declarations while preserving open custom fields", () => {
-    const schema = objectSchema(
-      {
-        heartbeatVisibility: false,
-        accounts: { type: "object", additionalProperties: true },
-      },
-      { additionalProperties: true },
-    );
-    install(feishuPlugin(schema));
-    const base = {
-      customChannelField: true,
-      heartbeatVisibility: { showOk: true },
-      accounts: { work: { customAccountField: true, heartbeatVisibility: { showAlerts: false } } },
-    };
-    expect(validateFeishu(base).ok).toBe(true);
-    for (const config of [
-      { ...base, heartbeatVisibility: "enabled" },
-      { ...base, accounts: { work: { heartbeatVisibility: { showOk: "yes" } } } },
-    ]) {
-      expect(validateFeishu(config).ok).toBe(false);
-    }
-  });
-
   it("keeps schema ownership when closer root metadata shadows a later schema", () => {
     install(
       feishuPlugin(objectSchema({}), "openclaw" + String.fromCharCode(10, 27) + "[31m-lark"),

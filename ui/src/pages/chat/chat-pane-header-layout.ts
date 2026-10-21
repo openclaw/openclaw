@@ -2,6 +2,7 @@ import { merge, type Element } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
 import { chatGoalPresentation } from "./chat-goals.ts";
@@ -33,6 +34,8 @@ import {
   isSidebarNewTabActive,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 export type PaneDetailsActions = Pick<
   ChatDetailsProps,

@@ -5,6 +5,7 @@ import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
@@ -288,7 +289,7 @@ describe("cron next_check action", () => {
       RUN_ID,
       {
         sessionKey: `agent:main:cron:${JOB_ID}`,
-        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled }]]),
+        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled, assertCurrent: () => {} }]]),
       },
       { trackOwner: true, ownsContext: true },
     );
@@ -313,11 +314,11 @@ describe("cron next_check action", () => {
     await nextCheck();
 
     runRegistry.claimAgentRunContext(RUN_ID, {
-      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true }]]),
+      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true, assertCurrent: () => {} }]]),
     });
     await nextCheck("next-job", "30m");
 
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });
