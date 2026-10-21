@@ -541,7 +541,7 @@ export function createAgentMemory(
     projection.revision();
     return wikiPreview?.source ?? null;
   });
-  const wikiPage = createMemo(() => wikiSource()?.read ?? null);
+  const wikiPage: () => WikiPagePreview | null = createMemo(() => wikiSource()?.read ?? null);
   publish = projection.publish;
   onSettled(() => {
     const agentTarget = getInitialAgentTarget();
