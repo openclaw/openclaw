@@ -141,7 +141,7 @@ export const baseProps = () => ({
   setTextScale: vi.fn(),
   sidebarLiveActivity: true,
   hiddenSessionCatalogIds: new Set<string>(),
-  hiddenSessionCatalogLabels: new Map<string, string>(),
+  hiddenSessionCatalogLabels: { read: () => new Map<string, string>(), scope: null },
   setSessionCatalogHidden: vi.fn(),
   openLinksExternally: false,
   composerHoldToRecord: true,

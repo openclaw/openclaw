@@ -371,8 +371,11 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   flush();
   expect(page.dreaming).toMatchObject({
     dreamDiaryContent: "Retained diary",
-    wikiPreview: { page: { path: "retained.md" }, loading: true },
+    wikiPreview: { page: { path: "retained.md" } },
   });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle).toMatchObject({ open: true, disabled: true });
   expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(true);
   refresh = true;
@@ -384,7 +387,10 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
   expect(page.request.mock.calls.filter(([method]) => method === "wiki.get")).toHaveLength(2);
   stale.resolve({ title: "Old", path: "retained.md", content: "Stale preview" });
   await preview;
-  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" }, loading: true });
+  expect(page.dreaming.wikiPreview).toMatchObject({ page: { content: "" } });
+  expect(page.text(".dreams-diary__preview-body .dreams-diary__empty-text")).toBe(
+    "Loading wiki page…",
+  );
   expect(page.toggle.open).toBe(true);
   freshPreview.resolve({ title: "Fresh", path: "retained.md", content: "Fresh preview" });
   await page.waitText(PREVIEW_TEXT, "Fresh preview");
@@ -455,6 +461,37 @@ it.each(["support-only", ""])("loads scoped wiki preview content %j", async (con
   expect(page.text(".dreams-diary__preview-hint")).toContain("6001");
   click(page.container, ".dreams-diary__preview-footer button");
   expect(page.dreaming.wikiPreview).toBeNull();
+});
+
+it("keeps the preview dialog and focused close control when its read fails, then opens a fresh page", async () => {
+  const failure = deferred<unknown>();
+  let fail = true;
+  const page = await createPage({
+    "wiki.get": () =>
+      fail ? failure.promise : { title: "Fresh", path: "fresh.md", content: "Fresh wiki content" },
+  });
+  click(page.container, "#dreams-tab-diary");
+  const pending = page.dreaming.onOpenWikiPage("failed.md");
+  flush();
+  const dialog = page.query("openclaw-modal-dialog");
+  expect(dialog).not.toBeNull();
+  await waitForSolid(() => expect(dialog?.querySelector("dialog")?.dataset.phase).toBe("open"));
+  const close = page.query<HTMLButtonElement>(".dreams-diary__preview-footer button")!;
+  close.focus();
+  expect(document.activeElement).toBe(close);
+  failure.reject(new Error("Wiki request failed"));
+  await pending;
+  await page.waitText(".dreams-diary__error", "Wiki request failed");
+  expect(page.query("openclaw-modal-dialog")).toBe(dialog);
+  expect(page.query(".dreams-diary__preview-footer button")).toBe(close);
+  expect(document.activeElement).toBe(close);
+  close.click();
+  flush();
+  expect(page.query("openclaw-modal-dialog")).toBeNull();
+  fail = false;
+  await page.dreaming.onOpenWikiPage("fresh.md");
+  await page.waitText(PREVIEW_TEXT, "Fresh wiki content");
+  expect(page.query(".dreams-diary__error")).toBeNull();
 });
 
 it("updates the mounted view across tab selection and owner notifications", async () => {

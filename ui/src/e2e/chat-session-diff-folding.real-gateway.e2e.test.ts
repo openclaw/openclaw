@@ -177,6 +177,38 @@ suite.define(() => {
           );
         });
         const servedAssets: { url: string; sha256: string }[] = [];
+        const diffRequests: { ok?: boolean; computing?: boolean; updatedLine?: boolean }[] = [];
+        page.on("websocket", (socket) => {
+          const requests = new Map<string, (typeof diffRequests)[number]>();
+          socket.on("framesent", ({ payload }) => {
+            const frame: { type: string; id: string; method?: string } = JSON.parse(
+              payload.toString(),
+            );
+            if (frame.type === "req" && frame.method === "sessions.diff") {
+              const request = {};
+              requests.set(frame.id, request);
+              diffRequests.push(request);
+            }
+          });
+          socket.on("framereceived", ({ payload }) => {
+            const frame: {
+              type: string;
+              id: string;
+              ok?: boolean;
+              payload?: { computing?: boolean; files?: { patch?: string }[] };
+            } = JSON.parse(payload.toString());
+            const request = requests.get(frame.id);
+            if (frame.type === "res" && request) {
+              Object.assign(request, {
+                ok: frame.ok,
+                computing: frame.payload?.computing === true,
+                updatedLine: frame.payload?.files?.some((file) =>
+                  file.patch?.includes('"nothing"'),
+                ),
+              });
+            }
+          });
+        });
         page.on("response", (response) => {
           const assetUrl = new URL(response.url()).pathname;
           if (/\/assets\/index-[^/]+\.js$/.test(assetUrl)) {
@@ -297,7 +329,29 @@ suite.define(() => {
         await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
         expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
         await fileToggle.click();
-        await file.getByText('return "nothing";', { exact: true }).waitFor();
+        try {
+          await file.getByText('return "nothing";', { exact: true }).waitFor();
+        } catch (error) {
+          const state = await file
+            .evaluate((element) => ({
+              busy: element.closest(".session-diff")?.getAttribute("aria-busy"),
+              expanded: element
+                .querySelector(".session-diff__file-toggle")
+                ?.getAttribute("aria-expanded"),
+              updatedText: element.textContent?.includes('return "nothing";'),
+              placeholders: element.querySelectorAll(".session-diff__code-placeholder").length,
+              disclosure: [
+                ...element.querySelectorAll<HTMLElement>(".session-diff__disclosure"),
+              ].map((node) => ({
+                hidden: node.hidden,
+                inert: node.inert,
+                visible: node.checkVisibility(),
+              })),
+            }))
+            .catch(() => null);
+          console.info("Session diff refresh failure:", JSON.stringify({ diffRequests, state }));
+          throw error;
+        }
         expect(await placeholder.count()).toBe(0);
         report.changedPatchRefreshMs =
           (await page.evaluate(
@@ -319,6 +373,7 @@ suite.define(() => {
         }
         expect(servedAssets.length).toBeGreaterThan(0);
         report.assets = servedAssets;
+        report.diffRequests = diffRequests;
         report.browser = page.context().browser()?.version();
         report.assertions =
           "default-collapsed; explicit file expansion; DOM absence; split/unified retention; source/highlight fidelity; nested state; real gap expansion; 64 long replacements; refresh retention; file-menu actions; real patch invalidation";

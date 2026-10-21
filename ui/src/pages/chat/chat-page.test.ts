@@ -37,7 +37,7 @@ import {
   setViewerPresenceContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
