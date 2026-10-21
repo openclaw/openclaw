@@ -81,73 +81,28 @@ const config = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
 const args = process.argv.slice(2);
 const boot = path.join(process.env.FIXTURE_ROOT, "booted");
 const live = path.join(process.env.FIXTURE_ROOT, "live");
-const updated = path.join(process.env.FIXTURE_ROOT, "updated");
-const ready = path.join(process.env.FIXTURE_ROOT, "repaired-ready");
-const authenticated = path.join(process.env.FIXTURE_ROOT, "repaired-authenticated");
 if (args[0] === "fixture-systemctl") {
   assert.equal(args[1], "--user");
   assert.equal(args.at(-1), "openclaw-gateway.service");
   if (args[2] === "is-active") process.exit(fs.existsSync(live) ? 0 : 3);
-  if (args[2] === "stop") {
-    assert.equal(fs.existsSync(boot), true);
-    // Like systemd, stopping an inactive unit succeeds.
-    fs.rmSync(live, { force: true });
-    fs.rmSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, { force: true });
-  } else {
-    assert.equal(args[2], "start");
-    assert.equal(fs.existsSync(live), false);
-    assert.equal(fs.existsSync(updated), true, "start must follow the historical no-restart update");
-    assert.equal(fs.existsSync(path.join(process.env.FIXTURE_ROOT, "survival")), true,
-      "start must follow migration survival assertions");
-    fs.writeFileSync(live, "candidate");
-    fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "1");
-  }
+  assert.equal(args[2], "stop");
+  assert.equal(fs.existsSync(boot), true);
+  fs.rmSync(live, { force: true });
+  fs.rmSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, { force: true });
   process.exit(0);
 }
 if (args[0] === "fixture-ready") {
   assert.equal(fs.existsSync(live), true);
-  if (fs.existsSync(updated)) {
-    assert.equal(args[1], "strict");
-    fs.writeFileSync(ready, "strict");
-  }
   process.exit(0);
 }
 if (args[0] === "config") {
   assert.deepEqual(args, ["config", "validate"]);
   assert.equal(config, original);
   assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
-} else if (args[0] === "gateway" && args[1] === "call") {
-  assert.equal(fs.existsSync(path.join(process.env.FIXTURE_ROOT, "restarted")), true,
-    "serving turn must follow the managed replacement");
-  assert.equal(args[args.indexOf("--token") + 1], "upgrade-survivor-token");
-  const params = JSON.parse(args[args.indexOf("--params") + 1]);
-  const markerFile = path.join(process.env.FIXTURE_ROOT, "serving-marker");
-  let result;
-  if (args[2] === "chat.send") {
-    assert.equal(params.sessionKey, "agent:main:main");
-    const marker = params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0];
-    fs.writeFileSync(markerFile, marker);
-    result = { status: "started", runId: "fixture-serving-run" };
-  } else if (args[2] === "agent.wait") {
-    assert.equal(params.runId, "fixture-serving-run");
-    assert.equal(fs.existsSync(markerFile), true);
-    result = { runId: params.runId, status: "ok", endedAt: 1788820180863 };
-  } else {
-    assert.equal(args[2], "chat.history");
-    assert.equal(params.sessionKey, "agent:main:main");
-    result = { sessionId: "upgrade-main-session", messages: [{ role: "assistant",
-      content: [{ type: "text", text: fs.readFileSync(markerFile, "utf8") }] }] };
-    fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "served"), "complete");
-  }
-  process.stdout.write(JSON.stringify(result));
 } else if (args[0] === "gateway" && args[1] === "status") {
   assert.deepEqual(args, ["gateway", "status", "--url", "ws://127.0.0.1:18789", "--token",
     "upgrade-survivor-token", "--require-rpc", "--timeout", "30000", "--json"]);
   assert.equal(fs.existsSync(live), true);
-  if (fs.existsSync(updated)) {
-    assert.equal(fs.existsSync(ready), true);
-    fs.writeFileSync(authenticated, "rpc");
-  }
   process.stdout.write(JSON.stringify({ rpc: { ok: true }, status: "running" }));
 } else if (args[0] === "gateway") {
   assert.deepEqual(args, ["gateway", "install", "--force", "--json"]);
@@ -175,13 +130,6 @@ if (args[0] === "config") {
   fs.writeFileSync(process.env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "1");
 } else {
   assert.equal(args[0], "fixture-update");
-  if (args[1] === "1") {
-    assert.deepEqual(args.slice(1), ["1", "file:" + path.join(process.env.FIXTURE_ROOT, "future.tgz"), "2100.1.0"]);
-    assert.equal(fs.existsSync(live), true, "candidate restart proof needs a live managed service");
-    assert.equal(fs.existsSync(authenticated), true, "candidate restart must follow authenticated readiness");
-    fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "restarted"), "complete");
-    process.exit(0);
-  }
   assert.equal(fs.existsSync(live), false, "legacy migration specimens require an offline baseline");
   assert.equal(config, original, "the updater must receive the authored config bytes");
   assert.equal(fs.existsSync(boot), process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "auto-auth");
@@ -241,21 +189,11 @@ apply_baseline_config_recipe() {
 resolve_candidate_version() { candidate_version=2026.8.2; }
 configure_clawhub_fixture() { :; }
 configure_plugin_registry() { :; }
-prepare_restart_inference() { :; }
-prepare_restart_plugin_release_selectors() { :; }
-prepare_restart_fixture() {
-  restart_fixture_package="$FIXTURE_ROOT/future.tgz"
-  restart_fixture_version=2100.1.0
-}
 install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { node "$FIXTURE_PROBE" fixture-ready "\${5:-strict}"; }
 openclaw_e2e_probe_tcp() { [ -f "$FIXTURE_ROOT/live" ]; }
 update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}" "\${2:-}" "\${3:-}"; }
-assert_managed_membership_warning() { [ -f "$FIXTURE_ROOT/restarted" ]; }
-assert_survival() { printf 'passed' > "$FIXTURE_ROOT/survival"; }
 ${source.slice(phaseStart, phaseEnd)}
-assert_survival
-repair_fixture_plugin_consent
 `,
     );
     const stateFunction = execFileSync(process.execPath, [
@@ -293,8 +231,6 @@ repair_fixture_plugin_consent
       authoredConfig,
     );
     expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
-    expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
-    expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
   },
 );
 

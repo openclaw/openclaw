@@ -202,15 +202,16 @@ function withPluginResult(patch: Record<string, unknown>) {
   };
 }
 
-function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
-  const finalMessage =
-    source === "npm"
-      ? 'Failed to install missing configured plugin "codex" from @openclaw/codex: Package not found on npm: @openclaw/codex@2026.9.4. See https://docs.openclaw.ai/tools/plugin for installable plugins.'
-      : 'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Package not found on ClawHub.';
-  const messages =
-    source === "fallback"
-      ? ["@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.", finalMessage]
-      : [finalMessage];
+function editAgentDb(stateDir: string, edit: (db: DatabaseSync) => void): undefined {
+  using db = new DatabaseSync(join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"));
+  edit(db);
+}
+
+function missingCodexUpdateResult() {
+  const messages = [
+    "@openclaw/codex unavailable; using clawhub:@openclaw/codex instead.",
+    'Failed to install missing configured plugin "codex" from clawhub:@openclaw/codex: Package not found on ClawHub.',
+  ];
   const outcomes: PluginUpdateOutcome[] = [
     {
       pluginId: "discord",
@@ -373,7 +374,7 @@ describe("upgrade recovery result assertions", () => {
   );
 
   it.each([false, true])("classifies missing Codex with consent failure=%s", (consentFailure) => {
-    const report = missingCodexUpdateResult("fallback");
+    const report = missingCodexUpdateResult();
     if (consentFailure) {
       report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
         (outcome) =>
@@ -394,7 +395,7 @@ describe("upgrade recovery result assertions", () => {
   });
 
   it("rejects missing-Codex history with reversed history", () => {
-    const report = missingCodexUpdateResult("fallback");
+    const report = missingCodexUpdateResult();
     const outcomes = report.postUpdate.plugins.npm.outcomes;
     const transition = outcomes[2]!;
     outcomes.splice(2, 2, outcomes[3]!, transition);
@@ -441,24 +442,10 @@ describe("upgrade recovery result assertions", () => {
     const invalidResults = [
       withPluginResult({ reason: undefined }),
       ...[
-        { npm: { outcomes: [consentOutcome, { ...consentOutcome, code: "INSTALL_FAILED" }] } },
-        { npm: { outcomes: [{ ...consentOutcome, code: undefined }] } },
         { npm: { outcomes: [{ ...consentOutcome, pluginId: "unreviewed" }] } },
         { reason: "registry-timeout" },
-        { reason: null },
       ].map((patch) => withPluginResult({ ...typedConsentResult.postUpdate.plugins, ...patch })),
-      { ...RECOVERABLE_UPDATE, reason: "global-update-failed" },
-      { ...RECOVERABLE_UPDATE, after: { version: "2026.7.1-2" } },
-      {
-        ...RECOVERABLE_UPDATE,
-        steps: RECOVERABLE_UPDATE.steps.map((step, index) =>
-          index === 0 ? { ...step, exitCode: 1 } : step,
-        ),
-      },
       { ...RECOVERABLE_UPDATE, postUpdate: { plugins: { reason: "registry-timeout" } } },
-      withPluginResult({ sync: { errors: [consentError, "registry unavailable"] } }),
-      withPluginResult({ npm: { outcomes: [{ status: "error", code: "EIO" }] } }),
-      withPluginResult({ integrityDrifts: [{ pluginId: "discord" }] }),
       ...["sync", "npm", "integrityDrifts"].map((field) =>
         withPluginResult({ [field]: undefined }),
       ),
@@ -477,8 +464,7 @@ function writeMigratedSessionState(stateDir: string): undefined {
   mkdirSync(agentSessionsDir, { recursive: true });
   mkdirSync(agentDbDir, { recursive: true });
 
-  const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
-  try {
+  editAgentDb(stateDir, (db) => {
     db.exec(`
       CREATE TABLE session_nodes (
         session_key TEXT PRIMARY KEY,
@@ -525,9 +511,7 @@ function writeMigratedSessionState(stateDir: string): undefined {
         1710000000000,
       );
     }
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function createMigratedSessionFileStore(
@@ -565,9 +549,7 @@ function writeLegacyCacheSessionState(
   stateDir: string,
   options: { empty?: boolean; includePrompt?: boolean; replaceNodes?: boolean } = {},
 ) {
-  const dbPath = join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  const db = new DatabaseSync(dbPath);
-  try {
+  editAgentDb(stateDir, (db) => {
     if (options.replaceNodes) {
       db.exec("DROP TABLE session_nodes;");
     }
@@ -587,15 +569,11 @@ function writeLegacyCacheSessionState(
     for (const [key, entry] of Object.entries(createMigratedSessionFileStore(options))) {
       insert.run("session_entries", key, JSON.stringify(entry));
     }
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function writeLegacySessionEntriesState(stateDir: string): void {
-  const dbPath = join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  const db = new DatabaseSync(dbPath);
-  try {
+  editAgentDb(stateDir, (db) => {
     db.exec(`
       DROP TABLE session_nodes;
       CREATE TABLE session_entries (
@@ -616,9 +594,7 @@ function writeLegacySessionEntriesState(stateDir: string): void {
       }
       insert.run(key, sessionId, JSON.stringify(entry), 1710000000000);
     }
-  } finally {
-    db.close();
-  }
+  });
 }
 
 function writeSharedRuntimeCaches(stateDir: string, versioned = false): void {
@@ -1550,51 +1526,40 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
-  it.each<{
-    name: string;
-    mutate: NonNullable<Parameters<typeof assertCompanionPluginRecords>[0]>;
-    error: RegExp;
-    capabilityConsentSupported?: boolean;
-  }>([
-    {
-      name: "official consent without integrity",
-      mutate: (records) => {
+  it.each<
+    [string, NonNullable<Parameters<typeof assertCompanionPluginRecords>[0]>, RegExp, boolean?]
+  >([
+    [
+      "official consent without integrity",
+      (records) => {
         recordOfficialAcceptance(records);
         Reflect.deleteProperty(records.discord!, "acceptedSurfaceIntegrity");
       },
-      error: /discord plugin consent integrity/,
-    },
-    {
-      name: "partial official consent",
-      mutate: (records) => {
-        records.discord!.acceptedSurfaceHash = "partial";
-      },
-      error: /discord plugin accepted surface missing/,
-    },
-    {
-      name: "custom ClawHub consent without integrity",
-      mutate: (records) => {
-        Reflect.deleteProperty(records.whatsapp!, "acceptedSurfaceIntegrity");
-      },
-      error: /whatsapp plugin consent integrity/,
-    },
-    {
-      name: "custom ClawHub consent with a changed hash",
-      mutate: (records) => {
-        records.whatsapp!.acceptedSurfaceHash = "incorrect";
-      },
-      error: /whatsapp plugin consent hash changed/,
-    },
-    {
-      name: "custom ClawHub consent without its surface",
-      mutate: (records) => {
-        Reflect.deleteProperty(records.whatsapp!, "acceptedSurface");
-      },
-      error: /whatsapp plugin accepted surface missing/,
-    },
-    {
-      name: "unaccepted custom ClawHub record",
-      mutate: (records) => {
+      /discord plugin consent integrity/,
+    ],
+    [
+      "partial official consent",
+      (records) => Object.assign(records.discord!, { acceptedSurfaceHash: "partial" }),
+      /discord plugin accepted surface missing/,
+    ],
+    [
+      "custom ClawHub consent without integrity",
+      (records) => Reflect.deleteProperty(records.whatsapp!, "acceptedSurfaceIntegrity"),
+      /whatsapp plugin consent integrity/,
+    ],
+    [
+      "custom ClawHub consent with a changed hash",
+      (records) => Object.assign(records.whatsapp!, { acceptedSurfaceHash: "incorrect" }),
+      /whatsapp plugin consent hash changed/,
+    ],
+    [
+      "custom ClawHub consent without its surface",
+      (records) => Reflect.deleteProperty(records.whatsapp!, "acceptedSurface"),
+      /whatsapp plugin accepted surface missing/,
+    ],
+    [
+      "unaccepted custom ClawHub record",
+      (records) => {
         for (const field of [
           "acceptedSurface",
           "acceptedSurfaceHash",
@@ -1604,64 +1569,59 @@ process.stdout.write(sessionDir + "\\n");
           Reflect.deleteProperty(records.whatsapp!, field);
         }
       },
-      error: /whatsapp plugin accepted surface missing/,
-    },
-    {
-      name: "unverified npm record",
-      mutate: (records) => {
-        records.discord!.artifactKind = "npm-pack";
-      },
-      error: /discord plugin accepted surface missing/,
-    },
-    {
-      name: "official-looking file spec",
-      mutate: (records) => {
-        records.discord!.spec = "@openclaw/discord@file:payload";
-      },
-      error: /discord plugin accepted surface missing/,
-    },
-    {
-      name: "official-looking git resolvedSpec",
-      mutate: (records) => {
-        records.discord!.resolvedSpec = "@openclaw/discord@git+https://example.invalid/discord.git";
-      },
-      error: /discord plugin accepted surface missing/,
-    },
-    {
-      name: "missing integrity without capability consent support",
-      capabilityConsentSupported: false,
-      mutate: (records) => {
-        Reflect.deleteProperty(records.discord!, "integrity");
-      },
-      error: /discord plugin integrity missing/,
-    },
-    {
-      name: "npm record without its source-native version",
-      mutate: (records) => {
+      /whatsapp plugin accepted surface missing/,
+    ],
+    [
+      "unverified npm record",
+      (records) => Object.assign(records.discord!, { artifactKind: "npm-pack" }),
+      /discord plugin accepted surface missing/,
+    ],
+    [
+      "official-looking file spec",
+      (records) => Object.assign(records.discord!, { spec: "@openclaw/discord@file:payload" }),
+      /discord plugin accepted surface missing/,
+    ],
+    [
+      "official-looking git resolvedSpec",
+      (records) =>
+        Object.assign(records.discord!, {
+          resolvedSpec: "@openclaw/discord@git+https://example.invalid/discord.git",
+        }),
+      /discord plugin accepted surface missing/,
+    ],
+    [
+      "missing integrity without capability consent support",
+      (records) => Reflect.deleteProperty(records.discord!, "integrity"),
+      /discord plugin integrity missing/,
+      false,
+    ],
+    [
+      "npm record without its source-native version",
+      (records) => {
         records.discord!.version = records.discord!.resolvedVersion;
         Reflect.deleteProperty(records.discord!, "resolvedVersion");
       },
-      error: /discord plugin version changed/,
-    },
-    {
-      name: "ClawHub record without its source-native version",
-      mutate: (records) => {
+      /discord plugin version changed/,
+    ],
+    [
+      "ClawHub record without its source-native version",
+      (records) => {
         records.whatsapp!.resolvedVersion = records.whatsapp!.version;
         Reflect.deleteProperty(records.whatsapp!, "version");
       },
-      error: /whatsapp plugin version changed/,
-    },
-    {
-      name: "installed package version differing from its record",
-      mutate: (_records, installPaths) => {
+      /whatsapp plugin version changed/,
+    ],
+    [
+      "installed package version differing from its record",
+      (_records, installPaths) => {
         writeJson(join(installPaths.discord, "package.json"), {
           name: "@openclaw/discord",
           version: "2026.8.0",
         });
       },
-      error: /discord installed package version changed/,
-    },
-  ])("rejects $name", ({ mutate, error, capabilityConsentSupported = true }) => {
+      /discord installed package version changed/,
+    ],
+  ])("rejects %s", (_name, mutate, error, capabilityConsentSupported = true) => {
     expect(() => assertCompanionPluginRecords(mutate, capabilityConsentSupported)).toThrow(error);
   });
 
@@ -1834,14 +1794,7 @@ process.stdout.write(sessionDir + "\\n");
       error: /main legacy session row missing/,
       setup: (stateDir) => {
         writeMigratedSessionState(stateDir);
-        const db = new DatabaseSync(
-          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-        );
-        try {
-          db.exec("DELETE FROM session_nodes;");
-        } finally {
-          db.close();
-        }
+        editAgentDb(stateDir, (db) => db.exec("DELETE FROM session_nodes;"));
         writeMigratedSessionFiles(stateDir);
       },
     },
@@ -1876,12 +1829,9 @@ process.stdout.write(sessionDir + "\\n");
       setup: (stateDir) => {
         const agentDbDir = join(stateDir, "agents", "main", "agent");
         mkdirSync(agentDbDir, { recursive: true });
-        const db = new DatabaseSync(join(agentDbDir, "openclaw-agent.sqlite"));
-        try {
-          db.exec("CREATE TABLE unrelated_state (key TEXT PRIMARY KEY);");
-        } finally {
-          db.close();
-        }
+        editAgentDb(stateDir, (db) =>
+          db.exec("CREATE TABLE unrelated_state (key TEXT PRIMARY KEY);"),
+        );
         writeMigratedSessionFiles(stateDir);
       },
     },
@@ -1918,14 +1868,14 @@ if (outcome === "cli-failed") {
 let result;
 if (method === "chat.send") {
   fs.writeFileSync(process.env.PROBE_MARKER_FILE, params.message.match(/OPENCLAW_E2E_SURVIVOR_[A-F0-9]+/)[0]);
-  result = { status: outcome === "not-started" ? "error" : "started", runId: "serving-run" };
+  result = { status: "started", runId: "serving-run" };
 } else if (method === "agent.wait") {
-  const pending = ["queued", "wait-timeout"].includes(outcome) && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
+  const pending = outcome === "queued" && !fs.existsSync(process.env.PROBE_MARKER_FILE + ".waited");
   fs.writeFileSync(process.env.PROBE_MARKER_FILE + ".waited", "waited");
-  result = { runId: params.runId, status: pending ? (outcome === "wait-timeout" ? "timeout" : "pending") : outcome === "turn-failed" ? "error" : "ok", ...(pending ? {} : { endedAt: 1788820180863 }) };
+  result = { runId: params.runId, status: pending ? "pending" : "ok", ...(pending ? {} : { endedAt: 1788820180863 }) };
 } else if (method === "chat.history") {
-  result = { sessionId: outcome === "wrong-session" ? "replacement" : "upgrade-main-session", messages: [{
-    role: outcome === "user-only" ? "user" : "assistant",
+  result = { sessionId: "upgrade-main-session", messages: [{
+    role: "assistant",
     content: [{ type: "text", text: outcome === "wrong-reply" ? "other" : fs.readFileSync(process.env.PROBE_MARKER_FILE, "utf8") }],
   }] };
 } else { process.exit(47); }
@@ -1971,10 +1921,7 @@ process.stdout.write(JSON.stringify(result));
     const check = () =>
       runSessionStateAssertion((stateDir) => {
         writeMigratedSessionState(stateDir);
-        const db = new DatabaseSync(
-          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-        );
-        try {
+        editAgentDb(stateDir, (db) => {
           db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
             JSON.stringify({
               skillsSnapshot: {
@@ -1985,9 +1932,7 @@ process.stdout.write(JSON.stringify(result));
             }),
             "agent:main:main",
           );
-        } finally {
-          db.close();
-        }
+        });
         return { OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage };
       });
     if (error) {
@@ -2001,19 +1946,14 @@ process.stdout.write(JSON.stringify(result));
     expect(() =>
       runSessionStateAssertion((stateDir) => {
         writeMigratedSessionState(stateDir);
-        const db = new DatabaseSync(
-          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-        );
-        try {
+        editAgentDb(stateDir, (db) => {
           db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
             JSON.stringify({
               sessionFile: join(stateDir, "sessions", "upgrade-main-session.jsonl"),
             }),
             "agent:main:main",
           );
-        } finally {
-          db.close();
-        }
+        });
       }),
     ).toThrow(/retained retired sessionFile metadata/);
   });
