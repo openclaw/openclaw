@@ -288,3 +288,25 @@ it("skips incomplete cache entries and chooses the newest executable revision", 
     ),
   ).toEqual({ kind: "custom", path: installed });
 });
+
+it("finds the macOS default cache without a configured browser path", () => {
+  vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", "");
+  vi.spyOn(os, "homedir").mockReturnValue("/Users/test");
+  const read = vi.spyOn(fs, "readdirSync").mockReturnValue([] as never);
+  expect(findPlaywrightChromiumExecutable("darwin")).toBeNull();
+  expect(read).toHaveBeenCalledWith("/Users/test/Library/Caches/ms-playwright");
+});
+
+it("keeps explicit shell identity discoverable independently of configured launch mode", () => {
+  const executable = path.join(tempDirs.make("openclaw-explicit-shell-"), "chrome-headless-shell");
+  fs.writeFileSync(executable, "", { mode: 0o755 });
+  expect(
+    resolveBrowserExecutableForPlatform(
+      resolveBrowserConfig({
+        executablePath: executable,
+        headless: false,
+      }),
+      "linux",
+    ),
+  ).toEqual({ kind: "custom", path: executable });
+});

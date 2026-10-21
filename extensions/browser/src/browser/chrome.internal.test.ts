@@ -457,27 +457,6 @@ describe("chrome.ts internal", () => {
       running.proc.kill?.("SIGTERM");
     }
 
-    async function verifySingletonRetry(
-      executablePath: string,
-      lockPid: number,
-      first: FakeProc,
-      second: FakeProc,
-    ) {
-      await withMockChromeCdpServer({
-        wsPath: "/devtools/browser/SINGLETON_RETRY",
-        run: async (baseUrl) => {
-          const profile = makeProfile(Number(new URL(baseUrl).port), { executablePath });
-          const directory = managedDirectory(profile.name);
-          await seedLockedProfile(profile, `${os.hostname()}-${lockPid}`, true);
-          const running = await launchOpenClawChrome(
-            makeResolved({ localLaunchTimeoutMs: 20 }),
-            profile,
-          );
-          expectSingletonRetry(running, first, second, directory);
-        },
-      });
-    }
-
     async function abortPendingLaunch(proc: FakeProc, reason: Error) {
       stubBrowserExecutableAndPrefs("present");
       spawnMock.mockReturnValue(proc);
@@ -570,49 +549,49 @@ describe("chrome.ts internal", () => {
       expect(ensurePortAvailableMock).toHaveBeenCalledWith(51111, "127.0.0.1");
     });
 
-    it.each([
-      ["runtime", "present", 51112],
-      ["bootstrap", "missing", 51113],
-    ] as const)(
-      "rejects a %s spawn error without attempting another launch",
-      async (stage, preferences, port) => {
-        const runtime = stage === "runtime";
-        stubBrowserExecutableAndPrefs(preferences);
-        const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
-        let failedProc: FakeProc | undefined;
-        spawnMock.mockImplementation(() => {
-          failedProc = makeFailedSpawnProc(spawnError);
-          return failedProc;
-        });
-        const fetchMock = vi.fn();
-        if (runtime) {
-          vi.stubGlobal("fetch", fetchMock);
-        }
-        const controller = new AbortController();
-        const addAbortListener = vi.spyOn(controller.signal, "addEventListener");
-        const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
-        await expect(
-          launchOpenClawChrome(
-            makeResolved(),
-            makeProfile(port),
-            runtime ? { signal: controller.signal } : undefined,
-          ),
-        ).rejects.toBe(spawnError);
-        expect(spawnMock).toHaveBeenCalledTimes(1);
-        if (!runtime) {
-          return;
-        }
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(failedProc?.stderr.listenerCount("data")).toBe(0);
-        const spawnAbortListener = addAbortListener.mock.calls.find(
-          ([eventName]) => eventName === "abort",
-        )?.[1];
-        expect(spawnAbortListener).toEqual(expect.any(Function));
-        expect(removeAbortListener).toHaveBeenCalledWith("abort", spawnAbortListener);
-        controller.abort(new Error("late lifecycle invalidation"));
-        expect(failedProc?.kill).not.toHaveBeenCalled();
-      },
-    );
+    it("rejects a runtime spawn error before polling CDP", async () => {
+      stubBrowserExecutableAndPrefs("present");
+      const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+      let failedProc: FakeProc | undefined;
+      spawnMock.mockImplementation(() => {
+        failedProc = makeFailedSpawnProc(spawnError);
+        return failedProc;
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const controller = new AbortController();
+      const addAbortListener = vi.spyOn(controller.signal, "addEventListener");
+      const removeAbortListener = vi.spyOn(controller.signal, "removeEventListener");
+
+      await expect(
+        launchOpenClawChrome(makeResolved(), makeProfile(51112), {
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(spawnError);
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(failedProc?.stderr.listenerCount("data")).toBe(0);
+      const spawnAbortListener = addAbortListener.mock.calls.find(
+        ([eventName]) => eventName === "abort",
+      )?.[1];
+      expect(spawnAbortListener).toEqual(expect.any(Function));
+      expect(removeAbortListener).toHaveBeenCalledWith("abort", spawnAbortListener);
+      controller.abort(new Error("late lifecycle invalidation"));
+      expect(failedProc?.kill).not.toHaveBeenCalled();
+    });
+
+    it("rejects a bootstrap spawn error without attempting the runtime launch", async () => {
+      stubBrowserExecutableAndPrefs("missing");
+      const spawnError = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+      spawnMock.mockImplementation(() => makeFailedSpawnProc(spawnError));
+
+      await expect(launchOpenClawChrome(makeResolved(), makeProfile(51113))).rejects.toBe(
+        spawnError,
+      );
+
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
 
     it("keeps handling process errors after a successful spawn", async () => {
       stubBrowserExecutableAndPrefs("present");
@@ -697,7 +676,11 @@ describe("chrome.ts internal", () => {
       // Mock executable discovery to a truthy path.
       stubBrowserExecutableAndPrefs("present");
 
-      spawnMock.mockImplementation(() => makeFakeProc());
+      let spawnCalls = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCalls += 1;
+        return makeFakeProc();
+      });
       vi.stubEnv("HTTP_PROXY", "http://proxy.test:8080");
       vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8443");
       vi.stubEnv("NO_PROXY", "localhost");
@@ -712,7 +695,7 @@ describe("chrome.ts internal", () => {
           const profile = makeProfile(Number(port));
           const running = await launchOpenClawChrome(makeResolved(), profile);
           expect(running.pid).toBe(4242);
-          expect(spawnMock).toHaveBeenCalled();
+          expect(spawnCalls).toBeGreaterThanOrEqual(1);
           const options = requireSpawnCall()[2];
           if (!options || typeof options !== "object") {
             throw new Error("expected spawn options for call #1");
@@ -811,7 +794,21 @@ describe("chrome.ts internal", () => {
       const secondProc = makeFakeProc();
       stubSingletonRetry(firstProc, secondProc, Buffer.alloc(70 * 1024, "x"));
 
-      await verifySingletonRetry("/tmp/profile-chrome", 535, firstProc, secondProc);
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/SINGLETON_RETRY",
+        run: async (baseUrl) => {
+          const port = Number(new URL(baseUrl).port);
+          const profile = { ...makeProfile(port), executablePath: "/tmp/profile-chrome" };
+          const userDataDir = managedDirectory(profile.name);
+          await seedLockedProfile(profile, `${os.hostname()}-535`, true);
+
+          const running = await launchOpenClawChrome(
+            makeResolved({ localLaunchTimeoutMs: 20 }),
+            profile,
+          );
+          expectSingletonRetry(running, firstProc, secondProc, userDataDir);
+        },
+      });
     });
 
     it.runIf(process.platform === "linux")(
@@ -825,7 +822,25 @@ describe("chrome.ts internal", () => {
           const secondProc = makeFakeProc();
           stubSingletonRetry(firstProc, secondProc);
 
-          await verifySingletonRetry(executablePath, zombiePid, firstProc, secondProc);
+          await withMockChromeCdpServer({
+            wsPath: "/devtools/browser/ZOMBIE_SINGLETON_RETRY",
+            run: async (baseUrl) => {
+              const port = Number(new URL(baseUrl).port);
+              const profile = {
+                ...makeProfile(port),
+                cdpUrl: baseUrl,
+                executablePath,
+              } as ResolvedBrowserProfile;
+              const userDataDir = managedDirectory(profile.name);
+              await seedLockedProfile(profile, `${os.hostname()}-${zombiePid}`, true);
+
+              const running = await launchOpenClawChrome(
+                makeResolved({ localLaunchTimeoutMs: 20 }),
+                profile,
+              );
+              expectSingletonRetry(running, firstProc, secondProc, userDataDir);
+            },
+          });
         } finally {
           await zombie.reap();
         }
@@ -854,8 +869,10 @@ describe("chrome.ts internal", () => {
         kill: vi.fn(() => true),
       });
 
-      spawnMock
-        .mockImplementationOnce(() => {
+      let spawnCalls = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCalls += 1;
+        if (spawnCalls === 1) {
           queueMicrotask(() => {
             firstProc.stderr.emit(
               "data",
@@ -863,8 +880,9 @@ describe("chrome.ts internal", () => {
             );
           });
           return firstProc;
-        })
-        .mockReturnValue(survivingProc);
+        }
+        return survivingProc;
+      });
 
       const profile = { ...makeProfile(51109), executablePath: "/tmp/profile-chrome" };
       managedDirectory(profile.name);
@@ -879,7 +897,7 @@ describe("chrome.ts internal", () => {
       expect(error).toMatchObject({ running: { pid: 62002, proc: survivingProc } });
       expect(firstProc.kill).toHaveBeenCalledWith("SIGKILL");
       expect(survivingProc.kill).toHaveBeenCalledWith("SIGKILL");
-      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(spawnCalls).toBe(2);
     });
 
     it("stops a lock-owned stale managed CDP listener before relaunching", async () => {
@@ -1356,7 +1374,11 @@ describe("chrome.ts internal", () => {
       });
       const bootstrapProc = makeFakeProc({ exitCode: 0 });
       const runtimeProc = makeFakeProc();
-      spawnMock.mockReturnValueOnce(bootstrapProc).mockReturnValue(runtimeProc);
+      let spawnCount = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCount += 1;
+        return spawnCount === 1 ? bootstrapProc : runtimeProc;
+      });
       await withMockChromeCdpServer({
         wsPath: "/devtools/browser/BOOTSTRAP_BREAK",
         run: async (baseUrl) => {
@@ -1365,7 +1387,7 @@ describe("chrome.ts internal", () => {
             makeResolved({ localLaunchTimeoutMs: 20 }),
             makeProfile(port),
           );
-          expect(spawnMock).toHaveBeenCalledTimes(2);
+          expect(spawnCount).toBe(2);
           expect(running.proc).toBe(runtimeProc);
           running.proc.kill?.("SIGTERM");
         },
@@ -1453,6 +1475,24 @@ describe("chrome.ts internal", () => {
           await expect(isChromeCdpReady(baseUrl, 50, 10)).resolves.toBe(false);
         },
       });
+    });
+  });
+
+  describe("isChromeCdpReady swallowed errors", () => {
+    it("returns false when a strict SSRF policy blocks the CDP endpoint", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools/browser/x" }),
+        } as unknown as Response),
+      );
+      await expect(
+        isChromeCdpReady("http://169.254.169.254:9222", 50, 50, {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        }),
+      ).resolves.toBe(false);
     });
   });
 });
