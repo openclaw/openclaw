@@ -53,7 +53,6 @@ type ToolReceipt = {
   delivery?: { status: string };
 };
 type RequestEvidence = {
-  body: ProviderRequest;
   kind: "title" | "parent" | "child";
   replyStep: boolean;
   announceStep: boolean;
@@ -113,7 +112,6 @@ async function startProofProvider() {
           ? "child"
           : "parent";
       const evidence: RequestEvidence = {
-        body,
         kind,
         replyStep: developerText.includes(REPLY_STEP_MARKER),
         announceStep: userText.includes(ANNOUNCE_STEP_MARKER),
@@ -322,16 +320,6 @@ it("returns the waited reply inline without an announce run against the child", 
     .logs()
     .split("\n")
     .filter((line) => line.includes("sessions_send announce"));
-  console.log(
-    JSON.stringify({
-      phase: "sessions-send-visible-child",
-      requests: provider.requests,
-      spawn: provider.spawn,
-      send: provider.send,
-      child,
-      announceLines,
-    }),
-  );
   expect(provider.errors).toEqual([]);
   expect(childKey).toMatch(CHILD_KEY_PATTERN);
   expect(child).toMatchObject({ spawnedBy: PARENT_KEY, parentSessionKey: PARENT_KEY });

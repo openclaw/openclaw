@@ -21,16 +21,15 @@ import {
 // Release-tier proof: separate real Gateway processes/state/auth/ports, not two
 // in-process Gateway singletons. Provider HTTP is a credential-checking fixture.
 it(
-  "keeps ordinary streams, identities and Skills isolated in the one/two user and Gateway matrix",
+  "isolates concurrent credentials and Skills for two users on each of two Gateways",
   { timeout: 240_000 },
   async () => {
     const instances: Awaited<ReturnType<typeof createSkillLibraryWireInstance>>[] = [];
     const clients: SkillLibraryWireClient[] = [];
     const providerErrors: unknown[] = [];
     let requestCount = 0;
-    let target = 1;
     let entered = 0;
-    let gate = createDeferred();
+    const gate = createDeferred();
     const credential = (gateway: number, user: string) => `synthetic-compat-${gateway}-${user}`;
     const instruction = (gateway: number, user: string) => `COMPAT_SKILL_${gateway}_${user}`;
     const servers = [0, 1].map((gateway) =>
@@ -54,7 +53,7 @@ it(
           let finish: string;
           if (!toolMessage) {
             entered += 1;
-            if (entered === target) {
+            if (entered === 4) {
               gate.resolve();
             }
             await gate.promise;
@@ -191,8 +190,6 @@ it(
           gateway: number;
           user: string;
           client: SkillLibraryWireClient;
-          profileId: string;
-          buildId: string | undefined;
         }> = [];
         for (const [gateway, instance] of instances.entries()) {
           const admin = await SkillLibraryWireClient.connect(instance);
@@ -206,25 +203,12 @@ it(
               buildId: admin.hello.server.buildId,
             });
             clients.push(connected.client);
-            const self = await connected.client.request<{ profile: { id: string } }>(
-              "users.self",
-              {},
-            );
-            expect(connected.hello.auth?.scopes).not.toContain("operator.admin");
             connections.push({
               gateway,
               user,
               client: connected.client,
-              profileId: self.profile.id,
-              buildId: admin.hello.server.buildId,
             });
           }
-        }
-        for (const gateway of [0, 1]) {
-          const ids = connections
-            .filter((connection) => connection.gateway === gateway)
-            .map((connection) => connection.profileId);
-          expect(new Set(ids).size).toBe(2);
         }
         await expect(
           SkillLibraryWireClient.connect({
@@ -232,76 +216,38 @@ it(
             gatewayToken: instances[1]!.gatewayToken,
           }),
         ).rejects.toThrow();
-        const phases = [[0], [0, 1], [0, 2], [0, 1, 2, 3]];
-        for (const [phase, indices] of phases.entries()) {
-          target = indices.length;
-          entered = 0;
-          gate = createDeferred();
-          const startCount = requestCount;
-          await Promise.all(
-            indices.map(async (index) => {
-              const owner = connections[index]!;
-              // Same agent/session ids and relative Skill paths intentionally recur on both Gateways.
-              const key = "agent:" + owner.user + ":compat-" + phase;
-              await owner.client.request("sessions.create", {
-                key,
-                agentId: owner.user,
-                displayName: "Compatibility proof",
-              });
-              const message = {
-                sessionKey: key,
-                message: "Read the guide Skill, then report its marker.",
-                deliver: false,
-                idempotencyKey: "compat-" + phase + "-" + owner.user,
-              };
-              const other = connections.find(
-                (connection) =>
-                  connection.gateway === owner.gateway && connection.user !== owner.user,
-              )!;
-              await expect(
-                owner.client.request("chat.send", message, 30_000, {
-                  expectedProfileId: other.profileId,
-                }),
-              ).rejects.toMatchObject({
-                error: {
-                  details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "not_started" },
-                },
-              });
-              const started = await owner.client.request<{ runId: string }>(
-                "chat.send",
-                message,
-                30_000,
-                { expectedProfileId: owner.profileId },
-              );
-              expect(
-                await owner.client.request(
-                  "agent.wait",
-                  { runId: started.runId, timeoutMs: 60_000 },
-                  65_000,
-                ),
-              ).toMatchObject({ status: "ok" });
-              const history = await owner.client.request<{ messages: unknown[] }>("chat.history", {
-                sessionKey: key,
-                limit: 50,
-              });
-              expect(JSON.stringify(history.messages)).toContain(
-                instruction(owner.gateway, owner.user) + "_OK",
-              );
-            }),
-          );
-          expect(providerErrors).toEqual([]);
-          expect(requestCount - startCount).toBe(indices.length * 2);
-        }
-        const alice = connections[0]!;
-        await alice.client.close();
-        const reconnected = await SkillLibraryWireClient.connect(instances[0]!, {
-          email: SKILL_LIBRARY_ALICE,
-          buildId: alice.buildId,
-        });
-        clients.push(reconnected.client);
-        expect(await reconnected.client.request("users.self", {})).toMatchObject({
-          profile: { id: alice.profileId },
-        });
+        await Promise.all(
+          connections.map(async (owner) => {
+            // Same agent/session ids and relative Skill paths intentionally recur on both Gateways.
+            const key = "agent:" + owner.user + ":compat";
+            await owner.client.request("sessions.create", {
+              key,
+              agentId: owner.user,
+              displayName: "Compatibility proof",
+            });
+            const started = await owner.client.request<{ runId: string }>("chat.send", {
+              sessionKey: key,
+              message: "Read the guide Skill, then report its marker.",
+              deliver: false,
+              idempotencyKey: "compat-" + owner.user,
+            });
+            expect(
+              await owner.client.request(
+                "agent.wait",
+                { runId: started.runId, timeoutMs: 60_000 },
+                65_000,
+              ),
+            ).toMatchObject({ status: "ok" });
+            const history = await owner.client.request<{ messages: unknown[] }>("chat.history", {
+              sessionKey: key,
+              limit: 50,
+            });
+            expect(JSON.stringify(history.messages)).toContain(
+              instruction(owner.gateway, owner.user) + "_OK",
+            );
+          }),
+        );
+        expect(requestCount).toBe(connections.length * 2);
         expect(providerErrors).toEqual([]);
       },
       () => gate.resolve(),

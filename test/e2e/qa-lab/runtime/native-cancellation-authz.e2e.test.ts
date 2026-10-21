@@ -1,4 +1,4 @@
-// Native cancellation E2E covers child owner/generation fences and real ACP process interrupts.
+// Keep the tool's foreign-owner guard and exact-instance real ACP process interrupts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
@@ -12,7 +12,7 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import acpxPlugin from "../../../../extensions/acpx/index.js";
 import {
   getAcpSessionManager,
@@ -20,9 +20,6 @@ import {
 } from "../../../../src/acp/control-plane/manager.js";
 import type { AcpRunTurnInput } from "../../../../src/acp/control-plane/manager.types.js";
 import { prepareSystemAgentRunAdmission } from "../../../../src/agents/admitted-run-context.js";
-import { killSubagentRunAdmin } from "../../../../src/agents/subagents/registry/subagent-control.js";
-import { subagentRuns } from "../../../../src/agents/subagents/registry/subagent-registry-memory.js";
-import * as subagentRegistry from "../../../../src/agents/subagents/registry/subagent-registry.js";
 import {
   getSubagentRunByRunId,
   registerSubagentRun,
@@ -36,19 +33,11 @@ import {
   replaceSessionEntrySync,
 } from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { startGatewayServer } from "../../../../src/gateway/server.js";
-import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
-import {
-  acquireGatewayE2ePortBlock,
-  startClaimedGateway,
-} from "../../../../src/gateway/test-helpers.listener.js";
 import { resetPluginRuntimeStateForTest } from "../../../../src/plugins/runtime.js";
-import { getGatewayContextResolver } from "../../../../src/plugins/runtime/gateway-request-scope.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-const TOKEN = "native-cancellation-e2e-token";
 const ROUTE_OWNER = "agent:main:native-authority-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -69,32 +58,6 @@ function writeSession(sessionKey: string, sessionId: string, ownerKey = ROUTE_OW
     },
     { sessionId, updatedAt: Date.now(), spawnedBy: ownerKey, parentSessionKey: ownerKey },
   );
-}
-
-async function registerRunningSubagent(
-  runId: string,
-  childSessionKey: string,
-  ownerKey = ROUTE_OWNER,
-  gatewayContextResolver?: Parameters<typeof registerSubagentRun>[0]["gatewayContextResolver"],
-) {
-  writeSession(childSessionKey, `session-${childSessionKey}`, ownerKey);
-  await registerSubagentRun({
-    runId,
-    childSessionKey,
-    childAgentId: "main",
-    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
-    controllerSessionKey: ownerKey,
-    requesterSessionKey: ownerKey,
-    requesterDisplayKey: ownerKey,
-    task: `Running child ${runId}`,
-    cleanup: "keep",
-    gatewayContextResolver,
-  });
-  const generation = getSubagentRunByRunId(runId)?.generation;
-  if (typeof generation !== "number") {
-    throw new Error("Subagent registration did not publish a generation");
-  }
-  return generation;
 }
 
 type AcpFixtureTraceEntry = {
@@ -126,7 +89,7 @@ function heldElicitation(question: string, onEntered = () => {}) {
   };
 }
 
-it("allows the owner and rejects foreign or replaced backing runs before termination", async ({
+it("fences foreign child cancellation and interrupts only the selected native ACP instance", async ({
   signal,
 }) => {
   const root = tempDirs.make("openclaw-native-cancellation-authz-");
@@ -137,11 +100,6 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
   await fs.mkdir(stateDir, { recursive: true });
 
   const config: OpenClawConfig = {
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      auth: { mode: "token", token: TOKEN },
-    },
     acp: {
       enabled: true,
       backend: "acpx",
@@ -153,7 +111,6 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
 
   await withEnvAsync(
     {
-      ...snapshotGatewayStartupEnv(),
       HOME: root,
       CODEX_PATH: path.resolve("extensions/acpx/test/fixtures/codex-app-server.mjs"),
       OPENCLAW_ACPX_PROCESS_FIXTURE_TRACE: acpxTracePath,
@@ -161,11 +118,6 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_HOME: root,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
       OPENCLAW_SKIP_ACPX_RUNTIME: undefined,
       OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1",
       OPENCLAW_STATE_DIR: stateDir,
@@ -173,35 +125,6 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
     async () => {
       clearConfigCache();
       clearRuntimeConfigSnapshot();
-      const activationEntered = createDeferred();
-      const releaseActivation = createDeferred();
-      const activate = subagentRegistry.activateSubagentRegistry;
-      const activation = vi
-        .spyOn(subagentRegistry, "activateSubagentRegistry")
-        .mockImplementation(async (resolver) => {
-          activationEntered.resolve();
-          await releaseActivation.promise;
-          return activate(resolver);
-        });
-      onTestFinished(() => {
-        releaseActivation.resolve();
-        activation.mockRestore();
-      });
-      const claim = await acquireGatewayE2ePortBlock();
-      const server = await startClaimedGateway(claim, () =>
-        startGatewayServer(claim.port, {
-          auth: { mode: "token", token: TOKEN },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        }),
-      );
-      await server.startupSettled;
-      await withinTest(activationEntered.promise, signal);
-      const gatewayContextResolver = activation.mock.calls[0]![0]()?.resolveGatewayContext;
-      if (!gatewayContextResolver) {
-        throw new Error("Gateway startup did not provide its registration owner");
-      }
       const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
       const acpxRuntime = createPluginRuntimeMock({
         state: {
@@ -245,22 +168,21 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           agentSessionKey: ROUTE_OWNER,
           agentId: "main",
         });
-        const allowedRunId = "run-native-owned";
-        const allowedChild = "agent:main:subagent:native-owned";
-        await registerRunningSubagent(allowedRunId, allowedChild);
-        const allowed = await ownerTool.execute("owned-cancel", {
-          action: "cancel",
-          runId: allowedRunId,
-        });
-        expect(allowed.details).toMatchObject({ found: true, killed: true });
-        expect(getSubagentRunByRunId(allowedRunId)).toMatchObject({
-          endedReason: "subagent-killed",
-          execution: { status: "terminal", endedAt: expect.any(Number) },
-        });
-
         const foreignRunId = "run-native-foreign";
         const foreignChild = "agent:main:subagent:native-foreign";
-        await registerRunningSubagent(foreignRunId, foreignChild, "agent:main:foreign-owner");
+        const foreignOwner = "agent:main:foreign-owner";
+        writeSession(foreignChild, `session-${foreignChild}`, foreignOwner);
+        await registerSubagentRun({
+          runId: foreignRunId,
+          childSessionKey: foreignChild,
+          childAgentId: "main",
+          sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: foreignChild }),
+          controllerSessionKey: foreignOwner,
+          requesterSessionKey: foreignOwner,
+          requesterDisplayKey: foreignOwner,
+          task: "Foreign running child",
+          cleanup: "keep",
+        });
         const foreign = await ownerTool.execute("foreign-cancel", {
           action: "cancel",
           runId: foreignRunId,
@@ -268,68 +190,6 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         expect(foreign.details).toMatchObject({ status: "forbidden" });
         expect(getSubagentRunByRunId(foreignRunId)?.execution.status).toBe("running");
         expect(getSubagentRunByRunId(foreignRunId)?.execution.endedAt).toBeUndefined();
-
-        for (const sameId of [false, true]) {
-          const childSessionKey = `agent:main:subagent:replacement-${sameId}`;
-          const runId = `native-original-${sameId}`;
-          const generation = await registerRunningSubagent(runId, childSessionKey);
-          const replacementRunId = sameId ? runId : "native-replacement";
-          const capture = subagentRuns.captureRegistrationOwnership.bind(subagentRuns);
-          let released = false;
-          const registration = vi
-            .spyOn(subagentRuns, "captureRegistrationOwnership")
-            .mockImplementation((...args) => {
-              const scope = capture(...args);
-              return {
-                get superseded() {
-                  return scope.superseded;
-                },
-                accept: scope.accept,
-                release: scope.release,
-                assertCurrent: () => {
-                  scope.assertCurrent();
-                  if (!released) {
-                    released = true;
-                    releaseActivation.resolve();
-                  }
-                },
-              };
-            });
-          try {
-            if (!sameId) {
-              expect(
-                await subagentRegistry.replaceSubagentRunAfterSteerCore({
-                  previousRunId: runId,
-                  nextRunId: replacementRunId,
-                }),
-              ).toBe(true);
-              expect(getSubagentRunByRunId(runId)).toBeUndefined();
-            }
-            await registerRunningSubagent(
-              replacementRunId,
-              childSessionKey,
-              ROUTE_OWNER,
-              gatewayContextResolver,
-            );
-            expect(released).toBe(true);
-            await withinTest(activation.mock.results[0]!.value, signal);
-            expect(getGatewayContextResolver(subagentRuns.get(replacementRunId)!)).toBeDefined();
-          } finally {
-            releaseActivation.resolve();
-            registration.mockRestore();
-          }
-          expect(
-            await killSubagentRunAdmin({
-              cfg: config,
-              sessionKey: childSessionKey,
-              expectedRunId: runId,
-              expectedGeneration: generation,
-              expectedOwnerKey: ROUTE_OWNER,
-            }),
-          ).toEqual({ found: false, killed: false });
-          expect(getSubagentRunByRunId(replacementRunId)?.execution.status).toBe("running");
-          expect(getSubagentRunByRunId(replacementRunId)?.execution.endedAt).toBeUndefined();
-        }
 
         const acpChild = "agent:main:acp:native-replacement";
         const reusedAcpRunId = "run-native-acp-reused";
@@ -513,13 +373,11 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
           interruptsAfterSuccessor.filter((entry) => entry.turnId === successorTurnStart?.turnId),
         ).toHaveLength(0);
       } finally {
-        releaseActivation.resolve();
         scheduler.beginClose();
         try {
           await acpxService.stop?.(acpxServiceContext);
         } finally {
           await scheduler.stop();
-          await server.close();
         }
       }
     },

@@ -1,7 +1,7 @@
 // QA Lab product proof for doctor gateway auth and SecretRef behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { stripAnsiSequences } from "../../../../packages/terminal-core/src/ansi.js";
 import { createConfigIO } from "../../../../src/config/io.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
@@ -74,94 +74,92 @@ async function createDoctorFixture() {
 
 // Windows ACL failure diagnostics are owned by focused resolver and Doctor
 // tests; this broad process proof owns the platform-neutral product flow.
-describe.skipIf(process.platform === "win32")("doctor auth and SecretRef product proof", () => {
-  it(
-    "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
-    { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
-    async () => {
-      const { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig } =
-        await createDoctorFixture();
+it.skipIf(process.platform === "win32")(
+  "preserves SecretRef ownership while proving resolution, fallback, exec gating, and token generation",
+  { timeout: DOCTOR_SCENARIO_TIMEOUT_MS },
+  async () => {
+    const { instance, doctor, normalized, readToken, writeConfig, localGatewayConfig } =
+      await createDoctorFixture();
 
-      const resolvedValue = "qa-resolved-gateway-value";
-      instance.env.QA_DOCTOR_GATEWAY_TOKEN = resolvedValue;
-      await writeConfig(
-        localGatewayConfig({
-          source: "env",
-          provider: "default",
-          id: "QA_DOCTOR_GATEWAY_TOKEN",
-        }),
-      );
-      const resolvedOutput = await doctor();
-      expect(resolvedOutput).not.toContain("Gateway token SecretRef could not be resolved");
-      expect(resolvedOutput).not.toContain(resolvedValue);
-
-      delete instance.env.QA_DOCTOR_MISSING_GATEWAY_TOKEN;
-      instance.env.OPENCLAW_GATEWAY_TOKEN = "qa-ambient-token-must-not-win";
-      const unresolvedRef = {
-        source: "env" as const,
+    const resolvedValue = "qa-resolved-gateway-value";
+    instance.env.QA_DOCTOR_GATEWAY_TOKEN = resolvedValue;
+    await writeConfig(
+      localGatewayConfig({
+        source: "env",
         provider: "default",
-        id: "QA_DOCTOR_MISSING_GATEWAY_TOKEN",
-      };
-      await writeConfig(localGatewayConfig(unresolvedRef));
-      const unresolvedOutput = await doctor("--repair", "--yes", "--generate-gateway-token");
-      expect(unresolvedOutput).toContain("Gateway token SecretRef could not be resolved");
-      expect(unresolvedOutput).toContain(
-        "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-      );
-      expect(unresolvedOutput).not.toContain("qa-ambient-token-must-not-win");
-      expect(await readToken()).toEqual(unresolvedRef);
+        id: "QA_DOCTOR_GATEWAY_TOKEN",
+      }),
+    );
+    const resolvedOutput = await doctor();
+    expect(resolvedOutput).not.toContain("Gateway token SecretRef could not be resolved");
+    expect(resolvedOutput).not.toContain(resolvedValue);
 
-      const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
-      const fileSecret = "qa-file-token";
-      await fs.writeFile(filePath, JSON.stringify({ gateway: { token: fileSecret } }), {
-        mode: 0o600,
-      });
+    delete instance.env.QA_DOCTOR_MISSING_GATEWAY_TOKEN;
+    instance.env.OPENCLAW_GATEWAY_TOKEN = "qa-ambient-token-must-not-win";
+    const unresolvedRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "QA_DOCTOR_MISSING_GATEWAY_TOKEN",
+    };
+    await writeConfig(localGatewayConfig(unresolvedRef));
+    const unresolvedOutput = await doctor("--repair", "--yes", "--generate-gateway-token");
+    expect(unresolvedOutput).toContain("Gateway token SecretRef could not be resolved");
+    expect(unresolvedOutput).toContain(
+      "Doctor will not overwrite gateway.auth.token with a plaintext value.",
+    );
+    expect(unresolvedOutput).not.toContain("qa-ambient-token-must-not-win");
+    expect(await readToken()).toEqual(unresolvedRef);
+
+    const filePath = path.join(instance.stateDir, "doctor-file-secretref.json");
+    const fileSecret = "qa-file-token";
+    await fs.writeFile(filePath, JSON.stringify({ gateway: { token: fileSecret } }), {
+      mode: 0o600,
+    });
+    await writeConfig(
+      localGatewayConfig(
+        { source: "file", provider: "filemain", id: "/gateway/token" },
+        { filemain: { source: "file", path: filePath } },
+      ),
+    );
+    const fileOutput = normalized(await doctor());
+    expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
+    expect(fileOutput).not.toContain(fileSecret);
+
+    const execMarker = path.join(instance.stateDir, "doctor-exec-secretref.marker");
+    const execScript = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(execMarker)}, 'executed');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'qa-exec-token' } }));",
+    ].join("");
+    await withSecureTestNodeCommand(async (command) => {
       await writeConfig(
         localGatewayConfig(
-          { source: "file", provider: "filemain", id: "/gateway/token" },
-          { filemain: { source: "file", path: filePath } },
+          { source: "exec", provider: "execmain", id: "gateway/token" },
+          {
+            execmain: {
+              source: "exec",
+              command,
+              args: ["-e", execScript],
+              trustedDirs: [path.dirname(command)],
+            },
+          },
         ),
       );
-      const fileOutput = normalized(await doctor());
-      expect(fileOutput).not.toContain("Gateway token SecretRef could not be resolved");
-      expect(fileOutput).not.toContain(fileSecret);
+      expect(normalized(await doctor())).toMatch(
+        /Gateway health checks skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
+      );
+      await expect(fs.access(execMarker)).rejects.toThrow();
 
-      const execMarker = path.join(instance.stateDir, "doctor-exec-secretref.marker");
-      const execScript = [
-        "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(execMarker)}, 'executed');`,
-        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { 'gateway/token': 'qa-exec-token' } }));",
-      ].join("");
-      await withSecureTestNodeCommand(async (command) => {
-        await writeConfig(
-          localGatewayConfig(
-            { source: "exec", provider: "execmain", id: "gateway/token" },
-            {
-              execmain: {
-                source: "exec",
-                command,
-                args: ["-e", execScript],
-                trustedDirs: [path.dirname(command)],
-              },
-            },
-          ),
-        );
-        expect(normalized(await doctor())).toMatch(
-          /Gateway health checks skipped because gateway credentials use an exec(?:\s|│)*SecretRef\./,
-        );
-        await expect(fs.access(execMarker)).rejects.toThrow();
+      const execAllowedOutput = normalized(await doctor("--allow-exec"));
+      await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
+      expect(execAllowedOutput).not.toContain("qa-exec-token");
+    });
 
-        const execAllowedOutput = normalized(await doctor("--allow-exec"));
-        await expect(fs.readFile(execMarker, "utf8")).resolves.toBe("executed");
-        expect(execAllowedOutput).not.toContain("qa-exec-token");
-      });
-
-      delete instance.env.OPENCLAW_GATEWAY_TOKEN;
-      await writeConfig(localGatewayConfig());
-      await doctor("--repair", "--yes", "--generate-gateway-token");
-      const token = await readToken();
-      expect(typeof token).toBe("string");
-      expect(token).toEqual(expect.stringMatching(/^.{21,}$/u));
-    },
-  );
-});
+    delete instance.env.OPENCLAW_GATEWAY_TOKEN;
+    await writeConfig(localGatewayConfig());
+    await doctor("--repair", "--yes", "--generate-gateway-token");
+    const token = await readToken();
+    expect(typeof token).toBe("string");
+    expect(token).toEqual(expect.stringMatching(/^.{21,}$/u));
+  },
+);

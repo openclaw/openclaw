@@ -124,20 +124,6 @@ describe("direct-channel silent-reply prompt contract", () => {
       );
     expect(visible).toHaveLength(1);
     expect(visible[0]?.isError).not.toBe(true);
-    const evidence = {
-      kind: "qa-channel-direct-ingress-gateway-provider-prompt",
-      channel: "qa-channel",
-      liveDiscord: false,
-      requestKind: request.requestKind,
-      providerOutcome: request.outcome,
-      providerRequests: requests.length,
-      visibleReplies: visible.length,
-      reply: outbound.text,
-      hasTooling: instructions.includes("## Tooling"),
-      hasCare: instructions.includes("## Care"),
-      hasGenericSilentReplies: instructions.includes("## Silent Replies"),
-    };
-    process.stdout.write(`${JSON.stringify(evidence)}\n`);
-    expect(evidence.hasGenericSilentReplies, "SILENT_REPLY_GUIDANCE_LEAK").toBe(false);
+    expect(instructions, "SILENT_REPLY_GUIDANCE_LEAK").not.toContain("## Silent Replies");
   }, 180_000);
 });

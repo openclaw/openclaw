@@ -2,26 +2,18 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  createQaBusState,
-  createQaChannelTransport,
-  startQaBusServer,
-} from "../../../../extensions/qa-lab/api.js";
-import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
-import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { describe, expect, it } from "vitest";
+import type { createQaBusState, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { useChannelProductProof } from "./channel-product-proof.test-support.js";
 
 const CHANNEL_ID = "qa-channel";
 const primary = { agentId: "main", accountId: "default", peerId: "primary-peer" };
 const sibling = { agentId: "finance", accountId: "finance", peerId: "finance-peer" };
 type Owner = typeof primary;
 
-type GatewayHarness = Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>;
+const proof = useChannelProductProof();
 
-let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
-
-async function listConversations(gateway: GatewayHarness["gateway"], agentId: string) {
+async function listConversations(gateway: QaGatewayChild, agentId: string) {
   const payload = await gateway.call("conversations.list", {
     agentId,
     channel: CHANNEL_ID,
@@ -44,7 +36,7 @@ function findConversation(items: Array<Record<string, unknown>>, { accountId, pe
   );
 }
 
-async function waitForConversation(gateway: GatewayHarness["gateway"], owner: Owner) {
+async function waitForConversation(gateway: QaGatewayChild, owner: Owner) {
   const deadline = Date.now() + 30_000;
   let latest: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
@@ -71,7 +63,7 @@ async function waitForConversation(gateway: GatewayHarness["gateway"], owner: Ow
   throw new Error(`timed out waiting for ${JSON.stringify(owner)}: ${JSON.stringify(latest)}`);
 }
 
-async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: string) {
+async function waitForAppliedConfig(gateway: QaGatewayChild, hash: string) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     const payload = await gateway.call("config.get", {});
@@ -104,35 +96,12 @@ function route({ agentId, accountId }: Pick<Owner, "agentId" | "accountId">) {
   return { type: "route" as const, agentId, match: { channel: CHANNEL_ID, accountId } };
 }
 
-afterEach(async () => {
-  try {
-    await runQaGatewayFixture(
-      async () => {},
-      () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
-      () => bus?.stop(),
-    );
-  } finally {
-    gatewayOwner = undefined;
-    bus = undefined;
-  }
-});
-
 describe("conversation route ownership clean-machine proof", () => {
   it(
     "keeps sibling accounts isolated and revalidates persisted references after reassignment",
     { timeout: 120_000 },
     async () => {
-      const state = createQaBusState();
-      bus = await startQaBusServer({ state });
-      gatewayOwner = createQaLiveLaneGateway();
-      const { gateway } = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        transport: createQaChannelTransport(state),
-        transportBaseUrl: bus.baseUrl,
-        controlUiEnabled: false,
+      const { gateway, state } = await proof.start((baseUrl) => ({
         mockAuthAgentIds: [primary.agentId, sibling.agentId],
         mutateConfig: (config) => {
           config.agents = {
@@ -146,7 +115,7 @@ describe("conversation route ownership clean-machine proof", () => {
           };
           config.bindings = [route(primary), route(sibling)];
           const account = {
-            baseUrl: bus?.baseUrl,
+            baseUrl,
             enabled: true,
             allowFrom: ["*"],
             pollTimeoutMs: 250,
@@ -158,7 +127,7 @@ describe("conversation route ownership clean-machine proof", () => {
           };
           return config;
         },
-      });
+      }));
       const send = (agentId: string, conversationRef: string, message: string) =>
         gateway.call("conversations.send", {
           agentId,
