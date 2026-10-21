@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -140,6 +141,79 @@ describe("installPackageDir", () => {
     vi.restoreAllMocks();
     await fixtureRootTracker.cleanup();
   });
+
+  it.each(["install", "commit", "rollback"] as const)(
+    "restores the manifest before validation and %s settlement",
+    async (settlement) => {
+      const { sourceDir, targetDir } = await createSourceFixture();
+      const readManifest = (dir: string) => fs.readFile(path.join(dir, "package.json"));
+      const expectManifest = async (dir: string, expected = originalManifest) =>
+        expect(await readManifest(dir)).toEqual(expected);
+      const originalManifest = Buffer.from(
+        `{
+\t"name": "demo-plugin", "version": "2.0.0",
+\t"dependencies": { "openclaw": ">=2026.4.5", "yaml": "^2.0.0" },
+\t"optionalDependencies": { "openclaw": ">=2026.4.5", "fsevents": "^2.3.3" },
+\t"peerDependencies": { "openclaw": ">=2026.4.5", "zod": "^4.0.0" },
+\t"peerDependenciesMeta": { "openclaw": { "optional": true }, "zod": { "optional": false } },
+\t"devDependencies": { "openclaw": "2026.6.1", "typescript": "~5.9.0" }
+}
+`.replaceAll("\n", "\r\n"),
+      );
+      await fs.writeFile(path.join(sourceDir, "package.json"), originalManifest);
+      const previousManifest = '{ "name": "demo-plugin", "version": "1.0.0" }\n';
+      if (settlement !== "install") {
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(path.join(targetDir, "package.json"), previousManifest);
+      }
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, options) => {
+        expect(JSON.parse((await readManifest(npmCwd(options))).toString("utf8"))).toEqual({
+          name: "demo-plugin",
+          version: "2.0.0",
+          dependencies: { yaml: "^2.0.0" },
+          optionalDependencies: { fsevents: "^2.3.3" },
+          peerDependencies: { zod: "^4.0.0" },
+          peerDependenciesMeta: { zod: { optional: false } },
+        });
+        return npmSuccess;
+      });
+      let validated = false;
+      const options = {
+        ...updateOptions(sourceDir, targetDir),
+        mode: settlement === "install" ? ("install" as const) : ("update" as const),
+        hasDeps: true,
+        omitOpenClawHostDependency: true,
+        afterInstall: async (stagedDir: string) => {
+          await expectManifest(stagedDir);
+          validated = true;
+          return { ok: true as const };
+        },
+      };
+      const result = await installPackageDir(
+        settlement === "install" ? options : requestDeferredPackageDirInstall(options),
+      );
+      expect(result.ok).toBe(true);
+      expect(validated).toBe(true);
+      await expectManifest(targetDir);
+      await expectManifest(sourceDir);
+      if (settlement !== "install") {
+        await expectDefined(resolvePackageDirInstallTransaction(result), "deferred transaction")[
+          settlement
+        ]();
+        await expectManifest(
+          targetDir,
+          settlement === "commit" ? originalManifest : Buffer.from(previousManifest),
+        );
+        await expectEmptyBackups(path.dirname(targetDir));
+      }
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        expectedNpmCommand(
+          "install --omit=dev --loglevel=error --ignore-scripts --workspaces=false".split(" "),
+        ),
+        expect.objectContaining({ cwd: expect.stringContaining(".openclaw-install-stage-") }),
+      );
+    },
+  );
 
   it.each([0, 1])(
     "reports dependency settlement only after npm finishes with code %s",

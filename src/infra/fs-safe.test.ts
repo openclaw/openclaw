@@ -150,21 +150,6 @@ describe("fs-safe", () => {
     expect((err as FsSafeError).message).not.toMatch(/EISDIR/i);
   });
 
-  it("writes external command output within an allowed root", async () => {
-    const dir = await tempDirs.make("openclaw-fs-safe-output-");
-
-    const result = await writeExternalFileWithinRoot({
-      rootDir: dir,
-      path: "artifact.txt",
-      write: async (tempPath) => {
-        await fs.writeFile(tempPath, "artifact");
-      },
-    });
-
-    expect(result).toEqual({ path: path.join(dir, "artifact.txt") });
-    await expect(fs.readFile(path.join(dir, "artifact.txt"), "utf8")).resolves.toBe("artifact");
-  });
-
   it("cleans partial external command output when the producer fails", async () => {
     const dir = await tempDirs.make("openclaw-fs-safe-output-failure-");
     const failure = new Error("external producer failed");
@@ -184,23 +169,27 @@ describe("fs-safe", () => {
   });
 
   it.each([
-    ["fallbackFileName", { fallbackFileName: "safe-output.bin" }],
-    ["tempPrefix", { tempPrefix: "safe-output.bin" }],
-  ] as const)("maps %s onto the upstream portable fallback name", async (_label, naming) => {
-    const dir = await tempDirs.make("openclaw-fs-safe-output-name-");
+    ["default", {}, "artifact.txt", "artifact.txt"],
+    ["fallbackFileName", { fallbackFileName: "safe-output.bin" }, "\u0001", "safe-output.bin"],
+    ["tempPrefix", { tempPrefix: "safe-output.bin" }, "\u0001", "safe-output.bin"],
+  ] as const)(
+    "publishes external output using %s naming",
+    async (_label, naming, requested, name) => {
+      const dir = await tempDirs.make("openclaw-fs-safe-output-name-");
 
-    const result = await writeExternalFileWithinRoot({
-      rootDir: dir,
-      path: "\u0001",
-      ...naming,
-      write: async (tempPath) => {
-        await fs.writeFile(tempPath, "artifact");
-      },
-    });
+      const result = await writeExternalFileWithinRoot({
+        rootDir: dir,
+        path: requested,
+        ...naming,
+        write: async (tempPath) => {
+          await fs.writeFile(tempPath, "artifact");
+        },
+      });
 
-    expect(result).toEqual({ path: path.join(dir, "safe-output.bin") });
-    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("artifact");
-  });
+      expect(result).toEqual({ path: path.join(dir, name) });
+      await expectContents(result.path, "artifact");
+    },
+  );
 
   it("enforces maxBytes", async () => {
     const file = await makeFile("big.bin", Buffer.alloc(8));
@@ -208,15 +197,21 @@ describe("fs-safe", () => {
     await expectRejectCode(readLocalFileSafely({ filePath: file, maxBytes: 4 }), "too-large");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinks", async () => {
-    const dir = await tempDirs.make("openclaw-fs-safe-");
-    const target = path.join(dir, "target.txt");
-    const link = path.join(dir, "link.txt");
-    await fs.writeFile(target, "target");
-    await fs.symlink(target, link);
-
-    await expectRejectCode(readLocalFileSafely({ filePath: link }), "symlink");
-  });
+  it.runIf(process.platform !== "win32").each(["local", "root"] as const)(
+    "rejects symlinks through %s reads",
+    async (method) => {
+      const dir = await tempDirs.make("openclaw-fs-safe-");
+      const target = await makeFile("target.txt", "outside");
+      const link = path.join(dir, "link.txt");
+      await fs.symlink(target, link);
+      await expectRejectCode(
+        method === "local"
+          ? readLocalFileSafely({ filePath: link })
+          : (await openRoot(dir)).open("link.txt"),
+        "symlink",
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32").each(["moved", "unresolved"] as const)(
     "resolves opened file real paths with a %s fd target",
@@ -292,17 +287,6 @@ describe("fs-safe", () => {
     const scopedPath = path.join(root, "scoped.txt");
     const readScoped = rootFs.reader();
     await expect(readScoped(scopedPath)).resolves.toEqual(Buffer.from("scoped"));
-  });
-
-  it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const outside = await tempDirs.make("openclaw-fs-safe-outside-");
-    const target = path.join(outside, "outside.txt");
-    const link = path.join(root, "link.txt");
-    await fs.writeFile(target, "outside");
-    await fs.symlink(target, link);
-
-    await expectRejectCode((await openRoot(root)).open("link.txt"), "symlink");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -471,17 +455,20 @@ describe("fs-safe", () => {
     },
   );
 
-  it("does not truncate out-of-root file when symlink retarget races write open", async () => {
-    await runSymlinkWriteRace((root, relativePath) =>
-      root.write(relativePath, "new-content", { mkdir: false }),
-    );
-  });
-
-  it("does not clobber out-of-root file when symlink retarget races append open", async () => {
-    await runSymlinkWriteRace((root, relativePath) =>
-      root.append(relativePath, "new-content", { mkdir: false, prependNewlineIfNeeded: true }),
-    );
-  });
+  it.each(["write", "append", "copyIn"] as const)(
+    "does not clobber an out-of-root file when symlink retarget races %s",
+    async (operation) => {
+      const data =
+        operation === "copyIn" ? await makeFile("source.txt", "new-content") : "new-content";
+      await runSymlinkWriteRace(
+        (root, relativePath) =>
+          operation === "append"
+            ? root.append(relativePath, data, { mkdir: false, prependNewlineIfNeeded: true })
+            : root[operation](relativePath, data, { mkdir: false }),
+        operation !== "copyIn",
+      );
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "does not unlink out-of-root file when symlink retarget races remove",
@@ -530,14 +517,6 @@ describe("fs-safe", () => {
       await expectRejectCode(fs.stat(path.join(outside, "nested")), "ENOENT");
     },
   );
-
-  it("does not clobber out-of-root file when symlink retarget races write-from-path open", async () => {
-    const sourcePath = await makeFile("source.txt", "new-content");
-    await runSymlinkWriteRace(
-      (root, relativePath) => root.copyIn(relativePath, sourcePath, { mkdir: false }),
-      false,
-    );
-  });
 
   it("returns not-found for missing files", async () => {
     const dir = await tempDirs.make("openclaw-fs-safe-");
