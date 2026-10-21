@@ -10,7 +10,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -134,7 +134,7 @@ export function selectUserProfileRoleAuthority(
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const hasRole = getAdmittedSqliteSchemaFacts(db) && tableHasColumn(db, "user_profiles", "role");
+  const hasRole = getAdmittedSqlSchemaFacts(db) && tableHasColumn(db, "user_profiles", "role");
   const query = userProfilesDb(db)
     .selectFrom("user_profiles as requested")
     .leftJoin("user_profiles as canonical", (join) =>
