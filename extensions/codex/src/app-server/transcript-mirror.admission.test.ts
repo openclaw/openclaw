@@ -48,6 +48,7 @@ it("does not report a rejected redacted annotation as a persistence failure", as
   const admitted = structuredClone(recorder.getPersistedMessage?.());
   const before = await readSessionTranscriptEvents(target);
   const markRuntimePersistencePending = vi.spyOn(recorder, "markRuntimePersistencePending");
+  const markRuntimePersisted = vi.spyOn(recorder, "markRuntimePersisted");
   const params = {
     ...base,
     ...target,
@@ -71,6 +72,10 @@ it("does not report a rejected redacted annotation as a persistence failure", as
 
     expect(markRuntimePersistencePending).not.toHaveBeenCalled();
     expect(onPersistenceError).not.toHaveBeenCalled();
+    // The refused annotation leaves the durable admission in place and still reports it.
+    expect(markRuntimePersisted).toHaveBeenCalledOnce();
+    expect(markRuntimePersisted.mock.calls[0]?.[0]).toEqual(admitted);
+    expect(markRuntimePersisted.mock.calls[0]?.[2]).toMatchObject({ appended: false });
     expect(recorder.getPersistedMessage?.()).toEqual(admitted);
     expect(await readSessionTranscriptEvents(target)).toEqual(before);
   } finally {
