@@ -15,7 +15,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
-  assertRestrictedWorkboardTarget,
   cleanupWorkboardCardWorktree,
   managedWorktreeName,
   resolveDispatchWorkspaceAccess,
@@ -28,8 +27,10 @@ import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
+  canonicalizeWorkboardWorkspaceAccess,
   WORKBOARD_REQUIRED_WORKER_TOOLS,
   WorkboardWorkspaceOutsideRootsError,
+  type WorkboardTargetWorkspaceRuntime,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -88,82 +89,6 @@ function cardHasActiveClaim(card: WorkboardCard, now: number): boolean {
   return Boolean(claim && isFutureDateTimestampMs(claim.expiresAt, { nowMs: now }));
 }
 
-async function materializeWorkspace(params: {
-  card: WorkboardCard;
-  worktrees?: WorkboardWorktreeRuntime;
-  materializeWorktree: boolean;
-  workspaceAccess: WorkboardWorkspaceAccess;
-  assertOwnerCurrent?: () => void;
-}): Promise<{ workspace?: WorkboardWorkspace; cwd?: string }> {
-  const workspace = params.card.metadata?.automation?.workspace;
-  if (!workspace || workspace.kind === "scratch") {
-    return {};
-  }
-  const sourcePath = workspace.sourcePath ?? workspace.path;
-  const sourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
-  if (!sourcePath || !path.isAbsolute(sourcePath)) {
-    throw new Error("worktree workspace path must be an absolute git checkout path");
-  }
-  // Persisted cards can outlive the caller that created them. Keep the exact
-  // canonical path that passes this dispatcher's current boundary check.
-  const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
-    workspace,
-    params.workspaceAccess,
-  );
-  if (!canonicalSourcePath) {
-    throw new Error("worktree workspace path is required");
-  }
-  if (workspace.kind === "dir" || !params.workspaceAccess.unrestricted) {
-    await assertCanonicalWorkboardRootAccess(canonicalSourcePath, params.workspaceAccess);
-    return workspace.kind === "worktree"
-      ? { cwd: canonicalSourcePath, workspace: { kind: "dir", path: canonicalSourcePath } }
-      : { cwd: canonicalSourcePath };
-  }
-  if (!params.materializeWorktree) {
-    throw new Error("managed worktree materialization was not explicitly authorized");
-  }
-  if (!params.worktrees) {
-    throw new Error("managed worktree runtime is unavailable");
-  }
-  params.assertOwnerCurrent?.();
-  const worktree = await params.worktrees.create({
-    repoRoot: canonicalSourcePath,
-    name: managedWorktreeName(params.card.id),
-    ...(sourceBranch ? { baseRef: sourceBranch } : {}),
-    ownerKind: "workboard",
-    ownerId: params.card.id,
-    ...(params.assertOwnerCurrent ? { commitGuard: params.assertOwnerCurrent } : {}),
-  });
-  let cwd: string;
-  try {
-    cwd = await canonicalPathFromExistingAncestor(worktree.path);
-  } catch (error) {
-    const removed = await params.worktrees
-      .removeIfLossless({
-        path: worktree.path,
-        ownerKind: "workboard",
-        ownerId: params.card.id,
-      })
-      .catch(() => false);
-    if (!removed) {
-      throw new Error(`${formatErrorMessage(error)}; managed worktree cleanup failed`, {
-        cause: error,
-      });
-    }
-    throw error;
-  }
-  return {
-    cwd,
-    workspace: {
-      kind: "worktree",
-      path: worktree.path,
-      branch: worktree.branch,
-      sourcePath,
-      ...(sourceBranch ? { sourceBranch } : {}),
-    },
-  };
-}
-
 function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   const priorityRank: Record<WorkboardCard["priority"], number> = {
     urgent: 0,
@@ -176,64 +101,6 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
     a.position - b.position ||
     a.createdAt - b.createdAt
   );
-}
-
-function selectStartableCards(
-  cards: WorkboardCard[],
-  limit: number,
-  candidates: WorkboardCard[],
-  ownerOverride: string | undefined,
-  now: number,
-  mode: "scheduled" | "exact",
-): { cards: WorkboardCard[]; rejection?: WorkboardStartFailure } {
-  if (limit <= 0) {
-    return { cards: [] };
-  }
-  const runningOwners = new Set<string>();
-  for (const card of cards) {
-    if (!workboardCardConsumesOwnerSlot(card, now)) {
-      continue;
-    }
-    runningOwners.add(workboardCardSlotOwner(card));
-  }
-  const selected: WorkboardCard[] = [];
-  const fallback: WorkboardCard[] = [];
-  const selectedOwners = new Set<string>();
-  const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
-  for (const card of ordered) {
-    const owner = ownerOverride || workboardCardSlotOwner(card, now);
-    const rejection = card.metadata?.archivedAt
-      ? "Card is archived; restore it before starting."
-      : cardHasActiveClaim(card, now)
-        ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
-        : mode === "scheduled" && card.status !== "ready"
-          ? ""
-          : mode === "exact" &&
-              card.status !== "backlog" &&
-              card.status !== "todo" &&
-              card.status !== "ready"
-            ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
-            : runningOwners.has(owner)
-              ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
-              : undefined;
-    if (rejection !== undefined) {
-      if (mode === "exact") {
-        return {
-          cards: [],
-          rejection: { cardId: card.id, title: card.title, error: rejection },
-        };
-      }
-      continue;
-    }
-    if (selectedOwners.has(owner)) {
-      fallback.push(card);
-      continue;
-    }
-    selectedOwners.add(owner);
-    selected.push(card);
-  }
-  // Try each owner before a failed owner's extra cards consume the outage budget.
-  return { cards: [...selected, ...fallback] };
 }
 
 export async function dispatchAndStartWorkboardCards(
@@ -286,14 +153,57 @@ async function runWorkboardDispatch(
   const maxAttempts = maxStarts * 2;
   let attemptedStarts = 0;
 
-  const selection = selectStartableCards(
-    cards,
-    maxStarts,
-    candidates,
-    ownerOverride,
-    now,
-    directCardId ? "exact" : "scheduled",
-  );
+  const mode = directCardId ? "exact" : "scheduled";
+  const selection = ((): { cards: WorkboardCard[]; rejection?: WorkboardStartFailure } => {
+    if (maxStarts <= 0) {
+      return { cards: [] };
+    }
+    const runningOwners = new Set<string>();
+    for (const card of cards) {
+      if (!workboardCardConsumesOwnerSlot(card, now)) {
+        continue;
+      }
+      runningOwners.add(workboardCardSlotOwner(card));
+    }
+    const selected: WorkboardCard[] = [];
+    const fallback: WorkboardCard[] = [];
+    const selectedOwners = new Set<string>();
+    const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
+    for (const card of ordered) {
+      const owner = ownerOverride || workboardCardSlotOwner(card, now);
+      const rejection = card.metadata?.archivedAt
+        ? "Card is archived; restore it before starting."
+        : cardHasActiveClaim(card, now)
+          ? `Card is already claimed by ${card.metadata?.claim?.ownerId ?? "another worker"}.`
+          : mode === "scheduled" && card.status !== "ready"
+            ? ""
+            : mode === "exact" &&
+                card.status !== "backlog" &&
+                card.status !== "todo" &&
+                card.status !== "ready"
+              ? `Card cannot start from ${card.status}; move it to backlog, todo, or ready first.`
+              : runningOwners.has(owner)
+                ? `Owner ${owner} already has active Workboard work; complete or stop it before starting another card.`
+                : undefined;
+      if (rejection !== undefined) {
+        if (mode === "exact") {
+          return {
+            cards: [],
+            rejection: { cardId: card.id, title: card.title, error: rejection },
+          };
+        }
+        continue;
+      }
+      if (selectedOwners.has(owner)) {
+        fallback.push(card);
+        continue;
+      }
+      selectedOwners.add(owner);
+      selected.push(card);
+    }
+    // Try each owner before a failed owner's extra cards consume the outage budget.
+    return { cards: [...selected, ...fallback] };
+  })();
   if (selection.rejection) {
     startFailures.push(selection.rejection);
   }
@@ -315,16 +225,49 @@ async function runWorkboardDispatch(
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
     let persistWorkspaceAccess: boolean;
-    const assertRestrictedTarget = (root: string) =>
-      assertRestrictedWorkboardTarget({
-        root,
-        agentId: card.agentId,
-        sessionKey,
-        modelProvider: params.options?.provider,
-        modelId: params.options?.model,
-        resolveAgentWorkspaceRuntime: params.options?.resolveAgentWorkspaceRuntime,
-        worktrees: params.worktrees,
-      });
+    const assertRestrictedTarget = async (root: string): Promise<void> => {
+      const agentId = card.agentId;
+      const modelProvider = params.options?.provider;
+      const modelId = params.options?.model;
+      const resolveAgentWorkspaceRuntime = params.options?.resolveAgentWorkspaceRuntime;
+      const worktrees = params.worktrees;
+      const resolved: WorkboardTargetWorkspaceRuntime = resolveAgentWorkspaceRuntime
+        ? await resolveAgentWorkspaceRuntime(agentId, sessionKey, root, modelProvider, modelId)
+        : {
+            sandboxed: false,
+            workspaceAccess: { unrestricted: true } as const,
+          };
+      const targetRuntime = {
+        ...resolved,
+        workspaceAccess: await canonicalizeWorkboardWorkspaceAccess(resolved.workspaceAccess),
+      };
+      if (!targetRuntime.sandboxed) {
+        throw new Error("target agent is not sandboxed for this restricted Workboard card.");
+      }
+      if (targetRuntime.confinementError) {
+        throw new Error(targetRuntime.confinementError);
+      }
+      if (targetRuntime.workspaceAccess.unrestricted || !targetRuntime.workspaceAccess.writable) {
+        throw new Error("target agent does not have writable workspace-only access.");
+      }
+      await assertCanonicalWorkboardRootAccess(root, targetRuntime.workspaceAccess);
+      if (!worktrees) {
+        throw new Error("workspace checkout inspection is unavailable for restricted dispatch.");
+      }
+      const checkoutRoot = await worktrees.resolveCheckoutRoot({ path: root });
+      if (!checkoutRoot) {
+        return;
+      }
+      if ((await canonicalPathFromExistingAncestor(checkoutRoot)) !== root) {
+        throw new Error("workspace root is nested inside a broader Git checkout.");
+      }
+      if (
+        !worktrees.hasSelfContainedCheckoutMetadata ||
+        !(await worktrees.hasSelfContainedCheckoutMetadata({ path: root }))
+      ) {
+        throw new Error("restricted workspace Git metadata must be contained inside its root.");
+      }
+    };
     // Preflight failures leave the card unclaimed; keep them outside the
     // claim and launch compensation boundary below.
     try {
@@ -420,13 +363,82 @@ async function runWorkboardDispatch(
       // provider-outage budget or starve a later healthy candidate.
       attemptedStarts += 1;
       const context = await params.store.buildWorkerContext(card.id);
-      const materialized = await materializeWorkspace({
-        card: claimed.card,
-        worktrees: params.worktrees,
-        materializeWorktree: params.options?.materializeWorktree === true,
-        workspaceAccess,
-        assertOwnerCurrent,
-      });
+      const materializeCard = claimed.card;
+      const worktrees = params.worktrees;
+      const materializeWorktree = params.options?.materializeWorktree === true;
+      const materializationAccess = workspaceAccess;
+      const materialized = await (async (): Promise<{
+        workspace?: WorkboardWorkspace;
+        cwd?: string;
+      }> => {
+        const workspace = materializeCard.metadata?.automation?.workspace;
+        if (!workspace || workspace.kind === "scratch") {
+          return {};
+        }
+        const sourcePath = workspace.sourcePath ?? workspace.path;
+        const sourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
+        if (!sourcePath || !path.isAbsolute(sourcePath)) {
+          throw new Error("worktree workspace path must be an absolute git checkout path");
+        }
+        // Persisted cards can outlive the caller that created them. Keep the exact
+        // canonical path that passes this dispatcher's current boundary check.
+        const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
+          workspace,
+          materializationAccess,
+        );
+        if (!canonicalSourcePath) {
+          throw new Error("worktree workspace path is required");
+        }
+        if (workspace.kind === "dir" || !materializationAccess.unrestricted) {
+          await assertCanonicalWorkboardRootAccess(canonicalSourcePath, materializationAccess);
+          return workspace.kind === "worktree"
+            ? { cwd: canonicalSourcePath, workspace: { kind: "dir", path: canonicalSourcePath } }
+            : { cwd: canonicalSourcePath };
+        }
+        if (!materializeWorktree) {
+          throw new Error("managed worktree materialization was not explicitly authorized");
+        }
+        if (!worktrees) {
+          throw new Error("managed worktree runtime is unavailable");
+        }
+        assertOwnerCurrent?.();
+        const worktree = await worktrees.create({
+          repoRoot: canonicalSourcePath,
+          name: managedWorktreeName(materializeCard.id),
+          ...(sourceBranch ? { baseRef: sourceBranch } : {}),
+          ownerKind: "workboard",
+          ownerId: materializeCard.id,
+          ...(assertOwnerCurrent ? { commitGuard: assertOwnerCurrent } : {}),
+        });
+        let cwd: string;
+        try {
+          cwd = await canonicalPathFromExistingAncestor(worktree.path);
+        } catch (error) {
+          const removed = await worktrees
+            .removeIfLossless({
+              path: worktree.path,
+              ownerKind: "workboard",
+              ownerId: materializeCard.id,
+            })
+            .catch(() => false);
+          if (!removed) {
+            throw new Error(`${formatErrorMessage(error)}; managed worktree cleanup failed`, {
+              cause: error,
+            });
+          }
+          throw error;
+        }
+        return {
+          cwd,
+          workspace: {
+            kind: "worktree",
+            path: worktree.path,
+            branch: worktree.branch,
+            sourcePath,
+            ...(sourceBranch ? { sourceBranch } : {}),
+          },
+        };
+      })();
       const runCwd = materialized.cwd ?? implicitWorkspaceCwd;
       if (runCwd && !workspaceAccess.unrestricted) {
         await assertRestrictedTarget(runCwd);
