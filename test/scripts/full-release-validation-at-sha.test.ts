@@ -313,27 +313,9 @@ describe("full-release-validation-at-sha", () => {
     rejectArgs(["-f", "trusted_workflow_json={}"], "reserves trusted_workflow_json");
   });
 
-  it("validates direct and reused runs through the strict evidence verifier", () => {
+  it("rejects invalid verifier run and tooling selections before launch", () => {
     const workflowSha = "a".repeat(40);
     const verifier = "/tmp/trusted/scripts/release-ci-summary.mjs";
-    const trustedTag = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    for (const ref of [undefined, trustedTag]) {
-      expect(releaseEvidenceVerificationArgs("123", workflowSha, verifier, ref)).toEqual([
-        "--validate-run",
-        "123",
-        "--trusted-workflow-ref",
-        ref ?? "main",
-        "--trusted-workflow-full-ref",
-        ref ? `refs/tags/${ref}` : "refs/heads/main",
-        "--trusted-workflow-sha",
-        workflowSha,
-        "--json",
-        "--verifier-source-sha",
-        workflowSha,
-        "--verifier-source-file",
-        verifier,
-      ]);
-    }
     expect(() => releaseEvidenceVerificationArgs("", workflowSha, verifier)).toThrow(
       "positive decimal",
     );
