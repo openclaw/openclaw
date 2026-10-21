@@ -377,6 +377,48 @@ results. Keep the same splits when comparing models; group related traces to
 avoid leakage. Retune after changes to the model checkpoint, rubric, evidence
 projection, or workload. Small samples do not establish reliable guarantees.
 
+### Tune without leaking held-out labels
+
+Use separate files with the same identity and disjoint sample IDs:
+
+```sh
+node scripts/decision-threshold.mts tune --tuning tuning.json --held-out held-out.json \
+  --min-precision 0.8 --min-recall 0.8 --beta 1
+```
+
+Both minimums are required and are illustrative, not OpenClaw defaults. The
+command maximizes F-beta only among thresholds meeting both targets on tuning
+examples. It searches observed tuning scores plus 0 and 1, uses the same inclusive
+comparison as evaluation, keeps equal scores together, and chooses the highest
+threshold on an exact tie. Held-out labels never select the threshold.
+
+The report includes the selected threshold and tuning metrics, held-out metrics,
+coverage, and a 0.50 baseline on both splits. If no threshold qualifies, it returns
+`no-feasible-threshold` with `selected: null` rather than relaxing either target.
+A selected threshold that fails on held-out data returns
+`held-out-targets-missed`; neither condition emits a replacement threshold.
+These two outcomes exit with code 2; invalid input exits with code 1.
+Undefined precision/recall cannot satisfy a constraint, even a zero minimum.
+
+Metrics still describe scored examples only. Check unscored coverage and class
+counts, and measure your fallback's outcomes separately before deploying a policy.
+Matching identities and disjoint IDs catch accidental mixing, not duplicated
+content under new IDs or a changing model behind a `latest` alias. Record the
+actual checkpoint and hold related conversations out together. For cross-validation,
+run the command on each preassigned train/validation pair using identical splits
+across models; never pick the best validation fold as your deployed threshold.
+The command does not create folds or fit a probability-calibration mapping.
+
+A report meeting held-out targets is an estimate, not automatic deployment
+approval. If constraints are unmet or evidence is insufficient, retain the existing
+consumer behavior or human review rather than silently choosing a new default.
+Deploy a validated threshold explicitly in the consuming plugin's action policy;
+the host has no global threshold setting. Keep its binding to the model, rubric,
+and question. Treat unavailable, scoreless, and abstained answers as fallback,
+not false. Cancellation remains terminal. The experimental conversational tool
+filter keeps its existing conservative threshold and retain-tools fallback; this
+script does not tune that multi-question policy.
+
 [Hamel Husain and Antaripa Saha's decision-model evaluation article](https://hamel.dev/blog/posts/decision-model-evals/index.html)
 explains this distinction between threshold selection and probability calibration.
 Threshold tuning does not calibrate probabilities. Check calibration separately

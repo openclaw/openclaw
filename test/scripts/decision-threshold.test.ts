@@ -84,3 +84,111 @@ it.each([
     expect(result.stderr).not.toContain('"probabilityTrue":');
   },
 );
+
+type Row = { id: string; label: boolean; probabilityTrue: number | null };
+function tuneRows(tuning: Row[], heldOut: Row[], args: string[] = [], heldOutIdentity = identity) {
+  const root = roots.make("decision-tuning-");
+  const tuningFile = path.join(root, "tuning.json");
+  const heldOutFile = path.join(root, "held-out.json");
+  writeFileSync(tuningFile, JSON.stringify({ identity, samples: tuning }));
+  writeFileSync(heldOutFile, JSON.stringify({ identity: heldOutIdentity, samples: heldOut }));
+  return spawnSync(
+    process.execPath,
+    [
+      "scripts/decision-threshold.mts",
+      "tune",
+      "--tuning",
+      tuningFile,
+      "--held-out",
+      heldOutFile,
+      "--min-precision",
+      "0.8",
+      "--min-recall",
+      "0.8",
+      ...args,
+    ],
+    { encoding: "utf8", timeout: 10_000 },
+  );
+}
+const separated: Row[] = [
+  { id: "positive", label: true, probabilityTrue: 0.4 },
+  { id: "negative", label: false, probabilityTrue: 0.1 },
+];
+const heldOut: Row[] = [
+  { id: "held-positive", label: true, probabilityTrue: 0.45 },
+  { id: "held-negative", label: false, probabilityTrue: 0.05 },
+];
+
+it("selects below 0.50 on tuning data, then reports held-out results and the default baseline", () => {
+  const result = tuneRows(separated, heldOut);
+  expect(result.status, result.stderr).toBe(0);
+  const report = JSON.parse(result.stdout);
+  expect(report).toMatchObject({
+    status: "held-out-targets-met",
+    selected: { threshold: 0.4, metrics: { precision: 1, recall: 1, fBeta: 1 } },
+    heldOut: { precision: 1, recall: 1, fBeta: 1 },
+    baseline: { threshold: 0.5, heldOut: { precision: null, recall: 0, fBeta: 0 } },
+  });
+});
+
+it("does not retune or relax targets after held-out failure", () => {
+  const result = tuneRows(separated, [
+    { id: "held-positive", label: true, probabilityTrue: 0.2 },
+    { id: "held-negative", label: false, probabilityTrue: 0.1 },
+  ]);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    status: "held-out-targets-missed",
+    selected: { threshold: 0.4 },
+    meetsHeldOutTargets: false,
+    heldOut: { precision: null, recall: 0, falseNegative: 1 },
+  });
+});
+
+it.each([
+  { rows: separated.map((row) => ({ ...row, probabilityTrue: 0.4 })) },
+  { rows: [{ id: "negative-only", label: false, probabilityTrue: 0.1 }] },
+  { rows: [{ id: "unavailable", label: true, probabilityTrue: null }] },
+])("returns no threshold when constraints cannot be established: %j", ({ rows }) => {
+  const result = tuneRows(rows, heldOut);
+  expect(result.status).toBe(2);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    status: "no-feasible-threshold",
+    selected: null,
+    heldOut: null,
+    meetsHeldOutTargets: null,
+  });
+});
+
+it("honors precision versus recall weighting and groups identical scores", () => {
+  const rows: Row[] = [
+    { id: "p1", label: true, probabilityTrue: 0.9 },
+    { id: "p2", label: true, probabilityTrue: 0.2 },
+    { id: "n1", label: false, probabilityTrue: 0.2 },
+    { id: "n2", label: false, probabilityTrue: 0.1 },
+  ];
+  for (const [beta, threshold] of [
+    ["0.5", 0.9],
+    ["2", 0.2],
+  ] as const) {
+    const result = tuneRows(rows, heldOut, [
+      "--min-precision",
+      "0",
+      "--min-recall",
+      "0",
+      "--beta",
+      beta,
+    ]);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout).selected.threshold).toBe(threshold);
+  }
+});
+
+it("rejects overlapping examples and mismatched model or rubric identities", () => {
+  const overlap = tuneRows(separated, separated);
+  expect(overlap).toMatchObject({ status: 1, stdout: "" });
+  expect(overlap.stderr).toContain("overlap");
+  const mismatch = tuneRows(separated, heldOut, [], { ...identity, rubricVersion: "2" });
+  expect(mismatch).toMatchObject({ status: 1, stdout: "" });
+  expect(mismatch.stderr).toContain("identities must match");
+});
