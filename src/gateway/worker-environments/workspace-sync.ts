@@ -65,6 +65,7 @@ import {
 import {
   createWorkspaceGitTransferList,
   filterExistingGitTransferList,
+  readGitTransferBuildCacheAdmission,
   readWorkspaceStagedInputDirectories,
 } from "./workspace-sync-inventory.js";
 import {
@@ -431,6 +432,16 @@ export function createWorkerWorkspaceActions(
         throw workspaceSyncError(transfer);
       }
 
+      // The setup script rebuilds the worker index from the base commit, so a
+      // cache input the host staged or kept untracked is not in `git ls-files
+      // --cached`. Pass the transfer-time admission inventory so the initial
+      // manifest retains those authored files instead of excluding them.
+      const admittedBuildCacheInputs = preparedGitTransferListPath
+        ? await readGitTransferBuildCacheAdmission({
+            listPath: preparedGitTransferListPath,
+            signal: options.ownerSignal,
+          })
+        : [];
       const manifest = await runWorkspaceCommand({
         transportRetry: "idempotent",
         argv: [
@@ -440,7 +451,12 @@ export function createWorkerWorkspaceActions(
           remoteWorkspaceDir,
           baseCommit,
           ...(mode === "git" ? ["eligible"] : []),
+          ...(admittedBuildCacheInputs.length > 0 ? ["retained-v1"] : []),
         ],
+        input:
+          admittedBuildCacheInputs.length > 0
+            ? JSON.stringify({ admittedInputs: admittedBuildCacheInputs })
+            : undefined,
         assertCurrent: request.authorize,
       });
       if (!success(manifest)) {

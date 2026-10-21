@@ -20,6 +20,7 @@ import {
 import {
   createWorkspaceGitTransferList,
   filterExistingGitTransferList,
+  readGitTransferBuildCacheAdmission,
   runWorkspaceInventoryCommandToFile,
 } from "./workspace-sync-inventory.js";
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
@@ -526,6 +527,28 @@ process.stdout.write("eligible.txt\\0".repeat(count));
       `exceed the ${MAX_WORKSPACE_GIT_CANDIDATES} limit`,
     );
   }, 30_000);
+});
+
+describe("readGitTransferBuildCacheAdmission", () => {
+  it("keeps only host-admitted build-cache inputs", async () => {
+    const root = tempDirs.make("openclaw-workspace-admission-");
+    const listPath = path.join(root, "transfer-list");
+    await fs.writeFile(
+      listPath,
+      [
+        "source.txt",
+        ".artifacts/report.md",
+        ".artifacts/build-all-cache/authored.txt",
+        ".artifacts/build-all-cache/newly-staged.txt",
+        ".artifacts/build-cache-inputs/compile.json",
+      ].join("\0") + "\0",
+    );
+    await expect(readGitTransferBuildCacheAdmission({ listPath })).resolves.toEqual([
+      ".artifacts/build-all-cache/authored.txt",
+      ".artifacts/build-all-cache/newly-staged.txt",
+      ".artifacts/build-cache-inputs/compile.json",
+    ]);
+  });
 });
 
 describe("preflightWorkerWorkspace", () => {

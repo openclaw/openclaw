@@ -14,6 +14,11 @@ import {
 import { workerSshCommandOptions } from "./ssh.js";
 import type { WorkspaceInventoryWriteCommand } from "./workspace-inventory-computation.js";
 import { workspaceInventoryError } from "./workspace-inventory-error.js";
+import {
+  MAX_WORKSPACE_GIT_CANDIDATES,
+  MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+} from "./workspace-inventory-limits.js";
+import { isBuildCacheWorkspacePath } from "./workspace-path-exclusions.js";
 
 const STDERR_LIMIT = 4_096;
 const COMMAND_KILL_GRACE_MS = 300;
@@ -34,6 +39,39 @@ export async function readWorkspaceTransferPaths(
     { type: "workspace.inventory.paths", input: { filePath } },
     { signal, inputBytes: Buffer.byteLength(filePath) },
   );
+}
+
+/**
+ * Cache inputs that the host has admitted into a Git transfer list but the
+ * worker index cannot see (staged locally, untracked, or absent from the base
+ * commit). The worker manifest must retain these paths instead of treating
+ * them as disposable generated output.
+ */
+export async function readGitTransferBuildCacheAdmission(params: {
+  listPath: string;
+  signal?: AbortSignal;
+}): Promise<string[]> {
+  params.signal?.throwIfAborted();
+  const stats = await fs.stat(params.listPath);
+  if (!stats.isFile() || stats.size > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+    throw new Error("Worker workspace transfer list exceeds its byte limit");
+  }
+  const raw = await fs.readFile(params.listPath, { signal: params.signal });
+  const paths = raw.toString("utf8").split("\0").filter(Boolean);
+  if (paths.length > MAX_WORKSPACE_GIT_CANDIDATES) {
+    throw new Error("Worker workspace Git path candidates exceed their byte limit");
+  }
+  const admitted = [
+    ...new Set(paths.filter((entry) => isBuildCacheWorkspacePath(entry))),
+  ].toSorted();
+  let bytes = 0;
+  for (const entry of admitted) {
+    bytes += Buffer.byteLength(entry) + 1;
+    if (bytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+      throw new Error("Worker workspace Git path candidates exceed their byte limit");
+    }
+  }
+  return admitted;
 }
 
 async function writeInventory(

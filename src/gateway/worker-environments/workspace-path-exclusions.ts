@@ -121,6 +121,7 @@ function projectWorkspaceEntries(entries, isRetainedInput, excludeBuildCaches = 
 export const {
   isDerivedWorkspacePath,
   isRuntimeOwnedWorkspacePath,
+  isBuildCacheWorkspacePath,
   projectWorkspaceEntries,
   buildCacheInputPaths,
 }: {
@@ -130,6 +131,7 @@ export const {
     excludeBuildCaches?: boolean,
   ) => boolean;
   isRuntimeOwnedWorkspacePath: (relativePath: string) => boolean;
+  isBuildCacheWorkspacePath: (relativePath: string) => boolean;
   buildCacheInputPaths: (paths?: Iterable<string>) => Set<string>;
   projectWorkspaceEntries: <T extends { path: string; type: string }>(
     entries: readonly T[],
@@ -137,7 +139,7 @@ export const {
     excludeBuildCaches?: boolean,
   ) => T[];
 } = compileFunction(
-  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
+  `${WORKSPACE_PATH_EXCLUSIONS_JS}\nreturn { isDerivedWorkspacePath, isRuntimeOwnedWorkspacePath, isBuildCacheWorkspacePath, projectWorkspaceEntries, buildCacheInputPaths };`,
 )();
 
 export const DERIVED_WORKSPACE_RSYNC_EXCLUDES = [

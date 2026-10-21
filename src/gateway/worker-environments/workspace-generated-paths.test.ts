@@ -381,3 +381,45 @@ it("retains admitted plain-workspace cache inputs when Git metadata appears", as
   expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
   expect(manifest.entries.some((entry) => entry.path === "source.txt")).toBe(true);
 });
+
+it("retains host-admitted cache inputs after an initial base-only worker setup", async () => {
+  const { root, env, workspace, readManifest } = await createScriptWorkspace(
+    tempDirs.make("workspace-initial-ssh-admission-"),
+  );
+  const authored = ".artifacts/build-all-cache/newly-staged.txt";
+  const generated = ".artifacts/build-all-cache/generated/output.js";
+  await writeWorkspaceFiles(workspace, { "source.txt": "source\n" });
+  const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
+  // The host admits the cache input without committing it.
+  await writeWorkspaceFiles(workspace, { [authored]: "host staged\n" });
+  const staged = await runCommandWithTimeout(
+    ["git", "-C", workspace, "add", "--force", "--", authored],
+    { timeoutMs: 10_000 },
+  );
+  expect(staged.code, staged.stderr).toBe(0);
+
+  // The SSH setup script rebuilds the worker index from the base commit, then
+  // rsync copies the uncommitted admission into the worker worktree.
+  const worker = path.join(root, "worker");
+  const cloned = await runCommandWithTimeout(
+    ["git", "clone", "--quiet", "--no-hardlinks", "--", workspace, worker],
+    { timeoutMs: 10_000 },
+  );
+  expect(cloned.code, cloned.stderr).toBe(0);
+  await writeWorkspaceFiles(worker, { [authored]: "host staged\n", [generated]: "cache\n" });
+
+  const runWorkerManifest = workspaceScriptRunner(REMOTE_WORKSPACE_MANIFEST_JS, worker, env);
+  const withoutAdmission = await runWorkerManifest([baseCommit, "eligible"]);
+  expect(withoutAdmission.code, withoutAdmission.stderr).toBe(0);
+  const dropped = await readManifest(withoutAdmission.stdout.trim());
+  expect(dropped.entries.some((entry) => entry.path === authored)).toBe(false);
+
+  const captured = await runWorkerManifest([baseCommit, "eligible", "retained-v1"], {
+    input: JSON.stringify({ admittedInputs: [authored] }),
+  });
+  expect(captured.code, captured.stderr).toBe(0);
+  const manifest = await readManifest(captured.stdout.trim());
+  expect(manifest.entries.some((entry) => entry.path === authored)).toBe(true);
+  expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
+  expect(manifest.entries.some((entry) => entry.path === "source.txt")).toBe(true);
+});

@@ -85,8 +85,13 @@ const eligibleOnly = process.argv[3] === "eligible";
 const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
 const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
 const memoMode = process.argv.at(-1) === "memo-v1";
+const retainedInputsMode = process.argv.at(-1) === "retained-v1";
 const priorManifestDigests = [
-  ...new Set(process.argv.slice(4).filter((value) => value && value !== "memo-v1")),
+  ...new Set(
+    process.argv.slice(4).filter(
+      (value) => value && value !== "memo-v1" && value !== "retained-v1",
+    ),
+  ),
 ];
 const MAX_WORKSPACE_GIT_CANDIDATES = ${MAX_WORKSPACE_GIT_CANDIDATES};
 const MAX_WORKSPACE_INVENTORY_ENTRIES = ${MAX_WORKSPACE_INVENTORY_ENTRIES};
@@ -117,6 +122,9 @@ function readHashMemo() {
   } catch {
     fail("invalid workspace hash memo");
   }
+  if (!Array.isArray(entries) && entries && typeof entries === "object") {
+    entries = entries.memo;
+  }
   if (
     !Array.isArray(entries) ||
     entries.length > MAX_WORKSPACE_HASH_MEMO_ENTRIES
@@ -124,6 +132,41 @@ function readHashMemo() {
     fail("invalid workspace hash memo");
   }
   return new Map(entries);
+}
+function readRetainedInputs() {
+  if (!retainedInputsMode) return [];
+  const raw = readManifestInput();
+  if (Buffer.byteLength(raw) > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+    fail("host-admitted workspace inputs exceed their byte limit");
+  }
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch {
+    fail("invalid host-admitted workspace inputs");
+  }
+  const admitted = envelope && typeof envelope === "object" ? envelope.admittedInputs : null;
+  if (!Array.isArray(admitted) || admitted.length > MAX_WORKSPACE_GIT_CANDIDATES) {
+    fail("invalid host-admitted workspace inputs");
+  }
+  let bytes = 0;
+  for (const relative of admitted) {
+    if (
+      typeof relative !== "string" ||
+      !relative ||
+      path.posix.isAbsolute(relative) ||
+      path.posix.normalize(relative) !== relative ||
+      relative === ".." ||
+      relative.startsWith("../")
+    ) {
+      fail("unsafe host-admitted workspace input");
+    }
+    bytes += Buffer.byteLength(relative) + 1;
+  }
+  if (bytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+    fail("host-admitted workspace inputs exceed their byte limit");
+  }
+  return admitted;
 }
 const hashMemo = readHashMemo();
 ${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
@@ -360,6 +403,7 @@ async function initializeRetainedBuildCacheInputs() {
     ...paths,
     ...priorPaths,
     ...(await nulPaths(["--full-name", "--cached"])),
+    ...readRetainedInputs(),
   ]);
 }
 function assertSerializedManifestBudget(baseCommit, entries) {
@@ -555,7 +599,11 @@ export function createRemoteWorkspaceManifestScript(
 ): string {
   return String.raw`const MAX_WORKSPACE_HASH_MEMO_BYTES = ${maxHashMemoBytes};
 ${WORKSPACE_MANIFEST_PROGRAM}
-function readManifestInput() { return fs.readFileSync(0, "utf8"); }
+let manifestInput;
+function readManifestInput() {
+  if (manifestInput === undefined) manifestInput = fs.readFileSync(0, "utf8");
+  return manifestInput;
+}
 function assertManifestCurrent() {}
 function readManifestGit(root, args, maxBuffer) {
   return childProcess.execFileSync("git", ["-C", root, ...args], {
