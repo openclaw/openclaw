@@ -54,46 +54,43 @@ describe("doctor exec safe bin helpers", () => {
     ]);
   });
 
-  it("scaffolds custom safeBin profiles but warns on interpreters and risky bins", () => {
-    const result = maybeRepairExecSafeBinProfiles(binConfig(["node", "jq", "myfilter"]));
-
-    expect(result.changes).toEqual([scaffoldChange]);
-    expect(result.warnings).toEqual([
-      `- tools.exec.safeBins includes 'jq': ${jqWarning}`,
-      "- tools.exec.safeBins includes interpreter/runtime 'node' without profile; remove it from safeBins or use explicit allowlist entries.",
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-  });
-
-  it("does not scaffold normalized risky safeBins from path-like entries", () => {
-    const cfg = binConfig(["/usr/local/bin/jq", "sed.exe", "myfilter"]);
-    const hits = scanExecSafeBinCoverage(cfg);
-
-    expect(hits).toEqual([
-      { scopePath: "tools.exec", bin: "myfilter", kind: "missingProfile", isInterpreter: false },
-      riskyHit("jq", jqWarning),
-      riskyHit("sed", sedWarning),
-    ]);
-
-    const result = maybeRepairExecSafeBinProfiles(cfg);
-
-    expect(result.changes).toEqual([scaffoldChange]);
-    expect(result.warnings).toEqual([
-      `- tools.exec.safeBins includes 'jq': ${jqWarning}`,
-      `- tools.exec.safeBins includes 'sed': ${sedWarning}`,
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
+  it.each([
+    {
+      bins: ["node", "jq", "myfilter"],
+      warning:
+        "- tools.exec.safeBins includes interpreter/runtime 'node' without profile; remove it from safeBins or use explicit allowlist entries.",
+    },
+    {
+      bins: ["/usr/local/bin/jq", "sed.exe", "myfilter"],
+      warning: `- tools.exec.safeBins includes 'sed': ${sedWarning}`,
+    },
+  ])("scaffolds only custom profiles for $bins", ({ bins, warning }) => {
+    const cfg = binConfig(bins);
+    if (bins.includes("sed.exe")) {
+      expect(scanExecSafeBinCoverage(cfg)).toEqual([
+        { scopePath: "tools.exec", bin: "myfilter", kind: "missingProfile", isInterpreter: false },
+        riskyHit("jq", jqWarning),
+        riskyHit("sed", sedWarning),
+      ]);
+    }
+    expect(maybeRepairExecSafeBinProfiles(cfg)).toEqual({
+      config: binConfig(bins, { myfilter: {} }),
+      changes: [scaffoldChange],
+      warnings: [`- tools.exec.safeBins includes 'jq': ${jqWarning}`, warning],
+    });
   });
 
   it("warns on awk-family safeBins instead of scaffolding them", () => {
     const result = maybeRepairExecSafeBinProfiles(binConfig(["awk", "sed"]));
 
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toEqual([
-      "- tools.exec.safeBins includes 'awk': awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
-      `- tools.exec.safeBins includes 'sed': ${sedWarning}`,
-    ]);
-    expect(result.config.tools?.exec?.safeBinProfiles).toBeUndefined();
+    expect(result).toEqual({
+      config: binConfig(["awk", "sed"]),
+      changes: [],
+      warnings: [
+        "- tools.exec.safeBins includes 'awk': awk-family interpreters can execute commands, access ENVIRON, and write files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+        `- tools.exec.safeBins includes 'sed': ${sedWarning}`,
+      ],
+    });
   });
 
   it("flags safeBins that resolve outside trusted directories", () => {
