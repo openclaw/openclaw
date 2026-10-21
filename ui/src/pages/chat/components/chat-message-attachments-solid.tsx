@@ -69,7 +69,11 @@ export type MessageAttachmentProps = AttachmentProps & {
 };
 
 export function AssistantAttachments(
-  props: AttachmentProps & { attachments: AssistantAttachmentItem[]; inlinePlayback?: boolean },
+  props: AttachmentProps & {
+    attachments: AssistantAttachmentItem[];
+    inlinePlayback?: boolean;
+    inlineComments?: boolean;
+  },
 ): SolidJSX.Element {
   const comments = () =>
     props.inlinePlayback !== false ? [] : props.attachments.filter(isSentCommentAttachment);
@@ -127,6 +131,7 @@ export function AssistantAttachments(
       >
         <SentCommentAttachments
           comments={comments()}
+          inline={props.inlineComments && files().length === 0}
           options={props.options}
           resolve={(item) => commentSources().get(item)!}
         />
