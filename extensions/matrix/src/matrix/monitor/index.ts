@@ -314,7 +314,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     clientLease = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
-      startClient: false,
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
       role: "monitor",

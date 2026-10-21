@@ -27,7 +27,7 @@ vi.mock("./create-client.js", () => ({
 }));
 
 function acquireStoppedClient(auth: MatrixAuth, role?: "monitor" | "transient") {
-  return acquireSharedMatrixClient({ auth, role, startClient: false });
+  return acquireSharedMatrixClient({ auth, role });
 }
 
 function createTaskRunner() {
@@ -147,8 +147,11 @@ describe("shared Matrix client generations", () => {
     createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
 
     const firstLease = await acquireSharedMatrixClient({ auth: firstAuth });
+    await firstLease.start();
     const repeatedFirstLease = await acquireSharedMatrixClient({ auth: firstAuth });
+    await repeatedFirstLease.start();
     const secondLease = await acquireSharedMatrixClient({ auth: secondAuth });
+    await secondLease.start();
 
     expect(firstLease.client).toBe(firstClient);
     expect(repeatedFirstLease.client).toBe(firstClient);
@@ -207,7 +210,6 @@ describe("shared Matrix client generations", () => {
     const caller = new AbortController();
     const cancelled = acquireSharedMatrixClient({
       auth: { ...auth, allowPrivateNetwork: true },
-      startClient: false,
       abortSignal: caller.signal,
     });
     caller.abort();
@@ -234,8 +236,8 @@ describe("shared Matrix client generations", () => {
     const client = createMockClient("shared");
     createMatrixClientMock.mockResolvedValue(client);
 
-    const first = await moduleA.acquireSharedMatrixClient({ auth, startClient: false });
-    const second = await moduleB.acquireSharedMatrixClient({ auth, startClient: false });
+    const first = await moduleA.acquireSharedMatrixClient({ auth });
+    const second = await moduleB.acquireSharedMatrixClient({ auth });
 
     expect(first.client).toBe(client);
     expect(second.client).toBe(client);
@@ -597,7 +599,6 @@ describe("shared Matrix client generations", () => {
         retained = acquireSharedMatrixClient({
           cfg: TEST_CFG,
           accountId: "main",
-          startClient: false,
         });
         await allowOwnerSettlement.promise;
       });
@@ -659,7 +660,6 @@ describe("shared Matrix client generations", () => {
         lease = await acquireSharedMatrixClient({
           cfg: TEST_CFG,
           accountId: "main",
-          startClient: false,
           abortSignal: caller.signal,
         });
       } catch (error) {
