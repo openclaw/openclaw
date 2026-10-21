@@ -81,21 +81,28 @@ export class GatewayBenchWorkerProfiler {
     this.resolveScript = resolveScript;
     process.on("worker", (worker) => {
       this.workers.add(worker);
-      const terminate = worker.terminate.bind(worker);
-      // Foreign workers can expose a read-only method; their unexported retirements stay incomplete.
-      Reflect.set(worker, "terminate", async () => {
-        const recordings = [...this.activeRecordings].filter(
-          ([recording]) => recording.threadId === worker.threadId,
-        );
-        if (recordings.length > 0) {
-          // Export before intentional retirement; an unresponsive worker must still terminate.
-          await Promise.race([
-            Promise.all(recordings.map(([recording, kind]) => this.finish(kind, recording))),
-            delay(5_000, undefined, { ref: false }),
-          ]);
-        }
-        return await terminate();
-      });
+      let owner: object | null = worker;
+      while (owner && !Object.hasOwn(owner, "terminate")) {
+        owner = Reflect.getPrototypeOf(owner);
+      }
+      const descriptor = owner && Object.getOwnPropertyDescriptor(owner, "terminate");
+      // Never invoke foreign accessors; unpatchable workers' retirements stay incomplete.
+      if (descriptor?.writable && typeof descriptor.value === "function") {
+        const terminate = worker.terminate.bind(worker);
+        Reflect.set(worker, "terminate", async () => {
+          const recordings = [...this.activeRecordings].filter(
+            ([recording]) => recording.threadId === worker.threadId,
+          );
+          if (recordings.length > 0) {
+            // Export before intentional retirement; an unresponsive worker must still terminate.
+            await Promise.race([
+              Promise.all(recordings.map(([recording, kind]) => this.finish(kind, recording))),
+              delay(5_000, undefined, { ref: false }),
+            ]);
+          }
+          return await terminate();
+        });
+      }
       worker.once("exit", () => this.workers.delete(worker));
     });
     inspector.on(

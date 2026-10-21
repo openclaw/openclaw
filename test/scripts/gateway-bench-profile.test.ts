@@ -275,26 +275,34 @@ process.on('message', (message) => {
 })();
 `;
 
-it("preserves read-only worker termination and reports its missing retirement profile", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-readonly-"));
-  const profilePath = path.join(directory, "heap");
-  const { child } = spawnFixture(
-    [
-      "--import",
-      new URL("../../scripts/tsx.mjs", import.meta.url).href,
-      "-e",
-      `
+it.each(["read-only", "accessor"])(
+  "preserves %s worker termination and reports its missing retirement profile",
+  async (method) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-readonly-"));
+    const profilePath = path.join(directory, "heap");
+    const { child } = spawnFixture(
+      [
+        "--import",
+        new URL("../../scripts/tsx.mjs", import.meta.url).href,
+        "-e",
+        `
         const { Worker } = require('node:worker_threads');
         const { once } = require('node:events');
         const keepAlive = setInterval(() => {}, 1000);
         process.once('disconnect', () => clearInterval(keepAlive));
-        class ReadOnlyWorker extends Worker {}
-        Object.defineProperty(ReadOnlyWorker.prototype, 'terminate', {
-          value: Worker.prototype.terminate, writable: false,
-        });
+        let terminateReads = 0;
+        class ForeignWorker extends Worker {
+          #terminate = Worker.prototype.terminate;
+          get terminate() { terminateReads++; return this.#terminate; }
+        }
+        if ('${method}' === 'read-only') {
+          Object.defineProperty(ForeignWorker.prototype, 'terminate', {
+            value: Worker.prototype.terminate, writable: false,
+          });
+        }
         (async () => {
           await import(process.argv[1]);
-          const worker = new ReadOnlyWorker('setInterval(() => {}, 1000)', {
+          const worker = new ForeignWorker('setInterval(() => {}, 1000)', {
             eval: true, execArgv: [], name: 'readonly-termination',
           });
           await once(worker, 'online');
@@ -304,27 +312,29 @@ it("preserves read-only worker termination and reports its missing retirement pr
               process.send({ retired: true });
             }
           });
-          process.send({ ready: true });
+          process.send({ ready: true, terminateReads });
         })();
       `,
-      preloadUrl,
-    ],
-    directory,
-  );
-  await waitMessage(child, "ready");
-  await controlGatewayProfile(child, "heap", "start", profilePath, { includeWorkers: true });
-  expect(await sendMessage(child, { retire: true })).toEqual({ retired: true });
-  await controlGatewayProfile(child, "heap", "stop", profilePath);
-  const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
-  const recording = manifest.workers.find(({ title }) => title.includes("readonly-termination"));
-  expect(recording?.completed).not.toBe(true);
-  expect(recording?.error).toMatch(/Worker retired/);
-}, 30_000);
+        preloadUrl,
+      ],
+      directory,
+    );
+    expect(await waitMessage(child, "ready")).toMatchObject({ terminateReads: 0 });
+    await controlGatewayProfile(child, "heap", "start", profilePath, { includeWorkers: true });
+    expect(await sendMessage(child, { retire: true })).toEqual({ retired: true });
+    await controlGatewayProfile(child, "heap", "stop", profilePath);
+    const manifest = await readJson<WorkerProfileManifest>(`${profilePath}.workers.json`);
+    const recording = manifest.workers.find(({ title }) => title.includes("readonly-termination"));
+    expect(recording?.completed).not.toBe(true);
+    expect(recording?.error).toMatch(/Worker retired/);
+  },
+  30_000,
+);
 
 async function waitMessage(child: ChildProcess, field: string) {
   for await (const [message] of on(child, "message", { close: ["exit"] })) {
     if (message[field]) {
-      return;
+      return message;
     }
   }
   throw new Error(`Profile fixture exited before ${field}`);
