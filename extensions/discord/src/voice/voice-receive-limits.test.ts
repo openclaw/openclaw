@@ -4,8 +4,7 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 defineDiscordVoiceTests((h) => {
   const { expect, it, vi } = h;
   async function createCaptureFixture(audio: { maxBytes?: number; enabled?: boolean }) {
-    const connection = h.createConnectionMock();
-    h.joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const connection = h.useConnection();
     const manager = h.createManager(
       audio.enabled === false
         ? undefined
