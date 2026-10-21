@@ -3,12 +3,11 @@ import type {
   MeetingTranscriptLine,
   MeetingTranscriptSnapshot,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
 import { meetTranscriptScript } from "./google-meet-caption-scripts.js";
 import { meetStatusScript } from "./google-meet-page-scripts.js";
 
 const MEETING_URL = "https://meet.google.com/abc-defg-hij";
-const GUEST_NAME = "Meeting Assistant";
 type CaptionLine = MeetingTranscriptLine;
 type CaptionSource = NonNullable<MeetingTranscriptLine["source"]>;
 type Transcript = MeetingTranscriptSnapshot & {
@@ -94,25 +93,24 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
     clearTimeout: (id: number) => timers.delete(id),
     window: windowState,
   });
+  const run = <T>(script: string) => (new Script(`(${script})`).runInContext(context) as () => T)();
   return {
     async poll(sessionId = "session-1") {
-      const inspect = new Script(
-        `(${meetStatusScript({
+      await run<Promise<string>>(
+        meetStatusScript({
           allowMicrophone: false,
           autoJoin: false,
           captionSessionId: sessionId,
           captureCaptions: true,
-          guestName: GUEST_NAME,
+          guestName: "Meeting Assistant",
           readOnly: true,
-        })})`,
-      ).runInContext(context) as () => Promise<string>;
-      await inspect();
+        }),
+      );
     },
     read(finalize = false, sessionId = "session-1"): Transcript {
-      const read = new Script(
-        `(${meetTranscriptScript(MEETING_URL, sessionId, finalize)})`,
-      ).runInContext(context) as () => string;
-      return JSON.parse(read()) as Transcript;
+      return JSON.parse(
+        run<string>(meetTranscriptScript(MEETING_URL, sessionId, finalize)),
+      ) as Transcript;
     },
     show(nextRows: CaptionNode[]) {
       rows = nextRows;
@@ -152,17 +150,13 @@ export function createCaptionPage(initialRows: CaptionNode[]) {
 export function onlyLine(lines: CaptionLine[]): CaptionLine {
   expect(lines).toHaveLength(1);
   const line = lines[0];
-  if (!line) {
-    throw new Error("Expected one captured caption");
-  }
+  assert(line, "Expected one captured caption");
   return line;
 }
 
 export function onlySourcedLine(lines: CaptionLine[]): CaptionLine & { source: CaptionSource } {
   const line = onlyLine(lines);
-  if (!line.source) {
-    throw new Error("Expected caption source identity");
-  }
+  assert(line.source, "Expected caption source identity");
   return { ...line, source: line.source };
 }
 

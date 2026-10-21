@@ -1,9 +1,14 @@
 import { PassThrough } from "node:stream";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { createMeetingBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
+import { createMeetingNodeBrowserFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "../config.js";
-import { MEET_URL, MEET_URL_EN, testBridgeProcess } from "../test-support/fixtures.test-helpers.js";
+import {
+  MEET_URL,
+  MEET_URL_EN,
+  meetBrowserState,
+  testBridgeProcess,
+} from "../test-support/fixtures.test-helpers.js";
 import { launchChromeMeet, launchChromeMeetOnNode } from "./chrome.js";
 
 const processes = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -41,21 +46,18 @@ describe("Google Meet startup ownership", () => {
   )(
     "reclaims $transport $inputSource audio after failed startup with an $ownership tab",
     async ({ transport, ownership, inputSource }) => {
+      const local = transport === "chrome";
       const events: string[] = [];
+      const matching = (prefix: string) => events.filter((event) => event.startsWith(prefix));
       const children: ReturnType<typeof testBridgeProcess>[] = [];
       const nodeStops: Array<{ action: string; bridgeId?: string }> = [];
-      const fixture = createMeetingBrowserFixture({
+      const fixture = createMeetingNodeBrowserFixture({
+        nodeCommand: "googlemeet.chrome",
         url: MEET_URL_EN,
         tabId: "owned-tab",
         title: "Meet",
         tabOpen: ownership !== "opened",
-        status: () => ({
-          inCall: true,
-          micMuted: false,
-          audioInputRouted: true,
-          audioOutputRouted: true,
-          url: MEET_URL_EN,
-        }),
+        status: () => meetBrowserState({ url: MEET_URL_EN }),
       });
       processes.spawn.mockImplementation((command: string) => {
         events.push(`spawn:${command}`);
@@ -75,6 +77,7 @@ describe("Google Meet startup ownership", () => {
         events.push(`browser:${String(request.path)}`);
         return fixture.browserResult(request);
       };
+      const nodeInvoke = fixture.invoke.getMockImplementation()!;
       const runtime = {
         gateway: {
           isAvailable: async () => true,
@@ -84,22 +87,12 @@ describe("Google Meet startup ownership", () => {
           },
         },
         nodes: {
-          list: async () => ({
-            nodes: [
-              {
-                nodeId: "node-1",
-                connected: true,
-                commands: ["googlemeet.chrome", "browser.proxy"],
-              },
-            ],
-          }),
-          invoke: async ({
-            command,
-            params,
-          }: {
+          ...fixture.runtime.nodes,
+          invoke: async (request: {
             command: string;
             params: { action: string; path: string; bridgeId?: string };
           }) => {
+            const { command, params } = request;
             if (command === "browser.proxy") {
               return { payload: { result: await browser(params) } };
             }
@@ -107,12 +100,7 @@ describe("Google Meet startup ownership", () => {
             if (params.action === "stop") {
               nodeStops.push({ action: params.action, bridgeId: params.bridgeId });
             }
-            return {
-              payload:
-                params.action === "start"
-                  ? { bridgeId: "bridge-1", audioBridge: { type: "node-command-pair" } }
-                  : {},
-            };
+            return nodeInvoke(request);
           },
         },
         system: {
@@ -131,7 +119,7 @@ describe("Google Meet startup ownership", () => {
         },
         realtime: { voiceProvider: "missing-meeting-test-provider" },
       });
-      const launch = transport === "chrome" ? launchChromeMeet : launchChromeMeetOnNode;
+      const launch = local ? launchChromeMeet : launchChromeMeetOnNode;
       await expect(
         launch({
           runtime,
@@ -155,17 +143,11 @@ describe("Google Meet startup ownership", () => {
       );
       expect(fixture.state.audioCaptureId).toBeUndefined();
 
-      expect(events.filter((event) => event.startsWith("node:"))).toEqual(
-        transport === "chrome-node"
-          ? ["node:stopByUrl", "node:setup", "node:start", "node:stop"]
-          : [],
-      );
-      expect(nodeStops).toEqual(
-        transport === "chrome-node" ? [{ action: "stop", bridgeId: "bridge-1" }] : [],
-      );
-      expect(events.filter((event) => event.startsWith("spawn:"))).toEqual(
-        transport === "chrome" ? ["spawn:play", `spawn:${config.chrome.audioInputCommand[0]}`] : [],
-      );
+      expect({ nodeEvents: matching("node:"), nodeStops, spawns: matching("spawn:") }).toEqual({
+        nodeEvents: local ? [] : ["node:stopByUrl", "node:setup", "node:start", "node:stop"],
+        nodeStops: local ? [] : [{ action: "stop", bridgeId: "bridge-1" }],
+        spawns: local ? ["spawn:play", `spawn:${config.chrome.audioInputCommand[0]}`] : [],
+      });
       expect(children.every((child) => child.kill.mock.calls.length === 1)).toBe(true);
       expect(events.filter((event) => event === "browser:/tabs")).toHaveLength(
         ownership === "opened" ? 2 : 1,
@@ -179,7 +161,7 @@ describe("Google Meet startup ownership", () => {
         expect(cleanupIndex).toBeLessThan(events.lastIndexOf("browser:/tabs"));
       }
       expect(events.indexOf("browser:/act")).toBeLessThan(
-        events.indexOf(transport === "chrome" ? "spawn:play" : "node:start"),
+        events.indexOf(local ? "spawn:play" : "node:start"),
       );
     },
   );
