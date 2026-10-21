@@ -10,14 +10,12 @@ import {
 } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: vi.fn(),
 }));
-const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
-
 const originalChildProcess =
   await vi.importActual<typeof import("node:child_process")>("node:child_process");
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -77,7 +75,7 @@ it.each(["2026.9.4", "2026.9.6"])(
   async (version) => {
     const root = dirs.make("survivor-cron-reader-seed-");
     const baselinePath = path.join(root, "legacy-operator-baseline.json");
-    fs.writeFileSync(baselinePath, "{}");
+    writeJson(baselinePath, {});
     const ran = new Set<string>();
     mockOpenClaw((args) => {
       if (args[1] === "add") {

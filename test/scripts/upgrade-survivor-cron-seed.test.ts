@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { assertLegacyOperatorCronOwners } from "../../scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runProcess, writeExecutable, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -26,15 +27,12 @@ it.each([
     mkdirSync(binDir);
     const packageRoot = path.join(root, "fixture-package");
     mkdirSync(packageRoot, { recursive: true });
-    writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: baselineVersion,
-        type: "module",
-        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.mjs" },
-      }),
-    );
+    writeJson(path.join(packageRoot, "package.json"), {
+      name: "openclaw",
+      version: baselineVersion,
+      type: "module",
+      exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.mjs" },
+    });
     // The package operation is substituted, but the real phase sequence must resolve
     // its installed SDK and seed SQLite before the historical no-restart update.
     writeFileSync(
@@ -66,12 +64,11 @@ export async function loadCronStore(storePath) {
 `,
     );
     writeFileSync(authoredPath, authoredConfig);
-    writeFileSync(
+    writeExecutable(
       path.join(binDir, "getent"),
       `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
-      { mode: 0o755 },
     );
-    writeFileSync(
+    writeExecutable(
       probePath,
       `#!${process.execPath}
 const assert = require("node:assert/strict");
@@ -216,12 +213,10 @@ if (args[0] === "config") {
   fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "updated"), "complete");
 }
 `,
-      { mode: 0o755 },
     );
-    writeFileSync(
+    writeExecutable(
       path.join(binDir, "systemctl"),
       `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
-      { mode: 0o755 },
     );
     const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
     const phaseStart = source.indexOf("phase storage-preflight");
@@ -269,26 +264,23 @@ repair_fixture_plugin_consent
       "scripts/lib/openclaw-test-state.mts",
       "shell-function",
     ]);
-    const result = spawnSync("bash", [runnerPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-        OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
-        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
-        OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
-        OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
-        FIXTURE_ROOT: root,
-        FIXTURE_ACCOUNT_HOME: accountHome,
-        FIXTURE_AUTHORED_PATH: authoredPath,
-        FIXTURE_PROBE: probePath,
-      },
+    const result = runProcess("bash", [runnerPath], {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
+      OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
+      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+      OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
+      OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
+      FIXTURE_ROOT: root,
+      FIXTURE_ACCOUNT_HOME: accountHome,
+      FIXTURE_AUTHORED_PATH: authoredPath,
+      FIXTURE_PROBE: probePath,
     });
     const installError = path.join(root, "artifacts", "baseline-service-install.err");
     expect(
