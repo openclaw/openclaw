@@ -530,6 +530,8 @@ export function detectSharedAuthStoreMigration(params: {
     env,
     ownershipLocation: ownership.location,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+    classifyRetainedSource: (sourcePath, ownerId) =>
+      isRetainedSharedAuthSource(env, sourcePath, ownerId),
   });
   const sourcePath = selection.sourcePath;
   const ownerId = selection.ownerId === LEGACY_IMPLICIT_AGENT_ID ? undefined : selection.ownerId;
@@ -540,7 +542,10 @@ export function detectSharedAuthStoreMigration(params: {
       ? { conflictingSourcePath: selection.conflictingSourcePath }
       : {}),
   };
-  if (isRetainedSharedAuthSource(env, sourcePath, ownerId ?? LEGACY_IMPLICIT_AGENT_ID)) {
+  if (
+    selection.held ||
+    isRetainedSharedAuthSource(env, sourcePath, ownerId ?? LEGACY_IMPLICIT_AGENT_ID)
+  ) {
     return { ...selected, hasLegacy: true, held: true };
   }
   const hasLegacy =

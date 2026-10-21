@@ -93,6 +93,7 @@ export type LegacySharedAuthSourceSelection = {
   ownerId: string;
   mainSourcePath: string;
   conflictingSourcePath?: string;
+  held?: boolean;
 };
 
 export class SharedAuthStoreSourceInspectionError extends Error {
@@ -302,6 +303,7 @@ export function resolveLegacySharedAuthSourceSelection(params: {
   env: NodeJS.ProcessEnv;
   ownershipLocation: "legacy-main" | "state-db";
   artifactPreservingReadOnly?: boolean;
+  classifyRetainedSource?: (sourcePath: string, ownerId: string) => boolean;
 }): LegacySharedAuthSourceSelection {
   const mainSourceDir = resolveSharedMainAuthAgentDir(params.env);
   const mainSourcePath = path.join(mainSourceDir, "openclaw-agent.sqlite");
@@ -322,16 +324,17 @@ export function resolveLegacySharedAuthSourceSelection(params: {
     ownerId: LEGACY_IMPLICIT_AGENT_ID,
     mainSourcePath,
   };
+  const owner = {
+    sourceDir: configuredOwnerDir,
+    sourcePath: configuredOwnerPath,
+    ownerId: configuredOwnerId,
+    mainSourcePath,
+  };
   if (ownerIsMain) {
     return main;
   }
   if (hasPendingSharedAuthCleanup(params.env, configuredOwnerPath, params)) {
-    return {
-      sourceDir: configuredOwnerDir,
-      sourcePath: configuredOwnerPath,
-      ownerId: configuredOwnerId,
-      mainSourcePath,
-    };
+    return owner;
   }
   if (hasPendingSharedAuthCleanup(params.env, mainSourcePath, params)) {
     return main;
@@ -339,18 +342,20 @@ export function resolveLegacySharedAuthSourceSelection(params: {
   if (params.ownershipLocation !== "legacy-main") {
     return main;
   }
+  // Classify retained sources before opening their auth rows. A retained database may
+  // be unreadable or malformed; Doctor must leave it untouched instead of failing.
+  if (params.classifyRetainedSource?.(configuredOwnerPath, configuredOwnerId)) {
+    return { ...owner, held: true };
+  }
+  if (params.classifyRetainedSource?.(mainSourcePath, LEGACY_IMPLICIT_AGENT_ID)) {
+    return { ...main, held: true };
+  }
   const ownerRows = inspectSharedAuthLegacyRowsReadOnly(configuredOwnerPath, params);
   const mainRows = inspectSharedAuthLegacyRowsReadOnly(mainSourcePath, params);
   const ownerPopulated =
     hasStoredSharedAuthProfiles(ownerRows) || hasLegacyAuthSources(configuredOwnerDir, params.env);
   const mainPopulated =
     hasStoredSharedAuthProfiles(mainRows) || hasLegacyAuthSources(mainSourceDir, params.env);
-  const owner = {
-    sourceDir: configuredOwnerDir,
-    sourcePath: configuredOwnerPath,
-    ownerId: configuredOwnerId,
-    mainSourcePath,
-  };
   if (ownerPopulated && mainPopulated) {
     return { ...owner, conflictingSourcePath: mainSourcePath };
   }

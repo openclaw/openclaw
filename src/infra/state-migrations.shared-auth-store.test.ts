@@ -27,6 +27,7 @@ import {
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -893,6 +894,37 @@ for (const crashState of [
     expect(count(cleanedSource, "auth_profile_state", "state_key", "primary")).toBe(0);
   });
 }
+
+it("classifies a retained main source before opening its unreadable rows", async () => {
+  const fixture = await createEmptyFixture(false);
+  const mainAgentDir = paths.resolveSharedMainAuthAgentDir(fixture.env);
+  sqlite.writePersistedAuthProfileStoreRaw(makeStore("openai:main", "main-key"), mainAgentDir);
+  closeOpenClawAgentDatabasesForTest();
+  beginAgentDeletionJournal(
+    {
+      agentId: "main",
+      operationId: "retained-main",
+      agentDir: mainAgentDir,
+      workspaceDir: path.join(fixture.stateDir, "workspace"),
+      sessionsDir: path.join(fixture.stateDir, "sessions", "main"),
+      deleteFiles: false,
+    },
+    { env: fixture.env },
+  );
+  fs.writeFileSync(fixture.sourcePath, "not a sqlite database");
+  const config = {
+    agents: {
+      defaults: { authInheritance: { agentId: "ops" } },
+      entries: { main: {}, ops: {} },
+    },
+  } as OpenClawConfig;
+
+  expect(fixture.detect({ config })).toMatchObject({
+    sourcePath: fixture.sourcePath,
+    hasLegacy: true,
+    held: true,
+  });
+});
 
 it.each(["dangling symlink", "unreadable file"] as const)(
   "fails closed for a legacy source with a %s",
