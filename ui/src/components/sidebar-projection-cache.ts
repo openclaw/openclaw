@@ -68,15 +68,13 @@ export function sameSidebarPresentation(a: unknown, b: unknown, omit?: string): 
   if (a instanceof Map || b instanceof Map || a instanceof Set || b instanceof Set) {
     return false;
   }
-  const left = a as Readonly<Record<string, unknown>>;
-  const right = b as Readonly<Record<string, unknown>>;
-  for (const key in left) {
-    if (key !== omit && !sameSidebarPresentation(left[key], right[key])) {
+  for (const key in a) {
+    if (key !== omit && !sameSidebarPresentation(Reflect.get(a, key), Reflect.get(b, key))) {
       return false;
     }
   }
-  for (const key in right) {
-    if (key !== omit && !(key in left) && right[key] !== undefined) {
+  for (const key in b) {
+    if (key !== omit && !(key in a) && Reflect.get(b, key) !== undefined) {
       return false;
     }
   }
