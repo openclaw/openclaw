@@ -118,6 +118,8 @@ const changedReport = (from: string | RegExp, to: string) => ({
   prReport: report().replace(from, to),
 });
 const appendedReport = (text: string) => ({ prReport: `${report()}\n${text}` });
+const insertFailure = (anchor: string, message: string) =>
+  changedReport(anchor, `Error: ${message}\n[shard:gateway] ${anchor}`);
 
 function failureClassifier(
   options: {
@@ -177,53 +179,54 @@ function gateFixture(
   const changed = options.changed ?? ["src/channels/unrelated.ts"];
   const failureJob = options.failureJob ?? job;
   const signatureFile = options.signatureFile ?? file;
+  const responses: Record<string, unknown> = {
+    "/actions/runs/100": {
+      ...mainRun,
+      id: 100,
+      event: "pull_request",
+      head_sha: headSha,
+      head_repository: { full_name: options.headRepository ?? repository },
+    },
+    "/actions/runs/100/attempts/1/jobs": { total_count: 1, jobs: [failureJob] },
+    "/actions/workflows/ci.yml/runs": {
+      workflow_runs: [
+        {
+          ...mainRun,
+          event: options.mainEvent ?? "schedule",
+          conclusion: options.mainConclusion ?? "failure",
+        },
+      ],
+    },
+    "/pulls/7": {
+      state: "open",
+      draft: false,
+      changed_files: options.changedCount ?? changed.length,
+      head: { sha: headSha, repo: { full_name: options.headRepository ?? repository } },
+      base: { ref: "main", repo: { full_name: repository } },
+    },
+    "/pulls/7/files": changed.map((filename) => ({ filename })),
+    "/git/ref/heads/main": { object: { sha: options.liveMainSha ?? mainSha } },
+    [`/compare/${options.liveMainSha ?? mainSha}...${headSha}`]: {
+      merge_base_commit: { sha: baseSha },
+    },
+    [`/compare/${baseSha}...${mainSha}`]: { status: options.age ?? "ahead" },
+    "/actions/runs/200/attempts/1/jobs": {
+      total_count: 1,
+      jobs: [{ ...failureJob, id: 20, run_id: 200 }],
+    },
+  };
+  if (options.liveMainSha) {
+    responses[`/compare/${mainSha}...${options.liveMainSha}`] = {
+      status: "ahead",
+      files: (options.mainChanged ?? []).map((filename) => ({ filename })),
+    };
+  }
   const api = vi.fn(async (url: string) => {
     const path = new URL(url).pathname.replace(`/repos/${repository}`, "");
-    let body: unknown;
-    if (path === "/actions/runs/100") {
-      body = {
-        ...mainRun,
-        id: 100,
-        event: "pull_request",
-        head_sha: headSha,
-        head_repository: { full_name: options.headRepository ?? repository },
-      };
-    } else if (path === "/actions/runs/100/attempts/1/jobs") {
-      body = { total_count: 1, jobs: [failureJob] };
-    } else if (path === "/actions/workflows/ci.yml/runs") {
-      body = {
-        workflow_runs: [
-          {
-            ...mainRun,
-            event: options.mainEvent ?? "schedule",
-            conclusion: options.mainConclusion ?? "failure",
-          },
-        ],
-      };
-    } else if (path === "/pulls/7") {
-      body = {
-        state: "open",
-        draft: false,
-        changed_files: options.changedCount ?? changed.length,
-        head: { sha: headSha, repo: { full_name: options.headRepository ?? repository } },
-        base: { ref: "main", repo: { full_name: repository } },
-      };
-    } else if (path === "/pulls/7/files") {
-      body = changed.map((filename) => ({ filename }));
-    } else if (path === "/git/ref/heads/main") {
-      body = { object: { sha: options.liveMainSha ?? mainSha } };
-    } else if (path === `/compare/${options.liveMainSha ?? mainSha}...${headSha}`) {
-      body = { merge_base_commit: { sha: baseSha } };
-    } else if (path === `/compare/${baseSha}...${mainSha}`) {
-      body = { status: options.age ?? "ahead" };
-    } else if (options.liveMainSha && path === `/compare/${mainSha}...${options.liveMainSha}`) {
-      body = {
-        status: "ahead",
-        files: (options.mainChanged ?? []).map((filename) => ({ filename })),
-      };
-    } else if (path === "/actions/runs/200/attempts/1/jobs") {
-      body = { total_count: 1, jobs: [{ ...failureJob, id: 20, run_id: 200 }] };
-    } else if (path === "/actions/jobs/20/logs") {
+    if (Object.hasOwn(responses, path)) {
+      return new Response(JSON.stringify(responses[path]));
+    }
+    if (path === "/actions/jobs/20/logs") {
       return new Response(options.mainReport ?? report());
     } else if (path === "/actions/jobs/10/logs") {
       return new Response(options.prReport ?? report());
@@ -231,20 +234,20 @@ function gateFixture(
       if (new URL(url).searchParams.get("ref") !== mainSha) {
         throw new Error("Subject source must use the immutable main evidence revision");
       }
-      body = {
-        type: "file",
-        encoding: "base64",
-        content: Buffer.from(
-          path.endsWith("/package.json")
-            ? JSON.stringify({ name: options.packageNames?.[path.split("/")[3]!] })
-            : (options.source ??
-                'import { it } from "vitest"; import { start } from "./subject.js";'),
-        ).toString("base64"),
-      };
-    } else {
-      throw new Error(`Unexpected evidence request ${path}`);
+      return new Response(
+        JSON.stringify({
+          type: "file",
+          encoding: "base64",
+          content: Buffer.from(
+            path.endsWith("/package.json")
+              ? JSON.stringify({ name: options.packageNames?.[path.split("/")[3]!] })
+              : (options.source ??
+                  'import { it } from "vitest"; import { start } from "./subject.js";'),
+          ).toString("base64"),
+        }),
+      );
     }
-    return new Response(JSON.stringify(body));
+    throw new Error(`Unexpected evidence request ${path}`);
   });
   vi.stubGlobal("fetch", api);
   return createKnownMainRed({
@@ -328,63 +331,30 @@ describe("main failure attribution", () => {
     });
   });
 
-  it("makes unverified scope visible without inventing a mismatch", async () => {
-    const classifier = failureClassifier({
-      mainJobs: [{ ...job, id: 20, conclusion: "success" }],
-    });
-    expect(await classifier.classifyJob(job)).toMatchObject({
-      class: "new",
-      reason: "Matching main job passed; selected scope not compared",
-    });
-  });
-
+  const unparsedReason =
+    "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared";
+  const matchedReason = "Failure signatures match main; selected scope not compared";
+  const rejected = report("startup > rejects the session");
+  const changedTypes = typeReport(typeDiagnostic.replace("TS2367", "TS2554"));
+  const build = { ...job, name: "build-artifacts" };
   it.each<[string, typeof job, string, string?, string?, string?]>([
+    ["node match", job, "pre-existing", undefined, undefined, matchedReason],
+    ["node mismatch", job, "new", undefined, rejected],
+    ["node subset", job, "new", report() + rejected],
+    ["tsgo match", typeJob, "pre-existing", typeReport(), typeReport()],
+    ["tsgo mismatch", typeJob, "new", typeReport(), changedTypes],
+    ["legacy lint", lintJob, "pre-existing", lintReport, lintReport],
+    ["node setup", failedJob(job.name, "Prepare workspace"), "unknown"],
+    ["truncated log", job, "unknown", undefined, "truncated log"],
+    ["node timeout", { ...job, conclusion: "timed_out" }, "unknown"],
+    ["build failure", build, "pre-existing", undefined, undefined, unparsedReason],
     [
-      "matching Node assertions",
-      job,
+      "build timeout",
+      { ...build, conclusion: "timed_out" },
       "pre-existing",
       undefined,
       undefined,
-      "Failure signatures match main; selected scope not compared",
-    ],
-    ["changed Node assertions", job, "new", undefined, report("startup > rejects the session")],
-    [
-      "only a subset of main assertions",
-      job,
-      "new",
-      report() + report("startup > rejects the session"),
-    ],
-    ["matching static types", typeJob, "pre-existing", typeReport(), typeReport()],
-    [
-      "changed static types",
-      typeJob,
-      "new",
-      typeReport(),
-      typeReport(typeDiagnostic.replace("TS2367", "TS2554")),
-    ],
-    ["matching legacy lint diagnostics", lintJob, "pre-existing", lintReport, lintReport],
-    [
-      "a Node setup failure without signatures",
-      failedJob(job.name, "Prepare workspace"),
-      "unknown",
-    ],
-    ["missing assertions", job, "unknown", undefined, "truncated log"],
-    ["a timeout in a signature-capable job", { ...job, conclusion: "timed_out" }, "unknown"],
-    [
-      "the same unparsed build failure",
-      { ...job, name: "build-artifacts" },
-      "pre-existing",
-      undefined,
-      undefined,
-      "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
-    ],
-    [
-      "the same unparsed build timeout",
-      { ...job, name: "build-artifacts", conclusion: "timed_out" },
-      "pre-existing",
-      undefined,
-      undefined,
-      "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
+      unparsedReason,
     ],
   ])("classifies %s", async (_name, failure, expected, mainReport, prReport, reason) => {
     const classifier = failureClassifier({
@@ -416,6 +386,9 @@ describe("main failure attribution", () => {
       class: expected,
       mainRunId: 200,
       mainJobId: 20,
+      ...(conclusion === "success"
+        ? { reason: "Matching main job passed; selected scope not compared" }
+        : {}),
     });
   });
 
@@ -585,13 +558,7 @@ describe("known hourly main failures", () => {
       "failure before invocation start",
       { prReport: `[shard:gateway] Error: setup failed\n${report()}` },
     ],
-    [
-      "failure before first summary",
-      changedReport(
-        "[shard:gateway] Test Files",
-        "[shard:gateway] Error: coverage setup failed\n[shard:gateway] Test Files",
-      ),
-    ],
+    ["before summaries", insertFailure("Test Files", "coverage setup failed")],
     [
       "unknown later config",
       changedReport(
@@ -614,26 +581,11 @@ describe("known hourly main failures", () => {
       "unreported failed config",
       changedReport("failed 1 Vitest shard in", "failed 2 Vitest shards in"),
     ],
+    ["after terminal", insertFailure("[test] FAILED (exit 1)", "report close failed")],
+    ["during summaries", insertFailure("Tests 1 failed", "coverage finalization failed")],
     [
-      "failure after invocation terminal",
-      changedReport(
-        "[test] FAILED (exit 1)",
-        "Error: report close failed\n[shard:gateway] [test] FAILED (exit 1)",
-      ),
-    ],
-    [
-      "failure during summaries",
-      changedReport(
-        "[shard:gateway] Tests 1 failed",
-        "[shard:gateway] Error: coverage finalization failed\n[shard:gateway] Tests 1 failed",
-      ),
-    ],
-    [
-      "failure after summaries",
-      changedReport(
-        "[test] failed 1 Vitest shard in 7s",
-        "Error: report finalization failed\n[shard:gateway] [test] failed 1 Vitest shard in 7s",
-      ),
+      "after summaries",
+      insertFailure("[test] failed 1 Vitest shard in 7s", "report finalization failed"),
     ],
     ["outer failure after receipt", appendedReport("Error: write failed")],
     ["main has recovered", { mainConclusion: "success" }],

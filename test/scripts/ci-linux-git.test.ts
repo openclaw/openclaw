@@ -338,38 +338,15 @@ linuxIt(
   },
 );
 
-posixIt("fetches the CI harness without a second full-repository snapshot", async ({ signal }) => {
+posixIt("fetches only the harness bloblessly", async ({ signal }) => {
   const report = await runCiGitStep({ signal, job: "checks-fast-core", fetchResults: [0, 0] });
   expect(report.code).toBe(0);
-  const harnessDirectory = path.join(report.workspace, ".ci-harness");
-  const harnessCommands = report.commands.filter(
-    ({ tool, cwd }) => tool === "git" && cwd === harnessDirectory,
-  );
-  expect(harnessCommands.map(({ args }) => args[0])).toEqual(
-    command("init remote sparse-checkout fetch checkout"),
-  );
-  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args).toEqual(
-    expect.arrayContaining(["--filter=blob:none", `+${harness}:refs/remotes/origin/ci-harness`]),
-  );
-  expect(harnessCommands.find(({ args }) => args[0] === "fetch")?.args.at(-1)).toBe(
-    `+${harness}:refs/remotes/origin/ci-harness`,
-  );
-  expect(harnessCommands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-    expect.arrayContaining(
-      [
-        "scripts/ci-npm-lock-admission.mjs",
-        "scripts/generate-npm-package-lock.mjs",
-        "scripts/generate-npm-package-lock.mts",
-        "scripts/changed-lanes.mts",
-        "scripts/lib/merge-head-diff-base.mjs",
-        "scripts/stage-openclaw-bun.sh",
-        "scripts/lib/openclaw-bun.json",
-      ].map((file) => `/${file}`),
-    ),
-  );
-  expect(report.fetches.find(({ cwd }) => cwd === report.workspace)).toMatchObject({
-    args: expect.not.arrayContaining(["--filter=blob:none"]),
-  });
+  expect(
+    report.fetches.map(({ cwd, args }) => ({ cwd, blobless: args.includes("--filter=blob:none") })),
+  ).toEqual([
+    { cwd: report.workspace, blobless: false },
+    { cwd: path.join(report.workspace, ".ci-harness"), blobless: true },
+  ]);
 });
 
 type QaGitCase = {

@@ -112,6 +112,10 @@ function fixtureCommit(origin: string, tree: string, parent: string | undefined,
   );
 }
 
+function importCommit(ref: string, mark: number, parent?: string, message = "x\n", body = "") {
+  return `commit ${ref}\nmark :${mark}\ncommitter fixture <fixture@example.invalid> ${mark} +0000\ndata ${Buffer.byteLength(message)}\n${message}${parent ? `from ${parent}\n` : ""}${body}\n`;
+}
+
 function checkoutFixture(root: string, files: string[]) {
   const origin = join(root, "origin");
   const workspace = join(root, "checkout");
@@ -160,13 +164,7 @@ function createAncestryFixture(
   const targetRef = "refs/heads/main";
   const commit = (ref: string, parent: number | undefined, label: string) => {
     const mark = commits.length + 1;
-    const message = `${label}\n`;
-    commits.push(`commit ${ref}
-mark :${mark}
-committer fixture <fixture@example.invalid> ${mark} +0000
-data ${Buffer.byteLength(message)}
-${message}${parent ? `from :${parent}\n` : ""}
-`);
+    commits.push(importCommit(ref, mark, parent ? `:${parent}` : undefined, `${label}\n`));
     return mark;
   };
   const sourceRoot = commit(sourceRef, undefined, "source root");
@@ -198,46 +196,15 @@ function createProvisionalMergeBaseFixture(
   const root = command.createTempDir("openclaw-release-ancestry-provisional-");
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
-  const commits = Array.from({ length: 341 }, (_, index) => {
-    const mark = index + 1;
-    const parent = mark > 1 ? `from :${String(mark - 1)}\n` : "";
-    return `commit refs/heads/main
-mark :${String(mark)}
-committer fixture <fixture@example.invalid> ${String(mark)} +0000
-data 1
-x
-${parent}
-`;
-  });
-  commits.push(`commit refs/heads/main
-mark :342
-committer fixture <fixture@example.invalid> 342 +0000
-data 1
-x
-from :341
-merge :1
-
-`);
+  const commits = Array.from({ length: 341 }, (_, index) =>
+    importCommit("refs/heads/main", index + 1, index ? `:${index}` : undefined),
+  );
+  commits.push(importCommit("refs/heads/main", 342, ":341", "x\n", "merge :1\n"));
   for (let mark = 343; mark <= 562; mark += 1) {
     const parent = mark === 343 ? 121 : mark - 1;
-    commits.push(`commit refs/heads/release-source
-mark :${String(mark)}
-committer fixture <fixture@example.invalid> ${String(mark)} +0000
-data 1
-x
-from :${String(parent)}
-
-`);
+    commits.push(importCommit("refs/heads/release-source", mark, `:${parent}`));
   }
-  commits.push(`commit refs/heads/release-source
-mark :563
-committer fixture <fixture@example.invalid> 563 +0000
-data 1
-x
-from :562
-merge :1
-
-`);
+  commits.push(importCommit("refs/heads/release-source", 563, ":562", "x\n", "merge :1\n"));
   fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
   fixtureGit(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   return {
@@ -785,15 +752,13 @@ it.for([
     fixtureGit(origin, ["config", "uploadpack.allowFilter", "true"]);
     const commits = Array.from({ length: depth + 1 }, (_, index) => {
       const message = `fixture ${index}\n`;
-      const parent = index > 0 ? `from :${index}\n` : "";
-      return `commit refs/heads/main
-mark :${index + 1}
-committer fixture <fixture@example.invalid> ${1_700_000_000 + index} +0000
-data ${Buffer.byteLength(message)}
-${message}${parent}M 100644 inline fixture.txt
-data ${Buffer.byteLength(message)}
-${message}
-`;
+      return importCommit(
+        "refs/heads/main",
+        index + 1,
+        index ? `:${index}` : undefined,
+        message,
+        `M 100644 inline fixture.txt\ndata ${Buffer.byteLength(message)}\n${message}`,
+      );
     });
     fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
     let baseSha = fixtureGit(origin, ["rev-parse", `main~${depth}`]);
@@ -810,16 +775,13 @@ ${message}
       fixtureGit(
         origin,
         ["fast-import", "--quiet"],
-        `commit refs/heads/main
-committer fixture <fixture@example.invalid> 1700000002 +0000
-data 14
-remote update
-from ${previous}
-M 100644 inline fixture.txt
-data 14
-remote update
-
-`,
+        importCommit(
+          "refs/heads/main",
+          depth + 2,
+          previous,
+          "remote update\n",
+          "M 100644 inline fixture.txt\ndata 14\nremote update\n",
+        ),
       );
       baseSha = fixtureGit(origin, ["rev-parse", "main"]);
     }
