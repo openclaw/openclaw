@@ -538,6 +538,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
               }
             >
               <SidebarCommunityInvite
+                mode={this.context.theme.resolvedMode}
                 onDismiss={() => this.navigationViewElements.get(this.navigationView)?.focus()}
               />
             </Show>

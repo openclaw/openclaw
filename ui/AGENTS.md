@@ -85,4 +85,4 @@ imports inside their route's `component` loader.
 ## Visual Proof
 
 - Large design changes: run the [UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test).
-- Never capture the retired Discord invitation artwork. Mock/E2E harnesses default to `communityInvite: false`; Community card scenarios opt in with `communityInvite: true`. Capture the current card and its dismissed state with synthetic content, exercising the real dismiss action for persistence proof.
+- Mock/E2E harnesses default to `communityInvite: false`; Community card scenarios opt in with `communityInvite: true`. Capture the current invitation artwork and dismissed state with synthetic content across the selected theme modes, exercising the real dismiss action for persistence proof.

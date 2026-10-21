@@ -49,7 +49,7 @@ suite.define(() => {
             if (mobile) {
               await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
             }
-            const card = page.getByRole("region", { name: "Community", exact: true });
+            const card = page.locator(".community-invite-card");
             const close = card.getByRole("button", { name: "Dismiss and don't show again" });
             await close.waitFor();
             const shell = page.locator(".sidebar-shell");
@@ -65,9 +65,23 @@ suite.define(() => {
             );
             expect(listBounds.y + listBounds.height).toBeLessThanOrEqual(cardBounds.y);
             expect(listBounds.height).toBeGreaterThan(120);
-            expect(cardBounds.height).toBeLessThan(190);
+            const artwork = card.locator(".invite__art");
+            await expect
+              .poll(() =>
+                artwork.evaluate(
+                  (node) =>
+                    node instanceof HTMLImageElement && node.complete && node.naturalWidth === 1024,
+                ),
+              )
+              .toBe(true);
+            expect(await artwork.getAttribute("src")).toContain(`community-invite-${mode}.webp`);
+            const artworkBounds = (await artwork.boundingBox())!;
+            expect(artworkBounds.height).toBeGreaterThan(80);
+            expect(cardBounds.height - artworkBounds.height).toBeLessThan(190);
             expect(
-              await card.evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
+              await card
+                .locator(".invite__body")
+                .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
             ).toBeGreaterThanOrEqual(12);
             if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
               const frame = await takeControlUiScreenshotFrame(page, shell, [card, close], {

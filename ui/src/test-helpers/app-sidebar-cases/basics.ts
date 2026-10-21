@@ -78,7 +78,7 @@ it("honors deployment policy and existing Community dismissals", async () => {
     await context.config.refresh();
     await sidebar.updateComplete;
     expect(find(".community-invite-card")).not.toBeNull();
-    find<HTMLButtonElement>(".sidebar-community__close")!.click();
+    find<HTMLButtonElement>(".invite__close")!.click();
     await sidebar.updateComplete;
     expect(find(".community-invite-card")).toBeNull();
   } finally {
