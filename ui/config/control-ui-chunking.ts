@@ -59,6 +59,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "node_modules/@solidjs/signals/dist/prod/core/action.js":
+    case "node_modules/@solidjs/signals/dist/dev/core/action.js":
+      // Solid's shared runtime imports actions; keep the first lazy action user out of boot.
+      return "solid-actions-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";

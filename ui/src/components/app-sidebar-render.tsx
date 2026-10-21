@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -106,7 +106,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
     const avatarLoader = createIdentityAvatars();
-    onCleanup(avatarLoader.connect());
+    onSettled(() => avatarLoader.connect());
     const avatarSource = projectOwner(avatarLoader, (owner) => owner);
     const avatar = createMemo(() => {
       const sourceUrl = avatarUrl();
@@ -244,7 +244,7 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Element {
   let button: HTMLButtonElement | undefined;
   const focusHeader = () => button?.focus();
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host.sidebarMenus.focusAgentRoster === focusHeader) {
       host.sidebarMenus.focusAgentRoster = undefined;
     }
