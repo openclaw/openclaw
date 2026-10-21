@@ -27,6 +27,44 @@ describe("config writer policy-close ordering", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
   const clients: GatewayClient[] = [];
+  const scopes = ["operator.admin", "operator.read", "operator.write"];
+  async function connectClient(
+    port: number,
+    options: Pick<
+      ConstructorParameters<typeof GatewayClient>[0],
+      "token" | "deviceToken" | "deviceIdentity" | "clientName" | "mode" | "origin"
+    >,
+  ) {
+    const connected = createDeferredCore();
+    const closed = createDeferredCore();
+    let didClose = false;
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      clientName: "gateway-client",
+      clientVersion: "1.0.0",
+      mode: "backend",
+      deviceIdentity: null,
+      scopes,
+      ...options,
+      hostDeps: {
+        loadDeviceAuthToken: () => null,
+        storeDeviceAuthToken: () => {},
+        clearDeviceAuthToken: () => {},
+      },
+      onHelloOk: () => connected.resolve(),
+      onConnectError: (error) => connected.reject(error),
+      onClose: (code, reason) => {
+        didClose = true;
+        client.stop();
+        connected.reject(new Error(`closed ${code}: ${reason}`));
+        closed.resolve();
+      },
+    });
+    clients.push(client);
+    client.start();
+    await connected.promise;
+    return { client, closed: closed.promise, didClose: () => didClose };
+  }
   beforeEach(async () => {
     state = await createOpenClawTestState({
       label: "config-policy-response",
@@ -80,7 +118,6 @@ describe("config writer policy-close ordering", () => {
       const identity = loadOrCreateDeviceIdentity({
         path: state.path("writer-identity", "client", "credentials.sqlite"),
       });
-      const scopes = ["operator.admin", "operator.read", "operator.write"];
       const pairing = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -97,37 +134,8 @@ describe("config writer policy-close ordering", () => {
       if (!deviceToken) {
         throw new Error("Expected a real paired writer token");
       }
-      const connect = async (writer: boolean) => {
-        const connected = createDeferredCore();
-        const closed = createDeferredCore();
-        const client = new GatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          ...(writer ? { deviceToken } : { token }),
-          clientName: "gateway-client",
-          clientVersion: "1.0.0",
-          mode: "backend",
-          deviceIdentity: writer ? identity : null,
-          scopes,
-          hostDeps: {
-            loadDeviceAuthToken: () => null,
-            storeDeviceAuthToken: () => {},
-            clearDeviceAuthToken: () => {},
-          },
-          onHelloOk: () => connected.resolve(),
-          onConnectError: (error) => connected.reject(error),
-          onClose: (code, reason) => {
-            client.stop();
-            connected.reject(new Error(`closed ${code}: ${reason}`));
-            closed.resolve();
-          },
-        });
-        clients.push(client);
-        client.start();
-        await connected.promise;
-        return { client, closed: closed.promise };
-      };
-      const writer = await connect(true);
-      const admin = await connect(false);
+      const writer = await connectClient(port, { deviceToken, deviceIdentity: identity });
+      const admin = await connectClient(port, { token });
       const before = await writer.client.request<ConfigSnapshot>("config.get");
       const writtenPath = target === "include" ? includePath : state.configPath;
       await fs.writeFile(`${writtenPath}.bak`, "retained latest backup\n");
@@ -252,15 +260,10 @@ describe("config writer policy-close ordering", () => {
       const finishMetadata = createDeferredCore();
       const published = createDeferredCore<restartSentinel.RestartSentinelPayload>();
       const writeSentinel = restartSentinel.writeRestartSentinel;
-      const connect = async (credential: string, browser = false, browserOrigin = origin) => {
-        const closed = createDeferredCore();
-        const connected = createDeferredCore();
-        let didClose = false;
-        const client = new GatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+      const connect = (credential: string, browser = false, browserOrigin = origin) =>
+        connectClient(port, {
           token: credential,
           clientName: browser ? "openclaw-control-ui" : "gateway-client",
-          clientVersion: "1.0.0",
           mode: browser ? "webchat" : "backend",
           ...(browser ? { origin: browserOrigin } : {}),
           deviceIdentity: browser
@@ -268,26 +271,7 @@ describe("config writer policy-close ordering", () => {
                 path: state.path("browser-identity", "client", "credentials.sqlite"),
               })
             : null,
-          scopes: ["operator.admin", "operator.read", "operator.write"],
-          hostDeps: {
-            loadDeviceAuthToken: () => null,
-            storeDeviceAuthToken: () => {},
-            clearDeviceAuthToken: () => {},
-          },
-          onHelloOk: () => connected.resolve(),
-          onConnectError: (error) => connected.reject(error),
-          onClose: (code, reason) => {
-            didClose = true;
-            client.stop();
-            connected.reject(new Error(`closed ${code}: ${reason}`));
-            closed.resolve();
-          },
         });
-        clients.push(client);
-        client.start();
-        await connected.promise;
-        return { client, closed: closed.promise, didClose: () => didClose };
-      };
       if (policy === "publicOrigin") {
         // Adding the public origin must supersede the runtime-only localhost seed.
         const setup = await connect(token);

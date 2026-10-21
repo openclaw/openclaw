@@ -85,6 +85,11 @@ async function expectResponse(response: Response, status = 200) {
   expect(response.status, await response.clone().text()).toBe(status);
 }
 
+async function hookRunId(response: Response) {
+  await expectResponse(response);
+  return ((await response.json()) as { runId?: string }).runId;
+}
+
 function waitForGate(
   gate: Promise<void>,
   pending: Promise<unknown>,
@@ -556,14 +561,10 @@ describe("gateway hook admission", () => {
         return { status: "ok", summary: "done" };
       });
       const replayKey = "production-reload-replay";
-      const firstAgent = await postAgent(
-        port,
-        replayKey,
-        { message: "replay across reload" },
-        ROTATED_HOOK_TOKEN,
+      const message = { message: "replay across reload" };
+      const firstRunId = await hookRunId(
+        await postAgent(port, replayKey, message, ROTATED_HOOK_TOKEN),
       );
-      expect(firstAgent.status).toBe(200);
-      const firstAgentBody = (await firstAgent.json()) as { runId?: string };
       await waitForCronIsolatedRuns(1);
 
       await patchHooksConfig(socket, {
@@ -578,16 +579,10 @@ describe("gateway hook admission", () => {
         body: "{}",
         status: 400,
       });
-      const replayedAgent = await postHook(
-        port,
-        "/incoming/agent",
-        { message: "replay across reload" },
-        replayKey,
-        ROTATED_HOOK_TOKEN,
+      const replayedRunId = await hookRunId(
+        await postHook(port, "/incoming/agent", message, replayKey, ROTATED_HOOK_TOKEN),
       );
-      expect(replayedAgent.status).toBe(200);
-      const replayedAgentBody = (await replayedAgent.json()) as { runId?: string };
-      expect(replayedAgentBody.runId).toBe(firstAgentBody.runId);
+      expect(replayedRunId).toBe(firstRunId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
     });
   });
@@ -733,11 +728,7 @@ describe("gateway hook admission", () => {
         runnerAdmission.resolve();
 
         const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-        expect(first.status).toBe(200);
-        expect(duplicate.status).toBe(200);
-        const firstBody = (await first.json()) as { runId?: string };
-        const duplicateBody = (await duplicate.json()) as { runId?: string };
-        expect(duplicateBody.runId).toBe(firstBody.runId);
+        expect(await hookRunId(duplicate)).toBe(await hookRunId(first));
       });
     },
   );
@@ -762,16 +753,13 @@ describe("gateway hook admission", () => {
       const request = () => postAgent(port, "admission-retry");
 
       const conflict = await request();
-      expect(conflict.status).toBe(409);
+      await expectResponse(conflict, 409);
       const conflictBody = (await conflict.json()) as { ok?: boolean; runId?: string };
       expect(conflictBody.ok).toBe(false);
 
       const gatewayFailure = await request();
-      expect(gatewayFailure.status).toBe(502);
-      const gatewayFailureBody = (await gatewayFailure.json()) as {
-        ok?: boolean;
-        runId?: string;
-      };
+      await expectResponse(gatewayFailure, 502);
+      const gatewayFailureBody = (await gatewayFailure.json()) as typeof conflictBody;
       expect(gatewayFailureBody.ok).toBe(false);
       expect(gatewayFailureBody.runId).not.toBe(conflictBody.runId);
 

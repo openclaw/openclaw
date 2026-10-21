@@ -17,7 +17,6 @@ import type { McpServerConfig } from "../config/types.mcp.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
-import { registerMcpAuthCommitEffects } from "./server.mcp-auth-login.commit-effects.test-support.js";
 import { rpcReq } from "./test-helpers.server.js";
 
 type OAuthProvider = Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>;
@@ -435,18 +434,96 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       }
     });
 
-    registerMcpAuthCommitEffects({
-      identity,
-      resourceUrl: () => resourceUrl,
-      seed,
-      stored,
-      begin,
-      callback,
-      start,
-      finishError,
-      revoke,
-      observeLogin: (observe) => observeProvider((_provider, login) => observe(login)),
-      registerRestore: (restore) => restoreEffects.push(restore),
+    const expectPendingCleared = async (state: string) => {
+      const after = await stored();
+      expectAbsent(after, "codeVerifier", "lastAuthorizationUrl");
+      expect(await pending(state)).toBeUndefined();
+      return after;
+    };
+    const revokeAfterMutation = (kind: "tokens" | "authorizationRedirect") => {
+      const mutate = oauthStore.mutateMcpOAuthStore;
+      const spy = vi
+        .spyOn(oauthStore, "mutateMcpOAuthStore")
+        .mockImplementation(async (...args) => {
+          const result = await mutate(...args);
+          if (args[1].kind === kind) {
+            revoke();
+          }
+          return result;
+        });
+      restoreEffects.push(() => spy.mockRestore());
+    };
+
+    it("rolls back the token write when authority is withdrawn at its commit hook", async () => {
+      await seed();
+      const before = await stored();
+      expect(
+        await oauthCoordinator.recordMcpOAuthAuthorizationRequired({
+          identity: identity(),
+          rejectedAccessToken: "fixture-access",
+          scope: "expanded",
+        }),
+      ).toBe(true);
+      const started = await begin();
+      let observed: oauthProvider.McpOAuthLoginLifecycle | undefined;
+      observeProvider((_provider, login) => {
+        observed = login;
+        const beforeTokensSaved = login.beforeTokensSaved;
+        vi.spyOn(login, "beforeTokensSaved").mockImplementation(() => {
+          beforeTokensSaved();
+          revoke();
+        });
+        vi.spyOn(login, "onTokensSaved");
+      });
+      expect((await callback(started.state)).status).toBe(200);
+      const result = await finishError(started.sessionId);
+      expect(result.error).toContain("Sign-in did not finish");
+      expect(result.error).not.toContain("Authentication saved");
+      expect(observed?.beforeTokensSaved).toHaveBeenCalledTimes(1);
+      expect(observed?.onTokensSaved).toHaveBeenCalledTimes(0);
+      const after = await expectPendingCleared(started.state);
+      expect(after.tokens).toEqual(before.tokens);
+      expect(after.tokenExpiresAt).toBe(before.tokenExpiresAt);
+      expect(after.tokensAuthorizationServerUrl).toBe(before.tokensAuthorizationServerUrl);
+      expect(after.clientInformation).toEqual(before.clientInformation);
+      expect(after.pendingAuthorizationChallenge).toMatchObject({ requiresAuthorization: true });
+    });
+
+    it("reports saved authentication when authority ends before provider bookkeeping", async () => {
+      const started = await begin();
+      revokeAfterMutation("tokens");
+      let observed: oauthProvider.McpOAuthLoginLifecycle | undefined;
+      observeProvider((_provider, login) => {
+        observed = login;
+        vi.spyOn(login, "onTokensSaved");
+      });
+      expect((await callback(started.state)).status).toBe(200);
+      const result = await finishError(started.sessionId);
+      expect(result.error).toContain("Authentication saved, but sign-in cleanup did not finish");
+      expect(observed?.onTokensSaved).toHaveBeenCalledTimes(1);
+      const after = await expectPendingCleared(started.state);
+      expect(after.tokens?.access_token).toBe("fixture-access");
+      expect(after.tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
+      expect((await callback(started.state)).status).toBe(410);
+    });
+
+    it("cleans up a durable redirect when authority ends before provider bookkeeping", async () => {
+      revokeAfterMutation("authorizationRedirect");
+      let published: oauthProvider.McpOAuthLoginLifecycle["onAuthorizationPublished"] | undefined;
+      observeProvider((_provider, login) => {
+        published = vi.spyOn(login, "onAuthorizationPublished");
+      });
+      const result = await finishError(await start());
+      expect(result.error).toContain("Sign-in did not finish");
+      const publication = vi.mocked(expectDefined(published, "authorization publication hook"));
+      expect(publication).toHaveBeenCalledTimes(1);
+      const state = expectDefined(
+        publication.mock.calls[0]?.[0],
+        "acknowledged authorization state",
+      );
+      const after = await expectPendingCleared(state);
+      expectAbsent(after, "tokens", "redirectUrl");
+      expect((await callback(state)).status).toBe(410);
     });
 
     it("rejects verifier publication after the real PKCE digest resolves under revoked authority", async () => {
