@@ -92,19 +92,13 @@ function setProvider(
   return provider;
 }
 
-async function prepareNative(
-  candidates: MemorySearchHit[],
+async function prepare(
+  candidates: MemorySearchHit[] | MemorySearchResult[],
   activeProjectKeys: string[] = projectKeys,
 ): Promise<string[]> {
-  runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
-  return bootstrap({ activeProjectKeys });
-}
-
-async function prepareLegacy(
-  candidates: MemorySearchResult[],
-  activeProjectKeys: string[] = projectKeys,
-): Promise<string[]> {
-  runtimeMocks.listCurated.mockResolvedValue(candidates);
+  runtimeMocks.listCurated.mockResolvedValue(
+    runtimeMocks.providerRuntime ? { hits: candidates } : candidates,
+  );
   return bootstrap({ activeProjectKeys });
 }
 
@@ -131,7 +125,7 @@ it.each(["legacy", "native"])("filters project recall and its budget via %s", as
   const rejected = ["Untrusted project instruction.", "Missing-provenance project instruction."];
   const lines =
     runtime === "legacy"
-      ? await prepareLegacy([
+      ? await prepare([
           ...entries,
           ...rejected.map((snippet, index) => ({
             ...entry,
@@ -141,7 +135,7 @@ it.each(["legacy", "native"])("filters project recall and its budget via %s", as
               index === 0 ? { ...entry.provenance, originClass: "untrusted" as const } : undefined,
           })),
         ])
-      : await prepareNative([
+      : await prepare([
           ...nativeEntries,
           ...rejected.map((excerpt, index) =>
             Object.assign({}, nativeEntries[0]!, {
@@ -161,10 +155,7 @@ it.each(["legacy", "native"])("filters project recall and its budget via %s", as
 it.each(["legacy", "native"])("includes every active project via %s", async (runtime) => {
   resetRuntime(runtime === "native");
   const active = ["github.com/example/other", ...projectKeys];
-  const lines =
-    runtime === "native"
-      ? await prepareNative(nativeEntries, active)
-      : await prepareLegacy(entries, active);
+  const lines = await prepare(runtime === "native" ? nativeEntries : entries, active);
   expect(lines.join("\n")).toContain("Use the release helper.");
   expect(lines.join("\n")).toContain("Foreign fact.");
 });
@@ -178,7 +169,7 @@ it.each(["legacy", "native"])("uses curated listing rather than search via %s", 
       search: runtimeMocks.search,
     });
   }
-  const lines = native ? await prepareNative([nativeEntries[0]!]) : await prepareLegacy([entry]);
+  const lines = await prepare(native ? [nativeEntries[0]!] : [entry]);
   expect(lines.join("\n")).toContain("Use the release helper.");
   expect(runtimeMocks.search).not.toHaveBeenCalled();
   expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
@@ -197,7 +188,7 @@ describe("project memory bootstrap", () => {
       startLine: index + 1,
       snippet: `${String(index)} ${"bounded entry ".repeat(50)}`,
     }));
-    const lines = await prepareLegacy(crowded);
+    const lines = await prepare(crowded);
     expect(lines.join("\n").length).toBeLessThanOrEqual(2_000);
     expect(lines.slice(2, -1).every((line) => /\(Source: MEMORY\.md#L\d+\)$/u.test(line))).toBe(
       true,
@@ -205,7 +196,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("truncates long entries before admission while preserving the hard cap", async () => {
-    const rendered = (await prepareLegacy([{ ...entry, snippet: "🧠".repeat(1_000) }])).join("\n");
+    const rendered = (await prepare([{ ...entry, snippet: "🧠".repeat(1_000) }])).join("\n");
     expect(rendered).toContain("…");
     expect(rendered.length).toBeLessThanOrEqual(2_000);
   });
@@ -216,11 +207,11 @@ describe("project memory bootstrap", () => {
       startLine: index + 1,
       snippet: "a".repeat(550),
     }));
-    const prefix = await prepareLegacy(first);
+    const prefix = await prepare(first);
     const sourceSuffix = " (Source: MEMORY.md#L5)";
     const remaining = 2_000 - prefix.join("\n").length;
     const lastSnippet = "z".repeat(remaining - "- ".length - sourceSuffix.length - 1);
-    const lines = await prepareLegacy([
+    const lines = await prepare([
       ...first,
       { ...entries[0]!, startLine: 4, snippet: "b".repeat(600) },
       { ...entries[0]!, startLine: 5, snippet: lastSnippet },
@@ -232,7 +223,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("keeps sessions without an active repository unchanged", async () => {
-    await expect(prepareLegacy(entries, [])).resolves.toEqual([]);
+    await expect(prepare(entries, [])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
   });
 
@@ -266,7 +257,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("cites legacy chunks by start line from the already-loaded runtime", async () => {
-    const lines = await prepareLegacy([
+    const lines = await prepare([
       { ...entries[0]!, startLine: 5, endLine: 6, source: undefined as never },
     ]);
 
@@ -282,7 +273,7 @@ describe("project memory bootstrap", () => {
   it("does not load the slot plugin when no memory runtime is active", async () => {
     runtimeMocks.legacyRuntime = undefined;
 
-    await expect(prepareLegacy([entries[0]!])).resolves.toEqual([]);
+    await expect(prepare([entries[0]!])).resolves.toEqual([]);
     expect(runtimeMocks.getManager).not.toHaveBeenCalled();
     expect(runtimeMocks.getProvider).not.toHaveBeenCalled();
   });

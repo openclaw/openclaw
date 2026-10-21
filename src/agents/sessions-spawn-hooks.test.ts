@@ -8,18 +8,9 @@ import {
 } from "./subagents/spawn/subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
-type TestBindingRequest = {
-  targetSessionKey: string;
-  targetKind?: string;
-  conversation: {
-    channel: string;
-    accountId?: string;
-    conversationId: string;
-    parentConversationId?: string;
-  };
-  placement: "current" | "child";
-  metadata?: Record<string, unknown>;
-};
+type LoadOptions = Parameters<typeof loadSubagentSpawnModuleForTest>[0];
+type BindingService = ReturnType<NonNullable<LoadOptions["getSessionBindingService"]>>;
+type TestBindingRequest = Parameters<NonNullable<BindingService["bind"]>>[0];
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
@@ -189,6 +180,7 @@ beforeEach(async () => {
 afterEach(() => resetSubagentRegistryForTests());
 
 it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
+  const requester = { channel: "discord", accountId: "work", to: "channel:123", threadId: 456 };
   const result = await spawn({
     label: "research",
     model: "openai/gpt-5.4",
@@ -238,7 +230,7 @@ it("binds the subagent thread in core and emits subagent_spawned with requester 
     threadRequested: true,
     resolvedModel: "openai/gpt-5.4",
     resolvedProvider: "openai",
-    requester: { channel: "discord", accountId: "work", to: "channel:123", threadId: 456 },
+    requester,
     childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
   });
   expect(ctx).toMatchObject({
@@ -252,10 +244,8 @@ it("binds the subagent thread in core and emits subagent_spawned with requester 
       runId: "run-1",
       childSessionKey: event.childSessionKey,
       requester: {
-        channel: "discord",
-        accountId: "work",
+        ...requester,
         to: "channel:source",
-        threadId: 456,
         channelId: "source-native",
         messageId: "message-789",
       },

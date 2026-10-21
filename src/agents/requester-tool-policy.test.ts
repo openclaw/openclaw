@@ -405,48 +405,38 @@ describe("resolveRequesterToolPolicies", () => {
     expect(forged.groupPolicy).toEqual({ deny: ["read"] });
   });
 
-  it("does not trust partial persisted lineage as an authority envelope", async () => {
-    const childSessionKey = "agent:main:subagent:partial";
-    await writeSession(childSessionKey, {
-      spawnedBy: "agent:main:discord:direct:alice",
-    });
-
-    expectCurrentPolicy(await resolvePolicy({ sessionKey: childSessionKey }));
-  });
-
-  it("re-resolves sender policy for an unversioned legacy child envelope", async () => {
-    const childSessionKey = "agent:main:subagent:legacy";
-    await writeChild(childSessionKey, {
-      inheritedToolPolicyVersion: undefined,
-      inheritedToolDeny: ["message"],
-    });
-
-    const result = await resolvePolicy({ sessionKey: childSessionKey });
-
-    expectCurrentPolicy(result);
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
-  });
-
-  it.each([
-    ["sender identity", { senderId: "bob" }],
-    ["external provenance", { inputProvenance: { kind: "external_user" as const } }],
-  ])("applies current policy to an existing child with %s", async (_label, externalFacts) => {
-    const childSessionKey = "agent:main:subagent:external-turn";
-    await writeChild(childSessionKey, {
-      inheritedToolDeny: ["message"],
-      inheritedToolPolicySource: "sender",
-    });
-
-    const result = await resolvePolicy({
-      sessionKey: childSessionKey,
-      messageProvider: "discord",
-      ...externalFacts,
-    });
-
-    expectCurrentPolicy(result);
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
-    expect(result.inheritedToolPolicySource).toBe("sender");
-  });
+  it.each(["partial lineage", "unversioned legacy", "sender identity", "external provenance"])(
+    "applies current policy to a child with %s",
+    async (kind) => {
+      const childSessionKey = "agent:main:subagent:current-policy";
+      const partial = kind === "partial lineage";
+      const external = kind === "sender identity" || kind === "external provenance";
+      if (partial) {
+        await writeSession(childSessionKey, { spawnedBy: "agent:main:discord:direct:alice" });
+      } else {
+        await writeChild(childSessionKey, {
+          inheritedToolPolicyVersion: kind === "unversioned legacy" ? undefined : 1,
+          inheritedToolDeny: ["message"],
+          inheritedToolPolicySource: external ? "sender" : undefined,
+        });
+      }
+      const result = await resolvePolicy({
+        sessionKey: childSessionKey,
+        ...(external ? { messageProvider: "discord" } : {}),
+        ...(kind === "sender identity" ? { senderId: "bob" } : {}),
+        ...(kind === "external provenance"
+          ? { inputProvenance: { kind: "external_user" as const } }
+          : {}),
+      });
+      expectCurrentPolicy(result);
+      if (!partial) {
+        expect(result.inheritedToolPolicy).toEqual({ deny: ["message"] });
+      }
+      if (external) {
+        expect(result.inheritedToolPolicySource).toBe("sender");
+      }
+    },
+  );
 
   it.each([false, true])(
     "applies current requester policy to a fresh child followup while retaining its ceiling (delegated=%s)",

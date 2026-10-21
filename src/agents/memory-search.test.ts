@@ -18,6 +18,13 @@ import {
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
+type Search = NonNullable<OpenClawConfig["memory"]>["search"];
+const multimodalSearch = (overrides: Search = {}): Search => ({
+  provider: "gemini",
+  model: "gemini-embedding-2-preview",
+  multimodal: { enabled: true, modalities: ["image"] },
+  ...overrides,
+});
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
   ...cfg,
   // Provider registries are supplied explicitly below; plugin loading belongs
@@ -66,11 +73,7 @@ describe("memory search config", () => {
 
   afterEach(() => setActiveDegradedSecretOwners([]));
 
-  function searchConfig(
-    search: NonNullable<OpenClawConfig["memory"]>["search"],
-    overrides?: NonNullable<OpenClawConfig["memory"]>["search"],
-    agentId = "main",
-  ): OpenClawConfig {
+  function searchConfig(search: Search, overrides?: Search, agentId = "main"): OpenClawConfig {
     return asConfig({
       memory: { search },
       ...(overrides && {
@@ -153,17 +156,33 @@ describe("memory search config", () => {
     });
   });
 
-  it("preserves explicitly configured transcript search for an opted-in agent", () => {
-    expect(
-      resolve({}, { rememberAcrossConversations: true, sources: ["sessions"] }, "personal"),
-    ).toMatchObject({ sources: ["sessions"], searchSources: ["sessions"] });
-  });
-
-  it("normalizes legacy auto provider config to openai", () => {
-    expect(resolve({ provider: "auto" })).toMatchObject({
-      provider: "openai",
-      model: "text-embedding-3-small",
-    });
+  it.each<[string, Search, Search, Record<string, unknown>]>([
+    [
+      "agent transcript opt-in",
+      {},
+      { rememberAcrossConversations: true, sources: ["sessions"] },
+      { sources: ["sessions"], searchSources: ["sessions"] },
+    ],
+    [
+      "legacy auto provider",
+      { provider: "auto" },
+      undefined,
+      { provider: "openai", model: "text-embedding-3-small" },
+    ],
+    [
+      "input type overrides",
+      { provider: "openai", inputType: "passage", queryInputType: "query" },
+      { documentInputType: "document" },
+      { inputType: "passage", queryInputType: "query", documentInputType: "document" },
+    ],
+    [
+      "session source exclusion",
+      { provider: "openai", sources: ["memory", "sessions"] },
+      { rememberAcrossConversations: false },
+      { sources: ["memory"], sessionSourceExcluded: true },
+    ],
+  ])("resolves %s", (_name, defaults, overrides, expected) => {
+    expect(resolve(defaults, overrides, "personal")).toMatchObject(expected);
   });
 
   it("resolves providers from the generic embedding provider registry", () => {
@@ -259,15 +278,15 @@ describe("memory search config", () => {
   });
 
   it("normalizes multimodal settings", () => {
-    const resolved = resolve({
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      multimodal: {
-        enabled: true,
-        modalities: ["all"],
-        maxFileBytes: 8192,
-      },
-    });
+    const resolved = resolve(
+      multimodalSearch({
+        multimodal: {
+          enabled: true,
+          modalities: ["all"],
+          maxFileBytes: 8192,
+        },
+      }),
+    );
     expect(resolved?.multimodal).toEqual({
       enabled: true,
       modalities: ["image", "audio"],
@@ -275,54 +294,30 @@ describe("memory search config", () => {
     });
   });
 
-  it("rejects multimodal memory on unsupported providers", () => {
-    expect(() =>
-      resolve({
-        provider: "openai",
-        model: "text-embedding-3-small",
-        multimodal: { enabled: true, modalities: ["image"] },
-      }),
-    ).toThrow(
+  it.each<[string, Search, RegExp]>([
+    [
+      "unsupported provider",
+      { provider: "openai", model: "text-embedding-3-small" },
       /memory\.search\.multimodal requires a provider adapter that supports multimodal embeddings/,
-    );
+    ],
+    [
+      "fallback",
+      { fallback: "openai" },
+      /memory\.search\.multimodal does not support memory\.search\.fallback/,
+    ],
+  ])("rejects multimodal memory with %s", (_name, overrides, error) => {
+    expect(() => resolve(multimodalSearch(overrides))).toThrow(error);
   });
 
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
     clearEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
-    const resolved = resolve({
-      provider: "gemini",
-      model: "gemini-embedding-2-preview",
-      multimodal: { enabled: true, modalities: ["image"] },
-    });
+    const resolved = resolve(multimodalSearch());
     expect(resolved?.provider).toBe("gemini");
     expect(resolved?.multimodal).toEqual({
       enabled: true,
       modalities: ["image"],
       maxFileBytes: 10 * 1024 * 1024,
-    });
-  });
-
-  it("rejects multimodal memory when fallback is configured", () => {
-    expect(() =>
-      resolve({
-        provider: "gemini",
-        model: "gemini-embedding-2-preview",
-        fallback: "openai",
-        multimodal: { enabled: true, modalities: ["image"] },
-      }),
-    ).toThrow(/memory\.search\.multimodal does not support memory\.search\.fallback/);
-  });
-
-  it("merges memory search input_type overrides", () => {
-    const resolved = resolve(
-      { provider: "openai", inputType: "passage", queryInputType: "query" },
-      { documentInputType: "document" },
-    );
-    expect(resolved).toMatchObject({
-      inputType: "passage",
-      queryInputType: "query",
-      documentInputType: "document",
     });
   });
 
@@ -350,14 +345,6 @@ describe("memory search config", () => {
         timeoutMinutes: 60,
       },
     });
-  });
-
-  it("gates session sources behind rememberAcrossConversations", () => {
-    const resolved = resolve(
-      { provider: "openai", sources: ["memory", "sessions"] },
-      { rememberAcrossConversations: false },
-    );
-    expect(resolved).toMatchObject({ sources: ["memory"], sessionSourceExcluded: true });
   });
 
   it.each([
