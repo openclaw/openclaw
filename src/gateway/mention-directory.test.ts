@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { validateUsersMentionableResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as userProfileReads from "../state/user-profile-reads.js";
 import {
@@ -16,6 +15,7 @@ import {
   SESSION_ID,
   withMentionInbox as withInbox,
   mentionRoles,
+  pauseMentionOperation,
 } from "./mention-inbox.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { soloClient } from "./server-methods/sessions-sharing.test-support.js";
@@ -57,27 +57,18 @@ async function withHeldDirectory(
   client: MentionFixture["bobClient"],
   change: () => void | Promise<void>,
 ) {
-  const readDirectory = userProfileReads.readUserProfileDirectory;
-  const ready = createDeferred();
-  const release = createDeferred();
+  const held = pauseMentionOperation(userProfileReads.readUserProfileDirectory);
   const spy = vi
     .spyOn(userProfileReads, "readUserProfileDirectory")
-    .mockImplementationOnce(async (...args) => {
-      const result = readDirectory(...args);
-      void result.then(() => ready.resolve(), ready.reject);
-      await result;
-      await release.promise;
-      return result;
-    });
+    .mockImplementationOnce(held.run);
   const pending = f.call("users.mentionable", directoryParams(query), client);
   try {
-    await ready.promise;
-    await change();
-    release.resolve();
-    return await pending;
+    return await held.interleave(
+      pending,
+      async () => change(),
+      "Directory did not prepare its read",
+    );
   } finally {
-    release.resolve();
-    await pending;
     spy.mockRestore();
   }
 }

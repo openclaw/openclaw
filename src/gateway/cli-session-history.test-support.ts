@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+} from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt } from "../config/sessions.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
@@ -11,6 +15,32 @@ import {
   visitClaudeCliSessionMessages,
   type ClaudeCliHistoryParams,
 } from "./cli-session-history.claude-snapshot.js";
+
+export const blocks = (text: string) => [{ type: "text", text }];
+export const nativeImage = {
+  type: "image",
+  source: { type: "base64", media_type: "image/png", data: "x" },
+};
+export const REQUESTER_HINT =
+  'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
+export const frame = (json = '{"requester_profile":{"id":"owner"}}') =>
+  `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+export const DRIFT_NOTES = [
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=prompt-tools.",
+  "OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=system-prompt,prompt-tools.",
+] as const;
+export const imagePrompt = (id: string, hash = "a") =>
+  `${formatCliImageTurnContext(hashCliImageTurnEntryId(id))}\n\n@/tmp/openclaw/openclaw-cli-images/${hash.repeat(64)}.png`;
+export const imageTurn = (id: string, content: string, timestamp: number, filename: string) =>
+  user(content, timestamp, {
+    id,
+    media: [{ kind: "image", contentType: "image/png", path: `/media/inbound/${filename}.png` }],
+  });
+
+export function merge(localMessages: unknown[], importedMessages: unknown[]) {
+  return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+}
 
 export async function readClaudeCliSessionMessagesAsync(
   params: ClaudeCliHistoryParams,
@@ -63,14 +93,6 @@ export function answer(
   return { ...user("Repeated answer", timestamp, meta), role: "assistant" };
 }
 
-export function boundEntry(sessionId: string): SessionEntry {
-  return {
-    sessionId: "openclaw-session",
-    updatedAt: 1,
-    cliSessionBindings: { "claude-cli": { sessionId } },
-  };
-}
-
 export function receipt(prompt: string, sessionId = "openclaw-session"): CliSessionReseedReceipt {
   return {
     version: 1,
@@ -109,6 +131,20 @@ export function createClaudeTextHistoryLines(
 }
 
 type ClaudeHistoryReadOptions = Omit<ClaudeCliHistoryParams, "cliSessionId" | "homeDir">;
+
+export function writeClaudeEntries(filePath: string, entries: readonly unknown[]) {
+  return fs.writeFile(filePath, entries.map((entry) => JSON.stringify(entry)).join("\n"), "utf-8");
+}
+
+export function readImportedHistory(
+  entries: readonly unknown[],
+  options?: ClaudeHistoryReadOptions,
+) {
+  return withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
+    await writeClaudeEntries(filePath, entries);
+    return { messages: await readMessages(options), sessionId };
+  });
+}
 
 export async function withClaudeProjectsDir<T>(
   run: (params: {

@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   resolveCatalogIconUrl: vi.fn(),
   resolveIconSource: vi.fn(),
   resolveActivityIconSource: vi.fn(),
+  fetchMetadata: vi.fn<typeof fetch>(),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -32,13 +33,10 @@ vi.mock("../media/fetch.js", () => ({
 }));
 
 vi.mock("../media/image-ops.js", () => ({
-  createImageProcessor: () => ({
-    encode: (...args: unknown[]) => mocks.encodeImage(...args),
-  }),
+  createImageProcessor: () => ({ encode: (...args: unknown[]) => mocks.encodeImage(...args) }),
   MAX_IMAGE_INPUT_PIXELS: 25_000_000,
   readImageMetadataFromHeader: (...args: unknown[]) => mocks.readImageMetadata(...args),
 }));
-
 vi.mock("../plugins/management-service.js", () => ({
   resolveManagedPluginIconSources: (...args: unknown[]) => mocks.resolveIconSource(...args),
   resolveManagedPluginActivityIconSource: (...args: unknown[]) =>
@@ -895,5 +893,123 @@ describe("compact plugin activity icons", () => {
         expect(response.end).toHaveBeenCalledWith(Buffer.from(ACTIVITY_SVG));
       },
     });
+  });
+});
+
+describe("ClawHub branding through the public icon route", () => {
+  const realFetch = globalThis.fetch;
+  const packageName = "@acme/calendar";
+  const packageMetadata = {
+    name: packageName,
+    displayName: "Calendar",
+    family: "code-plugin",
+    isOfficial: false,
+  };
+  const source = { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName };
+  const packageUrl = "https://cdn.example.test/package.png";
+  const publisherUrl = "https://cdn.example.test/publisher.png";
+  const metadataUrl = "https://clawhub.ai/api/v1/packages/%40acme%2Fcalendar";
+
+  beforeEach(async () => {
+    const { readImageMetadataFromHeader } =
+      await vi.importActual<typeof import("../media/image-ops.js")>("../media/image-ops.js");
+    mocks.readImageMetadata.mockImplementation(readImageMetadataFromHeader);
+    mocks.resolveIconSource.mockResolvedValue([source]);
+    mocks.fetchMetadata.mockReset().mockImplementation(async () =>
+      Response.json({
+        package: { ...packageMetadata, icon: packageUrl },
+        owner: { image: publisherUrl },
+      }),
+    );
+    vi.stubGlobal("fetch", (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      if (url.href === metadataUrl) {
+        return mocks.fetchMetadata(input, init);
+      }
+      if (url.origin === `http://127.0.0.1:${port}`) {
+        return realFetch(input, init);
+      }
+      throw new Error(`Unexpected icon fixture request: ${url.origin}${url.pathname}`);
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  async function requestBranding(method = "GET") {
+    const response = await request("/__openclaw__/plugin-icon/calendar", { method });
+    await response.arrayBuffer();
+    return response;
+  }
+  function expectPublicMetadataRequest() {
+    expect(mocks.fetchMetadata).toHaveBeenCalledOnce();
+    const call = mocks.fetchMetadata.mock.calls[0];
+    const input = call?.[0];
+    expect(input instanceof Request ? input.url : input instanceof URL ? input.href : input).toBe(
+      metadataUrl,
+    );
+    expect(new Headers(call?.[1]?.headers).has("Authorization")).toBe(false);
+  }
+
+  it.each([null, `/api/v1/skill-icons/${"a".repeat(64)}`, "https://cdn.example/icon.png"])(
+    "reads package icon %s and publisher image in order through one exact public request",
+    async (icon) => {
+      const image = "https://cdn.example/publisher.png";
+      mocks.fetchMetadata.mockImplementation(async () =>
+        Response.json({ package: { ...packageMetadata, icon }, owner: { image } }),
+      );
+      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
+        if (url !== image) {
+          throw new Error("Package icon unavailable");
+        }
+        return { buffer: PNG_BYTES, contentType: "image/png" };
+      });
+
+      expect((await requestBranding()).status).toBe(200);
+      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
+        icon ? [icon.startsWith("/") ? `https://clawhub.ai${icon}` : icon, image] : [image],
+      );
+      expectPublicMetadataRequest();
+    },
+  );
+
+  it("rejects a different returned package identity before fetching an image", async () => {
+    mocks.fetchMetadata.mockImplementation(async () =>
+      Response.json({ package: { ...packageMetadata, name: "@other/calendar", icon: packageUrl } }),
+    );
+
+    expect((await requestBranding()).status).toBe(404);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expectPublicMetadataRequest();
+  });
+
+  it.each(["package", "publisher", "missing"])(
+    "tries local, remote package, then publisher images and caches the successful %s result",
+    async (outcome) => {
+      writeFileSync(localIconPath, "invalid local image");
+      mocks.resolveIconSource.mockResolvedValue([fileSource(localIconPath), source]);
+      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
+        if (outcome === "missing" || (outcome === "publisher" && url === packageUrl)) {
+          throw new Error("Image unavailable");
+        }
+        return { buffer: PNG_BYTES, contentType: "image/png" };
+      });
+
+      const response = await requestBranding();
+      expect(response.status).toBe(outcome === "missing" ? 404 : 200);
+      expectPublicMetadataRequest();
+      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
+        outcome === "package" ? [packageUrl] : [packageUrl, publisherUrl],
+      );
+      if (outcome !== "missing") {
+        const cached = await requestBranding("HEAD");
+        expect(cached.status).toBe(200);
+        expect(cached.headers.get("etag")).toBe(response.headers.get("etag"));
+        expect(mocks.fetchMetadata).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("does not read remote metadata when the local package icon succeeds", async () => {
+    mocks.resolveIconSource.mockResolvedValue([fileSource(localIconPath), source]);
+    expect((await requestBranding()).status).toBe(200);
+    expect(mocks.fetchMetadata).not.toHaveBeenCalled();
   });
 });

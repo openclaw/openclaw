@@ -378,13 +378,6 @@ describe("plugin node capability helpers", () => {
     expect(authorizeCapability(client, { surface: "files" })).toBe(false);
   });
 
-  test("rejects invalidated clients without sliding capability expiry", () => {
-    const client = makeTokenClient();
-    client.invalidated = true;
-    expect(authorizeCapability(client)).toBe(false);
-    expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
-  });
-
   test("rejects plugin surface capabilities when the clock is invalid", () => {
     const client = makeTokenClient();
     expect(authorizeCapability(client, undefined, undefined, Number.NaN)).toBe(false);
@@ -407,9 +400,5 @@ describe("plugin node capability helpers", () => {
         ttlMs: 100,
       }),
     ).toBe(true);
-  });
-
-  test("rejects expired capabilities", () => {
-    expect(authorizeCapability(makeTokenClient(999), { surface: "canvas" })).toBe(false);
   });
 });

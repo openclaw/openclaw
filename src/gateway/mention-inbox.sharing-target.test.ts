@@ -1,7 +1,6 @@
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
@@ -16,6 +15,7 @@ import {
   expectMentionError,
   dismissMentionInbox,
   withMentionInbox,
+  pauseMentionOperation,
 } from "./mention-inbox.test-support.js";
 import {
   emitSessionsChanged,
@@ -105,49 +105,43 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
         registerSessionAutomationSource({ getJobs: () => jobs, getDefaultAgentId: () => "main" });
         expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(false);
       }
-      const prepared = createDeferred();
-      const release = createDeferred();
       const commit = mentionWorker.commitMentionChanges;
       const guard = vi.fn<() => void>();
-      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(
-        async (context, input, assertCurrent) => {
-          prepared.resolve();
-          await release.promise;
-          return commit(context, input, guard.mockImplementation(assertCurrent));
-        },
-      );
+      const guarded: typeof commit = (context, input, assertCurrent) =>
+        commit(context, input, guard.mockImplementation(assertCurrent));
+      const held = pauseMentionOperation(guarded, undefined, true);
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(held.run);
       const changesAccess = publication === "sharing revocation";
       const dismissal = dismissMentionInbox(f.inbox, f.bobClient, [original.id]);
       const owner = Symbol("mention-presentation");
       const target = { key: SESSION_KEY, agentId: "main" };
       try {
-        await awaitGateBeforeSettlement(
-          prepared.promise,
+        const result = await held.interleave(
           dismissal,
+          async () => {
+            if (publication === "activity summary") {
+              setSessionActivitySummaryState(target, owner, {
+                sessionId: SESSION_ID,
+                storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+                state: "updating",
+              });
+            } else if (publication === "runtime settlement") {
+              emitSettlement(f, cfg);
+            } else if (publication === "automation") {
+              jobs.push(
+                makeCronJob({
+                  sessionTarget: `session:${SESSION_KEY}`,
+                  payload: { kind: "systemEvent", text: "Synthetic automation" },
+                }),
+              );
+              invalidateSessionAutomationIndex();
+              expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(true);
+            } else {
+              await f.setSession({ visibility: "draft" });
+            }
+          },
           "Dismissal did not prepare its commit authority",
         );
-        if (publication === "activity summary") {
-          setSessionActivitySummaryState(target, owner, {
-            sessionId: SESSION_ID,
-            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-            state: "updating",
-          });
-        } else if (publication === "runtime settlement") {
-          emitSettlement(f, cfg);
-        } else if (publication === "automation") {
-          jobs.push(
-            makeCronJob({
-              sessionTarget: `session:${SESSION_KEY}`,
-              payload: { kind: "systemEvent", text: "Synthetic automation" },
-            }),
-          );
-          invalidateSessionAutomationIndex();
-          expect(sessionHasAutomation(SESSION_KEY, cfg, "main")).toBe(true);
-        } else {
-          await f.setSession({ visibility: "draft" });
-        }
-        release.resolve();
-        const result = await dismissal;
         if (changesAccess) {
           expectMentionError(result, "UNAVAILABLE");
           expect(guard.mock.results).toContainEqual({
@@ -166,8 +160,6 @@ it.each(["activity summary", "runtime settlement", "automation", "sharing revoca
             : [],
         );
       } finally {
-        release.resolve();
-        await dismissal;
         setSessionActivitySummaryState(target, owner);
         if (publication === "automation") {
           registerSessionAutomationSource(null);

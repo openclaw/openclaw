@@ -84,6 +84,10 @@ it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
       };
 
       await f.post();
+      expect(f.broadcast.mock.calls.map((call) => [...call[2]])).toEqual([
+        ["bob-one"],
+        ["bob-two"],
+      ]);
       expect(peer.frames).toMatchObject([
         { event: "mentions.changed", payload: { gatewayInstanceId: "mention-gateway" } },
       ]);
@@ -93,19 +97,32 @@ it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
           sessionKey: SESSION_KEY,
           messageId: "message-source-one",
           senderProfileId: f.alice.id,
+          senderLabel: "Alice",
+          sessionTitle: "Design review",
+          excerpt: "@Bob review this change",
         },
       ]);
       const item = (await f.items(connected))[0]!;
+      await expectItems([], "mentions.list", {}, f.aliceClient);
       await expectItems([], "mentions.list", {}, f.carolClient);
-      await expectItems([], "mentions.dismiss", { ids: [item.id] }, f.carolClient);
+      await expectItems(
+        [],
+        "mentions.dismiss",
+        { ids: [item.id, "unknown-mention"] },
+        f.carolClient,
+      );
       await expectError("INVALID_REQUEST", "mentions.list", { profileId: f.carol.id });
       await expectItems([item], "mentions.list", {}, f.bobSecond);
+      await expectItems([item], "mentions.dismiss", { ids: [` ${item.id} `] });
       await expectItems([], "mentions.dismiss", { ids: [item.id] });
       expect(await f.items(f.bobSecond)).toEqual([]);
+      expect(f.push.mock.calls[0]![0].isCurrent()).toBe(false);
       await f.post();
       expect(await f.items()).toEqual([]);
+      expect(f.push).toHaveBeenCalledTimes(1);
 
       await f.post("before-revocation");
+      expect(f.push).toHaveBeenCalledTimes(2);
       const delayed = f.push.mock.calls.at(-1)?.[0];
       expect(delayed?.isCurrent()).toBe(true);
       const retained = (await f.items(connected))[0]!;
