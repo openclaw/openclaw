@@ -48,9 +48,7 @@ async function runChronologyHost(input: { path: string; connection: string }): P
       admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
     },
   });
-  cleanup.defer(async () => {
-    await worker.terminate();
-  });
+  cleanup.defer(() => worker.terminate().then(() => undefined));
   worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
     process.send?.(message);
   });
@@ -96,14 +94,16 @@ if (parentPort) {
       ["invalid-a", "invalid", "garbage-a", null],
       ["invalid-b", "invalid", "garbage-b", null],
     ] as const;
-    const write = (fixture: (typeof fixtures)[number], startedAtMs: number | null) => {
-      const [selector, sessionId, startedAt] = fixture;
-      return runOpenClawStateWriteTransaction(
+    const write = (
+      [selector, sessionId, startedAt]: (typeof fixtures)[number],
+      started_at_ms: number | null,
+    ) =>
+      runOpenClawStateWriteTransaction(
         ({ db }) =>
           writeMeetingTranscriptSessionInDatabase(db, {
             session: { sessionId, startedAt },
             sessionValues: {
-              started_at_ms: startedAtMs,
+              started_at_ms,
               selector,
               export_key: selector,
               session_slug: selector,
@@ -117,7 +117,6 @@ if (parentPort) {
           }),
         options,
       );
-    };
     for (const fixture of fixtures) {
       assert.equal(write(fixture, fixture[3]).inserted, true);
     }

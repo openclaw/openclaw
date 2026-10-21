@@ -5,14 +5,13 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { listTranscriptLibrary } from "./library.js";
+import { listTranscriptLibrary as list } from "./library.js";
 import {
   createTranscriptLibraryStoreFixture,
   transcriptLibrarySession as session,
 } from "./library.store.test-support.js";
-import { deriveMeetingTranscriptSummaryColumns } from "./store-columns.js";
 import { meetingTranscriptDb } from "./store-sqlite.js";
-import { transcriptSessionSelector } from "./store.js";
+import { transcriptSessionSelector as selector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,14 +20,14 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-function fixture() {
-  return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-search-"));
-}
+const fixture = () => createTranscriptLibraryStoreFixture(tempDirs.make("search-"));
 
 const emptySummary = (target: ReturnType<typeof session>) =>
   summarizeTranscripts({ session: target, utterances: [] });
-const selectors = (result: Awaited<ReturnType<typeof listTranscriptLibrary>>) =>
-  result.sessions.map((entry) => entry.selector);
+const page = (result: Awaited<ReturnType<typeof list>>) => ({
+  ids: result.sessions.map((entry) => entry.selector),
+  cursor: result.nextCursor,
+});
 
 it("searches stored notes and speech once per capture with stable filtered pagination", async () => {
   const { store } = fixture();
@@ -54,44 +53,29 @@ it("searches stored notes and speech once per capture with stable filtered pagin
     startedBefore: "2026-08-22T00:00:00Z",
     limit: 1,
   };
-  const first = await listTranscriptLibrary(store, filters);
-  expect(first).toMatchObject({
-    sessions: [{ selector: transcriptSessionSelector(speech) }],
-    nextCursor: expect.any(String),
-  });
-  const second = await listTranscriptLibrary(store, { ...filters, cursor: first.nextCursor! });
-  expect(second).toMatchObject({
-    sessions: [{ selector: transcriptSessionSelector(notes) }],
-    nextCursor: null,
-  });
-  expect(
-    (await listTranscriptLibrary(store, { ...filters, accountId: "personal" })).sessions,
-  ).toEqual([]);
+  const first = await list(store, filters);
+  expect(page(first)).toEqual({ ids: [selector(speech)], cursor: expect.any(String) });
+  const second = await list(store, { ...filters, cursor: first.nextCursor! });
+  expect(page(second)).toEqual({ ids: [selector(notes)], cursor: null });
+  expect((await list(store, { ...filters, accountId: "personal" })).sessions).toEqual([]);
 });
 
 it("finds historical structured overviews and canonical Markdown notes", async () => {
   const { store, database } = fixture();
   const target = session("historical-notes");
   await store.writeSession(target);
-  await store.writeSummary({ ...emptySummary(target), overview: "Separate overview" }, target);
+  await store.writeSummary({ ...emptySummary(target), overview: "Overview" }, target);
   const db = database();
   const summary = meetingTranscriptDb(db)
     .updateTable("meeting_transcript_summaries")
     .where("session_id", "=", target.sessionId)
     .where("session_started_at", "=", target.startedAt);
-  const expected = [transcriptSessionSelector(target)];
+  const expected = [selector(target)];
   for (const [query, fields] of [
-    ["SEPARATE OVERVIEW", { markdown: null }],
-    [
-      "CANONICAL DECISION",
-      {
-        markdown: "# Earlier notes\nCanonical decision",
-        summary_json: null,
-        ...deriveMeetingTranscriptSummaryColumns(null),
-      },
-    ],
+    ["OVERVIEW", { markdown: null }],
+    ["MARKDOWN", { markdown: "Markdown", summary_json: null, overview: null }],
   ] as const) {
     executeSqliteQuerySync(db, summary.set(fields));
-    expect(selectors(await listTranscriptLibrary(store, { query }))).toEqual(expected);
+    expect(page(await list(store, { query })).ids).toEqual(expected);
   }
 });
