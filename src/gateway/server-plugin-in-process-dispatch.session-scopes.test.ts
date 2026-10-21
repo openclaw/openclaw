@@ -148,7 +148,11 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const scheduled =
     source === "scheduled"
       ? prepareCronRunAdmission({
-          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+          deliveryAttemptFence: {
+            occurrenceAtMs: 0,
+            beforeAttempt: async () => {},
+            assertCurrent: () => {},
+          },
           cfg,
           runId: "scope-parent-run",
           agentId: "main",

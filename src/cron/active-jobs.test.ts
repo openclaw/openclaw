@@ -78,7 +78,11 @@ describe("cron message action authority", () => {
         sessionKey: "cron:long-message-read",
       };
       const owner = prepareCronRunAdmission({
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        deliveryAttemptFence: {
+          occurrenceAtMs: 0,
+          beforeAttempt: async () => {},
+          assertCurrent: () => {},
+        },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,
         jobId,

@@ -160,6 +160,7 @@ export async function finalizeCronCompletionAnnouncement(params: {
                 job: params.job,
                 runStartedAt: params.runStartedAtMs,
                 deliveryAttemptFence: params.deliveryAttemptFence,
+                admitsOccurrence: true,
               },
             }),
         onDeliveryAttempt: (reachedRecipient) => {
@@ -167,10 +168,11 @@ export async function finalizeCronCompletionAnnouncement(params: {
         },
       });
       if (result.status !== "sent") {
-        if (result.skipReason) {
+        if (result.status === "suppressed" && result.skipReason) {
           deliveryState.deliverySuppressionReason = result.skipReason;
         } else {
-          const uncertain = result.reason === "adapter_returned_no_identity";
+          const uncertain =
+            result.status === "unknown" || result.reason === "adapter_returned_no_identity";
           deliveryState.status = uncertain ? "unknown" : "not-delivered";
           deliveryState.delivered = uncertain ? undefined : false;
           deliveryState.error = `cron delivery ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`;
@@ -189,6 +191,9 @@ export async function finalizeCronCompletionAnnouncement(params: {
       }
       deliveryState.status = "delivered";
       deliveryState.delivered = true;
+      if (result.earlierRoute) {
+        return finish(true);
+      }
       effectivePayloads = result.payloads;
       try {
         const bound = await bindCronResultConversation(conversationParams);

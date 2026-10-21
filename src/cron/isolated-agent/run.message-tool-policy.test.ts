@@ -60,7 +60,11 @@ function makeJob(
 }
 function makeParams(job = makeJob()) {
   return makeIsolatedAgentParamsFixture({
-    deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+    deliveryAttemptFence: {
+      occurrenceAtMs: 0,
+      beforeAttempt: async () => {},
+      assertCurrent: () => {},
+    },
     job,
     message: "send a message",
     sessionKey: "cron:message-tool-policy",

@@ -40,6 +40,7 @@ it.each(["current", "stale-attempt", "revoked-capability"] as const)(
         scheduledToolPolicy: { version: 1, mode: "trusted" },
         toolsAllow: ["message"],
         deliveryAttemptFence: {
+          occurrenceAtMs: 0,
           async beforeAttempt() {},
           assertCurrent() {
             if (atCommit) {

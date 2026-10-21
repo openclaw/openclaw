@@ -25,6 +25,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.runningScheduleChangeId;
   delete state.failureAlertIncident;
   delete state.lastFailureNotificationId;
+  delete state.deliveryAdmission;
   return {
     ...publicJob,
     state,

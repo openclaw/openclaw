@@ -223,14 +223,15 @@ export async function maybeApplyTtsToCronPayloads(params: {
   );
 }
 
+/** `atMs` is the scheduled occurrence the send belongs to, or the run start for a run's own send. */
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
-  runStartedAt: number;
+  atMs: number;
   delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "to" | "accountId" | "threadId">;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.
-  const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
+  const executionId = createCronExecutionId(params.jobId, params.atMs);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
@@ -255,12 +256,16 @@ export async function isCompletedDirectCronDelivery(
   return receipt.status === "completed";
 }
 
-/** Wait only for an active recipient owner, never for crashed ambiguous sends. */
-export async function waitForCompletedDirectCronDelivery(params: {
+/**
+ * Waits only while another owner is actively sending the intent, never for a
+ * crashed ambiguous send. `unsent`: the queue holds the intent again with no
+ * send claimed or started, so that owner's attempt never reached the recipient.
+ */
+export async function waitForDirectCronDeliveryOwner(params: {
   id: string;
   queueName: string;
   signal?: AbortSignal;
-}): Promise<boolean> {
+}): Promise<"completed" | "unsent" | "unknown"> {
   const context = captureDeliveryQueueStateContext();
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -273,7 +278,10 @@ export async function waitForCompletedDirectCronDelivery(params: {
     );
     params.signal?.throwIfAborted();
     if (status === "completed") {
-      return true;
+      return "completed";
+    }
+    if (owner && owner.recoveryState === undefined) {
+      return "unsent";
     }
     if (
       !owner ||
@@ -284,13 +292,13 @@ export async function waitForCompletedDirectCronDelivery(params: {
           typeof owner.availableAt !== "number" ||
           owner.availableAt <= Date.now())
     ) {
-      return false;
+      return "unknown";
     }
     if (attempt < 119) {
       await sleepWithAbort(250, params.signal);
     }
   }
-  return false;
+  return "unknown";
 }
 
 function summarizeDirectCronDeliveryError(error: unknown): string {

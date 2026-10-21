@@ -127,6 +127,7 @@ export async function launchCronRun(
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
       runId: taskRunId,
+      immediate: isImmediateCronRunMode(options.mode),
       activeJobMarker,
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,

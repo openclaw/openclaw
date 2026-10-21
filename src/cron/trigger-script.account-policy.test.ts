@@ -97,7 +97,11 @@ it.each(["trigger", "payload"] as const)(
             script,
             state: null,
             abortSignal: controller.signal,
-            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+            deliveryAttemptFence: {
+              occurrenceAtMs: 0,
+              beforeAttempt: async () => {},
+              assertCurrent: () => {},
+            },
             executionIdentity: {
               ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
               onPostAdmission: (admitted: AdmittedRunContext) => {
