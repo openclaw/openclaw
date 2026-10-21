@@ -7,12 +7,8 @@ import { reconcileSessionRunTerminal } from "./index.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
-  sessionsResult as makeSessionsResult,
+  sessionsResult,
 } from "./session-capability.test-support.ts";
-
-function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return makeSessionsResult(sessions, 1);
-}
 const running: GatewaySessionRow = {
   key: "agent:main:terminal",
   sessionId: "terminal-session",
@@ -24,17 +20,17 @@ const running: GatewaySessionRow = {
 };
 
 describe("reconcileSessionRunTerminal yielded parent", () => {
-  it("settles the owned model run while keeping parent work pending", () => {
+  it.each([false, true])("settles a yielding run (overlap: %s)", (overlap) => {
     const result = sessionsResult([
       {
         key: "agent:main:main",
         kind: "direct",
         updatedAt: 1,
         hasActiveRun: true,
-        activeRunIds: ["run-1"],
+        activeRunIds: overlap ? ["run-1", "run-2"] : ["run-1"],
         status: "running",
         startedAt: 100,
-        suppressErrorNotice: true,
+        ...(overlap ? {} : { suppressErrorNotice: true }),
       },
     ]);
 
@@ -50,46 +46,12 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
       sessions: [
         {
           ...result.sessions[0],
-          activeRunIds: [],
-          hasActiveRun: false,
+          activeRunIds: overlap ? ["run-2"] : [],
+          hasActiveRun: overlap,
           status: "running",
-          endedAt: 160,
-          runtimeMs: 60,
-          abortedLastRun: false,
-          suppressErrorNotice: false,
-        },
-      ],
-    });
-  });
-
-  it("preserves overlapping active runs when one model turn yields", () => {
-    const result = sessionsResult([
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: 1,
-        hasActiveRun: true,
-        activeRunIds: ["run-1", "run-2"],
-        status: "running",
-        startedAt: 100,
-      },
-    ]);
-
-    expect(
-      reconcileSessionRunTerminal(result, {
-        sessionKeys: ["main"],
-        runId: "run-1",
-        status: "running",
-        endedAt: 160,
-      }),
-    ).toEqual({
-      ...result,
-      sessions: [
-        {
-          ...result.sessions[0],
-          activeRunIds: ["run-2"],
-          hasActiveRun: true,
-          status: "running",
+          ...(overlap
+            ? {}
+            : { endedAt: 160, runtimeMs: 60, abortedLastRun: false, suppressErrorNotice: false }),
         },
       ],
     });
@@ -151,13 +113,9 @@ async function terminalOwner(
 
 describe("terminal metadata ownership", () => {
   const previousTerminal: GatewaySessionRow = {
-    key: "agent:main:terminal",
-    sessionId: "terminal-session",
-    kind: "direct",
+    ...running,
     updatedAt: 200,
     derivedTitle: "Initial title",
-    status: "running",
-    hasActiveRun: true,
     activeRunIds: ["new-run"],
     lastRunId: "old-run",
     startedAt: 100,
@@ -214,17 +172,18 @@ describe("terminal metadata ownership", () => {
 
   it("uses only the new failure detail after a previously killed run", async () => {
     const h = await terminalOwner({ ...previousTerminal, abortedLastRun: true }, "primary");
-    h.sessions.reconcileRunTerminal({
+    const terminal = {
       sessionKeys: [previousTerminal.key],
-      runId: "new-run",
-      status: "failed",
+      status: "failed" as const,
       endedAt: 400,
-      errorMessage: "Current run\nfailed: password=synthetic-password",
-    });
+      errorMessage: `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
+    };
+    expect(h.sessions.reconcileRunTerminal(terminal)).toBe(false);
+    expect(h.sessions.reconcileRunTerminal({ ...terminal, runId: "new-run" })).toBe(true);
     expect(h.row()).toMatchObject({
       status: "failed",
       lastRunId: "new-run",
-      lastRunError: "Current run failed: password=[redacted]",
+      lastRunError: `Provider failed. password=[redacted] ${"x".repeat(123)}`,
       abortedLastRun: false,
     });
   });

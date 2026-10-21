@@ -18,6 +18,7 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import type { SessionCapability } from "./index.ts";
 import {
   createSubscriptionHydrationHarness,
@@ -34,15 +35,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 function requestFor(subscribe: () => unknown, list: (params?: Record<string, unknown>) => unknown) {
-  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "sessions.subscribe") {
-      return subscribe();
-    }
-    if (method === "sessions.list") {
-      return list(params);
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
+  return sessionRequest({ "sessions.subscribe": subscribe, "sessions.list": list });
 }
 const retryError = (message: string) =>
   new GatewayRequestError({
@@ -131,6 +124,8 @@ function connection(
 }
 const listCallsOf = (request: { mock: { calls: readonly (readonly unknown[])[] } }) =>
   request.mock.calls.filter(([method]) => method === "sessions.list");
+const expectList = (request: ReturnType<typeof requestFor>, fields: Record<string, unknown>) =>
+  expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining(fields));
 
 const targetedSessionReconciliationCases = [
   {
@@ -280,13 +275,7 @@ it("lets a queued foreground refresh supersede bootstrap during profile hydratio
   h.update({ client, phase: "connected" });
 
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({
-        agentId: "main",
-        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      }),
-    ),
+    expectList(request, { agentId: "main", limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
   );
   expect(
     request.mock.calls.find(([method]) => method === "sessions.list")?.[1]?.ownerFirst,
@@ -329,12 +318,7 @@ it("uses the selected agent before a session key is available", async () => {
   const { sessions, client } = h;
   h.update({ client, phase: "connected" });
 
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "roboclaw", includeDerivedTitles: true }),
-    ),
-  );
+  await waitForFast(() => expectList(request, { agentId: "roboclaw", includeDerivedTitles: true }));
   await waitForFast(() => expect(sessions.state.agentId).toBe("roboclaw"));
   expect(sessions.state.result).toStrictEqual(result);
 });

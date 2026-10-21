@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -37,14 +38,9 @@ const enrichedOptions = { ...foregroundOptions, includeDerivedTitles: true };
 
 function listRequest(read?: (call: number, params?: unknown) => unknown, patch?: () => unknown) {
   let calls = 0;
-  return vi.fn(async (method: string, params?: unknown) => {
-    if (method === "sessions.list" && read) {
-      return read(++calls, params);
-    }
-    if (method === "sessions.patch" && patch) {
-      return patch();
-    }
-    throw new Error(`Unexpected request: ${method}`);
+  return sessionRequest({
+    "sessions.list": read && ((params) => read(++calls, params)),
+    "sessions.patch": patch,
   });
 }
 
@@ -119,12 +115,9 @@ it("keeps derived titles when a foreground refresh queues behind an archive repl
       }
       return sessionsResult(
         [
-          sessionRow(key, "title-session", 1, {
-            label: key,
-            ...(asOptionalRecord(params)?.includeDerivedTitles === true
-              ? { derivedTitle: titled.derivedTitle }
-              : {}),
-          }),
+          asOptionalRecord(params)?.includeDerivedTitles === true
+            ? titled
+            : sessionRow(key, "title-session", 1, { label: key }),
         ],
         1,
       );
@@ -151,8 +144,10 @@ it("keeps derived titles when a foreground refresh queues behind an archive repl
   expect(listCalls).toHaveLength(3);
   expect(listCalls[1]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
   expect(listCalls[2]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
-  expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe("Readable planning title");
-  expect(sessions.state.result?.sessions[0]?.archived).toBe(true);
+  expect(sessions.state.result?.sessions[0]).toMatchObject({
+    derivedTitle: titled.derivedTitle,
+    archived: true,
+  });
   expect(archiveReverted).toBe(false);
   stop();
 });
@@ -242,9 +237,9 @@ it.each(["before", "after"] as const)(
     const response = createDeferred<typeof confirmation>();
     let failRefresh = false;
     const snapshots: GatewaySessionRow[] = [
-      { key, kind: "direct", sessionId: "archived-session", updatedAt: 10 },
+      sessionRow(key, "archived-session", 10),
       { key, kind: "direct", updatedAt: 30, archived: false },
-      { key, kind: "direct", sessionId: "replacement-session", updatedAt: 40, archived: false },
+      sessionRow(key, "replacement-session", 40, { archived: false }),
     ];
     const request = listRequest(
       (call) => {
@@ -308,14 +303,10 @@ it.each(["before", "after"] as const)(
 
 it("restores Active membership when an archive and restore share a timestamp", async () => {
   vi.useFakeTimers();
-  const original: GatewaySessionRow = {
-    key: "agent:main:restored-archive",
+  const original = sessionRow("agent:main:restored-archive", "restored-archive", 10, {
     agentId: "main",
-    sessionId: "restored-archive",
-    kind: "direct",
-    updatedAt: 10,
     archived: false,
-  };
+  });
   let offered = original;
   const client = createTestGatewayClient(async (method) => {
     if (method === "sessions.list") {
@@ -509,9 +500,9 @@ it("does not preserve another agent's raw-global row through background hydratio
     tokensUsed: 0,
     continuationTurns: 0,
   };
-  const request = listRequest((listCallCount) => {
-    return sessionsResult(
-      listCallCount === 1
+  const request = listRequest((call) =>
+    sessionsResult(
+      call === 1
         ? [
             {
               key: "global",
@@ -523,9 +514,9 @@ it("does not preserve another agent's raw-global row through background hydratio
             },
           ]
         : [],
-      listCallCount,
-    );
-  });
+      call,
+    ),
+  );
   const { sessions, gateway } = fixture(request, "global", undefined, "ops");
 
   await sessions.refresh({ agentId: "ops", force: true });

@@ -10,6 +10,7 @@ import {
 } from "../../app/agent-selection.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness,
@@ -28,14 +29,9 @@ function row(key: string, updatedAt = 1, fields: Partial<GatewaySessionRow> = {}
 function listRequest(
   list: (params?: Record<string, unknown>) => SessionsListResult | Promise<SessionsListResult>,
 ) {
-  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      return list(params);
-    }
-    throw new Error(`Unexpected request: ${method}`);
+  return sessionRequest({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.list": list,
   });
 }
 

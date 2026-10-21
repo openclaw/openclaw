@@ -1,4 +1,3 @@
-import { buildControlUiCatalogSessionUrl } from "@openclaw/session-url-contract";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildCatalogSessionKey } from "./catalog-key.ts";
@@ -48,16 +47,6 @@ it("requires the destination face while preserving catalog identity", () => {
     mainKey: "workspace",
   });
 
-  expect(target.href).toBe(
-    buildControlUiCatalogSessionUrl({
-      namespace: "dashboard",
-      agentId: "research",
-      basePath: "/admin/openclaw/",
-      catalog: catalogKey.catalogId,
-      host: catalogKey.hostId,
-      thread: catalogKey.threadId,
-    }),
-  );
   expect(target).toEqual({
     href: "/admin/openclaw/dashboard/research?catalog=claude&host=gateway%3Alocal&thread=thread-1",
     options: {
