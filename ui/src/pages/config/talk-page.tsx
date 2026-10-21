@@ -289,7 +289,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     connection: CatalogConnection | null;
   } = { value: initial, read: initial, connection: null };
   const catalogSource = projectMutableSource(catalogState, (state) => state);
-  const catalog = createMemo(() => catalogSource.read().read);
+  const catalog = createMemo(async () => catalogSource.read().read);
   const catalogScope = createMemo(() => catalogSource.read().connection);
   const [modelDefaultResetIntent, setModelDefaultResetIntent] =
     createSignal<ModelDefaultResetIntent | null>(null);
