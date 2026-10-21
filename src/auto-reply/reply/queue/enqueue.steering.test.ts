@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import {
@@ -11,14 +11,20 @@ import {
 import { createQueueSettings, createQueueTestRun } from "../queue.test-helpers.js";
 import { enqueueFollowupRun, reserveSteerCandidate } from "./enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./state.js";
-import type { FollowupRun } from "./types.js";
+import type { FollowupRun, QueueSettings } from "./types.js";
 
-const keys = new Set<string>();
+let key: string;
+let settings: QueueSettings;
+let runFollowup: (run: FollowupRun) => Promise<void>;
+const reserve = (run: FollowupRun) => reserveSteerCandidate(key, run, settings, runFollowup)!;
+const source = (prompt: string, messageId = prompt) => createQueueTestRun({ prompt, messageId });
+beforeEach(() => {
+  key = `steer:${expect.getState().currentTestName}`;
+  settings = createQueueSettings({ mode: "steer" });
+  runFollowup = vi.fn(async () => {});
+});
 afterEach(() => {
-  for (const key of keys) {
-    clearFollowupQueue(key);
-  }
-  keys.clear();
+  clearFollowupQueue(key);
   vi.useRealTimers();
 });
 
@@ -26,10 +32,7 @@ describe("parked steering admission", () => {
   it.each([true, false])(
     "retains the canonical receipt after acceptance=%s until outcome",
     async (accepted) => {
-      const key = `steer-native-settlement-${accepted}`;
-      keys.add(key);
-      const settings = createQueueSettings({ mode: "steer" });
-      const first = createQueueTestRun({ prompt: "first", messageId: "first" });
+      const first = source("first");
       const settled = vi.fn();
       const abandoned = vi.fn();
       first.turnAdoptionLifecycle = {
@@ -37,8 +40,7 @@ describe("parked steering admission", () => {
         onSettled: settled,
         onAbandoned: abandoned,
       };
-      const runFollowup = vi.fn(async (_run: FollowupRun) => {});
-      const reservation = reserveSteerCandidate(key, first, settings, runFollowup)!;
+      const reservation = reserve(first);
       expect(await reservation.admit()).toBe("steer");
       const input = first.controllerInput!;
       const receipt = input.injection;
@@ -83,21 +85,17 @@ describe("parked steering admission", () => {
   );
 
   it("retains the same early source and refuses a withdrawal-held steer", async () => {
-    const key = "steer-held-early-source";
-    keys.add(key);
-    const settings = createQueueSettings({ mode: "steer" });
-    const run = createQueueTestRun({ prompt: "early source", messageId: "early" });
+    const run = source("early source", "early");
     const input = reserveSessionControllerSource(key, {
       policy: settings,
       protocolRunId: " exact ",
     });
     bindSessionControllerSource(input, run);
     const hold = holdSessionControllerSourceWithdrawal(input);
-    const runFollowup = vi.fn(async (_run: FollowupRun) => {});
     expect(reserveSteerCandidate(key, run, settings, runFollowup)).toBeUndefined();
     expect(input.injection).toBeUndefined();
     hold.release();
-    const reservation = reserveSteerCandidate(key, run, settings, runFollowup)!;
+    const reservation = reserve(run);
     expect(run.controllerInput).toBe(input);
     expect(input.protocolRunId).toBe(" exact ");
     expect(await reservation.admit()).toBe("steer");
@@ -107,10 +105,7 @@ describe("parked steering admission", () => {
   });
 
   it("joins asynchronous source cleanup after native settlement and cancellation", async () => {
-    const key = "steer-async-source-cleanup";
-    keys.add(key);
-    const settings = createQueueSettings({ mode: "steer" });
-    const run = createQueueTestRun({ prompt: "accepted source", messageId: "accepted" });
+    const run = source("accepted source", "accepted");
     const cancellation = new AbortController();
     const cleanup = createDeferred();
     const cleanupStarted = createDeferred();
@@ -122,7 +117,7 @@ describe("parked steering admission", () => {
         return cleanup.promise;
       },
     };
-    const reservation = reserveSteerCandidate(key, run, settings, async () => {})!;
+    const reservation = reserve(run);
     expect(await reservation.admit()).toBe("steer");
     reservation.accepted(true);
     cancellation.abort();
@@ -142,10 +137,6 @@ describe("parked steering admission", () => {
   });
 
   it("rechecks channel execution authority after waiting for native settlement", async () => {
-    const key = "steer-post-wait-authority";
-    keys.add(key);
-    const settings = createQueueSettings({ mode: "steer" });
-    const runFollowup = vi.fn(async (_run: FollowupRun) => {});
     const first = createQueueTestRun({ prompt: "first" });
     const second = createQueueTestRun({ prompt: "second" });
     let current = true;
@@ -159,9 +150,9 @@ describe("parked steering admission", () => {
         }
       },
     });
-    const firstReservation = reserveSteerCandidate(key, first, settings, runFollowup)!;
+    const firstReservation = reserve(first);
     expect(await firstReservation.admit()).toBe("steer");
-    const secondReservation = reserveSteerCandidate(key, second, settings, runFollowup)!;
+    const secondReservation = reserve(second);
     const secondAdmission = secondReservation.admit();
     const rejected = expect(secondAdmission).rejects.toThrow("source authority revoked");
     current = false;
@@ -175,25 +166,22 @@ describe("parked steering admission", () => {
   it.each(["accepted", "rejected"] as const)(
     "tries newer input after an earlier steer rejects and drains %s fallback in order",
     async (outcome) => {
-      const key = `steer-after-rejection-${outcome}`;
-      keys.add(key);
-      const settings = createQueueSettings({ mode: "steer" });
-      const older = createQueueTestRun({ prompt: "older followup", messageId: "older" });
-      const first = createQueueTestRun({ prompt: "first steer", messageId: "first" });
-      const newer = createQueueTestRun({ prompt: "newer steer", messageId: "newer" });
+      const older = source("older followup", "older");
+      const first = source("first steer", "first");
+      const newer = source("newer steer", "newer");
       const delivered: string[] = [];
       const drained = createDeferred();
       const expected = outcome === "accepted" ? [older, first] : [older, first, newer];
-      const runFollowup = async (run: FollowupRun) => {
+      runFollowup = async (run) => {
         delivered.push(run.prompt);
         if (delivered.length === expected.length) {
           drained.resolve();
         }
       };
       enqueueFollowupRun(key, older, settings, "message-id", runFollowup, false);
-      const firstReservation = reserveSteerCandidate(key, first, settings, runFollowup)!;
+      const firstReservation = reserve(first);
       await expect(firstReservation.admit()).resolves.toBe("steer");
-      const newerReservation = reserveSteerCandidate(key, newer, settings, runFollowup)!;
+      const newerReservation = reserve(newer);
       const newerAdmission = newerReservation.admit();
       firstReservation.fallback();
       await expect(newerAdmission).resolves.toBe("steer");
@@ -216,18 +204,14 @@ describe("parked steering admission", () => {
 
   it("cancels a middle waiter without letting later steering overtake its predecessor", async () => {
     vi.useFakeTimers();
-    const key = "steer-cancelled-middle";
-    keys.add(key);
-    const settings = createQueueSettings({ mode: "steer" });
-    const runFollowup = vi.fn(async (_run: FollowupRun) => {});
-    const first = createQueueTestRun({ prompt: "first", messageId: "first" });
-    const middle = createQueueTestRun({ prompt: "middle", messageId: "middle" });
-    const last = createQueueTestRun({ prompt: "last", messageId: "last" });
+    const first = source("first");
+    const middle = source("middle");
+    const last = source("last");
     const cancellation = new AbortController();
     middle.abortSignal = cancellation.signal;
-    const firstReservation = reserveSteerCandidate(key, first, settings, runFollowup)!;
-    const middleReservation = reserveSteerCandidate(key, middle, settings, runFollowup)!;
-    const lastReservation = reserveSteerCandidate(key, last, settings, runFollowup)!;
+    const firstReservation = reserve(first);
+    const middleReservation = reserve(middle);
+    const lastReservation = reserve(last);
     await expect(firstReservation.admit()).resolves.toBe("steer");
     const middleAdmission = middleReservation.admit();
     const admittedLast = vi.fn();
@@ -254,12 +238,10 @@ describe("parked steering admission", () => {
   it.each(["summarize", "new", "old"] as const)(
     "applies cap after rejected steering with drop:%s without evicting active delivery",
     async (dropPolicy) => {
-      const key = `steer-fallback-cap-${dropPolicy}`;
-      keys.add(key);
-      const settings = createQueueSettings({ mode: "steer", cap: 1, dropPolicy });
-      const active = createQueueTestRun({ prompt: "active delivery", messageId: "active" });
-      const first = createQueueTestRun({ prompt: "first fallback", messageId: "first" });
-      const newer = createQueueTestRun({ prompt: "newer fallback", messageId: "newer" });
+      settings = createQueueSettings({ mode: "steer", cap: 1, dropPolicy });
+      const active = source("active delivery", "active");
+      const first = source("first fallback", "first");
+      const newer = source("newer fallback", "newer");
       let firstCurrent = true;
       if (dropPolicy === "old") {
         first.operatorAuthority = createAdmittedRunOperatorAuthority({
@@ -286,7 +268,7 @@ describe("parked steering admission", () => {
       const releaseActive = createDeferred();
       const drained = createDeferred();
       const delivered: string[] = [];
-      const runFollowup = async (run: FollowupRun) => {
+      runFollowup = async (run) => {
         delivered.push(run.prompt);
         if (run === active) {
           activeEntered.resolve();
@@ -299,10 +281,10 @@ describe("parked steering admission", () => {
       enqueueFollowupRun(key, active, settings, "message-id", runFollowup);
       await activeEntered.promise;
       try {
-        const firstReservation = reserveSteerCandidate(key, first, settings, runFollowup)!;
+        const firstReservation = reserve(first);
         await expect(firstReservation.admit()).resolves.toBe("steer");
         firstReservation.fallback();
-        const newerReservation = reserveSteerCandidate(key, newer, settings, runFollowup)!;
+        const newerReservation = reserve(newer);
         await expect(newerReservation.admit()).resolves.toBe("steer");
         const newerInput = newer.controllerInput!;
         const newerSettlement = captureSessionControllerSourceSettlement(newerInput);
