@@ -203,7 +203,7 @@ describe.skipIf(!mixedAgentConnection)("reserved-incognito adoption preflight", 
               fs.readFileSync(result.manifest, "utf8"),
             ) as DatabasePortManifest;
             const target = manifest.targets.find(
-              ({ original }) => original.engine === "sqlite" && original.path === agentPath,
+              ({ original: source }) => source.engine === "sqlite" && source.path === agentPath,
             )?.intended;
             assert(target?.engine === "postgres");
             for (const table of [
