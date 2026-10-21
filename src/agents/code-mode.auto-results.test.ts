@@ -309,13 +309,12 @@ async function consume() {
 it("bounds inspection and repeated console output under the shared result cap", async () => {
   const maxOutputBytes = 65_536;
   const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness(),
+    ctx: createHeadlessCodeModeHarness([], { codeMode: { maxOutputBytes } }),
     code:
       'const huge = { unicode: "🦞".repeat(100000), values: Array(100000).fill("x") }; ' +
       'console.log(huge); console.error(new Proxy({}, { ownKeys() { throw Error("bad proxy"); } })); ' +
       "for (let i = 0; i < 20000; i++) console.log(); await yield_control(); " +
       'console.log("after exhaustion"); return true;',
-    overrides: { maxOutputBytes },
   });
   expect(result.status).toBe("completed");
   expectCodeModeSharedBudget(result, maxOutputBytes);

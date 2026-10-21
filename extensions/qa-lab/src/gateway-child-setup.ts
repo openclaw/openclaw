@@ -117,22 +117,6 @@ const QA_GATEWAY_CHILD_BLOCKED_ENV_VARS: readonly string[] = [
   "SHELLOPTS",
 ];
 
-function scrubQaGatewayChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
-    delete env[envKey];
-  }
-  // Bash imports exported functions before the launcher can apply its allowlist.
-  for (const envKey of Object.keys(env)) {
-    if (envKey.startsWith("BASH_FUNC_")) {
-      delete env[envKey];
-    }
-  }
-  if (env.NODE_ENV === "test") {
-    delete env.NODE_ENV;
-  }
-  return env;
-}
-
 function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnabled?: boolean }) {
   if (params.controlUiEnabled === false) {
     return undefined;
@@ -140,11 +124,6 @@ function resolveQaControlUiRoot(params: { repoRoot: string; controlUiEnabled?: b
   const controlUiRoot = path.join(params.repoRoot, "dist", "control-ui");
   const indexPath = path.join(controlUiRoot, "index.html");
   return existsSync(indexPath) ? controlUiRoot : undefined;
-}
-
-function createQaPackagedMockApiKey(): string {
-  const prefix = ["s", "k"].join("");
-  return `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}`;
 }
 
 async function runQaPackagedBootstrap<T>(
@@ -173,42 +152,6 @@ function createQaPackagedBootstrapEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
     }
   }
   return bootstrapEnv;
-}
-
-async function stageQaPackagedMockAuthProfiles(params: {
-  lifetime: QaGatewayChildLifecycle;
-  command: QaGatewayChildCommand;
-  configPath: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  providers: readonly string[];
-}): Promise<void> {
-  for (const provider of uniqueStrings(params.providers)) {
-    await runQaPackagedBootstrap(
-      `installed package mock auth bootstrap failed for ${provider}`,
-      () =>
-        runQaGatewayCliCommand({
-          lifetime: params.lifetime,
-          executablePath: params.command.executablePath,
-          argsPrefix: params.command.argsPrefix ?? [],
-          args: [
-            "models",
-            "auth",
-            "--agent",
-            "qa",
-            "paste-api-key",
-            "--provider",
-            provider,
-            "--profile-id",
-            buildQaMockProfileId(provider),
-          ],
-          cwd: params.command.cwd ?? params.cwd,
-          env: { ...params.env, OPENCLAW_CONFIG_PATH: params.configPath },
-          stdin: `${createQaPackagedMockApiKey()}\n`,
-          bootstrapPhase: "mock-auth",
-        }),
-    );
-  }
 }
 
 export async function prepareQaGatewayChild(
@@ -548,7 +491,18 @@ export async function prepareQaGatewayChild(
       // launcher or runtime child can import them before its own allowlist runs.
       delete env[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
       delete env[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
-      env = scrubQaGatewayChildEnv(env);
+      for (const envKey of QA_GATEWAY_CHILD_BLOCKED_ENV_VARS) {
+        delete env[envKey];
+      }
+      // Bash imports exported functions before the launcher can apply its allowlist.
+      for (const envKey of Object.keys(env)) {
+        if (envKey.startsWith("BASH_FUNC_")) {
+          delete env[envKey];
+        }
+      }
+      if (env.NODE_ENV === "test") {
+        delete env.NODE_ENV;
+      }
       assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: liveProviderIds,
@@ -570,14 +524,35 @@ export async function prepareQaGatewayChild(
           flag: "wx",
           mode: 0o600,
         });
-        await stageQaPackagedMockAuthProfiles({
-          lifetime,
-          command: gatewayCommand,
-          configPath: packagedAuthConfigPath,
-          cwd: gatewayCwd,
-          env: createQaPackagedBootstrapEnv(env),
-          providers: mockAuthProviders,
-        });
+        const bootstrapEnv = createQaPackagedBootstrapEnv(env);
+        for (const provider of uniqueStrings(mockAuthProviders)) {
+          await runQaPackagedBootstrap(
+            `installed package mock auth bootstrap failed for ${provider}`,
+            () => {
+              const prefix = ["s", "k"].join("");
+              return runQaGatewayCliCommand({
+                lifetime,
+                executablePath: gatewayCommand.executablePath,
+                argsPrefix: gatewayCommand.argsPrefix ?? [],
+                args: [
+                  "models",
+                  "auth",
+                  "--agent",
+                  "qa",
+                  "paste-api-key",
+                  "--provider",
+                  provider,
+                  "--profile-id",
+                  buildQaMockProfileId(provider),
+                ],
+                cwd: gatewayCommand.cwd ?? gatewayCwd,
+                env: { ...bootstrapEnv, OPENCLAW_CONFIG_PATH: packagedAuthConfigPath },
+                stdin: `${prefix}-${["qa", "mock", randomUUID().replaceAll("-", "")].join("-")}\n`,
+                bootstrapPhase: "mock-auth",
+              });
+            },
+          );
+        }
         if (!canonicalConfig.equals(await fs.readFile(configPath))) {
           throw new Error("installed package mock auth bootstrap mutated canonical config");
         }

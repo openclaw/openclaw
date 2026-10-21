@@ -181,7 +181,6 @@ describe("WhatsApp QA live runtime", () => {
       const archiveBase64 = await createArchive(tempRoot, entries);
       const authDir = await unpackWhatsAppAuthArchive({
         archiveBase64,
-        clearSignalSessions: true,
         label: "driver",
         parentDir: tempRoot,
       });

@@ -1,4 +1,3 @@
-// Twitch tests cover plugin.lifecycle plugin behavior.
 import {
   createStartAccountContext,
   expectLifecyclePatch,
@@ -7,7 +6,6 @@ import {
   waitForStartedMocks,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { TwitchAccountConfig } from "./types.js";
 
@@ -23,24 +21,15 @@ const { twitchPlugin } = await import("./plugin.js");
 
 type TwitchStartAccount = NonNullable<NonNullable<typeof twitchPlugin.gateway>["startAccount"]>;
 
-function requireStartAccount(): TwitchStartAccount {
-  const startAccount = twitchPlugin.gateway?.startAccount;
-  if (!startAccount) {
-    throw new Error("Expected Twitch gateway startAccount");
-  }
-  return startAccount;
-}
-
-function buildAccount(): TwitchAccountConfig & { accountId: string } {
-  return {
-    accountId: "default",
-    username: "testbot",
-    accessToken: "oauth:test-token",
-    clientId: "test-client-id",
-    channel: "#testchannel",
-    enabled: true,
-  };
-}
+const account: TwitchAccountConfig & { accountId: string } = {
+  accountId: "default",
+  username: "testbot",
+  accessToken: "oauth:test-token",
+  clientId: "test-client-id",
+  channel: "#testchannel",
+  enabled: true,
+};
+const startAccount = twitchPlugin.gateway!.startAccount!;
 
 function mockStartedMonitor() {
   const stop = vi.fn();
@@ -48,15 +37,11 @@ function mockStartedMonitor() {
   return stop;
 }
 
-function startTwitchAccount(abortSignal?: AbortSignal) {
-  return requireStartAccount()(
-    withChannelRuntime(
-      createStartAccountContext({
-        account: buildAccount(),
-        abortSignal,
-      }),
-    ),
-  );
+function trackLifecycle() {
+  return startAccountAndTrackLifecycle({
+    startAccount: (ctx) => startAccount(withChannelRuntime(ctx)),
+    account,
+  });
 }
 
 function withChannelRuntime(ctx: Parameters<TwitchStartAccount>[0]) {
@@ -70,10 +55,7 @@ describe("twitch startAccount lifecycle", () => {
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {
     const stop = mockStartedMonitor();
-    const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: (ctx) => requireStartAccount()(withChannelRuntime(ctx)),
-      account: buildAccount(),
-    });
+    const { abort, task, isSettled } = trackLifecycle();
     await expectStopPendingUntilAbort({
       waitForStarted: waitForStartedMocks(hoisted.monitorTwitchProvider),
       isSettled,
@@ -85,17 +67,7 @@ describe("twitch startAccount lifecycle", () => {
 
   it("publishes starting and forwards a bound status sink to the monitor", async () => {
     const stop = mockStartedMonitor();
-    const patches: ChannelAccountSnapshot[] = [];
-    const abort = new AbortController();
-    const task = requireStartAccount()(
-      withChannelRuntime(
-        createStartAccountContext({
-          account: buildAccount(),
-          abortSignal: abort.signal,
-          statusPatchSink: (next) => patches.push({ ...next }),
-        }),
-      ),
-    );
+    const { patches, abort, task } = trackLifecycle();
 
     await vi.waitFor(() => expect(hoisted.monitorTwitchProvider).toHaveBeenCalledOnce());
     expectLifecyclePatch(patches, { lifecycle: "starting", running: true });
@@ -113,7 +85,9 @@ describe("twitch startAccount lifecycle", () => {
     const abort = new AbortController();
     abort.abort();
 
-    await startTwitchAccount(abort.signal);
+    await startAccount(
+      withChannelRuntime(createStartAccountContext({ account, abortSignal: abort.signal })),
+    );
 
     expect(hoisted.monitorTwitchProvider).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
@@ -121,16 +95,7 @@ describe("twitch startAccount lifecycle", () => {
 
   it("clears running status when monitor startup fails", async () => {
     hoisted.monitorTwitchProvider.mockRejectedValue(new Error("irc join failed"));
-    const patches: ChannelAccountSnapshot[] = [];
-
-    const task = requireStartAccount()(
-      withChannelRuntime(
-        createStartAccountContext({
-          account: buildAccount(),
-          statusPatchSink: (next) => patches.push({ ...next }),
-        }),
-      ),
-    );
+    const { task, patches } = trackLifecycle();
 
     await expect(task).rejects.toThrow("irc join failed");
     expectLifecyclePatch(patches, { running: true });
@@ -138,9 +103,9 @@ describe("twitch startAccount lifecycle", () => {
   });
 
   it("rejects startup without its registered context builder", async () => {
-    await expect(
-      requireStartAccount()(createStartAccountContext({ account: buildAccount() })),
-    ).rejects.toThrow("Twitch requires its registered channel runtime context builder");
+    await expect(startAccount(createStartAccountContext({ account }))).rejects.toThrow(
+      "Twitch requires its registered channel runtime context builder",
+    );
     expect(hoisted.monitorTwitchProvider).not.toHaveBeenCalled();
   });
 });

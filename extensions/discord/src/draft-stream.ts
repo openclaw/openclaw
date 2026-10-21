@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { deleteChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
 import type { RequestClient } from "./internal/rest.js";
+import { createDiscordRetryRunner } from "./retry.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
@@ -31,6 +32,7 @@ export function createDiscordDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   let channelId = params.channelId;
   const rest = params.rest;
+  const retryDelete = createDiscordRetryRunner({});
   const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
 
   const streamState = { stopped: false, final: false };
@@ -121,7 +123,8 @@ export function createDiscordDraftStream(params: {
       loop.resetThrottleWindow();
     },
     isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
-    deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
+    deleteMessage: (message) =>
+      retryDelete(() => deleteChannelMessage(rest, message.channelId, message.messageId)),
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });

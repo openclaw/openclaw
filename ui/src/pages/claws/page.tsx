@@ -6,6 +6,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { AgentsHomePage } from "../agents-home/agents-home-page.tsx";
 import { ClawsCatalogDialog } from "../agents-home/claws-catalog-dialog.tsx";
+import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { clawCreatorFlow } from "./creator-flow.ts";
 import { clawDraftTargetFromSearch, type ClawDraftTarget } from "./draft-navigation.ts";
 import type { ClawsRouteData } from "./route.ts";
@@ -48,14 +49,7 @@ export function ClawsPage(props: { routeData: ClawsRouteData | undefined }) {
         <SettingsPage wide carapace>
           <section class="plugin-catalog-detail plugin-catalog-detail--loading" role="status">
             <div class="plugin-catalog-detail__back skeleton" />
-            <div class="plugin-catalog-detail__hero">
-              <div class="plugin-catalog-detail__icon skeleton" />
-              <div>
-                <div class="plugin-catalog-detail__loading-title skeleton" />
-                <div class="plugin-catalog-detail__loading-publisher skeleton" />
-                <div class="plugin-catalog-detail__loading-summary skeleton" />
-              </div>
-            </div>
+            <PluginDetailLoadingHero />
           </section>
         </SettingsPage>
       }
