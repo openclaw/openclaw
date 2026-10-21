@@ -766,7 +766,7 @@ extension ComputerWindowActionExecutor {
         guard let outcome else {
             return OpenClawComputerActResult(ok: true, effect: .unverifiable)
         }
-        if outcome.effect == .refused {
+        if outcome.effect == .refused || (!background && outcome.effect == .suspectedNoop) {
             return background
                 ? self.backgroundEscalation(reason: outcome.refusalReason?.rawValue ?? "action_refused")
                 : OpenClawComputerActResult(
