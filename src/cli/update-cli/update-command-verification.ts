@@ -119,7 +119,7 @@ export async function recordFailedUpdateGatewayState(
   const facts = await readFailedUpdateGatewayState(run, env, timeoutMs);
   assertCurrent();
   if (run && facts) {
-    recordUpdateRunVerification(run.runId, facts, { env: run.env });
+    recordUpdateRunVerification(run.runId, facts, run);
   }
 }
 
@@ -167,7 +167,7 @@ export async function verifyPreviousManagedGatewayForUpdate(
           : "Previous gateway was not verified; automatic rollback cannot restart it.",
         endedAtMs: Date.now(),
       },
-      { env: run.env },
+      run,
     );
   }
 }
@@ -260,7 +260,7 @@ export async function verifyUpdatedGateway(
     recordUpdateRunVerification(
       proofOptions.run.runId,
       updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      { env: proofOptions.run.env },
+      proofOptions.run,
     );
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
@@ -321,7 +321,7 @@ export async function verifyUpdatedGateway(
         recordUpdateRunStep(
           run.runId,
           { failureFacts: undefined, ...row, endedAtMs, detail: row.detail ?? detail },
-          { env: run.env },
+          run,
         );
       }
     }
