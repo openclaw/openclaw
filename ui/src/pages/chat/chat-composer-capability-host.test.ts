@@ -9,6 +9,7 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
+  sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   gatewayHelloForMethods,
@@ -177,18 +178,11 @@ function createAddServerHarness(
   const sessions = createTestSessionCapability(gateway);
   Object.assign(sessions.state, {
     agentId: "main",
-    result: {
-      ts: 1,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [session],
-    },
+    result: sessionsResult([session]),
   });
   sessions.refresh = refresh;
   sessions.patch = patch;
   state.sessions = sessions;
-  onTestFinished(() => sessions.dispose());
   const host = new ChatComposerCapabilityHost();
   const container = mountDialogs(host, context, state, session);
   const query = (selector: string) => container.querySelector(selector);

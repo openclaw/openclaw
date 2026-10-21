@@ -69,11 +69,13 @@ describe("renderChatComposer controls", () => {
 
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
     const onAbort = vi.fn();
+    const onTypingChange = vi.fn();
     const { container, props, onSend, onDraftChange } = renderComposer({
       canAbort: true,
       canCompose: true,
       draft: "Keep this draft",
       onAbort,
+      onTypingChange,
       pendingAttachmentReads: 1,
     });
     const stop = primaryButton(container);
@@ -86,6 +88,7 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
     expect(onSend).not.toHaveBeenCalled();
     expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onTypingChange).not.toHaveBeenCalled();
     expect(textarea(container).value).toBe(props.draft);
   });
 
@@ -344,12 +347,14 @@ describe("renderChatComposer controls", () => {
   ] as const)(
     "submits %s as %s with modified Enter",
     (followUpMode, alternateMode, draft, getAttachments, liveDraft) => {
+      const onTypingChange = vi.fn();
       const { container, onSend } = renderComposer({
         ...activeRun(),
         draft,
         followUpMode,
         getAttachments,
         sendShortcut: "enter",
+        onTypingChange,
       });
       if (liveDraft !== undefined) {
         textarea(container).value = liveDraft;
@@ -358,6 +363,7 @@ describe("renderChatComposer controls", () => {
       const action = pressComposerEnter(container, { ctrlKey: true });
       expect(onSend).toHaveBeenCalledOnce();
       expect(onSend).toHaveBeenCalledWith(alternateMode, action);
+      expect(onTypingChange).toHaveBeenLastCalledWith(false);
 
       const held = pressComposerEnter(container, { ctrlKey: true, repeat: true });
       expect(held.defaultPrevented).toBe(true);
@@ -492,6 +498,9 @@ describe("renderChatComposer controls", () => {
     const state = item?.querySelector(".chat-queue__badge--reconnect");
     expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
     expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    expect(item?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
+    expect(item?.querySelector(".chat-queue__state")).toBeNull();
+    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
   });
 
   it("renders failed sends as retryable and running commands as inert", async () => {

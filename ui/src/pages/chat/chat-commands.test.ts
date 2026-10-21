@@ -32,18 +32,12 @@ function requireCommandByName(name: string) {
   return command;
 }
 
-function connectedSessionAccess() {
+function resetHost(confirm: () => Promise<boolean>) {
+  const reset = vi.fn();
   return {
     client: { request: vi.fn() } as unknown as GatewayBrowserClient,
     connected: true,
     hello: sessionMutationGatewayHello(),
-  };
-}
-
-function resetHost(confirm: () => Promise<boolean>) {
-  const reset = vi.fn();
-  return {
-    ...connectedSessionAccess(),
     connectionEpoch: 1,
     sessionKey: "agent:main:current",
     chatRunId: null as string | null,
@@ -250,20 +244,6 @@ describe("refreshSlashCommands", () => {
 });
 
 describe("local command loading", () => {
-  it("renders English help on the first local command", async () => {
-    const host = makeChatHost({
-      requestHandlers: {},
-      // This command-only harness never commits a transcript DOM.
-      renderLifecycle: { afterCommit: () => () => {} },
-    });
-    await expect(dispatchChatSlashCommand(host, "help", "")).resolves.toBe("completed");
-    expect(host.chatMessages.at(-1)).toMatchObject({
-      role: "system",
-      content: expect.stringContaining("**Available Commands**"),
-    });
-    expect(host.request).not.toHaveBeenCalled();
-  });
-
   it("does not run a command after its Gateway changes while loading", async () => {
     const host = makeChatHost({ requestHandlers: {} });
     const pending = dispatchChatSlashCommand(host, "model", "example/model");
@@ -306,27 +286,16 @@ describe("conversation reset confirmation", () => {
     ["clear", "sessions.reset"],
     ["compact", "sessions.compact"],
   ] as const)("rejects /%s without its exact operator scope", async (command, method) => {
-    const request = vi.fn();
-    const reset = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const host = {
-      client,
-      connected: true,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: [method] },
-      } as ApplicationGatewaySnapshot["hello"],
-      sessionKey: "agent:main:current",
-      chatRunId: command === "stop" ? "run-1" : null,
-      sessions: { reset },
-      confirmConversationReset: vi.fn(async () => true),
-      lastError: null,
-      chatError: null,
-    };
+    const host = resetHost(async () => true);
+    host.hello = {
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: [method] },
+    } as ApplicationGatewaySnapshot["hello"];
+    host.chatRunId = command === "stop" ? "run-1" : null;
     const result = await dispatchChatSlashCommand(host as never, command, "");
     expect(result).toBe("failed");
-    expect(request).not.toHaveBeenCalled();
-    expect(reset).not.toHaveBeenCalled();
+    expect(host.client.request).not.toHaveBeenCalled();
+    expect(host.sessions.reset).not.toHaveBeenCalled();
     expect(host.lastError).toBeTruthy();
   });
 

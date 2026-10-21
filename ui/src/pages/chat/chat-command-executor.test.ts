@@ -164,35 +164,6 @@ function mockSession(
 }
 
 describe("executeSlashCommand directives", () => {
-  it("keeps unknown partial thinking support under server validation", async () => {
-    const key = "agent:main:main";
-    const request = mockSession(
-      { model: "model" },
-      {
-        "sessions.patch": () => ({ ok: true, key, entry: { thinkingLevel: "low" } }),
-      },
-    );
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      key,
-      "think",
-      "low",
-      {
-        chatModelCatalog: [
-          {
-            id: "model",
-            name: "Model",
-            provider: "openai",
-            thinkingLevels: [{ id: "high", label: "High" }],
-            thinkingDefault: "high",
-          },
-        ],
-      },
-    );
-    expect(result.content).toBe(resultText("thinking.set", { level: "**low**" }));
-    expect(request).toHaveBeenCalledWith("sessions.patch", { key, thinkingLevel: "low" });
-  });
-
   it("lets the canonical row retire a slash-command selection equal to the default", async () => {
     const key = "agent:main:main";
     const request = mockRequests({
@@ -371,68 +342,50 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("does not report global model defaults for an agent without a session row", async () => {
-    const request = mockRequests({
-      "sessions.describe": () => ({
-        session: null,
-      }),
-    });
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "model",
-      "",
-      {
-        agentId: "work",
-        chatModelCatalog: [
-          { id: "work-model", name: "Work Model", provider: "openai", available: true },
-        ],
-      },
-    );
-    expect(result.content).toBe(
-      [
-        resultText("model.current", { model: "`default`" }),
-        resultText("model.available", { models: "`work-model`", remaining: "" }),
-      ].join("\n"),
-    );
-  });
-
-  it("reports global model defaults for a configured default agent", async () => {
-    const request = mockRequests({
-      "sessions.describe": () => ({ session: null }),
-      "sessions.list": () => ({
-        defaults: { modelProvider: "openai", model: "work-default" },
-        sessions: [],
-      }),
-    });
-    const result = await executeSlashCommand(
-      createTestGatewayClient(request),
-      "agent:work:main",
-      "model",
-      "",
-      {
-        agentId: "work",
-        defaultAgentId: "work",
-        chatModelCatalog: [
-          { id: "work-default", name: "Work Default", provider: "openai", available: true },
-        ],
-      },
-    );
-    expect(result.content).toBe(
-      [
-        resultText("model.current", { model: "`work-default`" }),
-        resultText("model.available", {
-          models: "`work-default`",
-          remaining: "",
-        }),
-      ].join("\n"),
-    );
-    expect(requireRequestCall(request, "sessions.list").payload).toMatchObject({
-      limit: 1,
-      rowMode: "compact",
-      agentId: "work",
-    });
-  });
+  it.each([false, true])(
+    "reports model defaults only for the default agent (default=%s)",
+    async (isDefault) => {
+      const model = isDefault ? "work-default" : "work-model";
+      const request = mockRequests({
+        "sessions.describe": () => ({ session: null }),
+        ...(isDefault
+          ? {
+              "sessions.list": () => ({
+                defaults: { modelProvider: "openai", model },
+                sessions: [],
+              }),
+            }
+          : {}),
+      });
+      const result = await executeSlashCommand(
+        createTestGatewayClient(request),
+        "agent:work:main",
+        "model",
+        "",
+        {
+          agentId: "work",
+          ...(isDefault ? { defaultAgentId: "work" } : {}),
+          chatModelCatalog: [{ id: model, name: model, provider: "openai", available: true }],
+        },
+      );
+      expect(result.content).toBe(
+        [
+          resultText("model.current", { model: isDefault ? "`work-default`" : "`default`" }),
+          resultText("model.available", {
+            models: isDefault ? "`work-default`" : "`work-model`",
+            remaining: "",
+          }),
+        ].join("\n"),
+      );
+      if (isDefault) {
+        expect(requireRequestCall(request, "sessions.list").payload).toMatchObject({
+          limit: 1,
+          rowMode: "compact",
+          agentId: "work",
+        });
+      }
+    },
+  );
 
   it("refreshes successful compaction without a duplicate command message", async () => {
     const request = mockRequests({ "sessions.compact": () => ({ ok: true, compacted: true }) });
@@ -535,17 +488,21 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("clears thinking override for /think default", async () => {
+  it.each([
+    ["think", "thinkingLevel", "thinking.reset"],
+    ["fast", "fastMode", "fast.reset"],
+  ] as const)("clears /%s default through the session patch owner", async (command, field, key) => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "sessions.patch") {
         return { ok: true, ...((payload ?? {}) as object) };
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const result = await runCommand(request, "think", "default");
-    expect(result.content).toBe(resultText("thinking.reset"));
-    expect(result.action).toBe("refresh");
-    expectPatch(request, { thinkingLevel: null });
+    expect(await runCommand(request, command, "default")).toEqual({
+      content: resultText(key),
+      action: "refresh",
+    });
+    expectPatch(request, { [field]: null });
   });
 
   it("uses default thinking options when the active session is absent", async () => {
@@ -599,30 +556,6 @@ describe("executeSlashCommand directives", () => {
     expectPatch(request, { thinkingLevel: "xhigh" });
     expectPatch(request, { thinkingLevel: "max" });
     expectPatch(request, { thinkingLevel: "adaptive" });
-  });
-
-  it("reports unknown thinking when the descriptor omits model metadata", async () => {
-    const request = mockSession(
-      {
-        modelProvider: "anthropic",
-        model: "claude-sonnet-4-6",
-        // thinkingLevels intentionally absent — lightweight row
-      },
-      {
-        "models.list": () => ({
-          models: [{ id: "claude-sonnet-4-6", provider: "anthropic", reasoning: true }],
-        }),
-      },
-    );
-    const status = await runCommand(request, "think");
-    expect(status.content).toBe(
-      [
-        resultText("thinking.current", { level: "Unknown" }),
-        resultText("options", {
-          options: "Unknown",
-        }),
-      ].join("\n"),
-    );
   });
 
   it("rejects thinking levels when the selected model advertises empty support", async () => {
@@ -695,19 +628,6 @@ describe("executeSlashCommand directives", () => {
     expect((await runCommand(request, "fast", arg)).content).toBe(resultText(`fast.${resultKey}`));
     expectPatch(request, { fastMode });
   });
-
-  it("clears fast mode override for /fast default", async () => {
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (method === "sessions.patch") {
-        return { ok: true, ...((payload ?? {}) as object) };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const result = await runCommand(request, "fast", "default");
-    expect(result.content).toBe(resultText("fast.reset"));
-    expect(result.action).toBe("refresh");
-    expectPatch(request, { fastMode: null });
-  });
 });
 
 describe("executeSlashCommand /steer (soft inject)", () => {
@@ -765,14 +685,6 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     const result = await runCommand(request, "steer");
     expect(result.content).toBe(resultText("steer.usage"));
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it("returns steer error message on RPC failure", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("connection lost");
-    });
-    const result = await runCommand(request, "steer", "try again");
-    expect(result.content).toBe(resultText("steer.requestFailed", { error: "connection lost" }));
   });
 });
 

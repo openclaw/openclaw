@@ -343,20 +343,6 @@ describe("chat composer queue reordering", () => {
     expect(container.textContent).not.toContain("Will notify:");
   });
 
-  it("projects one offline state on each row without a queue header", () => {
-    const container = renderQueue({
-      offline: true,
-      queue: [waiting("a", 1, { queueMode: "steer", sendState: "waiting-idle" })],
-    });
-
-    const row = find(container, "item");
-    expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(all(row!, "badge")).toHaveLength(1);
-    expect(text(row, "badge--reconnect")).toBe(t("chat.queue.states.waitingForReconnect"));
-    expect(find(row, "state")).toBeNull();
-    expect(all(container, "global-state")).toHaveLength(0);
-  });
-
   it("projects applying settings once and preserves the steer affordance", () => {
     const container = renderQueue({
       canAbort: true,
