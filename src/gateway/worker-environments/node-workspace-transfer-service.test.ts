@@ -111,6 +111,8 @@ describe("node workspace transfer service", () => {
     const root = tempDirs.make("node-workspace-transfer-build-cache-");
     const localPath = path.join(root, "workspace");
     const authored = ".artifacts/build-all-cache/authored.txt";
+    const newlyStaged = ".artifacts/build-all-cache/newly-staged.txt";
+    const report = ".artifacts/report.md";
     const generated = ".artifacts/build-all-cache/generated/output.js";
     await Promise.all([
       fs.mkdir(path.dirname(path.join(localPath, authored)), { recursive: true }),
@@ -135,6 +137,9 @@ describe("node workspace transfer service", () => {
     await git("add", ".");
     await git("commit", "--quiet", "-m", "base");
     const commit = await git("rev-parse", "HEAD");
+    await fs.writeFile(path.join(localPath, newlyStaged), "authored after base\n");
+    await fs.writeFile(path.join(localPath, report), "# useful report\n");
+    await git("add", "--force", "--", newlyStaged);
     await fs.writeFile(path.join(localPath, generated), "disposable cache\n");
     await fs.chmod(path.join(localPath, generated), 0);
 
@@ -152,12 +157,52 @@ describe("node workspace transfer service", () => {
       });
       expect(prepared.snapshot.manifest.baseCommit).toBe(commit);
       expect(prepared.snapshot.manifest.entries.map((entry) => entry.path)).toEqual(
-        expect.arrayContaining([authored, "source.ts"]),
+        expect.arrayContaining([authored, newlyStaged, report, "source.ts"]),
       );
       expect(prepared.snapshot.manifest.entries.some((entry) => entry.path === generated)).toBe(
         false,
       );
       expect(prepared.snapshot.manifest.buildCacheInputs).toContain(authored);
+
+      const server = await startNodeWorkspaceTransferTestServer(service);
+      try {
+        const runtime = new NodeWorkerWorkspaceRuntime({
+          root: path.join(root, "node-workspaces"),
+        });
+        const downloaded = await runtime.exec(
+          {
+            gatewayNamespace: "gateway-build-cache-proof",
+            environmentId: "environment-build-cache",
+            sessionId: "session-build-cache",
+            generation: 1,
+            argv: ["openclaw-internal-workspace-transfer"],
+            transfer: {
+              direction: "download",
+              token: prepared.token,
+              manifestRef: prepared.snapshot.manifestRef,
+            },
+          },
+          undefined,
+          { url: server.gatewayUrl },
+        );
+        await Promise.all(
+          [
+            [authored, "original input\n"],
+            [newlyStaged, "authored after base\n"],
+            [report, "# useful report\n"],
+            ["source.ts", "source\n"],
+          ].map(async ([relative, expected]) => {
+            await expect(
+              fs.readFile(path.join(downloaded.workspaceDir, relative), "utf8"),
+            ).resolves.toBe(expected);
+          }),
+        );
+        await expect(fs.stat(path.join(downloaded.workspaceDir, generated))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await server.close();
+      }
     } finally {
       await fs.chmod(path.join(localPath, generated), 0o644);
       await service.closeAll();
