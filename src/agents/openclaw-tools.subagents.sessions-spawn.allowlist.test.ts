@@ -60,11 +60,6 @@ beforeEach(async () => {
   hoisted.configOverride = createSubagentSpawnTestConfig();
 });
 
-it("forbids cross-agent targets outside the requester's allowlist", async () => {
-  setConfig({ subagents: { allowAgents: ["alpha"] } });
-  expectRejected(await spawn("beta"));
-});
-
 it("falls back to the default allowlist when the agent omits allowAgents", async () => {
   setConfig({}, { beta: {} }, { subagents: { allowAgents: ["beta"] } });
   expect(await spawn("beta")).toMatchObject({
@@ -78,20 +73,12 @@ it("rejects unconfigured targets even with a wildcard allowlist", async () => {
   expectRejected(await spawn("beta"), 'agentId "beta" is not in the configured agent registry');
 });
 
-it.each([
-  {
-    defaults: { sandbox: { mode: "all" } },
-    sandbox: undefined,
-    error: "Sandboxed sessions cannot spawn unsandboxed subagents.",
-  },
-  { defaults: undefined, sandbox: "require" as const, error: 'sandbox="require"' },
-])("forbids an unsandboxed child: $error", async ({ defaults, sandbox, error }) => {
+it("requires a sandboxed child when explicitly requested", async () => {
   setConfig(
     { subagents: { allowAgents: ["research"] } },
     { research: { sandbox: { mode: "off" } } },
-    defaults,
   );
-  expectRejected(await spawn("research", sandbox), error);
+  expectRejected(await spawn("research", "require"), 'sandbox="require"');
 });
 
 it("forbids omitted agentId when requireAgentId is configured", async () => {

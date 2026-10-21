@@ -18,6 +18,10 @@ const acpAgent = {
 const planFor = (options: Partial<Parameters<typeof resolveSubagentModelAndThinkingPlan>[0]>) =>
   resolveSubagentModelAndThinkingPlan({ cfg: {}, targetAgentId: "research", ...options });
 const nativeModel = "minimax/MiniMax-M2.7";
+const configFor = (
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
+  research: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] = acpAgent,
+) => ({ agents: { defaults, entries: { research } } });
 
 it("threads explicit fast mode into the initial child session patch", async () => {
   const plan = await planFor({ fastMode: "ultrafast" });
@@ -25,12 +29,7 @@ it("threads explicit fast mode into the initial child session patch", async () =
 });
 it("applies an explicit native model instead of ACP defaults", async () => {
   const plan = await planFor({
-    cfg: {
-      agents: {
-        defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
-        entries: { research: acpAgent },
-      },
-    },
+    cfg: configFor({ subagents: { model: nativeModel } }),
     targetAgentConfig: acpAgent,
     modelOverride: "openrouter/meta-llama/llama-3.3-70b:free",
   });
@@ -59,11 +58,7 @@ it("rejects invalid thinking before preparing a model", async () => {
 it("uses the target default provider for a bare configured subagent model", async () => {
   expect(
     await planFor({
-      cfg: {
-        agents: {
-          defaults: { model: { primary: "openai/gpt-5.5" }, subagents: { model: "gpt-5.4" } },
-        },
-      },
+      cfg: configFor({ model: { primary: "openai/gpt-5.5" }, subagents: { model: "gpt-5.4" } }, {}),
     }),
   ).toMatchObject({
     status: "ok",
@@ -86,23 +81,16 @@ it.each([
   async (_name, agentModel, defaultModel, provider, model, hasOrigin) => {
     const targetAgentConfig = { ...acpAgent, subagents: { model: agentModel } };
     const plan = await planFor({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "minimax/MiniMax-M2.7" },
-            subagents: { model: defaultModel },
-          },
-          entries: { research: targetAgentConfig },
-        },
-      },
+      cfg: configFor(
+        { model: { primary: nativeModel }, subagents: { model: defaultModel } },
+        targetAgentConfig,
+      ),
       targetAgentConfig,
     });
     assert(plan.status === "ok");
-    expect(plan).toMatchObject({ resolvedModel: `${provider}/${model}` });
-    expect(plan.initialSessionPatch).toMatchObject({
-      modelProvider: provider,
-      model,
-      modelOverrideSource: "auto",
+    expect(plan).toMatchObject({
+      resolvedModel: `${provider}/${model}`,
+      initialSessionPatch: { modelProvider: provider, model, modelOverrideSource: "auto" },
     });
     expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(
       hasOrigin ? provider : undefined,
