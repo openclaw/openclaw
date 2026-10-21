@@ -37,16 +37,10 @@ test.each([
   const sessionKey = "agent:main:dashboard:rejected-recovery";
   const sessionId = "rejected-recovery-session";
   const target = { agentId: "main", sessionKey, storePath };
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: 1_000,
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "rejected-cycle", revision: 1, chargedAttempts: 0 },
-      },
-    },
+  await writeSessionStore({ entries: { [sessionKey]: { sessionId, updatedAt: 1_000 } } });
+  await commitMainSessionRecovery({
+    target,
+    command: { kind: "mark_interrupted", cycleId: "rejected-cycle", now: 2_000 },
   });
   await seedSessionTranscript({
     ...target,
