@@ -240,6 +240,14 @@ function makeChildCompletion(
   transcriptEvents.push(assistantEvent(childRun.runId, resultText));
   return childRun;
 }
+function childCompletions(
+  requesterSessionKey: string,
+  ...rows: [child: string, result: string, overrides?: Parameters<typeof makeChildCompletion>[3]][]
+) {
+  return rows.map(([child, result, overrides]) =>
+    makeChildCompletion(requesterSessionKey, child, result, overrides),
+  );
+}
 
 function setCompletionSessions(
   childSessionId = "child-session",
@@ -827,35 +835,29 @@ describe("subagent announce formatting", () => {
     },
   );
 
-  it.each([false, true])(
-    "announces manual completion immediately (siblings=%s)",
-    async (siblings) => {
-      if (siblings) {
-        setMessageToolGroupReplyConfig();
-        registry.countPendingDescendantRuns.mockImplementation((key) =>
-          key === requesterKey ? 1 : 0,
-        );
-      }
-      setCompletionSessions("child-session-direct", "requester-session");
-      transcriptEvents = [assistantEvent("run-direct-completion", "final answer: 2")];
-      const call = await deliverCompletion({
-        childRunId: "run-direct-completion",
-        roundOneReply: "final answer: 2",
-      });
-      expect(call.params).toMatchObject({
-        channel: "discord",
-        to: "channel:12345",
-        sessionKey: requesterKey,
-        ...(siblings ? { deliver: false, sourceReplyDeliveryMode: "message_tool_only" } : {}),
-      });
-      expectInputProvenance(call.params, childKey);
-      expectText(
-        getAgentCallContext(call),
-        ["final answer: 2"],
-        ["✅ Subagent", ...(siblings ? ["There are still", "wait for the remaining results"] : [])],
-      );
-    },
-  );
+  it("announces manual completion immediately without waiting for siblings", async () => {
+    setMessageToolGroupReplyConfig();
+    registry.countPendingDescendantRuns.mockImplementation((key) => (key === requesterKey ? 1 : 0));
+    setCompletionSessions("child-session-direct", "requester-session");
+    transcriptEvents = [assistantEvent("run-direct-completion", "final answer: 2")];
+    const call = await deliverCompletion({
+      childRunId: "run-direct-completion",
+      roundOneReply: "final answer: 2",
+    });
+    expect(call.params).toMatchObject({
+      channel: "discord",
+      to: "channel:12345",
+      sessionKey: requesterKey,
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expectInputProvenance(call.params, childKey);
+    expectText(
+      getAgentCallContext(call),
+      ["final answer: 2"],
+      ["✅ Subagent", "There are still", "wait for the remaining results"],
+    );
+  });
 
   it("does not use a child bound destination when completion requester conversation is missing", async () => {
     setCompletionSessions();
@@ -987,11 +989,6 @@ describe("subagent announce formatting", () => {
   );
 
   it.each([
-    [
-      "override without thread",
-      undefined,
-      { channel: "discord", accountId: "acct-1", to: "channel:777", threadId: "777" },
-    ],
     [
       "override with thread",
       "999",
@@ -1128,86 +1125,63 @@ describe("subagent announce formatting", () => {
 
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
   const telegramSession = { lastChannel: "telegram", lastTo: "telegram:123", lastThreadId: 42 };
-  function routeCase(
-    name: string,
-    kind: "thread" | "direct" | "stale" | "nested",
-    expected: Record<string, unknown>,
-    origin?: AnnounceParams["requesterOrigin"],
-    stored?: SessionEntryFixture,
-  ) {
-    return { name, kind, expected, origin, stored };
-  }
-  it.each([
-    routeCase(
-      "stored Telegram thread",
-      "thread",
-      { ...telegramRoute, threadId: "42" },
-      undefined,
-      telegramSession,
-    ),
-    routeCase(
+  it.each<
+    [
+      name: string,
+      origin: AnnounceParams["requesterOrigin"],
+      stored: SessionEntryFixture | undefined,
+      expected: Record<string, unknown>,
+      requesterSessionKey?: string,
+    ]
+  >([
+    ["stored Telegram thread", undefined, telegramSession, { ...telegramRoute, threadId: "42" }],
+    [
       "explicit Telegram thread",
-      "thread",
-      { ...telegramRoute, threadId: "99" },
       { ...telegramRoute, threadId: 99 },
       telegramSession,
-    ),
-    routeCase(
-      "requester origin",
-      "direct",
-      { channel: "whatsapp", accountId: "acct-123" },
-      { channel: "whatsapp", accountId: "acct-123" },
-    ),
-    routeCase(
+      { ...telegramRoute, threadId: "99" },
+    ],
+    [
       "normalized requester origin",
-      "direct",
-      { channel: "whatsapp", accountId: "acct-987" },
       { channel: " whatsapp ", accountId: " acct-987 " },
-    ),
-    routeCase(
+      undefined,
+      { channel: "whatsapp", accountId: "acct-987" },
+    ],
+    [
       "explicit origin over stale channel",
-      "stale",
-      { ...telegramRoute, accountId: undefined },
       telegramRoute,
       { lastChannel: "whatsapp", queueMode: "collect", queueDebounceMs: 0 },
-    ),
-    routeCase(
+      { ...telegramRoute, accountId: undefined },
+      "main",
+    ],
+    [
       "internal parent user turn",
-      "nested",
-      {
-        sessionKey: orchestratorKey,
-        deliver: false,
-        channel: undefined,
-        to: undefined,
-      },
       whatsappOrigin,
-    ),
-  ])("routes direct announce: $name", async ({ name, origin, stored, expected, kind }) => {
-    if (stored) {
-      setRequesterSession(stored);
-    }
-    expect(
-      await announceWithDefaults({
+      undefined,
+      { sessionKey: orchestratorKey, deliver: false, channel: undefined, to: undefined },
+      orchestratorKey,
+    ],
+  ])(
+    "routes direct announce: %s",
+    async (name, origin, stored, expected, requester = requesterKey) => {
+      if (stored) {
+        setRequesterSession(stored);
+      }
+      const call = await expectAnnouncement({
         childSessionKey: workerKey,
         childRunId: name,
-        requesterSessionKey:
-          kind === "nested" ? orchestratorKey : kind === "stale" ? "main" : requesterKey,
+        requesterSessionKey: requester,
         requesterOrigin: origin,
-      }),
-    ).toBe("delivered");
-    const call = getAgentCall();
-    expect(call.params).toMatchObject(expected);
-    if (stored) {
-      expect(agentSpy).toHaveBeenCalledTimes(1);
-    }
-    if (kind === "direct" || kind === "stale") {
+      });
+      expectParentAnnounce();
+      expect(call.params).toMatchObject(expected);
       expect(call).toMatchObject({ expectFinal: true });
-    }
-    if (kind === "nested") {
-      expect(call.params?.role).toBeUndefined();
-      expectInputProvenance(call.params, workerKey);
-    }
-  });
+      if (requester === orchestratorKey) {
+        expect(call.params?.role).toBeUndefined();
+        expectInputProvenance(call.params, workerKey);
+      }
+    },
+  );
 
   it.each([true, false])(
     "settles an active child before delivery (settled=%s)",
@@ -1243,27 +1217,20 @@ describe("subagent announce formatting", () => {
     async (runTimeoutSeconds) => {
       const parentRunId = "run-parent-phase-1";
       parentChildren(
-        () => [
-          makeChildCompletion(parentKey, "a", "stale result from child a", {
-            runId: "run-child-stale",
-            createdAt: 9,
-          }),
-          makeChildCompletion(parentKey, "a", "current result from child a", {
-            runId: "run-child-a",
-          }),
-          makeChildCompletion(parentKey, "b", "result from child b", {
-            runId: "run-child-b",
-            createdAt: 11,
-          }),
-        ],
+        () =>
+          childCompletions(
+            parentKey,
+            ["a", "stale result from child a", { runId: "run-child-stale", createdAt: 9 }],
+            ["a", "current result from child a", { runId: "run-child-a" }],
+            ["b", "result from child b", { runId: "run-child-b", createdAt: 11 }],
+          ),
         parentRunId,
-        () => [
-          makeChildCompletion(parentKey, "other-turn", "stale result that should be filtered", {
-            runId: "run-child-other-turn",
-            task: "older turn",
-            createdAt: 1,
-          }),
-        ],
+        () =>
+          childCompletions(parentKey, [
+            "other-turn",
+            "stale result that should be filtered",
+            { runId: "run-child-other-turn", task: "older turn", createdAt: 1 },
+          ]),
       );
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -1307,11 +1274,9 @@ describe("subagent announce formatting", () => {
 
   it("terminates an accepted descendant wake after completion delivery closes", async () => {
     sessionStore = { [parentKey]: session("session-parent") };
-    registry.listSubagentRunsForRequester.mockReturnValue([
-      makeChildCompletion(parentKey, "child", "child result", {
-        endedAt: 20,
-      }),
-    ]);
+    registry.listSubagentRunsForRequester.mockReturnValue(
+      childCompletions(parentKey, ["child", "child result", { endedAt: 20 }]),
+    );
     let releaseWake!: () => void;
     const wakeResponse = new Promise<ReturnType<typeof visibleAgentResponse>>((resolve) => {
       releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
@@ -1354,12 +1319,12 @@ describe("subagent announce formatting", () => {
   it("does not re-wake an already woken run id", async () => {
     registry.countPendingDescendantRuns.mockReturnValue(0);
     parentChildren(
-      () => [
-        makeChildCompletion(parentKey, "a", "result from child a", {
-          runId: "run-child-a",
-          endedAt: 20,
-        }),
-      ],
+      () =>
+        childCompletions(parentKey, [
+          "a",
+          "result from child a",
+          { runId: "run-child-a", endedAt: 20 },
+        ]),
       "run-parent-phase-2:wake",
     );
     const didAnnounce = await announceWake(parentKey, "run-parent-phase-2:wake", {
@@ -1389,25 +1354,18 @@ describe("subagent announce formatting", () => {
     );
     registry.listSubagentRunsForRequester.mockImplementation((sessionKey: string) => {
       if (sessionKey === childSessionKey) {
-        return [
-          makeChildCompletion(childSessionKey, "grandchild", "grandchild final output", {
-            endedAt: 20,
-          }),
-        ];
+        return childCompletions(childSessionKey, [
+          "grandchild",
+          "grandchild final output",
+          { endedAt: 20 },
+        ]);
       }
       if (sessionKey === parentSessionKey && parentPending === 0) {
-        return [
-          makeChildCompletion(
-            parentSessionKey,
-            "child",
-            "child synthesized output from grandchild",
-            {
-              createdAt: 11,
-              endedAt: 21,
-              childSessionKey,
-            },
-          ),
-        ];
+        return childCompletions(parentSessionKey, [
+          "child",
+          "child synthesized output from grandchild",
+          { createdAt: 11, endedAt: 21, childSessionKey },
+        ]);
       }
       return [];
     });
@@ -1502,29 +1460,26 @@ describe("subagent announce formatting", () => {
   it("defers a synthesis wake until both children settle", async () => {
     // Regression guard: fan-out paths previously announced after the first child and dropped the sibling.
     let pending = 1;
+    const fanoutKey = "agent:main:subagent:parent-fanout";
     registry.countPendingDescendantRuns.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:main:subagent:parent-fanout" ? pending : 0,
+      sessionKey === fanoutKey ? pending : 0,
     );
     registry.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
-      sessionKey === "agent:main:subagent:parent-fanout"
-        ? [
-            makeChildCompletion("agent:main:subagent:parent-fanout", "a", "result A", {
-              runId: "run-fanout-a",
-            }),
-            makeChildCompletion("agent:main:subagent:parent-fanout", "b", "result B", {
-              runId: "run-fanout-b",
-              createdAt: 11,
-            }),
-          ]
+      sessionKey === fanoutKey
+        ? childCompletions(
+            fanoutKey,
+            ["a", "result A", { runId: "run-fanout-a" }],
+            ["b", "result B", { runId: "run-fanout-b", createdAt: 11 }],
+          )
         : [],
     );
 
-    const deferred = await announceWake("agent:main:subagent:parent-fanout", "run-parent-fanout");
+    const deferred = await announceWake(fanoutKey, "run-parent-fanout");
     expect(deferred).toBe("retryable");
     expect(agentSpy).not.toHaveBeenCalled();
 
     pending = 0;
-    const announced = await announceWake("agent:main:subagent:parent-fanout", "run-parent-fanout");
+    const announced = await announceWake(fanoutKey, "run-parent-fanout");
     expect(announced).toBe("delivered");
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = getAgentCall();

@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { expect } from "vitest";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -53,28 +52,23 @@ export function expectAgentCallFields(
   });
 }
 
-export type MockSubagentRun = {
-  runId: string;
-  childSessionKey: string;
-  requesterSessionKey: string;
-  requesterDisplayKey: string;
-  task: string;
-  cleanup: "keep" | "delete";
-  createdAt: number;
-  execution: {
-    endedAt?: number;
-    outcome?: {
-      status: "ok" | "timeout" | "error" | "unknown";
-      error?: string;
-    };
-  };
-  cleanupCompletedAt?: number;
-  label?: string;
-  completion?: {
-    required: boolean;
-    resultText?: string | null;
-    terminalReply?: AgentRunTerminalReplySnapshot;
-  };
+export type MockSubagentRun = Pick<
+  SubagentRunRecord,
+  | "runId"
+  | "childSessionKey"
+  | "requesterSessionKey"
+  | "requesterDisplayKey"
+  | "task"
+  | "cleanup"
+  | "createdAt"
+  | "cleanupCompletedAt"
+  | "label"
+> & {
+  execution: Pick<SubagentRunRecord["execution"], "endedAt" | "outcome">;
+  completion?: Pick<
+    NonNullable<SubagentRunRecord["completion"]>,
+    "required" | "resultText" | "terminalReply"
+  >;
 };
 
 export function publishAnnounceRunFixture(fixture: MockSubagentRun): SubagentRunRecord {

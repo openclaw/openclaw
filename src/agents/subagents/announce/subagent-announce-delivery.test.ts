@@ -1456,20 +1456,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     event?: NonNullable<Parameters<typeof taskCompletionEvents>[0]>,
   ];
   it.each<NoOutputCompletionCase>([
+    ["missing automatic receipt", silentResult, missingVisibleCompletion, "automatic"],
     [
-      "rejects missing automatic visible delivery",
-      silentResult,
-      missingVisibleCompletion,
-      "automatic",
-    ],
-    [
-      "blocks automatic replay after committed outbound side effects",
+      "committed side effects",
       { payloads: [], ...committedSessionSpawnEvidence },
       { ...missingVisibleCompletion, disposition: "permanent_failure" },
       "automatic",
     ],
     [
-      "fails error completions when parent silently skips the required message tool",
+      "failed child, silent parent",
       silentGatewayResult,
       {
         delivered: false,
@@ -1482,21 +1477,21 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     ],
     // These paired regressions distinguish the producer's absence fact from placeholder wording.
     [
-      "gates a reworded no-visible-result placeholder",
+      "reworded missing result",
       silentGatewayResult,
       missingVisibleCompletion,
       "queued",
       { result: "(no result yet; child still running)" },
     ],
     [
-      "does not gate a result that only reads like the placeholder",
+      "visible placeholder text",
       silentGatewayResult,
       { delivered: true, path: "direct" },
       "queued",
       { noVisibleResult: undefined },
     ],
     [
-      "rejects off-target messaging alone",
+      "off-target message",
       {
         payloads: [],
         didSendViaMessagingTool: true,
@@ -1580,32 +1575,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       evidence?: Record<string, unknown>,
     ]
   >([
+    ["legacy targetless delivery", { provider: "message" }, false],
+    ["wrong recipient", otherTarget, true],
+    ["targetless wrong provider", { provider: "slack" }, true],
+    ["wrong account", { ...requesterTarget, accountId: "acct-other" }, true],
     [
-      "accepts legacy targetless delivery on the requester provider",
-      { provider: "message" },
-      false,
-    ],
-    ["repairs a completion sent to another recipient", otherTarget, true],
-    ["repairs a targetless completion sent through another provider", { provider: "slack" }, true],
-    [
-      "repairs a completion sent through another requester account",
-      { ...requesterTarget, accountId: "acct-other" },
-      true,
-    ],
-    [
-      "preserves authoritative source delivery alongside an unrelated send",
+      "authoritative source receipt",
       otherTarget,
       false,
       { didDeliverSourceReplyViaMessageTool: true },
     ],
     [
-      "preserves targetless source media alongside an unrelated targeted send",
+      "targetless source media",
       { ...otherTarget, mediaUrls: ["/tmp/unrelated.mp3"] },
       false,
       { messagingToolSentMediaUrls: ["/tmp/current-source.mp3"] },
     ],
     [
-      "does not mistake an off-target attachment for targetless source media",
+      "off-target attachment",
       { ...otherTarget, mediaUrls: ["/tmp/off-target.mp3"] },
       true,
       { messagingToolSentMediaUrls: ["/tmp/off-target.mp3"] },

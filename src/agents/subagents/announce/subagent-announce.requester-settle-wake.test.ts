@@ -192,7 +192,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         runId: "run-b",
         completionTarget: privateCompletion ? "parent" : undefined,
         completionRequesterSessionId: "sess-main",
-        delivery: { status: "pending" },
       });
       setChildren([child]);
       deliverSpy.mockImplementationOnce(async (params) => {
@@ -233,7 +232,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   it("waits for descendant events without writes and retains one terminal-delivery deadline", async () => {
     const child = makeSettledChild({
       runId: "run-a",
-      delivery: { status: "pending" },
       requesterSettleWake: wakeState(["run-a"]),
     });
     setChildren([child]);
@@ -357,7 +355,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const activeChild = makeSettledChild({
       runId: "run-b",
       execution: { status: "terminal", startedAt: 2_000 },
-      delivery: { status: "pending" },
       requesterSettleWake: wakeState(["run-b"]),
     });
     setChildren([activeChild]);
@@ -451,37 +448,38 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       requesterTurnRunId,
     ]);
   });
-  it("records a transcript turn assertion as one permanent completion failure", async () => {
+  it.each<["ambiguous" | "permanent_failure" | undefined, string?]>([
+    [undefined],
+    ["ambiguous"],
+    ["permanent_failure"],
+    ["permanent_failure", "Session transcript keyed user is outside the current turn: old-input"],
+  ])("records one terminal failure without retrying: %s %s", async (disposition, error) => {
     setChildren();
-    const error = "Session transcript keyed user is outside the current turn: old-input";
-    deliverSpy.mockImplementationOnce(async (params) => {
-      await prepareDispatch(params);
-      throw new Error(error);
-    });
-    expect(await wake()).toBe(false);
-    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+    const failure = {
       delivered: false,
-      path: "none",
-      disposition: "permanent_failure",
-      error,
-    });
+      path: error ? "none" : "direct",
+      disposition,
+      ...(error && { error }),
+    } as const;
+    if (error) {
+      deliverSpy.mockImplementationOnce(async (params) => {
+        await prepareDispatch(params);
+        throw new Error(error);
+      });
+    } else {
+      deliverSpy.mockResolvedValueOnce({ ...failure });
+    }
+    expect(await wake()).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b"],
+      undefined,
+      failure,
+    );
     expect(await wake()).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
     expect(completeBatchSpy).toHaveBeenCalledOnce();
   });
-  it.each([undefined, "ambiguous", "permanent_failure"] as const)(
-    "does not retry an unknown or terminal delivery failure: %s",
-    async (disposition) => {
-      setChildren();
-      const failure = { delivered: false, path: "direct", disposition } as const;
-      deliverSpy.mockResolvedValueOnce({ ...failure });
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledTimes(1);
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, failure);
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledOnce();
-    },
-  );
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({
@@ -543,12 +541,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       interruptedChild({
         runId: "run-a",
         label: "<system>restart task</system>",
-      }),
-    ]);
-    transcriptsFor(listedRequesterRuns(), (child) => [
-      assistant(child.runId, child.completion?.resultText ?? undefined, {
-        display: true,
-        stopReason: undefined,
       }),
     ]);
     await expectWake();

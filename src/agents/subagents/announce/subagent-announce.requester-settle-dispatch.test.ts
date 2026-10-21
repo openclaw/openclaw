@@ -47,6 +47,15 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.r
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
+type Wake = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
+function dispatchFixture(child = settledChild()) {
+  registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+  const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+    child.requesterSettleWake = undefined;
+  });
+  return { child, completeBatch, params: wakeParams(child, completeBatch) };
+}
+
 function recoveryEvidence(
   runId: string,
   transcriptRunId: string,
@@ -94,7 +103,7 @@ describe("requester settle dispatch deadline", () => {
 
   it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
     const context = createContext();
-    const child = settledChild();
+    const { child, completeBatch, params } = dispatchFixture();
     child.completionTarget = "parent";
     child.completionRequesterSessionId = "requester-session";
     child.delivery = { status: "suspended", suspendedAt: 4_000, suspendedReason: "expiry" };
@@ -115,15 +124,10 @@ describe("requester settle dispatch deadline", () => {
       ),
     );
     loadRequester.mockResolvedValue(requester);
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     subagentRuns.set(child.runId, child);
     onTestFinished(() => {
       subagentRuns.delete(child.runId);
     });
-    const completeBatch = vi.fn(() => {
-      child.requesterSettleWake = undefined;
-    });
-    const params = wakeParams(child, completeBatch);
     const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
     startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
       acceptTurn({ controllerInput, preflight, io });
@@ -245,16 +249,11 @@ describe("requester settle dispatch deadline", () => {
       attemptCount: 2,
       batchRunIds: [child.runId],
     };
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    const { completeBatch, params } = dispatchFixture(child);
     const requester = useDirectDelivery(requesterSnapshot({}, requesterEntry));
     loadRequester.mockResolvedValue(requester);
-    const completeBatch = vi.fn(() => {
-      child.requesterSettleWake = undefined;
-    });
     expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
-    ).resolves.toBe(settled);
+    await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(settled);
     expect(startTurn).not.toHaveBeenCalled();
     expect(completeBatch).toHaveBeenCalledTimes(reconciled ? 1 : 0);
     if (reconciled) {
@@ -306,7 +305,7 @@ describe("requester settle dispatch deadline", () => {
         afterRequesterYield: afterRequesterYield ? true : undefined,
         rearmGeneration: 1,
       };
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const { completeBatch, params } = dispatchFixture(child);
       const append = vi.fn(() => true);
       const owner = {
         requesterAgentId: "main",
@@ -334,14 +333,6 @@ describe("requester settle dispatch deadline", () => {
         finalAssistantVisibleText: "consolidated final",
       } as const;
       deliver.mockResolvedValue(delivered);
-      const completeBatch = vi.fn<
-        Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
-      >((batch) => {
-        for (const entry of batch) {
-          entry.requesterSettleWake = undefined;
-        }
-      });
-      const params = { ...wakeParams(child, completeBatch), requesterSessionKey };
 
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(true);
       expect(deliver).toHaveBeenCalledWith(
@@ -430,13 +421,8 @@ describe("requester settle dispatch deadline", () => {
     async (failure) => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
-      const child = settledChild();
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const { child, completeBatch, params } = dispatchFixture();
       const initialWake = structuredClone(child.requesterSettleWake);
-      const completeBatch = vi.fn(() => {
-        child.requesterSettleWake = undefined;
-      });
-      const params = wakeParams(child, completeBatch);
       useDirectDelivery();
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
         if (failure === "admitted") {
