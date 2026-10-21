@@ -22,6 +22,26 @@ const configFor = (
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
   research: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string] = acpAgent,
 ) => ({ agents: { defaults, entries: { research } } });
+function expectModelPlan(
+  plan: Awaited<ReturnType<typeof planFor>>,
+  provider: string,
+  model: string,
+  source: "user" | "auto",
+  hasOrigin = true,
+) {
+  assert(plan.status === "ok");
+  expect(plan).toMatchObject({
+    resolvedModel: `${provider}/${model}`,
+    modelApplied: true,
+    initialSessionPatch: { modelProvider: provider, model, modelOverrideSource: source },
+  });
+  expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(
+    hasOrigin ? provider : undefined,
+  );
+  expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(
+    hasOrigin ? model : undefined,
+  );
+}
 
 it("threads explicit fast mode into the initial child session patch", async () => {
   const plan = await planFor({ fastMode: "ultrafast" });
@@ -33,18 +53,7 @@ it("applies an explicit native model instead of ACP defaults", async () => {
     targetAgentConfig: acpAgent,
     modelOverride: "openrouter/meta-llama/llama-3.3-70b:free",
   });
-  expect(plan).toMatchObject({
-    status: "ok",
-    resolvedModel: "openrouter/meta-llama/llama-3.3-70b:free",
-    modelApplied: true,
-    initialSessionPatch: {
-      model: "meta-llama/llama-3.3-70b:free",
-      modelOverrideSource: "user",
-    },
-  });
-  assert(plan.status === "ok");
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBeUndefined();
-  expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBeUndefined();
+  expectModelPlan(plan, "openrouter", "meta-llama/llama-3.3-70b:free", "user", false);
 });
 
 it("rejects invalid thinking before preparing a model", async () => {
@@ -56,20 +65,14 @@ it("rejects invalid thinking before preparing a model", async () => {
 });
 
 it("uses the target default provider for a bare configured subagent model", async () => {
-  expect(
+  expectModelPlan(
     await planFor({
       cfg: configFor({ model: { primary: "openai/gpt-5.5" }, subagents: { model: "gpt-5.4" } }, {}),
     }),
-  ).toMatchObject({
-    status: "ok",
-    resolvedModel: "openai/gpt-5.4",
-    initialSessionPatch: {
-      model: "gpt-5.4",
-      modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-5.4",
-    },
-  });
+    "openai",
+    "gpt-5.4",
+    "auto",
+  );
 });
 
 it.each([
@@ -87,17 +90,7 @@ it.each([
       ),
       targetAgentConfig,
     });
-    assert(plan.status === "ok");
-    expect(plan).toMatchObject({
-      resolvedModel: `${provider}/${model}`,
-      initialSessionPatch: { modelProvider: provider, model, modelOverrideSource: "auto" },
-    });
-    expect(plan.initialSessionPatch.modelOverrideFallbackOriginProvider).toBe(
-      hasOrigin ? provider : undefined,
-    );
-    expect(plan.initialSessionPatch.modelOverrideFallbackOriginModel).toBe(
-      hasOrigin ? model : undefined,
-    );
+    expectModelPlan(plan, provider, model, "auto", hasOrigin);
   },
 );
 it.each([

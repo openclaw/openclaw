@@ -116,50 +116,39 @@ async function startContract(
 describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => {
   afterEach(resetOpenClawOwnedToolHooks);
 
-  it("preserves partially adjusted before_tool_call params through execution and after_tool_call", async () => {
-    const adjustedParams = { mode: "safe" };
-    const mergedParams = { command: "pwd", mode: "safe" };
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
-    const execute = vi.fn(async () => textToolResult("done", { ok: true }));
-    const { toolCallId, finish, expectAfter } = await startContract(
-      "exec",
-      execute,
-      { command: "pwd" },
-      "contract",
-    );
-    await finish();
-
-    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await expectAfter(
-      hooks,
-      {
-        params: mergedParams,
-        result: { content: [{ type: "text", text: "done" }], details: { ok: true } },
-      },
-      session,
-    );
-  });
-
-  it("reports embedded agent dynamic tool execution errors through after_tool_call", async () => {
-    const adjustedParams = { timeoutSec: 1 };
-    const mergedParams = { command: "false", timeoutSec: 1 };
-    const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
-    const execute = vi.fn(async () => {
-      throw new Error("tool failed");
-    });
-    const { result, toolCallId, finish, expectAfter } = await startContract(
-      "exec",
-      execute,
-      { command: "false" },
-      "error",
-    );
-    const resultDetails = (result as { details?: Record<string, unknown> }).details;
-    expect(resultDetails).toMatchObject({ status: "error", error: "tool failed" });
-    await finish(true);
-
-    expect(execute).toHaveBeenCalledWith(toolCallId, mergedParams, undefined, undefined);
-    await expectAfter(hooks, { params: mergedParams, error: "tool failed" });
-  });
+  it.each([
+    { outcome: "success", command: "pwd", adjustedParams: { mode: "safe" }, fails: false },
+    { outcome: "error", command: "false", adjustedParams: { timeoutSec: 1 }, fails: true },
+  ])(
+    "preserves adjusted params through execution and after_tool_call on $outcome",
+    async ({ command, adjustedParams, fails }) => {
+      const params = { command, ...adjustedParams };
+      const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
+      const expected = { content: [{ type: "text", text: "done" }], details: { ok: true } };
+      const execute = vi.fn(async () => {
+        if (fails) {
+          throw new Error("tool failed");
+        }
+        return textToolResult("done", { ok: true });
+      });
+      const { result, toolCallId, finish, expectAfter } = await startContract(
+        "exec",
+        execute,
+        { command },
+        fails ? "error" : "contract",
+      );
+      if (fails) {
+        expect(result).toMatchObject({ details: { status: "error", error: "tool failed" } });
+      }
+      await finish(fails);
+      expect(execute).toHaveBeenCalledWith(toolCallId, params, undefined, undefined);
+      await expectAfter(
+        hooks,
+        { params, ...(fails ? { error: "tool failed" } : { result: expected }) },
+        fails ? {} : session,
+      );
+    },
+  );
 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
