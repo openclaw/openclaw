@@ -63,7 +63,9 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
               await waitForGatewayClient(this.context.gateway, wait.signal);
             }
             // Let hello and its subscribers finish before committing cached rows.
-            await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, 0);
+            });
           }
           if (!isCurrent()) {
             return hydration.complete?.();
