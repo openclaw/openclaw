@@ -90,7 +90,34 @@ describe("web_search normalized output security", () => {
     );
     expect(normalized.truncated).toBe(true);
     expect(untrustedContentChars).toBeLessThanOrEqual(20_000);
-    expect(JSON.stringify(normalized).length).toBeLessThan(22_000);
+    // Every row keeps a title share, and each kept field carries its own envelope.
+    expect(JSON.stringify(normalized).length).toBeLessThan(23_000);
+  });
+
+  it("keeps later results whole when early pages are long and trims only the longest", () => {
+    const snippetLengths = [12_000, 9_000, 100, 100, 100, 100, 100, 100, 100, 100];
+    const normalized = normalize({
+      results: snippetLengths.map((length, index) => ({
+        title: `result ${index}`,
+        url: `https://example.com/${index}`,
+        snippet: "s".repeat(length),
+        siteName: "example.com",
+      })),
+    });
+
+    assertOutputKind(normalized, "results");
+    expect(normalized.truncated).toBe(true);
+    const kept = normalized.results.map((row) => [
+      stripWrapMarkers(row.title),
+      stripWrapMarkers(row.siteName ?? ""),
+      stripWrapMarkers(row.snippet ?? "").length,
+    ]);
+    expect(kept.slice(1)).toEqual(
+      snippetLengths
+        .slice(1)
+        .map((length, index) => [`result ${index + 1}`, "example.com", length]),
+    );
+    expect(kept[0]?.[2]).toBeGreaterThan(9_000);
   });
 
   it("charges final sanitized answer text when short special tokens expand", () => {

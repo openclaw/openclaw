@@ -280,7 +280,7 @@ export function normalizeWebSearchOutput(params: {
       const url = toHttpUrl(row.url as string) as string;
       return consumeUrlBudget(url, budget) ? [{ row, url }] : [];
     });
-    const results = boundedRows.map(({ row, url }) => {
+    const prepared = boundedRows.map(({ row, url }) => {
       const snippet =
         typeof row.snippet === "string"
           ? row.snippet
@@ -297,21 +297,43 @@ export function normalizeWebSearchOutput(params: {
           published = row.published;
         }
       }
-      const normalizedRow: Static<typeof WebSearchResultSchema> = {
-        title: wrapProse(row.title as string, budget),
-        url,
-      };
-      if (snippet !== undefined) {
-        normalizedRow.snippet = wrapProse(snippet, budget);
-      }
-      if (published !== undefined) {
-        normalizedRow.published = published;
-      }
-      if (typeof row.siteName === "string") {
-        normalizedRow.siteName = wrapProse(row.siteName, budget);
-      }
-      return normalizedRow;
+      const title = row.title as string;
+      const siteName = typeof row.siteName === "string" ? row.siteName : undefined;
+      const proseChars = [title, snippet, siteName].reduce(
+        (total, value) =>
+          total + (value === undefined ? 0 : unwrapWebSearchOutputText(value).length),
+        0,
+      );
+      return { url, title, snippet, published, siteName, proseChars };
     });
+    // Charge rows from the least prose to the most, each within an equal share of
+    // what is left: rows that fit keep everything and only the longest are trimmed,
+    // so one long page cannot blank the results after it.
+    const order = prepared
+      .map((entry, index) => ({ entry, index }))
+      .toSorted((a, b) => a.entry.proseChars - b.entry.proseChars);
+    const results: Array<Static<typeof WebSearchResultSchema>> = [];
+    for (const [position, { entry, index }] of order.entries()) {
+      const share = Math.floor(budget.remaining / (order.length - position));
+      const rowBudget: WebSearchOutputBudget = { remaining: share, truncated: false };
+      // The title and site name are charged before the snippet, which takes the rest.
+      const title = wrapProse(entry.title, rowBudget);
+      const siteName =
+        entry.siteName === undefined ? undefined : wrapProse(entry.siteName, rowBudget);
+      const normalizedRow: Static<typeof WebSearchResultSchema> = { title, url: entry.url };
+      if (entry.snippet !== undefined) {
+        normalizedRow.snippet = wrapProse(entry.snippet, rowBudget);
+      }
+      if (entry.published !== undefined) {
+        normalizedRow.published = entry.published;
+      }
+      if (siteName !== undefined) {
+        normalizedRow.siteName = siteName;
+      }
+      budget.remaining -= share - rowBudget.remaining;
+      budget.truncated ||= rowBudget.truncated;
+      results[index] = normalizedRow;
+    }
     const rowsWereReduced = rows.length !== results.length;
     return {
       kind: "results",
