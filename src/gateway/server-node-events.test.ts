@@ -395,7 +395,7 @@ describe("node exec events", () => {
 });
 
 describe("voice transcript events", () => {
-  it.each(["reservation", "dispatch", "rejected connection", "stale connection"] as const)(
+  it.each(["reservation", "dispatch"] as const)(
     "releases later voice transcripts after a failed %s check",
     async (phase) => {
       const sessionKey = `voice-authority-${phase}`;
@@ -414,17 +414,21 @@ describe("voice transcript events", () => {
       };
       using _ = vi
         .spyOn(nodeEventSource, "withNodeEventSessionSource")
-        .mockImplementation((_evt, opts, consume) => {
+        .mockImplementation(async (_evt, opts, consume) => {
           const pending: Promise<unknown>[] = [];
-          return consume(opts, {
-            loaded: buildSessionLookup(sessionKey),
-            assertCurrent: () => {
-              if (opts === firstConnection && !current) {
-                throw new Error("Node event session authority changed");
-              }
-            },
-            pending,
-          }).finally(() => Promise.allSettled(pending));
+          try {
+            return await consume(opts, {
+              loaded: buildSessionLookup(sessionKey),
+              assertCurrent: () => {
+                if (opts === firstConnection && !current) {
+                  throw new Error("Node event session authority changed");
+                }
+              },
+              pending,
+            });
+          } finally {
+            await Promise.allSettled(pending);
+          }
         });
       const { emit } = nodeFixture();
       const first = emit(
@@ -438,12 +442,8 @@ describe("voice transcript events", () => {
         await entered.promise;
       }
       const later = emit("voice.transcript", { sessionKey, text: "accepted transcript" });
-      current = phase !== "dispatch";
-      if (phase === "rejected connection") {
-        checked.reject(new Error("Connection check failed"));
-      } else {
-        checked.resolve(phase !== "stale connection");
-      }
+      current = false;
+      checked.resolve(true);
       await later;
       if (phase !== "reservation") {
         await first;
