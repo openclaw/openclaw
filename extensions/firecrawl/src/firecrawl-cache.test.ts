@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { createServer, type Server } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -20,22 +21,15 @@ describe("Firecrawl search cache", () => {
       authorizations.push(authorization);
       void Promise.resolve(resolveCredentialBody?.(authorization) ?? body).then(
         (content) => {
+          const data = [{ url: `https://example.com/${content}`, title: content }];
           response.writeHead(200, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              success: true,
-              data: [{ url: `https://example.com/${content}`, title: content }],
-            }),
-          );
+          response.end(JSON.stringify({ success: true, data }));
         },
-        (error: unknown) => {
-          response.destroy(new Error("credential response failed", { cause: error }));
-        },
+        (error: unknown) =>
+          response.destroy(new Error("credential response failed", { cause: error })),
       );
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    await once(server.listen(0, "127.0.0.1"), "listening");
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected a loopback TCP address");
@@ -111,7 +105,6 @@ describe("Firecrawl search cache", () => {
       expectResult(await search(query, 0), freshBody, freshBody === "fresh" ? 2 : 3, false);
     }
 
-    // Disabled requests must neither replace an existing entry nor populate an empty cache.
     body = "reenabled";
     expectResult(
       await search(query, 15),
@@ -125,15 +118,14 @@ describe("Firecrawl search cache", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const query = "shorter cache TTL";
     await search(query, 15);
-    now += 59_999;
-    expectResult(await search(query, 1), "original", 1, true);
-
-    now += 1;
-    body = "fresh";
-    expectResult(await search(query, 1), "fresh", 2, false);
-
-    now += 60_001;
-    body = "expired";
-    expectResult(await search(query, 15), "expired", 3, false);
+    for (const [elapsed, ttl, content, calls, cached] of [
+      [59_999, 1, "original", 1, true],
+      [1, 1, "fresh", 2, false],
+      [60_001, 15, "expired", 3, false],
+    ] as const) {
+      now += elapsed;
+      body = content;
+      expectResult(await search(query, ttl), content, calls, cached);
+    }
   });
 });
