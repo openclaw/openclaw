@@ -578,7 +578,11 @@ export function enqueueSessionEventForHost(
             onTerminal: async (runId, outcome, deliveryEvidence) => {
               if (outcome !== "completed") {
                 failure ??=
-                  deliveryEvidence?.meta?.error?.message || `Session event execution ${outcome}`;
+                  deliveryEvidence?.meta?.error?.message ||
+                  deliveryEvidence?.payloads?.find(
+                    (payload) => payload.isError && payload.text?.trim(),
+                  )?.text ||
+                  `Session event execution ${outcome}`;
               }
               await prepareCurrent();
               if (options.scheduledAutomation) {

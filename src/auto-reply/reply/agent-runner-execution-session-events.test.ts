@@ -414,6 +414,12 @@ describe("ordinary session event execution", () => {
           expect(providerWork).not.toHaveBeenCalled();
           expect(event.onStarted).not.toHaveBeenCalled();
           expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(result.runId, "failed", {
+            payloads: [
+              {
+                isError: true,
+                text: "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+              },
+            ],
             resolved: {
               provider: runtime === "cli" ? "claude-cli" : "anthropic",
               model: runtime === "cli" ? "claude-opus-4-6" : "claude",

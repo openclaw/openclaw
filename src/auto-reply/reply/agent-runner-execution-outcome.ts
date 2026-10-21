@@ -103,7 +103,7 @@ async function recordSessionEventTerminalOutcome(
     result?.outcome.kind === "settled"
       ? { ...result.outcome.result, resolved: result.outcome.resolved }
       : result?.outcome.kind === "rejected"
-        ? { resolved: result.outcome.resolved }
+        ? { payloads: [result.outcome.payload], resolved: result.outcome.resolved }
         : undefined,
   );
 }

@@ -521,7 +521,9 @@ it.for([
             });
           }
           if (scenario === "scheduled-subagent-locked") {
-            expect(completedOutcome.error).toBe("Session event execution failed");
+            expect(completedOutcome.error).toBe(
+              "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+            );
             expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
               provider: "mock-openai",
               model: "gpt-5.6-luna",
@@ -705,8 +707,8 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
   );
 });
 
-it.for(["transport", "agent"] as const)(
-  "records a scheduled %s failure with its cause and usage",
+it.for(["transport", "agent", "context-overflow"] as const)(
+  "records a scheduled %s failure with its cause and available usage",
   async (failureKind, { signal }) => {
     await withOpenClawTestState(
       { label: "session-event-delivery", env: { OPENCLAW_TEST_FAST: "0" } },
@@ -732,6 +734,18 @@ it.for(["transport", "agent"] as const)(
         });
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
           await startRun(params);
+          if (failureKind === "context-overflow") {
+            return {
+              payloads: [],
+              meta: {
+                error: {
+                  kind: "context_overflow",
+                  message:
+                    "400 The prompt is too long: 203557, model maximum context length: 196607",
+                },
+              },
+            };
+          }
           return {
             payloads: [{ text: "The report is complete." }],
             meta: {
@@ -767,24 +781,40 @@ it.for(["transport", "agent"] as const)(
           },
         });
         try {
-          await expect(receipt.settled).resolves.toMatchObject({
-            status: failureKind === "agent" ? "failed" : "completed",
+          const outcome = await receipt.settled;
+          expect(outcome, outcome.error).toMatchObject({
+            status: failureKind === "transport" ? "completed" : "failed",
             executionStarted: true,
             delivered: false,
-            ...(failureKind === "agent"
-              ? { error: "Provider retry limit reached", deliveryAttempted: false }
-              : { deliveryAttempted: true, deliveryError: "transport unavailable" }),
-            automationResult: {
-              provider: "openai",
-              model: "gpt-5.6-sol",
-              usage: {
-                input_tokens: 20,
-                output_tokens: 5,
-                cache_read_tokens: 10,
-                total_tokens: 35,
-              },
-            },
+            ...(failureKind === "transport"
+              ? { deliveryAttempted: true, deliveryError: "transport unavailable" }
+              : {
+                  error:
+                    failureKind === "agent"
+                      ? "Provider retry limit reached"
+                      : expect.stringContaining("Auto-compaction could not recover this turn"),
+                  deliveryAttempted: false,
+                }),
+            ...(failureKind !== "context-overflow"
+              ? {
+                  automationResult: {
+                    provider: "openai",
+                    model: "gpt-5.6-sol",
+                    usage: {
+                      input_tokens: 20,
+                      output_tokens: 5,
+                      cache_read_tokens: 10,
+                      total_tokens: 35,
+                    },
+                  },
+                }
+              : {}),
           });
+          if (failureKind === "context-overflow") {
+            expect(outcome.error).toContain("use /compact");
+            expect(outcome.error).toContain("use /new");
+            expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+          }
           if (failureKind === "transport") {
             expect(routeReply).toHaveBeenCalled();
           } else {
