@@ -77,6 +77,7 @@ export function resolveGatewayRecoverySchemaPaths(
     resolveOpenClawStateSqlitePath(env),
     resolveClientCredentialStorePath(env),
     resolveDaemonRuntimePinStorePath(env),
+    path.join(resolveStateDir(env), "agents", "main", "agent", "openclaw-agent.sqlite"),
     ...[env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
       directory?.trim()
         ? [path.join(resolveUserPath(directory, env), "openclaw-agent.sqlite")]

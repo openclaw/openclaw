@@ -22,6 +22,9 @@ describe("migrated Gateway recovery schema ownership", () => {
     const paths = resolveGatewayRecoverySchemaPaths({ OPENCLAW_STATE_DIR: stateDir }, inventory);
 
     expect(paths).toContain(agentPath);
+    expect(paths).toContain(
+      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    );
     expect(paths).not.toContain(pluginPath);
   });
 });
