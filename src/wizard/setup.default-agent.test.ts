@@ -1,12 +1,12 @@
 // Classic setup tests keep every workspace-owned effect on the configured default agent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "./prompts.js";
+import { agentConfig, createEmptyWizardPrompter } from "./setup.credentials.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   readAuthority: vi.fn(),
@@ -118,15 +118,7 @@ vi.mock("../plugins/status.js", () => ({
 import { runSetupWizard } from "./setup.js";
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-const prompter = createWizardPrompter({
-  intro: vi.fn(),
-  outro: vi.fn(),
-  note: vi.fn(),
-  select: vi.fn(),
-  multiselect: vi.fn(),
-  text: vi.fn(),
-  confirm: vi.fn(),
-});
+const prompter = createEmptyWizardPrompter();
 const unchangedConfig = async (config: OpenClawConfig) => config;
 const unchangedParams = async ({ config }: { config: OpenClawConfig }) => config;
 const snapshot = (config: OpenClawConfig) => ({
@@ -174,13 +166,8 @@ describe("runSetupWizard default-agent ownership", () => {
         persistAuthProfiles: async () => {},
       }));
     const config = {
+      ...agentConfig(),
       wizard: { securityAcknowledgedAt: "2026-07-01T00:00:00.000Z" },
-      agents: {
-        defaults: { workspace: "/tmp/global-workspace" },
-        entries: {
-          ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" },
-        },
-      },
     } satisfies OpenClawConfig;
     mocks.readSnapshot.mockResolvedValue(snapshot(config));
     mocks.writeConfig.mockImplementation(async (nextConfig: OpenClawConfig) => ({

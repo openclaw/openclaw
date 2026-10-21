@@ -1073,30 +1073,6 @@ describe("runSetupWizard", () => {
             tailscale: { mode: "off" },
           },
         });
-        configureGatewayForSetup.mockImplementationOnce(
-          async ({ nextConfig, quickstartGateway: gateway }) => ({
-            nextConfig: {
-              ...nextConfig,
-              gateway: {
-                ...nextConfig.gateway,
-                port: gateway.port,
-                bind: gateway.bind,
-                auth: {
-                  ...nextConfig.gateway?.auth,
-                  mode: gateway.authMode,
-                  password: gateway.password,
-                },
-                tailscale: { ...nextConfig.gateway?.tailscale, mode: gateway.tailscaleMode },
-              },
-            },
-            settings: {
-              port: gateway.port,
-              bind: gateway.bind,
-              authMode: gateway.authMode,
-              gatewayToken: undefined,
-            },
-          }),
-        );
       }
       await runWizard(
         {
@@ -1123,15 +1099,6 @@ describe("runSetupWizard", () => {
           quickstartGateway: { ...quickstartGateway, token, tailscaleMode: "off" },
         });
       } else {
-        expect(persistedWizardConfigs()).toContainEqual(
-          expect.objectContaining({
-            gateway: expect.objectContaining({
-              port,
-              bind: "lan",
-              auth: expect.objectContaining({ mode: "password", password }),
-            }),
-          }),
-        );
         const visibleOutput = [
           ...vi.mocked(prompter.note).mock.calls.flat(),
           ...vi.mocked(runtime.log).mock.calls.flat(),

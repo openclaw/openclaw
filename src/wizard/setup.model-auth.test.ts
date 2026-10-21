@@ -15,7 +15,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "./prompts.js";
-import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { agentConfig, authCandidate as candidate } from "./setup.credentials.test-support.js";
+import { runSetupModelAuthStep } from "./setup.model-auth.js";
 import {
   requestTelemetryConsent,
   requireRiskAcknowledgement,
@@ -78,13 +79,6 @@ function runStep(params: Partial<Parameters<typeof runSetupModelAuthStep>[0]> = 
   });
 }
 
-function candidate(
-  config: OpenClawConfig,
-  authProfiles: SetupModelAuthCandidate["authProfiles"] = [],
-) {
-  return { config, authProfiles, persistAuthProfiles: vi.fn(async () => {}) };
-}
-
 function expectCall(mock: unknown, fields: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
@@ -98,16 +92,6 @@ const managedModels: OpenClawConfig["models"] = {
     },
   },
 };
-
-function agentConfig(agents: NonNullable<OpenClawConfig["agents"]> = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { workspace: "/tmp/global-workspace" },
-      entries: { ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" } },
-      ...agents,
-    },
-  };
-}
 
 describe("runSetupModelAuthStep", () => {
   beforeEach(() => {
@@ -417,19 +401,17 @@ describe("resolveQuickstartGatewayDefaults", () => {
   });
 
   it("aligns credential-only overrides while keeping an explicit auth mode authoritative", () => {
-    const mode = (opts: Parameters<typeof gatewayDefaults>[1], config = storedConfig) =>
-      gatewayDefaults(config, opts).authMode;
-    expect(mode({ gatewayPassword: "explicit-password" })).toBe("password");
-    expect(
-      mode(
-        { gatewayToken: "explicit-token" },
-        {
-          gateway: { auth: { mode: "password", password: "stored-password" } },
-        },
-      ),
-    ).toBe("token");
-    expect(mode({ gatewayAuth: "password", gatewayToken: "explicit-token" })).toBe("password");
-    expect(mode({ gatewayAuth: "token", gatewayPassword: "explicit-password" })).toBe("token");
+    const passwordConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "stored-password" } },
+    };
+    for (const [opts, expected, config = storedConfig] of [
+      [{ gatewayPassword: "explicit-password" }, "password"],
+      [{ gatewayToken: "explicit-token" }, "token", passwordConfig],
+      [{ gatewayAuth: "password", gatewayToken: "explicit-token" }, "password"],
+      [{ gatewayAuth: "token", gatewayPassword: "explicit-password" }, "token"],
+    ] as const) {
+      expect(gatewayDefaults(config, opts).authMode).toBe(expected);
+    }
   });
 
   it("maps an explicit env-backed token to the canonical SecretRef", () => {

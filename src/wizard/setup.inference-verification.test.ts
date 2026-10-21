@@ -4,7 +4,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
   readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
@@ -16,6 +15,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SetupInferenceConfigTarget } from "../system-agent/setup-inference-transition.js";
 import { verifySetupInferenceConfig } from "../system-agent/setup-inference-turn.js";
+import { authCandidate, createEmptyWizardPrompter } from "./setup.credentials.test-support.js";
 import type { SetupModelAuthCandidate } from "./setup.model-auth.js";
 
 const mocks = vi.hoisted(() => ({
@@ -39,20 +39,8 @@ type VerificationOptions = Partial<
   Omit<VerificationParams, "config" | "configTarget" | "runtime" | "prompter">
 >;
 
-function authCandidate(config: OpenClawConfig) {
-  return { config, authProfiles: [], persistAuthProfiles: vi.fn(async () => {}) };
-}
-
 function verificationFixture(config: OpenClawConfig, options: VerificationOptions = {}) {
-  const prompter = createWizardPrompter({
-    intro: vi.fn(),
-    outro: vi.fn(),
-    note: vi.fn(),
-    confirm: vi.fn(),
-    select: vi.fn(),
-    multiselect: vi.fn(),
-    text: vi.fn(),
-  });
+  const prompter = createEmptyWizardPrompter();
   const writeConfig = vi.fn(async (next: OpenClawConfig) => next);
   let current = structuredClone(config);
   const target: SetupInferenceConfigTarget = {
