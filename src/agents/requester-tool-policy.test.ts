@@ -582,26 +582,19 @@ describe("resolveRequesterToolPolicies", () => {
     return { requesterSessionKey, parentChildSessionKey, leafSessionKey };
   }
 
-  it("walks nested lineage to the projection captured from the target requester", async () => {
-    const { requesterSessionKey, leafSessionKey } = await writeNestedLineage();
+  it.each([
+    ["requester", ["exec"]],
+    ["parent-child resume envelope", ["exec", "read"]],
+  ] as const)("restores the nested completion projection for %s", async (target, deny) => {
+    const { requesterSessionKey, parentChildSessionKey, leafSessionKey } =
+      await writeNestedLineage();
+    const sessionKey = target === "requester" ? requesterSessionKey : parentChildSessionKey;
     const result = await resolvePolicy({
-      sessionKey: requesterSessionKey,
-      ...completionHandoffFacts(leafSessionKey, requesterSessionKey),
+      sessionKey,
+      ...(target === "requester" ? {} : { subagentSessionKey: parentChildSessionKey }),
+      ...completionHandoffFacts(leafSessionKey, sessionKey),
     });
-
-    expectInherited(result, "completion-handoff", { deny: ["exec"] });
-  });
-
-  it("prioritizes a verified nested completion over the target subagent resume envelope", async () => {
-    const { parentChildSessionKey, leafSessionKey } = await writeNestedLineage();
-
-    const result = await resolvePolicy({
-      sessionKey: parentChildSessionKey,
-      subagentSessionKey: parentChildSessionKey,
-      ...completionHandoffFacts(leafSessionKey, parentChildSessionKey),
-    });
-
-    expectInherited(result, "completion-handoff", { deny: ["exec", "read"] });
+    expectInherited(result, "completion-handoff", { deny: [...deny] });
   });
 
   it("fails closed for untrusted or mismatched completion handoffs", async () => {

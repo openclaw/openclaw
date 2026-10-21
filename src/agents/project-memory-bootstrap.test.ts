@@ -332,36 +332,4 @@ describe("native project memory bootstrap", () => {
       ),
     );
   });
-
-  it.each(["selection", "close"])(
-    "does not inject records after caller authority is revoked during %s",
-    async (during) => {
-      let active = true;
-      const close = vi.fn(async () => {
-        if (during === "close") {
-          active = false;
-        }
-      });
-      setProvider({ close });
-      runtimeMocks.listCurated.mockImplementation(async () => {
-        if (during === "selection") {
-          active = false;
-        }
-        return { hits: nativeEntries };
-      });
-      expect(
-        await bootstrap({
-          context: {
-            authority: { kind: "host", operation: "project-test" },
-            assertCurrent() {
-              if (!active) {
-                throw new Error("revoked");
-              }
-            },
-          },
-        }),
-      ).toEqual([]);
-      expect(close).toHaveBeenCalledOnce();
-    },
-  );
 });

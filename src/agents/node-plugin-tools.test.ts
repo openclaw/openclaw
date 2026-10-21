@@ -83,7 +83,6 @@ function respond(payload: unknown) {
 }
 
 const textBlock = (text: string) => ({ type: "text", text });
-const imageBlock = (data: string) => ({ type: "image", data, mimeType: "image/png" });
 
 function richMcpContent() {
   return [
@@ -317,62 +316,6 @@ describe("createNodePluginTools", () => {
     );
   });
 
-  it("wraps node-host MCP arguments and maps MCP content", async () => {
-    connectTool(docsTool("search", "Search node-local docs"));
-    respond({
-      content: [
-        {
-          type: "image",
-          data: "aW1hZ2UtMQ==",
-          mimeType: "image/png",
-          annotations: { audience: ["assistant"] },
-          _meta: { detailCanary: "must-not-leak" },
-        },
-        textBlock("first"),
-        textBlock("second"),
-        imageBlock("aW1hZ2UtMg=="),
-        { type: "image", data: 42, mimeType: "image/png" },
-        { type: "audio", data: "audio-canary", mimeType: "audio/wav" },
-      ],
-      structuredContent: { hits: 2 },
-      isError: true,
-    });
-
-    const tool = firstTool();
-    const result = await tool.execute("call-mcp", { query: "needle" });
-
-    expectInvocation(
-      {
-        nodeId: "node-1",
-        command: "mcp.tools.call.v1",
-        params: { server: "docs", tool: "search", arguments: { query: "needle" } },
-        timeoutMs: 120_000,
-        idempotencyKey: "call-mcp",
-      },
-      { mcp: true },
-    );
-    expect(tool.executionMode).toBe("sequential");
-    expect(tool.resultContentSource).toBe("network");
-    expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
-    expect(result.content).toEqual([
-      textBlock('structuredContent:\n{\n  "hits": 2\n}'),
-      imageBlock("aW1hZ2UtMQ=="),
-      textBlock("first"),
-      textBlock("second"),
-      imageBlock("aW1hZ2UtMg=="),
-      textBlock('{"type":"image","data":42,"mimeType":"image/png"}'),
-      textBlock("[audio audio/wav]"),
-    ]);
-    expect(result.details).toEqual({
-      mcpServer: "docs",
-      mcpTool: "search",
-      structuredContent: { hits: 2 },
-      status: "error",
-    });
-    expect(JSON.stringify(result.details)).not.toContain("canary");
-    expect(isToolResultError(result)).toBe(true);
-  });
-
   it("snapshots successful node MCP text once", async () => {
     const text = "ordinary report line\n".repeat(25_000);
     const payload = CallToolResultSchema.parse({
@@ -380,6 +323,13 @@ describe("createNodePluginTools", () => {
         { type: "text", text },
         { type: "resource_link", uri: "memo://report", name: "Report" },
         { type: "text", text: "résumé\n東京", _meta: { source: "report" } },
+        {
+          type: "image",
+          data: "aW1hZ2U=",
+          mimeType: "image/png",
+          annotations: { audience: ["assistant"] },
+          _meta: { detailCanary: "must-not-leak" },
+        },
       ],
       isError: false,
     });
@@ -392,6 +342,7 @@ describe("createNodePluginTools", () => {
       { type: "text", text },
       { type: "text", text: "[Report] memo://report" },
       { type: "text", text: "résumé\n東京" },
+      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
     ]);
     expect(isToolResultError(result)).toBe(false);
     expect(consumeMcpCodeModeGuestResult(result)).toEqual(payload);
@@ -418,6 +369,13 @@ describe("createNodePluginTools", () => {
     });
 
     const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
+    const nodeTool = expectDefined(nodeTools[0], "node MCP tool");
+    expect(nodeTool.executionMode).toBe("sequential");
+    expect(nodeTool.resultContentSource).toBe("network");
+    expect(getPluginToolMeta(nodeTool)?.mcp?.node).toEqual({
+      id: "node-1",
+      displayName: "Studio Node",
+    });
     const { catalogRef, codeModeTools, ctx } = createCodeModeHarness(nodeTools);
     const nodeEntry = catalogRef.current?.entries.find(
       (entry) => entry.name === "docs_search" && entry.source === "mcp",
@@ -492,6 +450,7 @@ describe("createNodePluginTools", () => {
     expect(result.content).toEqual([
       { type: "text", text: "MCP tool failed without returning content." },
     ]);
+    expect(result.details).toEqual({ mcpServer: "docs", mcpTool: "fail", status: "error" });
     expect(isToolResultError(result)).toBe(true);
 
     const { codeModeTools } = createCodeModeHarness(nodeTools);

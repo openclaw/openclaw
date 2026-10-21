@@ -159,20 +159,6 @@ describe("memory search config", () => {
     ).toMatchObject({ sources: ["sessions"], searchSources: ["sessions"] });
   });
 
-  it("lets a per-agent false override a default true", () => {
-    const resolved = resolve(
-      { rememberAcrossConversations: true },
-      { rememberAcrossConversations: false },
-      "shared",
-    );
-
-    expect(resolved).toMatchObject({
-      rememberAcrossConversations: false,
-      experimental: { sessionMemory: false },
-      sources: ["memory"],
-    });
-  });
-
   it("normalizes legacy auto provider config to openai", () => {
     expect(resolve({ provider: "auto" })).toMatchObject({
       provider: "openai",

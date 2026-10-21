@@ -36,10 +36,6 @@ const wait = (runId = "run-observed") => waitForAgentRun({ runId, timeoutMs: 500
 const observe = (untilTerminal?: true) =>
   waitForAgentRunReply({ runId: "run-ended", timeoutMs: 1_000, untilTerminal });
 
-async function expectHistoryReply(messages: unknown[], expected: string) {
-  callGatewayMock.mockResolvedValue({ messages });
-  await expect(readReply()).resolves.toBe(expected);
-}
 function signedText(text: string, id: string, phase: string) {
   return { type: "text", text, textSignature: JSON.stringify({ v: 1, id, phase }) };
 }
@@ -109,40 +105,34 @@ function expectAgentWaitRequest(
 }
 
 describe("readLatestAssistantReply", () => {
-  it("returns the most recent assistant message when compaction markers trail history", async () => {
-    await expectHistoryReply(
-      [
+  it.each([
+    {
+      name: "trailing compaction markers",
+      reply: "All checks passed and changes were pushed.",
+      messages: [
         textAssistant("All checks passed and changes were pushed."),
         { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-      "All checks passed and changes were pushed.",
-    );
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey, limit: 50 },
-    });
-  });
-
-  it("falls back to older assistant text when latest assistant has no text", async () => {
-    await expectHistoryReply(
-      [
+    },
+    {
+      name: "an empty latest assistant",
+      reply: "older output",
+      messages: [
         textAssistant("older output"),
         { role: "assistant", content: [] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-      "older output",
-    );
-  });
-
-  it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
-    await expectHistoryReply(
-      [
+    },
+    {
+      name: "transcript-only assistant mirrors",
+      reply: "real worker reply",
+      messages: [
         { ...textAssistant("real worker reply"), timestamp: 10 },
         {
           ...textAssistant("already delivered through message tool"),
-          openclawMessageToolMirror: { toolName: "message", toolCallId: "call-message-send" },
           timestamp: 11,
+          openclawMessageToolMirror: { toolName: "message", toolCallId: "call-message-send" },
         },
         {
           ...textAssistant("gateway notice"),
@@ -151,13 +141,11 @@ describe("readLatestAssistantReply", () => {
           timestamp: 12,
         },
       ],
-      "real worker reply",
-    );
-  });
-
-  it("skips a trailing projected cron run prompt for latest-reply reads", async () => {
-    await expectHistoryReply(
-      [
+    },
+    {
+      name: "a projected cron prompt",
+      reply: "older worker reply",
+      messages: [
         { ...textAssistant("older worker reply"), timestamp: 10 },
         {
           ...textAssistant("forwarded input text"),
@@ -171,13 +159,11 @@ describe("readLatestAssistantReply", () => {
           },
         },
       ],
-      "older worker reply",
-    );
-  });
-
-  it("preserves spaces across split final_answer history blocks", async () => {
-    await expectHistoryReply(
-      [
+    },
+    {
+      name: "spaces across final-answer blocks",
+      reply: "Hi there",
+      messages: [
         {
           role: "assistant",
           content: [
@@ -187,8 +173,14 @@ describe("readLatestAssistantReply", () => {
           ],
         },
       ],
-      "Hi there",
-    );
+    },
+  ])("reads the latest reply with $name", async ({ messages, reply }) => {
+    callGatewayMock.mockResolvedValue({ messages });
+    await expect(readReply()).resolves.toBe(reply);
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey, limit: 50 },
+    });
   });
 
   it("reads the full message when history returns a display-capped preview", async () => {

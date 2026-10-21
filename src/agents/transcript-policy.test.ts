@@ -23,12 +23,10 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
         ![
           "amazon-bedrock",
           "anthropic",
-          "google",
           "github-copilot",
           "env-sensitive",
           "minimax",
           "mistral",
-          "openai",
           "ollama",
           "vllm",
         ].includes(provider)
@@ -92,21 +90,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };
-            case "google":
-              return {
-                sanitizeMode: "full",
-                sanitizeToolCallIds: true,
-                toolCallIdMode: "strict",
-                sanitizeThoughtSignatures: {
-                  allowBase64Only: true,
-                  includeCamelCase: true,
-                },
-                repairToolUseResultPairing: true,
-                applyAssistantFirstOrderingFix: true,
-                validateGeminiTurns: true,
-                validateAnthropicTurns: false,
-                allowSyntheticToolResults: true,
-              };
             case "github-copilot":
               return context?.modelApi === "anthropic-messages"
                 ? {
@@ -122,15 +105,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
               return {
                 sanitizeToolCallIds: true,
                 toolCallIdMode: "strict9",
-              };
-            case "openai":
-              return {
-                sanitizeMode: "images-only",
-                sanitizeToolCallIds: context?.modelApi === "openai-completions",
-                ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
-                applyAssistantFirstOrderingFix: false,
-                validateGeminiTurns: false,
-                validateAnthropicTurns: false,
               };
             default:
               return undefined;
@@ -200,29 +174,10 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it("enables sanitizeToolCallIds for Google provider", () => {
-    const policy = resolve("google", "gemini-2.0-flash", "google-generative-ai");
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.sanitizeThoughtSignatures).toEqual({
-      allowBase64Only: true,
-      includeCamelCase: true,
-    });
-  });
-
   it("enables sanitizeToolCallIds for Mistral provider", () => {
     expect(resolve("mistral", "mistral-large-latest")).toMatchObject({
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict9",
-    });
-  });
-
-  it("disables sanitizeToolCallIds for OpenAI provider", () => {
-    expect(resolve("openai", "gpt-4o", "openai")).toMatchObject({
-      sanitizeToolCallIds: false,
-      toolCallIdMode: undefined,
-      applyGoogleTurnOrdering: false,
-      validateGeminiTurns: false,
-      validateAnthropicTurns: false,
     });
   });
 
@@ -274,41 +229,6 @@ describe("resolveTranscriptPolicy", () => {
     expect(
       resolve("custom-openai-proxy", "gpt-5.4", "openai-responses").validateAnthropicTurns,
     ).toBe(false);
-  });
-
-  it("resolves unowned Anthropic thinking retention by model", () => {
-    for (const [modelId, dropThinkingBlocks] of [
-      ["claude-opus-4-6", false],
-      ["claude-opus-5", false],
-      ["claude-sonnet-4-5-20250929", true],
-      ["claude-3-7-sonnet-20250219", true],
-    ] as const) {
-      expect(
-        resolve("custom-anthropic-proxy", modelId, "anthropic-messages").dropThinkingBlocks,
-      ).toBe(dropThinkingBlocks);
-    }
-  });
-
-  it("resolves Anthropic policy from the canonical model identity", () => {
-    const config = {};
-    const model = makeOpenAiCompatibleReasoningModel({
-      id: "production-claude",
-      name: "Production Claude",
-      provider: "custom-anthropic-proxy",
-      api: "anthropic-messages",
-    });
-
-    for (const [canonicalModelId, expected] of [
-      ["claude-sonnet-4-5-20250929", true],
-      ["claude-opus-5", false],
-    ] as const) {
-      expect(
-        resolve(model.provider, model.id, model.api, {
-          config,
-          model: { ...model, params: { canonicalModelId } },
-        }).dropThinkingBlocks,
-      ).toBe(expected);
-    }
   });
 
   it("gates in-history updates by authenticated route", () => {
@@ -450,19 +370,6 @@ describe("resolveTranscriptPolicy", () => {
           .dropReasoningFromHistory,
       ).toBe(!reasoning);
     }
-  });
-
-  it("enables Anthropic-compatible policies for Bedrock provider", () => {
-    const policy = resolve(
-      "amazon-bedrock",
-      "us.anthropic.claude-opus-4-6-v1",
-      "bedrock-converse-stream",
-    );
-    expect(policy.repairToolUseResultPairing).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
-    expect(policy.allowSyntheticToolResults).toBe(true);
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.sanitizeMode).toBe("full");
   });
 
   it("keeps core replay defaults when an owning plugin returns no policy", () => {

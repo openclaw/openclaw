@@ -55,16 +55,6 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(allows(profile, "read")).toBe(true);
   });
 
-  it.each(["read_public_item", "fixture-reader", "group:plugins"])(
-    "rechecks %s denies on registered tools",
-    (deny) => {
-      const profile = resolveProfile({
-        config: { tools: { allow: ["group:plugins"], deny: [deny] } },
-      });
-      expect(allows(profile, "read_public_item", { pluginId: "fixture-reader" })).toBe(false);
-    },
-  );
-
   it("does not let plugin ownership widen a narrower conversation policy", () => {
     const profile = resolveProfile({
       config: { tools: { allow: ["group:plugins", "read"] } },

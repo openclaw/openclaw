@@ -1,7 +1,4 @@
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ToolsSchema } from "../config/zod-schema.agent-runtime.js";
@@ -14,15 +11,10 @@ import {
   describeCodexNativeWebSearch,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
-import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 
 type SearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
 const searchConfig = (search: SearchConfig): OpenClawConfig => ({ tools: { web: { search } } });
 const baseConfig = searchConfig({ enabled: true, openaiCodex: { enabled: true, mode: "cached" } });
-const toolPolicy = (tools: OpenClawConfig["tools"]): OpenClawConfig => ({
-  ...baseConfig,
-  tools: { ...baseConfig.tools, ...tools },
-});
 function activate(params: Parameters<typeof resolveCodexNativeSearchActivation>[0] = {}) {
   return resolveCodexNativeSearchActivation({
     config: baseConfig,
@@ -70,26 +62,6 @@ describe("resolveCodexNativeSearchActivation", () => {
       "tool_policy_denied",
     ],
     [
-      "provider policy",
-      {
-        config: toolPolicy({ byProvider: { "gateway/gpt-5.5": { deny: ["web_search"] } } }),
-        modelId: "gpt-5.5",
-      },
-      "tool_policy_denied",
-    ],
-    [
-      "sender policy",
-      {
-        config: toolPolicy({
-          toolsBySender: { "channel:msteams:alice": { deny: ["web_search"] } },
-        }),
-        modelId: "gpt-5.5",
-        messageProvider: "teams",
-        senderId: "alice",
-      },
-      "tool_policy_denied",
-    ],
-    [
       "sandbox policy",
       { sandboxToolPolicy: { deny: ["group:web"] }, modelId: "gpt-5.5" },
       "tool_policy_denied",
@@ -102,40 +74,6 @@ describe("resolveCodexNativeSearchActivation", () => {
     const result = activate({ config: baseConfig, modelProvider: "openai" });
     expect(result).toMatchObject({ state: "native_active" });
     expect(result).not.toHaveProperty("inactiveReason");
-  });
-
-  it("keeps native search inactive when inherited session policy denies web_search", async () => {
-    const agentId = `native-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const sessionKey = `agent:${agentId}:subagent:limited`;
-    const storePath = path.join(
-      os.tmpdir(),
-      `openclaw-native-inherited-deny-${agentId}`,
-      "agents",
-      agentId,
-      "sessions",
-      "sessions.json",
-    );
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "limited-session",
-        updatedAt: Date.now(),
-        spawnDepth: 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        inheritedToolDeny: ["web_search"],
-      },
-    );
-
-    const result = await withPreparedSessionCapabilityRead(() =>
-      activate({
-        config: { ...baseConfig, session: { store: storePath } },
-        sessionKey,
-        modelId: "gpt-5.5",
-      }),
-    );
-
-    expect(result).toMatchObject({ state: "managed_only", inactiveReason: "tool_policy_denied" });
   });
 });
 

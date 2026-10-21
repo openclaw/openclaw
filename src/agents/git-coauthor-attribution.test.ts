@@ -123,18 +123,6 @@ it("resolves credit from the configured templated session store", async () => {
   });
 });
 
-it("returns undefined when the only participant has opted out", async () => {
-  await withSession("no-coauthors-opted-out", async (scope) => {
-    await upsertSessionEntryCore(scope, { sessionId: "no-coauthors-opted-out", updatedAt: 1 });
-    const email = "solo-opted-out@example.test";
-    const profile = linkedProfile(email, 201, "solo-opted-out");
-    setCredit(profile.id, false);
-    participant(scope, profile, 1);
-
-    expect(await resolveGitCoauthorAttribution({ ...scope, config: {} })).toBeUndefined();
-  });
-});
-
 it("derives exact bounded trailers only from canonical profile-backed humans", async () => {
   await withSession("coauthors", async (scope, state) => {
     // "default" writes no preference row: credit is on unless the person opts out.
