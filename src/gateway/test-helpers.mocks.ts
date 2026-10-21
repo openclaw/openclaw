@@ -133,6 +133,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         getAll: () => Array<{ provider?: string; id?: string }>;
         getAvailable: () => Array<{ provider?: string; id?: string }>;
         find: (provider: string, modelId: string) => unknown;
+        getProviderMetadataOwners: () => unknown;
       };
       new (
         authStorage: unknown,
@@ -141,6 +142,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         getAll: () => Array<{ provider?: string; id?: string }>;
         getAvailable: () => Array<{ provider?: string; id?: string }>;
         find: (provider: string, modelId: string) => unknown;
+        getProviderMetadataOwners: () => unknown;
       };
     };
     if (typeof Registry.create === "function") {
@@ -180,6 +182,13 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
       return (agentDiscoveryMock.models as Array<{ provider?: string; id?: string }>).find(
         (model) => model.provider === provider && model.id === modelId,
       );
+    }
+
+    getProviderMetadataOwners() {
+      if (!agentDiscoveryMock.enabled) {
+        return this.actualRegistry?.getProviderMetadataOwners();
+      }
+      return undefined;
     }
 
     fork(authStorage: unknown) {

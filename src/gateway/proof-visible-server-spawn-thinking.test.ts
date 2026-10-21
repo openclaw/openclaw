@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import path from "node:path";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
@@ -31,7 +30,6 @@ beforeAll(async () => {
   await connectOk(gatewayWs, {
     token: gatewayToken,
     scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(process.env.OPENCLAW_STATE_DIR!, "pr-135296-proof-device.sqlite"),
     prePairDevice: true,
   });
 });

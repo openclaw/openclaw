@@ -10,7 +10,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../src/config/conf
 import { clearSessionStoreCacheForTest } from "../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import {
-  connectGatewayClient,
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
@@ -57,8 +56,12 @@ type InputItem = {
 };
 
 function inputText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
     .map((part: unknown) =>
       typeof part === "object" && part !== null && "text" in part && typeof part.text === "string"
@@ -71,7 +74,9 @@ function inputText(content: unknown): string {
 function latestUser(input: InputItem[]): { index: number; text: string } {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item?.role !== "user") continue;
+    if (item?.role !== "user") {
+      continue;
+    }
     const text = inputText(item.content);
     if (
       !isInternalRuntimeContextCarrierText(text) &&
@@ -85,12 +90,16 @@ function latestUser(input: InputItem[]): { index: number; text: string } {
 }
 
 function hasThinkingInSpawnTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) return false;
+  if (!Array.isArray(tools)) {
+    return false;
+  }
   const spawn = tools.find(
     (tool): tool is Record<string, unknown> =>
       typeof tool === "object" && tool !== null && "name" in tool && tool.name === "sessions_spawn",
   );
-  if (!spawn || typeof spawn.parameters !== "object" || spawn.parameters === null) return false;
+  if (!spawn || typeof spawn.parameters !== "object" || spawn.parameters === null) {
+    return false;
+  }
   const properties = (spawn.parameters as Record<string, unknown>).properties;
   return typeof properties === "object" && properties !== null && "thinking" in properties;
 }
@@ -131,7 +140,9 @@ function sendToolCall(response: ServerResponse, id: string, args: Record<string,
 
 async function readRequest(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+  }
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
@@ -307,8 +318,9 @@ it(
         providerServer?.listen(0, "127.0.0.1", resolve);
       });
       const address = providerServer.address();
-      if (!address || typeof address === "string")
+      if (!address || typeof address === "string") {
         throw new Error("loopback model listener missing");
+      }
 
       const modelId = "gpt-proof";
       const config: OpenClawConfig = {
@@ -482,13 +494,17 @@ it(
       }
       if (providerServer?.listening) {
         providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => providerServer?.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          providerServer?.close(() => resolve());
+        });
       }
       envSnapshot.restore();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       clearSessionStoreCacheForTest();
-      if (tempHome) await fs.rm(tempHome, { recursive: true, force: true });
+      if (tempHome) {
+        await fs.rm(tempHome, { recursive: true, force: true });
+      }
     }
   },
 );
