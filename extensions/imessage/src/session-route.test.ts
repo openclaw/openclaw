@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { imessagePlugin } from "./channel.js";
 
+const messaging = imessagePlugin.messaging!;
+type RouteConfig = Parameters<NonNullable<typeof messaging.resolveOutboundSessionRoute>>[0]["cfg"];
+const routeTo = (target: string, cfg: RouteConfig = {}) =>
+  messaging.resolveOutboundSessionRoute!({ cfg, agentId: "main", target });
+const resolveTarget = (target: string, cfg: RouteConfig = {}) =>
+  messaging.targetResolver!.resolveTarget!({ cfg, input: target, normalized: target });
+
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   createIMessageRpcClient: async () => ({
@@ -16,11 +23,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 
 describe("iMessage outbound session routing", () => {
   it("keeps a service-qualified contact alias as target presentation", async () => {
-    const resolved = await imessagePlugin.messaging?.targetResolver?.resolveTarget?.({
-      cfg: {},
-      input: "imessage:Alice",
-      normalized: "imessage:Alice",
-    });
+    const resolved = await resolveTarget("imessage:Alice");
 
     expect(resolved).toMatchObject({ to: "imessage:Alice", display: "Alice" });
   });
@@ -36,11 +39,7 @@ describe("iMessage outbound session routing", () => {
     ["chat_guid:iMessage;+;chat123", false],
     ["chat_identifier:team-thread", false],
   ] as const)("reports canonical identity for %s", async (target, exact) => {
-    const route = await imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      target,
-    });
+    const route = await routeTo(target);
 
     expect(route?.recipientSessionExact).toBe(exact);
   });
@@ -52,21 +51,11 @@ describe("iMessage outbound session routing", () => {
     ["explicit identifier send", "chat_identifier:+15551234567", true],
   ] as const)("keeps a %s on the direct session", async (_name, target, explicit) => {
     const cfg = { session: { dmScope: "per-channel-peer" as const } };
-    const resolvedTarget = explicit
-      ? await imessagePlugin.messaging!.targetResolver!.resolveTarget!({
-          cfg,
-          input: target,
-          normalized: target,
-        })
-      : undefined;
+    const resolvedTarget = explicit ? await resolveTarget(target, cfg) : undefined;
     if (explicit) {
       expect(resolvedTarget).toMatchObject({ to: target, kind: "user" });
     }
-    const route = await imessagePlugin.messaging!.resolveOutboundSessionRoute!({
-      cfg,
-      agentId: "main",
-      target,
-    });
+    const route = await routeTo(target, cfg);
     expect(route).toMatchObject({
       sessionKey: "agent:main:imessage:direct:+15551234567",
       peer: { kind: "direct", id: "+15551234567" },
@@ -92,20 +81,8 @@ describe("iMessage outbound session routing", () => {
       "42",
     ],
   ] as const)("keeps a %s on the group session", async (_name, target, cfg, id) => {
-    expect(
-      await imessagePlugin.messaging!.targetResolver!.resolveTarget!({
-        cfg,
-        input: target,
-        normalized: target,
-      }),
-    ).toMatchObject({ to: target, kind: "group" });
-    expect(
-      await imessagePlugin.messaging!.resolveOutboundSessionRoute!({
-        cfg,
-        agentId: "main",
-        target,
-      }),
-    ).toMatchObject({
+    expect(await resolveTarget(target, cfg)).toMatchObject({ to: target, kind: "group" });
+    expect(await routeTo(target, cfg)).toMatchObject({
       sessionKey: `agent:main:imessage:group:${id}`,
       peer: { kind: "group", id },
       to: target,
@@ -114,53 +91,34 @@ describe("iMessage outbound session routing", () => {
 
   it("uses the resolved default account for account-scoped direct sessions", async () => {
     expect(
-      await imessagePlugin.messaging!.resolveOutboundSessionRoute!({
-        cfg: {
-          channels: { imessage: { defaultAccount: "work", accounts: { work: {} } } },
-          session: { dmScope: "per-account-channel-peer" },
-        },
-        agentId: "main",
-        target: "chat_id:42",
+      await routeTo("chat_id:42", {
+        channels: { imessage: { defaultAccount: "work", accounts: { work: {} } } },
+        session: { dmScope: "per-account-channel-peer" },
       }),
     ).toMatchObject({ sessionKey: "agent:main:imessage:work:direct:+15551234567" });
   });
 
   it("does not invent a session for an unresolved chat ID", async () => {
-    expect(
-      await imessagePlugin.messaging!.resolveOutboundSessionRoute!({
-        cfg: {},
-        agentId: "main",
-        target: "chat_id:999",
-      }),
-    ).toBeNull();
+    expect(await routeTo("chat_id:999")).toBeNull();
   });
 
   it.each([
-    ["uses auto when a bare direct target has no configured service", {}, "+15551234567", "auto"],
+    ["defaults to auto", {}, "+15551234567", "auto"],
+    ["uses configured SMS", { channels: { imessage: { service: "sms" } } }, "+15551234567", "sms"],
     [
-      "uses the configured SMS override for a bare direct target",
-      { channels: { imessage: { service: "sms" } } },
-      "+15551234567",
-      "sms",
-    ],
-    [
-      "keeps an explicit SMS target authoritative",
+      "keeps explicit SMS authoritative",
       { channels: { imessage: { service: "imessage" } } },
       "sms:+15551234567",
       "sms",
     ],
     [
-      "keeps an explicit auto target authoritative",
+      "keeps explicit auto authoritative",
       { channels: { imessage: { service: "sms" } } },
       "auto:+15551234567",
       "auto",
     ],
   ] as const)("%s", async (_label, cfg, target, expectedService) => {
-    const route = await imessagePlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg,
-      agentId: "main",
-      target,
-    });
+    const route = await routeTo(target, cfg);
 
     expect(route).toMatchObject({
       from: `${expectedService}:+15551234567`,

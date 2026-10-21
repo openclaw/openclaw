@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { warnMock, runCommand, randomUUIDMock } = vi.hoisted(() => ({
@@ -22,13 +23,17 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 import { withIMessageRemoteFile } from "./remote-file.js";
 
+function stage(options: Partial<Parameters<typeof withIMessageRemoteFile<string>>[0]> = {}) {
+  return withIMessageRemoteFile({
+    remoteHost: "messages-mac",
+    localPath: "/gateway/file.pdf",
+    use: async () => "sent",
+    ...options,
+  });
+}
+
 function result(
-  overrides: Partial<{
-    code: number | null;
-    stdout: string;
-    stderr: string;
-    termination: "exit" | "timeout" | "signal" | "no-output-timeout";
-  }> = {},
+  overrides: Partial<Pick<SpawnResult, "code" | "stdout" | "stderr" | "termination">> = {},
 ) {
   return {
     code: 0,
@@ -65,9 +70,7 @@ describe("withIMessageRemoteFile", () => {
         return result();
       });
       const use = vi.fn(async () => "sent");
-      const settled = withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/synthetic.pdf",
+      const settled = stage({
         assertDirectAdapterHandoff: () => {
           if (!current) {
             throw retired;
@@ -99,9 +102,7 @@ describe("withIMessageRemoteFile", () => {
     runCommand.mockResolvedValue(result());
     const use = vi.fn(async () => "sent");
     await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/synthetic.pdf",
+      stage({
         assertDirectAdapterHandoff: () => {
           throw new Error("iMessage delivery retired");
         },
@@ -121,7 +122,7 @@ describe("withIMessageRemoteFile", () => {
     const use = vi.fn(async () => "sent");
 
     await expect(
-      withIMessageRemoteFile({
+      stage({
         remoteHost: "bot@messages-mac",
         localPath: "/gateway/private/a file;$(touch nope).png",
         use,
@@ -134,18 +135,14 @@ describe("withIMessageRemoteFile", () => {
     expect(runCommand.mock.calls[0]?.[1].input).not.toContain("a file");
     expect(runCommand.mock.calls[1]?.[0]).toEqual([
       "scp",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "ConnectTimeout=10",
-      "-o",
-      "ClearAllForwardings=yes",
-      "-o",
-      "ForwardAgent=no",
-      "-o",
-      "ForwardX11=no",
+      ...[
+        "BatchMode=yes",
+        "StrictHostKeyChecking=yes",
+        "ConnectTimeout=10",
+        "ClearAllForwardings=yes",
+        "ForwardAgent=no",
+        "ForwardX11=no",
+      ].flatMap((option) => ["-o", option]),
       "--",
       "/gateway/private/a file;$(touch nope).png",
       "bot@messages-mac:/tmp/openclaw-imessage-a1b2c3d4e5f60718293a4b5c6d7e8f90/a-file-touch-nope-.png",
@@ -163,13 +160,7 @@ describe("withIMessageRemoteFile", () => {
       .mockResolvedValueOnce(result({ code: null, termination: "timeout" }))
       .mockResolvedValueOnce(result());
 
-    await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
-        use: async () => "unused",
-      }),
-    ).rejects.toThrow("allocation failed (timeout)");
+    await expect(stage()).rejects.toThrow("allocation failed (timeout)");
     expect(runCommand.mock.calls.map(([argv]) => argv[0])).toEqual(["ssh", "ssh"]);
     expect(runCommand.mock.calls[1]?.[1].input).toContain(
       "rm -rf -- /tmp/openclaw-imessage-0123456789abcdef0123456789abcdef",
@@ -184,9 +175,7 @@ describe("withIMessageRemoteFile", () => {
       .mockResolvedValueOnce(result({ code: 1, stderr: "cleanup failed" }));
 
     await expect(
-      withIMessageRemoteFile({
-        remoteHost: "messages-mac",
-        localPath: "/gateway/file.pdf",
+      stage({
         use: async () => {
           throw primary;
         },

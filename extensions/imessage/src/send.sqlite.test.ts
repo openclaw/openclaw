@@ -11,6 +11,27 @@ describe("iMessage send SQLite receipt recovery", () => {
   let dbPath: string;
   let sendMessageIMessage: typeof import("./send.js").sendMessageIMessage;
 
+  function withDatabase<T>(use: (db: DatabaseSync) => T, readOnly = false) {
+    const db = new DatabaseSync(dbPath, { readOnly });
+    try {
+      return use(db);
+    } finally {
+      db.close();
+    }
+  }
+
+  const send = (target: string, client: IMessageRpcClient) =>
+    sendMessageIMessage(target, "synthetic receipt", {
+      config: { channels: { imessage: {} } },
+      client,
+      dbPath,
+      approvalPrompt: {
+        approvalId: "synthetic-approval",
+        approvalKind: "exec",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+    });
+
   beforeEach(async () => {
     state = await createOpenClawTestState({
       layout: "state-only",
@@ -19,8 +40,7 @@ describe("iMessage send SQLite receipt recovery", () => {
     await loadFreshIMessageReplyCacheForTest();
     ({ sendMessageIMessage } = await import("./send.js"));
     dbPath = state.path("synthetic-chat.db");
-    const db = new DatabaseSync(dbPath);
-    try {
+    withDatabase((db) => {
       db.exec(`
         CREATE TABLE message (
           ROWID INTEGER PRIMARY KEY, guid TEXT, text TEXT, date INTEGER,
@@ -39,9 +59,7 @@ describe("iMessage send SQLite receipt recovery", () => {
         INSERT INTO message VALUES (8, 'incoming-guid', 'synthetic receipt', 0, 0, 1);
         INSERT INTO chat_message_join VALUES (42, 5), (42, 6), (43, 7), (42, 8);
       `);
-    } finally {
-      db.close();
-    }
+    });
   });
 
   afterEach(async () => {
@@ -71,16 +89,7 @@ describe("iMessage send SQLite receipt recovery", () => {
     const client = new IMessageRpcClient({ dbPath });
     vi.spyOn(client, "request").mockRejectedValue(new Error("imsg rpc timeout (send)"));
     let settled = false;
-    const sending = sendMessageIMessage("chat_id:42", "synthetic receipt", {
-      config: { channels: { imessage: {} } },
-      client,
-      dbPath,
-      approvalPrompt: {
-        approvalId: "synthetic-approval",
-        approvalKind: "exec",
-        allowedDecisions: ["allow-once", "deny"],
-      },
-    }).then((result) => {
+    const sending = send("chat_id:42", client).then((result) => {
       settled = true;
       return result;
     });
@@ -116,14 +125,9 @@ describe("iMessage send SQLite receipt recovery", () => {
       prepareCalls.mock.calls.filter(([sql]) =>
         /\bSELECT\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
       ).length;
-    const calibration = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      expect(calibration.prepare("SELECT guid FROM message WHERE ROWID = 6").get()).toMatchObject({
-        guid: "recovered-guid",
-      });
-    } finally {
-      calibration.close();
-    }
+    expect(
+      withDatabase((db) => db.prepare("SELECT guid FROM message WHERE ROWID = 6").get(), true),
+    ).toMatchObject({ guid: "recovered-guid" });
     expect(countMessageSelects()).toBe(1);
     expect(get).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
@@ -131,30 +135,19 @@ describe("iMessage send SQLite receipt recovery", () => {
     const client = new IMessageRpcClient({ dbPath });
     const request = vi.spyOn(client, "request");
     request.mockImplementation(async (_method, params) => {
-      const db = new DatabaseSync(dbPath);
-      try {
+      withDatabase((db) => {
         db.prepare("UPDATE message SET text = ?, date = ?").run(
           String(params?.text),
           (Date.now() - 978_307_200_000) * 1_000_000,
         );
-      } finally {
-        db.close();
-      }
+      });
       throw new Error("imsg rpc timeout (send)");
     });
-    const result = await sendMessageIMessage(target, "synthetic receipt", {
-      config: { channels: { imessage: {} } },
-      client,
-      dbPath,
-      approvalPrompt: {
-        approvalId: "synthetic-approval",
-        approvalKind: "exec",
-        allowedDecisions: ["allow-once", "deny"],
-      },
+    expect(await send(target, client)).toMatchObject({
+      guid: "recovered-guid",
+      messageId: "recovered-guid",
+      receipt: { platformMessageIds: ["recovered-guid"] },
     });
-    expect(result.guid).toBe("recovered-guid");
-    expect(result.messageId).toBe("recovered-guid");
-    expect(result.receipt.platformMessageIds).toEqual(["recovered-guid"]);
     expect(request).toHaveBeenCalledOnce();
     expect(countMessageSelects()).toBe(0);
   });
