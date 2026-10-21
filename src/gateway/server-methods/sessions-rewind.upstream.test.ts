@@ -13,7 +13,11 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { holdLifecycle, installHarness } from "./sessions-rewind.handler.test-support.js";
+import {
+  expectCutFailure,
+  holdLifecycle,
+  installHarness,
+} from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   invokeMessageCut,
@@ -105,13 +109,7 @@ it.each(["preparation", "current guard"] as const)(
       );
       const mutation = invokeMessageCut("sessions.rewind", scope);
       expect(await mutation.error).toBeUndefined();
-      expect(mutation.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.UNAVAILABLE,
-        }),
-      );
+      expectCutFailure(mutation.respond, { code: ErrorCodes.UNAVAILABLE });
     });
   },
 );
@@ -157,13 +155,9 @@ it("refuses incognito native context effects after upstream revocation during pr
     ).toMatchObject({ threadId: "late-upstream-thread" });
     expect(effect).not.toHaveBeenCalled();
     expect(rollback).not.toHaveBeenCalled();
-    expect(mutation.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("external agent harness"),
-      }),
-    );
+    expectCutFailure(mutation.respond, {
+      message: expect.stringContaining("external agent harness"),
+    });
   }, true);
 });
 it("refuses a shared-state owner retired while rewind waits for the lifecycle lock", async () => {

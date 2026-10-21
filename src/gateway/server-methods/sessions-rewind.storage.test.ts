@@ -63,7 +63,12 @@ import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import * as sessionEntryReader from "../session-utils-store-worker.js";
 import * as repositoryCheckpoints from "../worker-environments/session-repository-checkpoints.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import { holdLifecycle, invokeHandler } from "./sessions-rewind.handler.test-support.js";
+import {
+  expectCutFailure as expectFailure,
+  expectCutReply,
+  holdLifecycle,
+  invokeHandler,
+} from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   messageCutContext as context,
@@ -91,10 +96,6 @@ function withStorage(
       await run(state);
     },
   );
-}
-
-function expectFailure(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
 async function authorizeMemberFork(scope: SourceScope) {
@@ -239,18 +240,14 @@ it.each([
         params: { sessionKey: scope.sessionKey },
         client: identified ? sharingPolicyClient({ user: "branch-reader" }) : null,
       });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          branches: hidden
-            ? []
-            : expect.arrayContaining([
-                expect.objectContaining({ leafEntryId: "user-2", active: true }),
-                expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
-              ]),
-        },
-        undefined,
-      );
+      expectCutReply(respond, {
+        branches: hidden
+          ? []
+          : expect.arrayContaining([
+              expect.objectContaining({ leafEntryId: "user-2", active: true }),
+              expect.objectContaining({ leafEntryId: "alternate-user", active: false }),
+            ]),
+      });
       expect(parse.mock.calls.filter(([text]) => text.includes(unrelatedPrompt))).toHaveLength(0);
       expect(parse.mock.calls.filter(([text]) => text.includes(selectedPrompt))).toHaveLength(0);
       expect(reads).toHaveBeenCalledTimes(1);
@@ -375,7 +372,7 @@ async function revokeWithPublicLifecyclePredecessor(
     await mutation?.error;
   }
   expect(await removal).toBeUndefined();
-  expect(respond).toHaveBeenCalledWith(true, { ok: true, ...params }, undefined);
+  expectCutReply(respond, { ok: true, ...params });
   return expectDefined(mutation, "queued fork");
 }
 
@@ -555,11 +552,7 @@ it.each([
         expect(sourceReads).toEqual([]);
       }
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { sessionKey: expect.any(String), editorText: "What did I say?" },
-        undefined,
-      );
+      expectCutReply(respond, { sessionKey: expect.any(String), editorText: "What did I say?" });
       const result = expectDefined(
         respond.mock.calls[0]?.[1] as SessionsForkResult | undefined,
         "fork response",
@@ -767,7 +760,7 @@ it("sessions.fork retains member authority while restoring cold source history",
     const mutation = invokeMessageCut("sessions.fork", scope, mutationOptions);
 
     expect(await mutation.error).toBeUndefined();
-    expect(mutation.respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expectCutReply(mutation.respond, expect.any(Object));
     expect(readSessionColdTranscript(coldDatabase, scope.sessionId)).toBeUndefined();
   });
 });

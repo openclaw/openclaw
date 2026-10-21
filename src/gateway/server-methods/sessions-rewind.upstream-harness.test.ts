@@ -16,6 +16,8 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import {
   cfg,
+  expectCutFailure as expectFailure,
+  expectCutReply,
   installHarness,
   invokeHandler as invoke,
   restrictedOperator,
@@ -40,15 +42,6 @@ beforeEach(async () => {
     { agentId: "main", sessionKey },
     { sessionId: sourceSessionId, updatedAt: Date.now() },
   );
-  linkToUpstreamConversation();
-});
-
-afterEach(async () => {
-  await state.cleanup();
-  resetPluginRuntimeStateForTest();
-});
-
-function linkToUpstreamConversation(): void {
   expect(
     upsertSessionUpstreamLink({
       agentId: "main",
@@ -61,7 +54,12 @@ function linkToUpstreamConversation(): void {
       upstreamRef: { connectionFingerprint: "fingerprint", threadId: "thread-source" },
     }),
   ).toBe(true);
-}
+});
+
+afterEach(async () => {
+  await state.cleanup();
+  resetPluginRuntimeStateForTest();
+});
 
 function installUpstreamForkHarness(
   executionEnvironment?: "host-only",
@@ -93,10 +91,6 @@ function entries() {
   });
 }
 
-function expectFailure(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
-}
-
 function expectExternalOwner(respond: ReturnType<typeof vi.fn>) {
   expectFailure(respond, {
     code: ErrorCodes.INVALID_REQUEST,
@@ -111,7 +105,7 @@ describe("upstream session message-cut methods", () => {
     // Listing is read-only: "no local branches" is the truthful steady state,
     // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
-    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
+    expectCutReply(listed, { branches: [] });
   });
 
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
@@ -132,11 +126,7 @@ describe("upstream session message-cut methods", () => {
     });
 
     const respond = await invoke("sessions.fork");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" },
-      undefined,
-    );
+    expectCutReply(respond, { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" });
     expect(mocks.upstreamFork).toHaveBeenCalledWith(
       expect.objectContaining({
         assertCurrent: expect.any(Function),
@@ -204,33 +194,28 @@ describe("upstream session message-cut methods", () => {
     },
   );
 
-  it("does not mutate the local session when the upstream fork fails", async () => {
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockResolvedValue(forkFailure);
-
-    const entryCount = (await entries()).length;
-    const respond = await invoke("sessions.fork");
-
-    expectFailure(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      details: { reason: "upstream-unavailable" },
-    });
-    expect(await entries()).toHaveLength(entryCount);
-  });
-
-  it("passes through an invalid fork boundary failure", async () => {
-    const reason = "drift-mismatch";
-    installUpstreamForkHarness();
-    mocks.upstreamFork.mockResolvedValue({
-      status: "failed",
-      code: reason,
-      message: `boundary failed: ${reason}`,
-    });
-
-    expectFailure(await invoke("sessions.fork"), {
+  it.each([
+    { failure: forkFailure, code: ErrorCodes.UNAVAILABLE },
+    {
+      failure: {
+        status: "failed",
+        code: "drift-mismatch",
+        message: "boundary failed: drift-mismatch",
+      },
       code: ErrorCodes.INVALID_REQUEST,
-      details: { reason },
-      message: `boundary failed: ${reason}`,
-    });
-  });
+    },
+  ])(
+    "passes through $failure.code without mutating the local session",
+    async ({ failure, code }) => {
+      installUpstreamForkHarness();
+      mocks.upstreamFork.mockResolvedValue(failure);
+      const entryCount = (await entries()).length;
+      expectFailure(await invoke("sessions.fork"), {
+        code,
+        details: { reason: failure.code },
+        message: failure.message,
+      });
+      expect(await entries()).toHaveLength(entryCount);
+    },
+  );
 });
