@@ -185,13 +185,14 @@ describe("node workspace transfer service", () => {
           undefined,
           { url: server.gatewayUrl },
         );
+        const expectedFiles = [
+          [authored, "original input\n"],
+          [newlyStaged, "authored after base\n"],
+          [report, "# useful report\n"],
+          ["source.ts", "source\n"],
+        ] as const;
         await Promise.all(
-          [
-            [authored, "original input\n"],
-            [newlyStaged, "authored after base\n"],
-            [report, "# useful report\n"],
-            ["source.ts", "source\n"],
-          ].map(async ([relative, expected]) => {
+          expectedFiles.map(async ([relative, expected]) => {
             await expect(
               fs.readFile(path.join(downloaded.workspaceDir, relative), "utf8"),
             ).resolves.toBe(expected);
