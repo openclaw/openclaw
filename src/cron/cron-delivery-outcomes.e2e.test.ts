@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -31,10 +32,7 @@ type WebhookRequest = {
 
 async function createWebhookReceiver(responseStatus: number | null = 204) {
   const requests: WebhookRequest[] = [];
-  let resolveRequest!: (request: WebhookRequest) => void;
-  const request = new Promise<WebhookRequest>((resolve) => {
-    resolveRequest = resolve;
-  });
+  const request = createDeferred<WebhookRequest>();
   const server = createServer((incoming, response) => {
     let body = "";
     incoming.setEncoding("utf8");
@@ -47,7 +45,7 @@ async function createWebhookReceiver(responseStatus: number | null = 204) {
         path: incoming.url ?? "",
       };
       requests.push(received);
-      resolveRequest(received);
+      request.resolve(received);
       if (responseStatus !== null) {
         response.writeHead(responseStatus, { Connection: "close" });
         response.end();
@@ -59,7 +57,7 @@ async function createWebhookReceiver(responseStatus: number | null = 204) {
     createListener: () => server,
   });
   return {
-    request,
+    request: request.promise,
     requests,
     url: `http://127.0.0.1:${claim.port}/cron`,
     close: async () => {
@@ -191,10 +189,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
   it("omits providerless channel causes while preserving watchdog timeout diagnostics", async () => {
     await withReceiver("providerless", async (storePath, receiver, startCron) => {
       let execution: "channel-failure" | "watchdog-timeout" = "channel-failure";
-      let notifyWatchdogExecutionStarted!: () => void;
-      const watchdogExecutionStarted = new Promise<void>((resolve) => {
-        notifyWatchdogExecutionStarted = resolve;
-      });
+      const watchdogExecutionStarted = createDeferred();
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(
         async ({ abortSignal, onExecutionStarted }) => {
           if (execution === "channel-failure") {
@@ -208,7 +203,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             throw new Error("expected cron watchdog abort signal");
           }
           onExecutionStarted?.();
-          notifyWatchdogExecutionStarted();
+          watchdogExecutionStarted.resolve();
           await new Promise<void>((resolve) => {
             abortSignal.addEventListener("abort", () => resolve(), { once: true });
           });
@@ -243,7 +238,7 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         const watchdogRun = cron.run(watchdogJob.id, "force");
-        await watchdogExecutionStarted;
+        await watchdogExecutionStarted.promise;
         await vi.advanceTimersByTimeAsync(50);
         await expect(watchdogRun).resolves.toEqual({ ok: true, ran: true });
         await vi.waitFor(() => expect(receiver.requests).toHaveLength(2));

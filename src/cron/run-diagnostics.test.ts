@@ -9,7 +9,7 @@ import {
 } from "./run-diagnostics.js";
 import type { CronRunDiagnostic } from "./types.js";
 
-const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+const webSearchWarning =
   "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
 const terminalMessage = "Code Mode could not resolve a configured MCP tool.";
 const fixedClock = { nowMs: () => 123 };
@@ -36,8 +36,8 @@ describe("cron run diagnostics", () => {
       summary: "x".repeat(2_100),
       entries: Array.from({ length: 12 }, (_, i) => ({
         ts: i,
-        source: "exec",
-        severity: "error",
+        source: i === 11 ? "delivery" : "exec",
+        severity: i === 11 ? "error" : "warn",
         message: i === 11 ? `secret sk-1234567890abcdef ${"a".repeat(1_100)}` : `entry ${i}`,
       })),
     });
@@ -47,26 +47,8 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.entries.at(-1)?.message.endsWith("…")).toBe(true);
     expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
     expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
+    expect(diagnostics?.entries.at(-1)).toMatchObject({ source: "delivery", severity: "error" });
     expect(diagnostics?.summary).toHaveLength(2_000);
-  });
-
-  it("preserves later terminal diagnostics when capping entries", () => {
-    const terminal = { ts: 11, source: "delivery", severity: "error", message: "delivery failed" };
-    const diagnostics = normalizeDiagnostics({
-      entries: [
-        ...Array.from({ length: 10 }, (_, i) => ({
-          ts: i,
-          source: "tool",
-          severity: "warn",
-          message: `tool warning ${i}`,
-        })),
-        terminal,
-      ],
-    });
-
-    expect(diagnostics?.entries).toHaveLength(10);
-    expect(diagnostics?.entries.map((item) => item.message)).not.toContain("tool warning 0");
-    expect(diagnostics?.entries.at(-1)).toEqual(terminal);
   });
 
   it("returns undefined for empty diagnostics", () => {
@@ -92,11 +74,10 @@ describe("cron run diagnostics", () => {
     });
 
     const merged = mergeDiagnostics(first, second);
-    expect(merged?.summary).toBe("delivery failed");
-    expect(merged?.entries.map((item) => item.message)).toEqual([
-      "first failure",
-      "delivery failed",
-    ]);
+    expect(merged).toMatchObject({
+      summary: "delivery failed",
+      entries: [{ message: "first failure" }, { message: "delivery failed" }],
+    });
     expect(summarizeDiagnostics(merged)).toBe("delivery failed");
   });
 
@@ -108,9 +89,9 @@ describe("cron run diagnostics", () => {
     });
 
     expect(diagnostics).toEqual({
-      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      summary: webSearchWarning,
       entries: [
-        entry(MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE, {
+        entry(webSearchWarning, {
           ts: 900,
           source: "cron-preflight",
           severity: "warn",
