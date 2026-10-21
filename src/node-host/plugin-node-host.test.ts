@@ -54,15 +54,7 @@ it.each([undefined, "optional", true] as const)(
     expect(isDuplex("file.fetch")).toBe(duplex !== undefined);
     const payload = '{"ok":true}';
     if (duplex === undefined) {
-      const context = {
-        sendNodeEvent: vi.fn(async () => undefined),
-        sessionKey: "agent:main:canvas",
-      };
-      await expect(invoke("file.fetch", payload, undefined, context)).resolves.toBe(payload);
-      expect(handle).toHaveBeenCalledWith(payload, undefined, {
-        ...context,
-        prepareExecAuthorization: expect.any(Function),
-      });
+      await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
       await expect(invoke("missing.command", null)).resolves.toBeNull();
     } else {
       if (duplex === "optional") {

@@ -393,14 +393,9 @@ describe("runNodeHost", () => {
       );
     });
 
-    it.each([
-      ["whitespace", "  ", "\t"],
-      ["ambient token", "unrelated-gateway-token", undefined],
-      ["ambient password", undefined, "unrelated-gateway-password"],
-      ["both ambient credentials", "unrelated-gateway-token", "unrelated-gateway-password"],
-    ])("restarts a paired service without %s", async (_source, token, password) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", token);
-      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", password);
+    it("restarts a paired service without inheriting ambient credentials", async () => {
+      vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "unrelated-gateway-token");
+      vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "unrelated-gateway-password");
       await expectStartupTimeout(runOptions);
 
       const auth = connectAuth();

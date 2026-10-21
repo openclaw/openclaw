@@ -116,15 +116,11 @@ describe("candidate node runtime and database compatibility", () => {
     const statePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
     await fs.mkdir(path.dirname(statePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(statePath);
-    try {
-      database.exec("CREATE TABLE agent_databases (agent_id TEXT, path TEXT);");
-      database
-        .prepare("INSERT INTO agent_databases VALUES (?, ?)")
-        .run("removed", "removed-agent.sqlite");
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(statePath);
+    database.exec("CREATE TABLE agent_databases (agent_id TEXT, path TEXT);");
+    database
+      .prepare("INSERT INTO agent_databases VALUES (?, ?)")
+      .run("removed", "removed-agent.sqlite");
     return { stateDir, packageRoot, statePath };
   }
 
@@ -178,74 +174,65 @@ describe("candidate node runtime and database compatibility", () => {
   describe("candidate node database compatibility", () => {
     it("consolidates committed state and agent WAL rows without changing their live families", async () => {
       const { DatabaseSync } = requireNodeSqlite();
-      const state = new DatabaseSync(fixture.statePath);
+      using state = new DatabaseSync(fixture.statePath);
       const agentPath = path.join(fixture.stateDir, "agent.sqlite");
-      const agent = new DatabaseSync(agentPath);
-      try {
-        for (const writer of [state, agent]) {
-          writer.exec(`
+      using agent = new DatabaseSync(agentPath);
+      for (const writer of [state, agent]) {
+        writer.exec(`
             PRAGMA journal_mode = WAL;
             PRAGMA wal_autocheckpoint = 0;
             CREATE TABLE wal_probe (value TEXT);
             INSERT INTO wal_probe VALUES ('discard'), ('committed-wal');
             DELETE FROM wal_probe WHERE rowid = 1;
           `);
+      }
+      state.prepare("INSERT INTO agent_databases VALUES (?, ?)").run("active", agentPath);
+      const before = snapshotPreflightSourceManifest(fixture.stateDir);
+      const stateEntries = await fs.readdir(path.dirname(fixture.statePath));
+      const copiedPaths: string[] = [];
+      mocks.command.mockImplementation(async (argv: string[]) => {
+        const commandIndex = argv.indexOf("database");
+        const kind = copiedPaths.length === 0 ? "state" : "agent";
+        expect(argv.slice(0, commandIndex + 2)).toEqual([
+          process.execPath,
+          ...(process.versions.bun ? ["--no-install"] : []),
+          path.join(fixture.packageRoot, "openclaw.mjs"),
+          "database",
+          kind === "state" ? "preflight" : "preflight-agent",
+        ]);
+        const copiedPath = argv[commandIndex + 2] ?? "";
+        expect([fixture.statePath, agentPath]).not.toContain(copiedPath);
+        copiedPaths.push(copiedPath);
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          await expect(fs.access(`${copiedPath}${suffix}`)).rejects.toMatchObject({
+            code: "ENOENT",
+          });
         }
-        state.prepare("INSERT INTO agent_databases VALUES (?, ?)").run("active", agentPath);
-        const before = snapshotPreflightSourceManifest(fixture.stateDir);
-        const stateEntries = await fs.readdir(path.dirname(fixture.statePath));
-        const copiedPaths: string[] = [];
-        mocks.command.mockImplementation(async (argv: string[]) => {
-          const commandIndex = argv.indexOf("database");
-          const kind = copiedPaths.length === 0 ? "state" : "agent";
-          expect(argv.slice(0, commandIndex + 2)).toEqual([
-            process.execPath,
-            ...(process.versions.bun ? ["--no-install"] : []),
-            path.join(fixture.packageRoot, "openclaw.mjs"),
-            "database",
-            kind === "state" ? "preflight" : "preflight-agent",
+        using snapshot = new DatabaseSync(copiedPath, { readOnly: true });
+        if (kind === "state") {
+          expect(
+            snapshot.prepare("SELECT rowid, agent_id, path FROM agent_databases").all(),
+          ).toEqual([
+            { rowid: 1, agent_id: "removed", path: "removed-agent.sqlite" },
+            { rowid: 2, agent_id: "active", path: agentPath },
           ]);
-          const copiedPath = argv[commandIndex + 2] ?? "";
-          expect([fixture.statePath, agentPath]).not.toContain(copiedPath);
-          copiedPaths.push(copiedPath);
-          for (const suffix of ["-wal", "-shm", "-journal"]) {
-            await expect(fs.access(`${copiedPath}${suffix}`)).rejects.toMatchObject({
-              code: "ENOENT",
-            });
-          }
-          const snapshot = new DatabaseSync(copiedPath, { readOnly: true });
-          try {
-            if (kind === "state") {
-              expect(
-                snapshot.prepare("SELECT rowid, agent_id, path FROM agent_databases").all(),
-              ).toEqual([
-                { rowid: 1, agent_id: "removed", path: "removed-agent.sqlite" },
-                { rowid: 2, agent_id: "active", path: agentPath },
-              ]);
-            }
-            expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({
-              journal_mode: "delete",
-            });
-            expect(snapshot.prepare("SELECT rowid, value FROM wal_probe").all()).toEqual([
-              { rowid: 2, value: "committed-wal" },
-            ]);
-          } finally {
-            snapshot.close();
-          }
-          return preflightResult(kind);
-        });
-
-        await assertNodeRuntimeUpdateCompatible(fixture);
-
-        expect(mocks.command).toHaveBeenCalledTimes(2);
-        expect(snapshotPreflightSourceManifest(fixture.stateDir)).toEqual(before);
-        expect(await fs.readdir(path.dirname(fixture.statePath))).toEqual(stateEntries);
-        for (const copiedPath of copiedPaths) {
-          await expect(fs.access(copiedPath)).rejects.toMatchObject({ code: "ENOENT" });
         }
-      } finally {
-        agent.close();
-        state.close();
+        expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({
+          journal_mode: "delete",
+        });
+        expect(snapshot.prepare("SELECT rowid, value FROM wal_probe").all()).toEqual([
+          { rowid: 2, value: "committed-wal" },
+        ]);
+        return preflightResult(kind);
+      });
+
+      await assertNodeRuntimeUpdateCompatible(fixture);
+
+      expect(mocks.command).toHaveBeenCalledTimes(2);
+      expect(snapshotPreflightSourceManifest(fixture.stateDir)).toEqual(before);
+      expect(await fs.readdir(path.dirname(fixture.statePath))).toEqual(stateEntries);
+      for (const copiedPath of copiedPaths) {
+        await expect(fs.access(copiedPath)).rejects.toMatchObject({ code: "ENOENT" });
       }
     });
 
