@@ -1,7 +1,7 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { ExecToolConfig } from "../../../config/types.tools.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./exec-safe-bins.js";
 
 const originalPath = process.env.PATH ?? "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jqWarning =
   "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.";
 const sedWarning =
@@ -94,30 +95,24 @@ describe("doctor exec safe bin helpers", () => {
   });
 
   it("flags safeBins that resolve outside trusted directories", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-safe-bin-"));
-    try {
-      const binPath = join(tempDir, "custom-safe-bin");
-      writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
-      chmodSync(binPath, 0o755);
-      process.env.PATH = [tempDir, originalPath]
-        .filter((entry) => entry.length > 0)
-        .join(delimiter);
+    const tempDir = tempDirs.make("openclaw-safe-bin-");
+    const binPath = join(tempDir, "custom-safe-bin");
+    writeFileSync(binPath, "#!/bin/sh\nexit 0\n");
+    chmodSync(binPath, 0o755);
+    process.env.PATH = [tempDir, originalPath].filter((entry) => entry.length > 0).join(delimiter);
 
-      const hits = scanExecSafeBinTrustedDirHints(
-        binConfig(["custom-safe-bin"], { "custom-safe-bin": {} }),
-      );
+    const hits = scanExecSafeBinTrustedDirHints(
+      binConfig(["custom-safe-bin"], { "custom-safe-bin": {} }),
+    );
 
-      expect(hits).toStrictEqual([
-        { scopePath: "tools.exec", bin: "custom-safe-bin", resolvedPath: binPath },
-      ]);
+    expect(hits).toStrictEqual([
+      { scopePath: "tools.exec", bin: "custom-safe-bin", resolvedPath: binPath },
+    ]);
 
-      const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
-      expect(warnings).toStrictEqual([
-        `- tools.exec.safeBins entry 'custom-safe-bin' resolves to '${binPath}' outside trusted safe-bin dirs.`,
-        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
-      ]);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    const warnings = collectExecSafeBinTrustedDirHintWarnings(hits);
+    expect(warnings).toStrictEqual([
+      `- tools.exec.safeBins entry 'custom-safe-bin' resolves to '${binPath}' outside trusted safe-bin dirs.`,
+      "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
+    ]);
   });
 });

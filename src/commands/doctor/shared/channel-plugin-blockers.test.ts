@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
@@ -12,29 +13,19 @@ import {
 
 function plugin(
   id: string,
-  options: {
-    origin?: "bundled" | "config" | "global" | "workspace";
-    channelId?: string;
-    enabledByDefault?: boolean;
-    [key: string]: unknown;
-  } = {},
+  options: Partial<manifestRegistry.PluginManifestRecord> & { channelId?: string } = {},
 ) {
-  const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
+  const { channelId = id, ...metadata } = options;
   const rootDir = `/plugins/${id}`;
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    origin,
+    origin: "global",
     channels: [channelId],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    enabledByDefault,
+    enabledByDefault: false,
     rootDir,
     source: `${rootDir}/index.ts`,
-    manifestPath: `${rootDir}/openclaw.plugin.json`,
     ...metadata,
-  };
+  });
 }
 
 function packagePlugin(id: string, token: string, options: Parameters<typeof plugin>[1] = {}) {
@@ -51,11 +42,11 @@ const sharedOwner = (id: string, options: Parameters<typeof plugin>[1] = {}) =>
   plugin(id, { origin: "config", channelId: "shared-chat", ...options });
 const bundledOwner = { origin: "bundled", enabledByDefault: true } as const;
 
-function mockManifestPlugins(plugins: unknown[]) {
+function mockManifestPlugins(plugins: manifestRegistry.PluginManifestRecord[]) {
   vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
     plugins,
     diagnostics: [],
-  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistryCore>);
+  });
 }
 
 type Blocker = ReturnType<typeof scanConfiguredChannelPluginBlockers>[number];

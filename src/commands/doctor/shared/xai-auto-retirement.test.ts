@@ -48,20 +48,7 @@ function configForRoute(baseUrl: string, models: ModelDefinitionConfig[] = []): 
   };
 }
 
-function resolver(options: Omit<Parameters<typeof createResolver>[0], "cfg" | "env"> = {}) {
-  return createResolver({ cfg, env: state.env, ...options });
-}
-
-function session(sessionId: string): SessionEntry {
-  return {
-    sessionId,
-    updatedAt: 1,
-    providerOverride: "xai",
-    modelOverride: "auto",
-    authProfileOverride: "xai:fixture",
-    authProfileOverrideSource: "user",
-  };
-}
+const resolver = () => createResolver({ cfg, env: state.env });
 
 it("repairs the subscription selector while preserving fallbacks and model settings", () => {
   const repaired = repairConfig(cfg, resolver());
@@ -77,7 +64,14 @@ it("repairs the subscription selector while preserving fallbacks and model setti
 });
 
 it("repairs a session override without changing its selected profile", () => {
-  const entry = session("xai-upgrade-session");
+  const entry: SessionEntry = {
+    sessionId: "xai-upgrade-session",
+    updatedAt: 1,
+    providerOverride: "xai",
+    modelOverride: "auto",
+    authProfileOverride: "xai:fixture",
+    authProfileOverrideSource: "user",
+  };
   expect(repairSession(entry, "main", resolver(), "xai/grok-4.7", [])).toBe(true);
   expect(entry).toMatchObject({
     modelOverride: "grok-4.7",
