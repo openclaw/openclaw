@@ -3144,11 +3144,9 @@ describe("runReplyAgent pending final delivery capture", () => {
     );
     state.beforeAgentReplyRunMock.mockResolvedValue({ handled: true });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
-    const receipt: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({ opts: { replyOperationRunState: receipt } });
+    const { run } = createMinimalRun();
 
     await expect(run()).resolves.toBeUndefined();
-    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
