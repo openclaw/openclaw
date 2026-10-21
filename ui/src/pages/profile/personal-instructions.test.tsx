@@ -2,10 +2,12 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -38,11 +40,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createContext(
-  request: GatewayBrowserClient["request"],
-  signedIn = true,
-  multipleProfiles = true,
-) {
+function createContext(request: GatewayRequestHandler, signedIn = true, multipleProfiles = true) {
   const harness = createConnectedContext(
     request,
     signedIn ? { id: "profile-1", name: "Ada" } : null,
@@ -67,7 +65,7 @@ function createContext(
     emit: (patch: Parameters<typeof harness.emitSnapshot>[0]) => harness.emitSnapshot(patch),
   };
 }
-function mount(request: GatewayBrowserClient["request"], signedIn = true, multipleProfiles = true) {
+function mount(request: GatewayRequestHandler, signedIn = true, multipleProfiles = true) {
   const harness = createContext(request, signedIn, multipleProfiles);
   const provider = createSolidApplicationContextProvider(harness.context);
   const { container: element } = mountSolid(() => <PersonalInstructions />, {
@@ -389,8 +387,7 @@ it("keeps the actual Profile editor mounted across an offline transition", async
     }),
     "users.github.status": () => disconnectedGitHub,
   });
-  const client = createTestGatewayClient(request);
-  const { context, emit } = createContext(client.request.bind(client));
+  const { context, emit } = createContext(request);
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;

@@ -46,6 +46,14 @@ import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import {
+  createProfileChannelIdentitiesState,
+  sameConnectionScopes,
+  type ProfileChannelIdentityBusyState,
+  type ProfileChannelIdentityInputs,
+  type ProfileChannelIdentitiesState,
+} from "./profile-channel-identities-state.ts";
+import { ProfileChannelIdentities } from "./profile-channel-identities.tsx";
 import { ProfileHero } from "./profile-hero.tsx";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
@@ -60,6 +68,9 @@ type IdentityChange =
 
 class ProfileState {
   private publishTarget?: () => void;
+  private latestGatewaySnapshot: ApplicationGatewaySnapshot;
+  private syncingChannelIdentityState = false;
+  channelIdentityState: ProfileChannelIdentitiesState | null = null;
   readonly modelAccountsTarget: ModelAccountsTargetSource = {
     read: () => ({
       gateway: this.context.gateway.snapshot,
@@ -89,34 +100,119 @@ class ProfileState {
   canWrite = false;
   connectionScopes: readonly string[] | null = null;
   identityRequestId = 0;
+  identityProfileReady = false;
+  channelIdentityProfileId: string | null = null;
+  channelIdentityBusy: ProfileChannelIdentityBusyState = { loading: false, mutation: false };
+  channelIdentityGenerations = { request: 0, target: 0 };
   hello: ApplicationGatewaySnapshot["hello"] | undefined;
 
   constructor(
     readonly context: ApplicationContext,
     private readonly invalidate: () => void,
-  ) {}
+  ) {
+    this.latestGatewaySnapshot = context.gateway.snapshot;
+  }
   publish() {
+    this.syncChannelIdentityState();
+    this.publishView();
+  }
+  private publishView() {
     this.invalidate();
     this.publishTarget?.();
   }
+  hasPresentation() {
+    return (
+      (this.connected && this.client !== null) ||
+      this.connectionScopes !== null ||
+      this.selfUser !== null
+    );
+  }
+  private channelIdentityInputs(): ProfileChannelIdentityInputs {
+    return {
+      profileId: this.channelIdentityProfileId,
+      visible: this.ownProfile !== null && this.ownProfile.id === this.channelIdentityProfileId,
+      profileReady: this.identityProfileReady,
+      identityBusy: this.identityLoading || this.identityBusy !== null,
+      identityGeneration: this.identityRequestId,
+      targetGeneration: this.channelIdentityGenerations.target,
+      generations: this.channelIdentityGenerations,
+    };
+  }
+  private syncChannelIdentityState() {
+    const hasPresentation = this.hasPresentation();
+    if (!hasPresentation && !this.channelIdentityState) {
+      return;
+    }
+
+    if (hasPresentation) {
+      this.channelIdentityState ??= createProfileChannelIdentitiesState((busyState) =>
+        this.onChannelIdentityBusyStateChange(busyState),
+      );
+    }
+    const identitiesState = this.channelIdentityState;
+    if (!identitiesState) {
+      return;
+    }
+    const wasSyncingChannelIdentityState = this.syncingChannelIdentityState;
+    this.syncingChannelIdentityState = true;
+    try {
+      identitiesState.update(this.channelIdentityInputs(), this.latestGatewaySnapshot);
+    } finally {
+      this.syncingChannelIdentityState = wasSyncingChannelIdentityState;
+    }
+  }
+  private onChannelIdentityBusyStateChange(busyState: ProfileChannelIdentityBusyState) {
+    this.channelIdentityBusy = busyState;
+    if (!this.syncingChannelIdentityState) {
+      this.publishView();
+    }
+  }
+  releaseChannelIdentityState(identitiesState: ProfileChannelIdentitiesState) {
+    if (this.channelIdentityState !== identitiesState) {
+      return;
+    }
+    identitiesState.dispose();
+    this.channelIdentityState = null;
+    this.channelIdentityBusy = { loading: false, mutation: false };
+  }
   dispose() {
     this.publishTarget = undefined;
-    this.identityRequestId += 1;
+    this.channelIdentityState?.dispose();
+    this.channelIdentityState = null;
+    this.advanceIdentityRequest(true);
     this.client = null;
     this.connected = false;
     this.identityReady = false;
+    this.channelIdentityProfileId = null;
+    this.identityProfileReady = false;
+    this.channelIdentityBusy = { loading: false, mutation: false };
+  }
+  advanceIdentityRequest(targetChanged = false) {
+    const request = ++this.identityRequestId;
+    this.channelIdentityGenerations.request = request;
+    if (targetChanged) {
+      this.channelIdentityGenerations.target += 1;
+    }
+    return request;
   }
   applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    this.latestGatewaySnapshot = snapshot;
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
     // Hello can precede users.self; unresolved identity is not a sign-out.
     const identityReady = nextConnected && snapshot.selfUser !== undefined;
     const nextCanRead = hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const writeAccessChanged = nextCanWrite !== this.canWrite;
+    const connectionTargetChanged =
+      nextConnected !== this.connected || identityReady !== this.identityReady;
     const connectionChanged =
-      nextConnected !== this.connected ||
-      identityReady !== this.identityReady ||
-      (nextConnected && this.hello !== snapshot.hello);
+      connectionTargetChanged || (nextConnected && this.hello !== snapshot.hello);
+    const grantedScopes = snapshot.hello?.auth?.scopes ?? null;
+    const nextConnectionScopes = nextConnected ? (grantedScopes ? [...grantedScopes] : null) : null;
+    const connectionScopesChanged =
+      (nextConnected || clientChanged) &&
+      !sameConnectionScopes(this.connectionScopes, nextConnectionScopes);
     const nextSelfUser = identityReady
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : clientChanged
@@ -125,6 +221,7 @@ class ProfileState {
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const identityTargetChanged = clientChanged || connectionTargetChanged || selfProfileChanged;
     const writeAccessLost =
       nextConnected &&
       !nextCanWrite &&
@@ -134,6 +231,8 @@ class ProfileState {
     const readAccessLost = nextConnected && this.canRead && !nextCanRead;
     const identitySourceChanged =
       clientChanged || selfProfileChanged || writeAccessLost || readAccessLost;
+    const requestSourceChanged =
+      identitySourceChanged || connectionChanged || connectionScopesChanged || writeAccessChanged;
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.identityReady = identityReady;
@@ -147,11 +246,19 @@ class ProfileState {
         ? (snapshot.hello?.auth?.scopes ?? null)
         : this.connectionScopes;
     this.selfUser = nextSelfUser;
-    if (identitySourceChanged || connectionChanged) {
-      this.identityRequestId += 1;
+    if (requestSourceChanged) {
+      this.advanceIdentityRequest(identityTargetChanged);
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
+      this.identityProfileReady = false;
+      this.channelIdentityBusy = {
+        loading: false,
+        mutation: identityTargetChanged ? false : this.channelIdentityBusy.mutation,
+      };
+      if (identityTargetChanged) {
+        this.channelIdentityProfileId = null;
+      }
     }
     if (identitySourceChanged) {
       this.ownProfile = null;
@@ -162,7 +269,7 @@ class ProfileState {
     if (!identityReady || !snapshot.client) {
       return;
     }
-    if (identitySourceChanged || connectionChanged) {
+    if (requestSourceChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -177,13 +284,14 @@ class ProfileState {
     if (!client || !this.identityReady || !this.canRead || this.identityLoading) {
       return;
     }
-    const requestId = ++this.identityRequestId;
+    const requestId = this.advanceIdentityRequest();
     const currentProfile = this.ownProfile;
     const displayNameDraft = this.displayName;
     const hasUnsavedDisplayName =
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
     this.identityLoading = true;
     this.identityError = null;
+    this.identityProfileReady = false;
     this.publish();
     try {
       const profile = await this.context.gateway.loadSelfProfile();
@@ -191,6 +299,8 @@ class ProfileState {
         return;
       }
       this.ownProfile = profile;
+      this.channelIdentityProfileId = profile?.id ?? null;
+      this.identityProfileReady = true;
       if (!profile) {
         return;
       }
@@ -335,7 +445,13 @@ class ProfileState {
   }
 
   refreshManually() {
-    if (this.identityReady && !this.identityBusy && !this.identityLoading) {
+    if (
+      this.identityReady &&
+      !this.identityBusy &&
+      !this.identityLoading &&
+      !this.channelIdentityBusy.loading &&
+      !this.channelIdentityBusy.mutation
+    ) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -375,27 +491,29 @@ export function ProfilePage() {
     return state;
   };
   // Retire identity requests synchronously when connection authority changes.
-  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (
-      !state.identityBusy &&
-      event.event === "sessions.changed" &&
-      asOptionalRecord(event.payload)?.reason === "profile-identity"
-    ) {
-      state.identityRequestId += 1;
-      state.identityLoading = false;
-      void state.loadIdentity();
-    }
-  });
+  const stops = [
+    context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot)),
+    context.agents.subscribe(() => state.publish()),
+    context.agentIdentity.subscribe(() => state.publish()),
+    context.gateway.subscribeEvents((event) => {
+      if (
+        !state.identityBusy &&
+        !state.channelIdentityBusy.mutation &&
+        event.event === "sessions.changed" &&
+        asOptionalRecord(event.payload)?.reason === "profile-identity"
+      ) {
+        state.advanceIdentityRequest();
+        state.identityLoading = false;
+        void state.loadIdentity();
+      }
+    }),
+  ];
   state.applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
-    stopGateway();
-    stopEvents();
+    stops.forEach((stop) => stop());
     state.dispose();
   });
-  const connected = () => view().connected && view().client !== null;
-  const hasPresentation = () =>
-    connected() || view().connectionScopes !== null || view().selfUser !== null;
+  const hasPresentation = () => view().hasPresentation();
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -430,7 +548,11 @@ export function ProfilePage() {
             <button
               class="btn profile-refresh"
               disabled={
-                !view().identityReady || view().identityLoading || view().identityBusy !== null
+                !view().identityReady ||
+                view().identityLoading ||
+                view().identityBusy !== null ||
+                view().channelIdentityBusy.loading ||
+                view().channelIdentityBusy.mutation
               }
               onClick={() => state.refreshManually()}
             >
@@ -474,7 +596,7 @@ export function ProfilePage() {
                     <button
                       type="button"
                       class="btn"
-                      disabled={view().identityBusy !== null}
+                      disabled={view().identityBusy !== null || view().channelIdentityBusy.mutation}
                       onClick={() => context.gateway.connect()}
                     >
                       {t("profilePage.access.reconnect")}
@@ -549,6 +671,12 @@ export function ProfilePage() {
                 }
               />
             </Show>
+            <ProfileChannelIdentities
+              identitiesState={view().channelIdentityState!}
+              onPresentationDisposed={(identitiesState) =>
+                state.releaseChannelIdentityState(identitiesState)
+              }
+            />
           </Show>
           <PersonalInstructions
             hidden={
