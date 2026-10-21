@@ -12,6 +12,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { formatProviderLoginCommand } from "../../shared/provider-login-command.js";
+import { findPersonalAuthProfileStoreFailure } from "./personal-store-error.js";
 import type { AuthProfileFailureReason, AuthProfileStore, OAuthCredential } from "./types.js";
 
 export type OAuthRefreshFailureReason =
@@ -183,6 +184,7 @@ export class OAuthRefreshFailureError extends Error {
   readonly profileId?: string;
   readonly reason: OAuthRefreshFailureReason | null;
   readonly status?: number;
+  readonly storageFailure: boolean;
   readonly summary?: string;
 
   constructor(params: {
@@ -192,6 +194,7 @@ export class OAuthRefreshFailureError extends Error {
     cause?: unknown;
     errorType?: string;
     reason?: OAuthRefreshFailureReason | null;
+    storageFailure?: boolean;
     status?: number;
     summary?: string;
   }) {
@@ -212,6 +215,8 @@ export class OAuthRefreshFailureError extends Error {
         ? params.reason
         : (inherited?.reason ?? classifyOAuthRefreshFailureReason(params.message));
     this.status = params.status ?? inherited?.status;
+    this.storageFailure =
+      params.storageFailure ?? findPersonalAuthProfileStoreFailure(params.cause) !== undefined;
     this.summary = normalizeBoundedOptionalString(
       params.summary ?? inherited?.summary,
       OAUTH_REFRESH_FAILURE_SUMMARY_MAX_CHARS,
@@ -254,14 +259,18 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       initiatingCause instanceof OAuthRefreshFailureError
         ? initiatingCause
         : readProviderOAuthRefreshFailure(initiatingCause);
+    const personalStoreFailure = findPersonalAuthProfileStoreFailure(params.cause);
     const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
     super({
       provider: params.credential.provider,
       profileId: params.profileId,
-      message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
+      message: personalStoreFailure
+        ? formatRedactedOAuthRefreshError(personalStoreFailure, secrets)
+        : `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
       cause: createRedactedOAuthRefreshCause(params.cause, secrets),
       errorType: presentation?.errorType,
       reason: presentation?.reason,
+      storageFailure: personalStoreFailure !== undefined,
       status: presentation?.status,
       summary: presentation?.summary
         ? formatRedactedOAuthRefreshError(presentation.summary, secrets)

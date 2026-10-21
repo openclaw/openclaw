@@ -19,6 +19,7 @@ import {
 } from "../../state/user-model-accounts.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
+import { PersonalAuthProfileStoreError } from "./personal-store-error.js";
 import { assertPersonalAuthProfileRuntime } from "./runtime-scope.js";
 import type {
   AuthProfileCredential,
@@ -77,10 +78,15 @@ export function withPersonalAuthProfileStore<T>(
         };
         const readProfile = async () => {
           const authority = await capturePersonalCredentialAuthority(context, profileId);
-          const profile = await scope.execute({
-            type: "authProfiles.personal",
-            input: { profileId, artifactPreserving: false },
-          });
+          let profile: UserModelAuthProfile | undefined;
+          try {
+            profile = await scope.execute({
+              type: "authProfiles.personal",
+              input: { profileId, artifactPreserving: false },
+            });
+          } catch (error) {
+            throw new PersonalAuthProfileStoreError("read", error);
+          }
           assertCurrent();
           authority.observe(profile?.credential);
           // Recovery can prepare a replacement without reviving previously retained readers.
@@ -154,7 +160,7 @@ export function withPersonalAuthProfileStore<T>(
               ) {
                 return asStore(next);
               }
-              throw error;
+              throw new PersonalAuthProfileStoreError("update", error);
             }
           },
           async accept(credential, assertSelectionCurrent) {

@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it as baseIt, vi } from "vitest";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import {
   SqliteWorkerError,
@@ -41,6 +42,7 @@ import {
   mockOAuthProviderOperations,
   type NativeOAuthProviderFixture,
 } from "./oauth-native-provider.test-support.js";
+import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { OAuthCredential, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
@@ -423,6 +425,37 @@ it("normalizes refreshed optionals once", async ({ profileId, credential, replac
   expect(readUserModelAuthProfile(profileId)?.credential).toStrictEqual(replacement);
   expect(refreshCredential).toHaveBeenCalledTimes(1);
   expect(buildApiKey).toHaveBeenCalledTimes(1);
+});
+
+it("keeps personal store write failures out of OAuth credential rejection", async ({
+  profileId,
+  replacement,
+}) => {
+  const storeFailure = new Error("Synthetic personal store write failure");
+  let replacements = 0;
+  probe.command(workerStore, (command, executeOptions, scope) => {
+    if (command.type === "authProfiles.personalReplace" && ++replacements >= 2) {
+      throw storeFailure;
+    }
+    return scope.execute(command, executeOptions);
+  });
+  const refreshCredential = vi.fn(async () => replacement);
+  managerWith({ refreshCredential });
+
+  const caught: unknown = await resolveApiKeyForProfile({
+    profileId,
+    store: { version: 1, profiles: {} },
+    cfg: {},
+  }).catch((error: unknown) => error);
+
+  expect(refreshCredential).toHaveBeenCalledOnce();
+  expect(replacements).toBeGreaterThanOrEqual(2);
+  expect(caught).toBeInstanceOf(OAuthRefreshFailureError);
+  expect(caught).toMatchObject({ storageFailure: true });
+  const message = formatErrorMessage(caught);
+  expect(message).toContain(storeFailure.message);
+  expect(message).not.toContain("re-authenticate");
+  expect(message).not.toContain("OAuth token refresh failed");
 });
 
 it("rechecks live pins after refresh", async ({ owner, profileId, credential, replacement }) => {

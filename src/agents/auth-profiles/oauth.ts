@@ -33,7 +33,9 @@ import {
   markOAuthRefreshFailureSettled,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
-import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./personal-store.js";
+import { findPersonalAuthProfileStoreFailure } from "./personal-store-error.js";
+import { withPersonalAuthProfileStore } from "./personal-store.js";
+import type { PersonalAuthProfileStore } from "./personal-store.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -376,6 +378,13 @@ async function resolveApiKeyForProfileOwned(
     params.signal?.throwIfAborted();
     if (hasSqliteWorkerOutcomeUnknown(error)) {
       throw error;
+    }
+    if (error instanceof OAuthRefreshFailureError && error.storageFailure) {
+      throw error;
+    }
+    const personalStoreFailure = findPersonalAuthProfileStoreFailure(error);
+    if (personalStoreFailure) {
+      throw personalStoreFailure;
     }
     let settlementComplete = isSettledOAuthRefreshFailure(error);
     let refreshedStore =
