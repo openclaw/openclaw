@@ -23,6 +23,7 @@ type FixtureMode =
   | "tracked-close-failure"
   | "concurrent-close"
   | "held-route-drain"
+  | "held-route-failure"
   | "close-failure"
   | "late-context"
   | "late-setup"
@@ -79,6 +80,7 @@ const state = vi.hoisted(() => {
     firstCleanupEvent: "", pendingCloseCalls: -1, fulfilledBeforeFetchRelease: [],
     heldBodyErrorRetained: false, contextCleanupEvent: "", callbackOutcomes: [],
     pendingPageReject: undefined,
+    heldRouteFault: new Error("synthetic held module route failure"),
     closeFault: new Error("synthetic context close failure") };
 });
 vi.mock("playwright", () => ({ chromium: { launch: async () => {
@@ -135,7 +137,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
         });
         return context;
       }
-      if (${JSON.stringify(mode)} === "held-route-drain") {
+      if (${JSON.stringify(mode)}.startsWith("held-route-")) {
         const handlers = [];
         const pending = new Set();
         const contextHandlers = [];
@@ -165,6 +167,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
               fallback: async () => { state.events.push("fell through " + label); },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
+                if (label === "fault") throw state.heldRouteFault;
                 if (label === "later" || scope === "context") {
                   const started = scope === "context" ? state.contextFetchStarted : state.laterFetchStarted;
                   const gate = scope === "context" ? state.contextFetch : state.laterFetch;
@@ -499,6 +502,14 @@ suite.define(() => {
         message: "Browser context cleanup canceled the held module request",
       });
       event("held callback joined");
+    });
+  } else if (${JSON.stringify(mode)} === "held-route-failure") {
+    it("reports a settled held route failure during context cleanup", async () => {
+      await suite.withPage({}, async ({ page }) => {
+        await holdModuleResponse(page, /module-fault/u);
+        const outcome = await page.dispatchModule("module-fault", "fault");
+        expect(outcome.label).toBe("fault");
+      });
     });
   } else if (${JSON.stringify(mode)} === "concurrent-close") {
     it("joins the first context close", async () => {
@@ -849,6 +860,13 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       browserClosed: true,
       serverClosed: true,
     });
+  }));
+
+it("reports settled held route failures through context cleanup", (context) =>
+  runJoinedFixture("held-route-failure", context, (result) => {
+    expect(result.code, result.output).toBe(1);
+    expect(result.output).toContain("synthetic held module route failure");
+    expect(result.output).not.toContain("Unhandled Rejection");
   }));
 
 it.for([
