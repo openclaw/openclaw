@@ -22,11 +22,20 @@ import type { ClawAddPlan } from "../../claws/types.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../../config/runtime-write-application.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../../cron/config-revision.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -125,6 +134,9 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             return application;
           }
         : undefined;
+      const application = createRuntimeConfigWriteApplication(
+        captureGatewayRootWorkAdmissionContinuationScope()?.run,
+      );
       const result = await applyClawAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -158,6 +170,16 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
+        configWriteOptions: attachRuntimeConfigWriteApplication({}, application),
+        waitForAgentRuntime: async () => {
+          const outcome = application.claimed ? await application.result : "unclaimed";
+          assertCurrent();
+          if (outcome !== "applied") {
+            throw new Error(
+              `Claw agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); inspect config.get before retrying.`,
+            );
+          }
+        },
         cronGateway: {
           add: async (input, options) => {
             const assertForwardCurrent = () => {
@@ -188,7 +210,39 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
           }),
           get: async (jobId) => {
             assertCurrent();
-            return await context.cron.readJob(jobId);
+            const job = await context.cron.readJob(jobId);
+            return job ? { ...job, configRevision: resolveCronJobConfigRevision(job) } : undefined;
+          },
+          writeScratch: async (jobId, content, commitGuard) => {
+            const scratchResult = await context.cron.writeScratch(jobId, {
+              content,
+              expectedRevision: 0,
+              commitGuard: () => {
+                assertCurrent();
+                commitGuard();
+              },
+            });
+            if (!scratchResult.ok) {
+              throw new Error("Claw automation scratch changed before import.");
+            }
+          },
+          enable: async (jobId, expectedConfigRevision, commitGuard) => {
+            await context.cron.updateWithPrecondition(
+              jobId,
+              { enabled: true },
+              (job) => {
+                const actual = resolveCronJobConfigRevision(job);
+                if (actual !== expectedConfigRevision) {
+                  throw new CronJobConfigRevisionConflictError(expectedConfigRevision, actual);
+                }
+              },
+              {
+                commitGuard: () => {
+                  assertCurrent();
+                  commitGuard();
+                },
+              },
+            );
           },
           remove: async (jobId, options) => {
             const assertForwardCurrent = () => {

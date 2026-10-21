@@ -1,12 +1,9 @@
 import { A2uiMessageProcessor } from "@a2ui/web_core/v0_8";
-import { SignalArray } from "signal-utils/array";
-import { SignalMap } from "signal-utils/map";
-import { SignalObject } from "signal-utils/object";
-import { SignalSet } from "signal-utils/set";
-import { For, Show, createSignal, onCleanup, untrack } from "solid-js";
+import { For, Show, untrack } from "solid-js";
+import { observeSource } from "./catalog-primitives.jsx";
+import { CatalogNode, catalogStyles } from "./catalog-v0.8.jsx";
 import { hostStyles } from "./host-styles.js";
 import { defineHost } from "./host.jsx";
-import { provideTheme } from "./theme.js";
 
 const createSecureActionId = () => {
   const crypto = globalThis.crypto;
@@ -21,12 +18,7 @@ const createSecureActionId = () => {
 };
 
 class A2UIModel {
-  #processor = new A2uiMessageProcessor({
-    arrayCtor: SignalArray,
-    mapCtor: SignalMap,
-    objCtor: SignalObject,
-    setCtor: SignalSet,
-  });
+  #processor = new A2uiMessageProcessor();
   surfaces = [];
   pendingAction = null;
   toast = null;
@@ -38,13 +30,11 @@ class A2UIModel {
   connect(host) {
     host.addEventListener("a2uiaction", this.#actionListener);
     globalThis.addEventListener("openclaw:a2ui-action-status", this.#statusListener);
-    const stopTheme = provideTheme(host);
     return () => {
       host.removeEventListener("a2uiaction", this.#actionListener);
       globalThis.removeEventListener("openclaw:a2ui-action-status", this.#statusListener);
       clearTimeout(this.#toastTimer);
       this.toast = null;
-      stopTheme();
     };
   }
 
@@ -103,9 +93,9 @@ class A2UIModel {
     const sourceComponentId = payload.sourceComponentId ?? "";
     const surfaces = this.#processor.getSurfaces();
 
-    let surfaceId = null;
-    let sourceNode = null;
-    for (const [sid, surface] of surfaces.entries()) {
+    let surfaceId = surfaces.has(payload.surfaceId) ? payload.surfaceId : null;
+    let sourceNode = surfaceId ? payload.sourceComponent : null;
+    for (const [sid, surface] of sourceNode ? [] : surfaces.entries()) {
       const node = surface?.components?.get?.(sourceComponentId) ?? null;
       if (node) {
         surfaceId = sid;
@@ -222,22 +212,22 @@ class A2UIModel {
 
 function A2UIApp(props) {
   const model = untrack(() => props.model);
-  const [revision, setRevision] = createSignal(0);
-  model.notify = () => setRevision((value) => value + 1);
-  onCleanup(() => {
-    model.notify = () => {};
-  });
-  const read = () => {
-    revision();
-    return model;
-  };
+  const { read, revision } = observeSource(
+    () => model,
+    (notify) => {
+      model.notify = notify;
+      return () => {
+        model.notify = () => {};
+      };
+    },
+  );
   const statusText = () => {
     const action = read().pendingAction;
     return action ? `${action.phase === "sent" ? "Working" : "Sending"}: ${action.name}` : "";
   };
   return (
     <>
-      <style>{hostStyles}</style>
+      <style>{hostStyles + catalogStyles}</style>
       <Show
         when={read().surfaces.length > 0}
         fallback={
@@ -260,11 +250,15 @@ function A2UIApp(props) {
         <section id="surfaces">
           <For each={read().surfaces} keyed={(entry) => entry[0]}>
             {(entry) => (
-              <a2ui-surface
-                prop:surfaceId={entry()[0]}
-                prop:surface={entry()[1]}
-                prop:processor={model.processor}
-              />
+              <a2ui-surface>
+                <CatalogNode
+                  node={entry()[1].componentTree}
+                  processor={model.processor}
+                  surfaceId={entry()[0]}
+                  revision={revision()}
+                  onDataChange={() => model.notify()}
+                />
+              </a2ui-surface>
             )}
           </For>
         </section>

@@ -169,12 +169,12 @@ describe("gateway silent scope-upgrade reconnect", () => {
     const cli = { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI };
     const health = await callLocal("health", cli);
     expect(health.ok).toBe(true);
-    const admin = await callLocal("set-heartbeats", {
+    const admin = await callLocal("exec.approvals.get", {
       ...cli,
-      params: { enabled: false },
+      params: {},
       scopes: ["operator.admin"],
     });
-    expect(admin.ok).toBe(true);
+    expect(admin).toMatchObject({ file: { version: 1 } });
     const pending = await devicePairingModule.listDevicePairing();
     expect(pending.pending).toHaveLength(0);
     await expectReadScopedPairing(identity.deviceId);

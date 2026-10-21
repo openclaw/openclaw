@@ -70,7 +70,7 @@ describe("mention query cache", () => {
     {
       failure: "access revoked",
       error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-      message: "You cannot mention people here.",
+      message: "Mention access denied.",
     },
     {
       failure: "profile unavailable",
@@ -79,7 +79,7 @@ describe("mention query cache", () => {
         message: "Profile unavailable",
         details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       }),
-      message: "Your profile could not be verified.",
+      message: "Profile unverified.",
     },
     {
       failure: "invalid destination",
@@ -87,7 +87,7 @@ describe("mention query cache", () => {
         code: "INVALID_REQUEST",
         message: "Session was not found.",
       }),
-      message: "Mention search was rejected for this conversation.",
+      message: "Mention search rejected.",
     },
   ])("handles a background refresh failure: $failure", async ({ error, message }) => {
     const view = await staleFixture();
@@ -269,3 +269,33 @@ it.each(["pending", "denied"])(
     expect(menu.activeLabel()).toBe("Fresh");
   },
 );
+
+it("shares native mention lookup with external insertion and retires captured access on owner change", async () => {
+  const view = composerFixture("chat", "Before after");
+  const access = view.mentionAccess()!;
+  const pending = createDeferred<UsersMentionableResult>();
+  view.request.mockReturnValueOnce(pending.promise);
+  const first = access.request("Al");
+  const second = access.request("Al");
+  expect(view.request).toHaveBeenCalledTimes(1);
+  pending.resolve(people);
+  const [read, shared] = await Promise.all([first, second]);
+  expect(read?.result).toEqual(people);
+  expect(shared?.result).toBe(read?.result);
+  expect(access.read("Al")?.result).toBe(read?.result);
+  const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+  textarea.setSelectionRange(7, 12);
+  expect(read?.insert("profile-alex-online")).toBe(true);
+  view.refresh();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(view.value()).toEqual({
+    draft: "Before @Alex ",
+    mentions: [{ profileId: "profile-alex-online", start: 7, end: 12 }],
+  });
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
+  expect(view.send).not.toHaveBeenCalled();
+  view.replaceOwner();
+  expect(read?.insert("profile-alex-offline")).toBe(false);
+  expect(access.read("Al")).toBeNull();
+  expect(view.value().draft).toBe("Before @Alex ");
+});

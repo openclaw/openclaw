@@ -4,12 +4,6 @@ import type { AgentsFilesListResult, SkillStatusReport } from "../../api/types.t
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  beginPanelRefresh,
-  completePanelRefresh,
-  createPanelRefreshStatus,
-  failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
 import { createGitHubIdentity } from "../../features/github-connections/github-identity.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
@@ -74,7 +68,7 @@ import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
 
 type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
   AgentFilesState & {
-    chatModelCatalogStatus: ReturnType<typeof createPanelRefreshStatus>;
+    chatModelCatalogRead: Promise<void> | null;
     agentFilesList: AgentsFilesListResult | null;
     agentFileActive: string | null;
     identityDraft: AgentIdentityDraft;
@@ -126,7 +120,7 @@ export function createAgentsPageState(
     toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
-    chatModelCatalogStatus: createPanelRefreshStatus(),
+    chatModelCatalogRead: null,
     agentFilesLoading: false,
     agentFilesError: null,
     agentFilesList: null,
@@ -179,26 +173,22 @@ export function createAgentsPageState(
   let identitySaves = selectionDrafts.bindContext(context);
   let identityAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
   let catalogRecoveryPending = false;
-  const modelReader = new ModelCatalogReader(
-    () => {
-      if (modelReader.pending) {
-        state.chatModelCatalogStatus = beginPanelRefresh(state.chatModelCatalogStatus);
-      }
-      publish();
+  let catalogNeedsRecovery = false;
+  const modelReader = new ModelCatalogReader(publish, {
+    onRead: (read) => {
+      const completion = read.then((result) => {
+        const error = result && modelCatalogRefreshError(result);
+        if (error) {
+          throw new Error(error);
+        }
+      });
+      // The notice can be absent while another agent panel is selected.
+      void completion.catch(() => undefined);
+      state.chatModelCatalogRead = completion;
     },
-    {
-      onResult: (result) => {
-        const error = modelCatalogRefreshError(result);
-        settleModelCatalog(
-          error
-            ? failPanelRefresh(completePanelRefresh(), new Error(error), gateway.snapshot)
-            : completePanelRefresh(),
-        );
-      },
-      onError: (error) =>
-        settleModelCatalog(failPanelRefresh(state.chatModelCatalogStatus, error, gateway.snapshot)),
-    },
-  );
+    onResult: (result) => settleModelCatalog(Boolean(modelCatalogRefreshError(result))),
+    onError: () => settleModelCatalog(true),
+  });
   let routeDataInitialized = false;
   let applyingRouteSelection = false;
   let routeSelectionSuperseded = false;
@@ -505,11 +495,12 @@ export function createAgentsPageState(
   function resetModelCatalog() {
     modelReader.clear();
     catalogRecoveryPending = false;
-    state.chatModelCatalogStatus = createPanelRefreshStatus();
+    catalogNeedsRecovery = false;
+    state.chatModelCatalogRead = null;
   }
 
-  function settleModelCatalog(status: ReturnType<typeof createPanelRefreshStatus>) {
-    state.chatModelCatalogStatus = status;
+  function settleModelCatalog(needsRecovery: boolean) {
+    catalogNeedsRecovery = needsRecovery;
     if (catalogRecoveryPending) {
       catalogRecoveryPending = false;
       recoverModelCatalog();
@@ -517,8 +508,7 @@ export function createAgentsPageState(
   }
 
   function recoverModelCatalog() {
-    const status = state.chatModelCatalogStatus;
-    if (isGatewayAvailable(context.gateway.snapshot) && (status.awaitingGateway || status.error)) {
+    if (isGatewayAvailable(context.gateway.snapshot) && catalogNeedsRecovery) {
       ensureModelCatalog({ refresh: true });
     }
   }
@@ -529,9 +519,13 @@ export function createAgentsPageState(
       return;
     }
     if (modelReader.bind(context.gateway, { agentId })) {
-      state.chatModelCatalogStatus = createPanelRefreshStatus();
+      catalogNeedsRecovery = false;
+      state.chatModelCatalogRead = null;
     }
-    if (!modelReader.pending && (options.refresh || !state.chatModelCatalogStatus.hasLoaded)) {
+    if (
+      !modelReader.pending &&
+      (options.refresh || !state.chatModelCatalogRead || modelReader.failed)
+    ) {
       void modelReader.read();
     }
   }
@@ -892,6 +886,8 @@ export function createAgentsPageState(
         decisionModels: modelCatalog.decisionModels ?? [],
         modelSelectionPolicy: modelCatalog.modelSelectionPolicy,
         modelCatalogRetired: modelCatalog.retired,
+        modelCatalogHasSnapshot: modelCatalog.hasSnapshot,
+        modelCatalogGateway: context.gateway.snapshot,
         onIdentityFieldChange: (field: "name" | "emoji", value: string) => {
           if (canEditIdentity()) {
             setIdentityDraftField(state, field, value);

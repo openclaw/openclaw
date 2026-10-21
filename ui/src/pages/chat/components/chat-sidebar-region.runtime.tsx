@@ -1,12 +1,17 @@
 import "../../../styles/chat/side-panel.css";
-import "./chat-files-panel.tsx";
 import { Portal } from "@solidjs/web";
 import { For, Show, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../../../components/panel-hosted-tabs.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
@@ -15,20 +20,21 @@ import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import { SidebarPanel as SidebarPanelView } from "../chat-pane-embedded-view.tsx";
 import {
   SIDEBAR_GEOMETRY_COMMIT_EVENT,
-  SIDEBAR_MIN_HEIGHT_PX,
-  SIDEBAR_MIN_WIDTH_PX,
-  sidebarDock,
+  isSidebarNewTabActive,
   sidebarMainPanel,
   sidebarSidePanels,
   sidebarActivePanel,
   isSidebarSlotVisible,
-  type SidebarColumn,
   type SidebarPanel,
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
+import { MobilePanelLauncher } from "./chat-panel-launcher-mobile.tsx";
+import { SidebarRegionDivider } from "./chat-sidebar-region-divider.tsx";
 import {
   SidebarRegionHeader,
+  closeEmptyMobileHost,
   PanelTypeOption,
+  SidebarPanelLauncher,
   sidebarPanelType,
   readRegionHostedTabs,
 } from "./chat-sidebar-region-header.tsx";
@@ -41,7 +47,7 @@ import type {
 
 const regionOperations = new WeakMap<
   RegionElement,
-  Pick<RegionMethods, "readPanelHost" | "focusActiveSideTab"> & {
+  Pick<RegionMethods, "readPanelHost" | "focusActiveSideTab" | "readMobileChromeHeight"> & {
     inputsChanged(key: keyof RegionProps): void;
   }
 >();
@@ -50,9 +56,14 @@ function Region(props: RegionProps, host: RegionElement) {
   const panelHosts = new Map<SidebarSlotId, SidebarPanelHost>();
   const panelElements = new Map<string, HTMLDivElement>();
   let sideHeader: HTMLElement | null = null;
+  let localBack: HTMLElement | undefined;
   const tabFocus = createTabFocus();
   const focusActiveSideTab = tabFocus.focusActive;
   const operations = {
+    readMobileChromeHeight: () =>
+      (props.mobileHost?.destination.area === "panels"
+        ? (sideHeader?.getBoundingClientRect().height ?? 0)
+        : 0) + (localBack?.getBoundingClientRect().height ?? 0),
     readPanelHost: (slot: SidebarSlotId) =>
       panelHosts.get(slot) ??
       props.panelDefinitions.find((definition) => definition.slot === slot)?.panelHost ??
@@ -102,7 +113,7 @@ function Region(props: RegionProps, host: RegionElement) {
       surface && surface.closest(".sidebar-region") === props.elements?.shell ? surface : null;
   };
 
-  const closeFocusedPanel = (event: Event): void => {
+  const closeFocusedPanel = async (event: Event): Promise<void> => {
     if (
       event.defaultPrevented ||
       !props.layout.open ||
@@ -128,8 +139,10 @@ function Region(props: RegionProps, host: RegionElement) {
         ? browser?.closest("[data-region]")
         : (frame ?? focusedSurface);
     const active = sidebarActivePanel(props.layout);
+    const provisional = isSidebarNewTabActive(props.layout);
     if (
-      !active ||
+      (!active && !provisional) ||
+      (props.presentation === "desktop" && active?.slot === "conversation") ||
       !surface?.isConnected ||
       surface.closest(".sidebar-region") !== props.elements?.shell ||
       !surface.matches('[data-region="side"], [data-region-header="side"]') ||
@@ -151,75 +164,66 @@ function Region(props: RegionProps, host: RegionElement) {
         focusActiveSideTab();
       }
     };
+    const scope = props.panelIdPrefix;
+    const mobileScope = props.mobileHost?.scopeKey;
+    const isCurrentClose = () =>
+      host.isConnected &&
+      props.panelIdPrefix === scope &&
+      props.mobileHost?.scopeKey === mobileScope;
+    const finishClose = async () => {
+      await host.updateComplete;
+      if (isCurrentClose() && !closeEmptyMobileHost(props, mobileScope)) {
+        restoreFocus();
+      }
+    };
+    if (provisional) {
+      props.callbacks.newTab?.close();
+      await finishClose();
+      return;
+    }
+    if (!active) {
+      return;
+    }
     const hosted = readRegionHostedTabs(host, active);
     const hostedTabId = hosted?.activeHostedTabId;
     if (hosted && hostedTabId && hosted.hostedTabs.some((tab) => tab.id === hostedTabId)) {
       // The focused header tab is one page, not the panel; the owner's change
       // event re-renders the strip once that page is gone.
-      void hosted
-        .closeHostedTab(hostedTabId)
-        .then(() => host.updateComplete)
-        .then(restoreFocus);
+      await hosted.closeHostedTab(hostedTabId);
+      await host.updateComplete;
+      if (
+        (props.presentation === "desktop" || props.mobileHost) &&
+        isCurrentClose() &&
+        sidebarActivePanel(props.layout)?.id === active.id &&
+        readRegionHostedTabs(host, active) === hosted &&
+        hosted.hostedTabs.length === 0
+      ) {
+        props.callbacks?.closeSlot(active.slot);
+        refreshHostedTabs();
+      }
+      await finishClose();
       return;
+    }
+    if (props.presentation === "desktop" && active.slot === "companion") {
+      const clear = props.panelDefinitions.find((definition) => definition.slot === "companion")
+        ?.view?.onClearCompanion;
+      if (
+        !clear ||
+        !(await clear()) ||
+        !host.isConnected ||
+        props.panelIdPrefix !== scope ||
+        sidebarActivePanel(props.layout)?.id !== active.id ||
+        !props.layout.open ||
+        !props.callbacks
+      ) {
+        return;
+      }
     }
     props.callbacks.closeSlot(active.slot);
     // The callback invalidates the parent first; await this region's next commit.
     refreshHostedTabs();
-    void host.updateComplete.then(restoreFocus);
+    await finishClose();
   };
-
-  function Divider(view: { column: SidebarColumn }) {
-    const dock = () => sidebarDock(props.layout);
-    const dimension = () => (dock() === "bottom" ? "height" : "width");
-    const measure = () => {
-      const shell = props.elements?.shell;
-      const surfaces = [props.elements?.primary, ...panelElements.values()];
-      const primary = surfaces.find((element) => element?.dataset.region === "main");
-      const panel = surfaces.find(
-        (element) => element?.dataset.region === "side" && !element.hidden,
-      );
-      const primarySize = primary?.getBoundingClientRect()[dimension()] ?? 0;
-      const panelSize = panel?.getBoundingClientRect()[dimension()] ?? view.column[dimension()];
-      // Grid columns mirror in RTL; divider ratios follow physical left/top movement.
-      const panelBeforeMain =
-        dock() !== "bottom" &&
-        (dock() === "left") !== (getComputedStyle(shell ?? host).direction === "rtl");
-      return { primarySize, panelSize, panelBeforeMain, total: primarySize + panelSize };
-    };
-    return (
-      <resizable-divider
-        class="sidebar-column__divider"
-        prop:label={t("chat.sidePanel.resize")}
-        prop:orientation={dock() === "bottom" ? "horizontal" : "vertical"}
-        prop:splitRatio={0.5}
-        prop:minRatio={0.05}
-        prop:maxRatio={0.95}
-        prop:measureRatio={() => {
-          const { primarySize, panelSize, panelBeforeMain, total } = measure();
-          return total > 0 ? (panelBeforeMain ? panelSize : primarySize) / total : 0.5;
-        }}
-        prop:measureSize={() => measure().total}
-        onResize={(event: CustomEvent<{ splitRatio: number }>) => {
-          const bounds = props.elements?.shell.getBoundingClientRect();
-          const regionSize =
-            dimension() === "width" && props.availableWidth > 0
-              ? props.availableWidth
-              : (bounds?.[dimension()] ?? 0);
-          const measured = measure();
-          const total = measured.total || regionSize;
-          const requested =
-            total *
-            (measured.panelBeforeMain ? event.detail.splitRatio : 1 - event.detail.splitRatio);
-          const minimum = dock() === "bottom" ? SIDEBAR_MIN_HEIGHT_PX : SIDEBAR_MIN_WIDTH_PX;
-          const maximum = Math.max(minimum, regionSize * 0.6);
-          props.callbacks?.resizePanel(
-            view.column.id,
-            Math.max(minimum, Math.min(requested, maximum)),
-          );
-        }}
-      />
-    );
-  }
 
   /**
    * A narrow pane puts the side panel in the main view's place, hiding whatever
@@ -313,6 +317,39 @@ function Region(props: RegionProps, host: RegionElement) {
     });
   }
 
+  const openPanelFromLauncher = (slot: SidebarSlotId) => {
+    const alreadyOpen = props.layout.columns[0]?.panels.some((panel) => panel.slot === slot);
+    if (props.callbacks?.newTab) {
+      props.callbacks.newTab.openPanel(slot);
+    } else {
+      props.callbacks?.openSlot(slot);
+    }
+    if (!alreadyOpen) {
+      return;
+    }
+    const request =
+      slot === "browser"
+        ? ([BROWSER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }] as const)
+        : slot === "link-reader"
+          ? ([LINK_READER_PANEL_TOGGLE_EVENT, { open: true, newTab: true }] as const)
+          : slot === "terminal"
+            ? ([TERMINAL_PANEL_TOGGLE_EVENT, { open: true, newSession: true }] as const)
+            : undefined;
+    if (request) {
+      host.deliverPanelEvent(slot, new CustomEvent(request[0], { detail: request[1] }));
+    }
+  };
+  const hasNativeFileBack = () => {
+    hostedRevision();
+    const active = sidebarActivePanel(props.layout);
+    if (active?.slot !== "workspace") {
+      return false;
+    }
+    const selected = readRegionHostedTabs(host, active)?.activeHostedTabId;
+    return Boolean(selected && selected !== "browse");
+  };
+  const openMobileLauncher = () =>
+    props.callbacks?.newTab?.open({ returnPanelId: props.layout.columns[0]?.activePanelId });
   const panelTypes = () => props.panelDefinitions.filter((definition) => definition.available);
   function Empty(view: { panel?: SidebarPanel }) {
     const selectedType = () =>
@@ -321,21 +358,42 @@ function Region(props: RegionProps, host: RegionElement) {
       <Show
         when={selectedType()}
         fallback={
-          <div class="side-panel-empty side-panel-empty--selector">
-            <div class="side-panel-empty__types">
-              <For each={panelTypes()} keyed={(type) => type.slot}>
-                {(type) => (
-                  <button
-                    class="side-panel-empty__type"
-                    type="button"
-                    onClick={() => props.callbacks?.openSlot(type().slot)}
-                  >
-                    <PanelTypeOption type={type()} />
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
+          <Show
+            when={props.presentation === "desktop"}
+            fallback={
+              <Show
+                when={props.mobileHost}
+                fallback={
+                  <div class="side-panel-empty side-panel-empty--selector">
+                    <div class="side-panel-empty__types">
+                      <For each={panelTypes()} keyed={(type) => type.slot}>
+                        {(type) => (
+                          <button
+                            class="side-panel-empty__type"
+                            type="button"
+                            onClick={() => props.callbacks?.openSlot(type().slot)}
+                          >
+                            <PanelTypeOption type={type()} />
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                }
+              >
+                <MobilePanelLauncher
+                  definitions={props.panelDefinitions}
+                  onOpen={openPanelFromLauncher}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
+              </Show>
+            }
+          >
+            <SidebarPanelLauncher
+              definitions={props.panelDefinitions}
+              onOpen={openPanelFromLauncher}
+            />
+          </Show>
         }
       >
         {(type) => (
@@ -359,7 +417,11 @@ function Region(props: RegionProps, host: RegionElement) {
         ),
       );
     return (
-      <div class="side-panel__body">
+      <div
+        class="side-panel__body"
+        hidden={Boolean(props.mobileHost?.destination.page)}
+        inert={Boolean(props.mobileHost?.destination.page)}
+      >
         <For each={panels()} keyed={(panel) => panel.id}>
           {(panel) => {
             // The semantic key owns this container until that panel is removed.
@@ -375,6 +437,7 @@ function Region(props: RegionProps, host: RegionElement) {
                 data-panel-slot={panel().slot}
                 data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
                 hidden={!isSidebarSlotVisible(props.layout, panel().slot)}
+                inert={!isSidebarSlotVisible(props.layout, panel().slot)}
               >
                 <SidebarPanelView
                   definition={sidebarPanelType(props.panelDefinitions, panel().slot)}
@@ -394,9 +457,27 @@ function Region(props: RegionProps, host: RegionElement) {
             );
           }}
         </For>
-        <Show when={sidebarSidePanels(props.layout).length === 0}>
-          <div class="side-panel__empty-body" data-region="side">
-            <Empty />
+        <Show
+          when={sidebarSidePanels(props.layout).length === 0 || isSidebarNewTabActive(props.layout)}
+        >
+          <div
+            class="side-panel__empty-body"
+            data-region="side"
+            id={
+              props.mobileHost && isSidebarNewTabActive(props.layout)
+                ? `${props.panelIdPrefix}-new-tab`
+                : undefined
+            }
+          >
+            <Show
+              when={!props.mobileHost && isSidebarNewTabActive(props.layout)}
+              fallback={<Empty />}
+            >
+              <SidebarPanelLauncher
+                definitions={props.panelDefinitions}
+                onOpen={openPanelFromLauncher}
+              />
+            </Show>
           </div>
         </Show>
       </div>
@@ -418,24 +499,88 @@ function Region(props: RegionProps, host: RegionElement) {
           <>
             <Show
               when={
-                !props.narrow && props.layout.open && !props.layout.expanded ? column() : undefined
+                !props.mobileHost &&
+                props.layout.open &&
+                (props.presentation === "desktop" || (!props.narrow && !props.layout.expanded))
+                  ? column()
+                  : undefined
               }
             >
-              {(value) => <Divider column={value()} />}
+              {(value) => (
+                <SidebarRegionDivider
+                  elements={props.elements}
+                  layout={props.layout}
+                  availableWidth={props.availableWidth}
+                  callbacks={props.callbacks}
+                  column={value()}
+                  panelElements={panelElements}
+                  host={host}
+                />
+              )}
             </Show>
             <div class="side-panel" ref={(element) => (panelElement = element)}>
-              <Show when={sidebarSidePanels(props.layout).length > 0}>
+              <Show
+                when={
+                  props.presentation === "desktop" ||
+                  Boolean(props.mobileHost) ||
+                  sidebarSidePanels(props.layout).length > 0
+                }
+              >
                 <SidebarRegionHeader
                   {...props}
                   host={host}
+                  onOpenMobileLauncher={props.mobileHost ? openMobileLauncher : undefined}
                   hostedRevision={hostedRevision}
                   refreshHostedTabs={refreshHostedTabs}
                   headerRef={(element) => (sideHeader = element)}
                   tabFocus={tabFocus}
                 />
               </Show>
+              <Show
+                when={
+                  props.mobileHost?.destination.area === "panels" &&
+                  props.mobileHost.destination.backTo &&
+                  !hasNativeFileBack() &&
+                  props.mobileHost.destination.slot !== "dashboard"
+                }
+              >
+                <div
+                  class="chat-mobile-host__local-back"
+                  ref={[
+                    elementRef((element) => {
+                      localBack = element;
+                      return () => {
+                        localBack = undefined;
+                      };
+                    }),
+                  ]}
+                >
+                  <button type="button" onClick={() => props.mobileHost?.back()}>
+                    <Icon name="chevronLeft" />
+                    {t("common.back")}
+                  </button>
+                  <span>{props.mobileHost?.destination.page?.title}</span>
+                </div>
+              </Show>
               <Show when={mounted()}>
                 <Body />
+              </Show>
+              <Show
+                when={
+                  props.mobileHost?.destination.area === "panels"
+                    ? props.mobileHost.destination.page
+                    : undefined
+                }
+              >
+                {(page) => (
+                  <div
+                    class="chat-mobile-host__page"
+                    data-region="side"
+                    ref={[elementRef(props.onScrollPortRef)]}
+                  >
+                    {page().content}
+                  </div>
+                )}
               </Show>
             </div>
           </>
@@ -470,15 +615,39 @@ function Region(props: RegionProps, host: RegionElement) {
   function bindHostedTabsRoot() {
     stopHostedTabs();
     const shell = host.elements?.shell;
-    stopHostedTabs = shell
-      ? listen(shell, PANEL_HOSTED_TABS_CHANGE_EVENT, refreshHostedTabs)
-      : () => {};
+    if (!shell) {
+      stopHostedTabs = () => {};
+      return;
+    }
+    const onTransition = (event: TransitionEvent) => {
+      if (
+        props.presentation === "desktop" &&
+        event.target instanceof HTMLElement &&
+        (event.target === shell || event.target.matches("[data-region], [data-region-header]")) &&
+        event.target.closest(".sidebar-region") === shell
+      ) {
+        scheduleGeometryCommit();
+      }
+    };
+    const stops = [
+      listen(shell, PANEL_HOSTED_TABS_CHANGE_EVENT, refreshHostedTabs),
+      listen(shell, "transitionend", onTransition),
+      listen(shell, "transitioncancel", onTransition),
+    ];
+    stopHostedTabs = () => stops.forEach((stop) => stop());
   }
   // Descendants can publish hosted tabs synchronously during their first commit.
   bindHostedTabsRoot();
   listen(document, "pointerdown", trackFocus, options);
   listen(document, "focusin", trackFocus, options);
-  listen(window, "openclaw:native-close-focused-panel", closeFocusedPanel, options);
+  listen(
+    window,
+    "openclaw:native-close-focused-panel",
+    (event) => {
+      void closeFocusedPanel(event);
+    },
+    options,
+  );
   onSettled(() => {
     scheduleGeometryCommit();
     scheduleFocusTransition();
@@ -510,6 +679,9 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
   {
     properties: {
       elements: { default: null, attribute: false },
+      mobileHost: { default: undefined, attribute: false },
+      onScrollPortRef: { default: undefined, attribute: false },
+      presentation: { default: undefined, attribute: false },
       panelIdPrefix: { default: "", attribute: false },
       conversationTab: { default: undefined, attribute: false },
       layout: { default: { columns: [] }, attribute: false },
@@ -523,6 +695,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       availableWidth: { default: 0 },
     },
     methods: {
+      readMobileChromeHeight: (host) => regionOperations.get(host)?.readMobileChromeHeight() ?? 0,
       readPanelHost: (host, slot) => regionOperations.get(host)?.readPanelHost(slot) ?? null,
       awaitPanelCommit: async (host, slot) => {
         await host.updateComplete;

@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
@@ -9,12 +9,14 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
@@ -62,7 +64,7 @@ export function AgentOverview(
     : undefined;
   const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
   const avatarLoader = createIdentityAvatars();
-  onCleanup(avatarLoader.connect());
+  onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
@@ -258,16 +260,9 @@ export function AgentOverview(
             >
               {renderIdentityAvatar()}
               <span class="agent-identity-editor__avatar-edit" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
+                <StrokeIcon>
                   <path d="m16 5 3 3M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" />
-                </svg>
+                </StrokeIcon>
               </span>
             </button>
             <div class="agent-identity-editor__content">
@@ -381,7 +376,38 @@ export function AgentOverview(
       ) : undefined}
       <SettingsSection
         title={t("agents.overview.modelSelection")}
-        notice={<PanelRefreshNotice status={params.readData().chatModelCatalogStatus} />}
+        notice={
+          <For
+            each={
+              params.readData().chatModelCatalogRead
+                ? [params.readData().chatModelCatalogRead!]
+                : []
+            }
+          >
+            {(read) => (
+              <Errored
+                fallback={(error) => (
+                  <PanelRefreshNotice
+                    status={failPanelRefresh(
+                      {
+                        error: null,
+                        hasLoaded: params.modelCatalogHasSnapshot,
+                        stale: false,
+                        awaitingGateway: false,
+                      },
+                      error(),
+                      params.modelCatalogGateway,
+                    )}
+                  />
+                )}
+              >
+                <Loading>
+                  <ModelCatalogCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
+        }
         actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
         <SettingsRow
@@ -459,4 +485,9 @@ export function renderAgentContextSection(
       ])}
     </SettingsSection>
   );
+}
+
+function ModelCatalogCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
 }

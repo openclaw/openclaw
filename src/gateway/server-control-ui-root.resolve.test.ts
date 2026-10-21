@@ -123,8 +123,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
       const refreshed = await readControlUiRootAsset(root, "assets/app.js", true);
       expect(refreshed).toMatchObject({
         file: { body: Buffer.from("reenabled") },
-        br: { body: Buffer.from("reenabled.br") },
-        gzip: { body: Buffer.from("reenabled.gz") },
       });
       expect(await readControlUiRootAsset(root, "assets/app.js", false)).toBe(refreshed);
       expect(await readControlUiRootAsset(siblingRoot, "assets/app.js", true)).toEqual(original);

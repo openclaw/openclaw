@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   BoardSnapshot,
   BoardWidgetPutParams,
@@ -6,8 +7,8 @@ import type {
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
+import * as inProcessGateway from "../../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
-import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { readBoardHtml } from "../../boards/board-store.test-support.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -120,7 +121,6 @@ function sourceHarness(view: {
 describe("board gateway methods", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
-    resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
     return () => resetPluginRuntimeStateForTest();
   });
@@ -421,6 +421,7 @@ describe("board gateway methods", () => {
   });
 
   it("keeps identical global widget notices separate for each owner", async () => {
+    const widget = `notice-${randomUUID()}`;
     const { invoke } = createHarness(undefined, {}, undefined, {
       getRuntimeConfig: () => ({
         agents: explicitOwners,
@@ -431,7 +432,7 @@ describe("board gateway methods", () => {
       const target = { sessionKey: "global", agentId };
       await invoke("board.widget.put", {
         ...target,
-        name: "counter",
+        name: widget,
         content: html("ok"),
       });
       const snapshot = responseBoard(await invoke("board.get", target));
@@ -439,7 +440,7 @@ describe("board gateway methods", () => {
       const first = await invoke("board.event", { ticket, payload: { count: 1 } });
       const duplicate = await invoke("board.event", {
         ...target,
-        widget: "counter",
+        widget,
         payload: { count: 1 },
       });
       expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
@@ -447,7 +448,7 @@ describe("board gateway methods", () => {
     }
     for (const agentId of ["main", "work"]) {
       expect(peekSystemEventEntries(`agent:${agentId}:global`).map((event) => event.text)).toEqual([
-        '[dashboard] {"count":1} on widget counter',
+        `[dashboard] {"count":1} on widget ${widget}`,
       ]);
     }
   });
@@ -482,7 +483,11 @@ describe("website dashboard authoring", () => {
       }
       return payload as T;
     };
-    const tool = createDashboardTool({ agentSessionKey: sessionKey, callGateway });
+    const gatewaySpy = vi
+      .spyOn(inProcessGateway, "callInProcessGatewayTool")
+      .mockImplementation(callGateway);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createDashboardTool({ agentSessionKey: sessionKey });
     return { ...harness, tool };
   }
 

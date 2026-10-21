@@ -412,16 +412,15 @@ a separate check.
 
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
-`identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
-verifies their stored SQLite rows, then removes the old files. Node startup,
-including the macOS app's worker, leaves these inputs for Doctor. Pending device
-auth or exec approvals stop startup before capabilities are prepared. A missing
-stored identity plus retired identity data or an interrupted import claim
-also stops startup before a new key can be created. An existing valid stored
-identity remains authoritative when an older release recreates `identity/device.json`;
-Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
-it contains the device keypair and auth tokens.
+`identity/device-auth.json`. Node startup, including the macOS app's worker,
+automatically prepares legacy credentials and exec approvals before capabilities
+are prepared. It uses the same backup and migration owner as Doctor, preserving
+the existing keypair and pairing tokens. Retained credential JSON stays consumed
+even if an older release recreates it; an existing valid stored identity remains
+authoritative. Malformed or conflicting sources remain unchanged and require the
+repair described in the diagnostic. Keep `client/credentials.sqlite` private;
+it contains the device keypair and auth tokens. Other retired node state remains
+part of `openclaw doctor --fix`.
 
 ## Exec approvals
 

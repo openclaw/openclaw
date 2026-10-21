@@ -515,6 +515,7 @@ function applyPageGatewayEvent(
           if (sessionMatches) {
             chatRunPresentation(state).publish(
               payload?.state === "delta" ? "animation-frame" : "immediate",
+              payload?.state === "delta",
             );
           }
         },

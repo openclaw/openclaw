@@ -403,7 +403,6 @@ export function defineSessionPlacementModuleBoundaryTests(
           ...buildGatewaySessionSnapshot({
             sessionRow: session,
             agentId: "cloud",
-            includeSession: true,
           }),
           placement,
           placementMove: null,

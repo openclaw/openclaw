@@ -98,15 +98,7 @@ type RouteReplyResult = {
   queueCustody?: "held" | "released";
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
-  reason?:
-    | "reasoning_payload_not_external"
-    | "channel_transform"
-    | "adapter_returned_no_identity"
-    | "adapter_returned_no_send"
-    | "cancelled_by_message_sending_hook"
-    | "cancelled_by_reply_payload_sending_hook"
-    | "empty_after_message_sending_hook"
-    | "empty_after_reply_payload_sending_hook";
+  reason?: "channel_transform";
   messageId?: string;
   error?: string;
   /** Original failure retains the delivery owner's no-send proof. */
@@ -156,14 +148,15 @@ async function routeReplyOperation(
   operation: ReplyDispatchOperation,
 ): Promise<RouteReplyResult> {
   const { channel, to, accountId, threadId, cfg, abortSignal } = params;
-  const suppress = (reason?: RouteReplyResult["reason"]): RouteReplyResult => ({
+  const suppress = (reason?: "suppressed" | "channel_transform"): RouteReplyResult => ({
     ok: true,
     delivered: false,
-    ...(reason ? { suppressed: true, reason } : {}),
+    ...(reason ? { suppressed: true } : {}),
+    ...(reason === "channel_transform" ? { reason } : {}),
   });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
-  if (shouldSuppressReasoningPayload(payload)) {
-    return suppress("reasoning_payload_not_external");
+  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
+    return suppress("suppressed");
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -383,14 +376,13 @@ async function routeReplyOperation(
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
     ) {
-      return suppress(send.reason);
+      return suppress("suppressed");
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       return {
         ok: true,
         delivered: false,
         ambiguous: true,
-        reason: "adapter_returned_no_identity",
       };
     }
     const results = send.status === "sent" ? send.results : [];

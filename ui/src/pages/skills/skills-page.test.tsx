@@ -94,6 +94,7 @@ function mountSkills(
   const page = mounted.container.querySelector<HTMLElement>("openclaw-skills-page")!;
   return {
     page,
+    unmount: mounted.unmount,
     connection,
     agents,
     context,
@@ -259,6 +260,31 @@ describe("Skills discovery lifecycle", () => {
     expect(page.querySelector('input[name="skills-search"]')).toBe(input);
     expect(document.activeElement).toBe(input);
     expect(input.value).toBe("calendar");
+  });
+
+  it("cancels the debounced discovery search when the page unmounts", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "skills.library.list" ? personalLibrary : { results: [] },
+    );
+    const { page, unmount } = mountSkills(request);
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.search", expect.anything(), expect.anything()),
+    );
+    vi.useFakeTimers();
+    try {
+      const input = page.querySelector<HTMLInputElement>('input[name="skills-search"]')!;
+      input.value = "calendar";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      unmount();
+      request.mockClear();
+
+      await vi.advanceTimersByTimeAsync(300);
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("follows sidebar selection and rejects old scope results before installing", async () => {

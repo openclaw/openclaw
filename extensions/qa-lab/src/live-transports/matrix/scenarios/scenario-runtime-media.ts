@@ -80,8 +80,10 @@ async function sendMatrixQaImageAttachment(context: MatrixQaScenarioContext, men
 }
 
 export async function runImageUnderstandingAttachmentScenario(context: MatrixQaScenarioContext) {
-  const { attachmentEvent, client, driverEventId, roomId, triggerBody } =
-    await sendMatrixQaImageAttachment(context, true);
+  const { attachmentEvent, client, driverEventId, roomId } = await sendMatrixQaImageAttachment(
+    context,
+    true,
+  );
   const matched = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -97,14 +99,6 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
   });
   const reply = buildMatrixReplyArtifact(matched.event);
   return {
-    artifacts: {
-      attachmentCaptionPreview: truncateMatrixQaPreview(attachmentEvent.event.attachment?.caption),
-      attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
-      driverEventId,
-      reply,
-      roomId,
-      triggerBody,
-    },
     details: [
       `room id: ${roomId}`,
       `driver attachment event: ${driverEventId}`,
@@ -118,8 +112,6 @@ export async function runImageUnderstandingAttachmentScenario(context: MatrixQaS
 export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioContext) {
   const roomId = resolveMatrixQaScenarioRoomId(context, MATRIX_QA_MEDIA_ROOM_KEY);
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
-  const attachments: NonNullable<MatrixQaScenarioExecution["artifacts"]>["attachments"] = [];
-  const replies: NonNullable<MatrixQaScenarioExecution["artifacts"]>["replies"] = [];
   const details = [`room id: ${roomId}`];
   let since = startSince;
 
@@ -163,19 +155,6 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
     });
     since = matched.since ?? since;
     const reply = buildMatrixReplyArtifact(matched.event, token);
-    attachments.push({
-      eventId: driverEventId,
-      filename: mediaCase.fileName,
-      kind: attachmentEvent.event.attachment?.kind,
-      label: mediaCase.label,
-      msgtype: attachmentEvent.event.msgtype,
-    });
-    replies.push({
-      eventId: reply.eventId,
-      label: mediaCase.label,
-      token,
-      tokenMatched: reply.tokenMatched,
-    });
     details.push(
       `${mediaCase.label} event: ${driverEventId}`,
       `${mediaCase.label} msgtype: ${attachmentEvent.event.msgtype ?? "<none>"}`,
@@ -186,11 +165,6 @@ export async function runMediaTypeCoverageScenario(context: MatrixQaScenarioCont
   }
 
   return {
-    artifacts: {
-      attachments,
-      replies,
-      roomId,
-    },
     details: details.join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }
@@ -246,13 +220,6 @@ export async function runVoicePreflightMentionScenario(context: MatrixQaScenario
   }
   const reply = buildMatrixReplyArtifact(matched.event, MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER);
   return {
-    artifacts: {
-      attachmentFilename: MATRIX_QA_VOICE_PREFLIGHT_FILENAME,
-      driverEventId,
-      reply,
-      roomId,
-      expectedMarker: MATRIX_QA_VOICE_PREFLIGHT_REPLY_MARKER,
-    },
     details: [
       "post-gate transcript echo proved captionless audio satisfied mention gating",
       `room id: ${roomId}`,
@@ -276,12 +243,6 @@ export async function runAttachmentOnlyIgnoredScenario(context: MatrixQaScenario
     unexpectedMessage: "unexpected SUT reply to attachment-only group media",
   });
   return {
-    artifacts: {
-      attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
-      driverEventId,
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      roomId,
-    },
     details: [
       `room id: ${roomId}`,
       `driver attachment event: ${driverEventId}`,
@@ -318,15 +279,6 @@ export async function runUnsupportedMediaSafeScenario(context: MatrixQaScenarioC
   });
   const reply = buildMatrixReplyArtifact(matched.event, token);
   return {
-    artifacts: {
-      attachmentFilename: "unsupported-matrix-qa.txt",
-      attachmentKind: "file",
-      driverEventId,
-      reply,
-      roomId,
-      token,
-      triggerBody,
-    },
     details: [
       `room id: ${roomId}`,
       `driver file event: ${driverEventId}`,
@@ -375,16 +327,6 @@ export async function runGeneratedImageDeliveryScenario(context: MatrixQaScenari
     );
   }
   return {
-    artifacts: {
-      attachmentBodyPreview: truncateMatrixQaPreview(matchedEvent.body),
-      attachmentEventId: matchedEvent.eventId,
-      attachmentFilename: attachment.filename,
-      attachmentKind: attachment.kind,
-      attachmentMsgtype: matchedEvent.msgtype,
-      driverEventId,
-      roomId,
-      triggerBody,
-    },
     details: [
       `room id: ${roomId}`,
       `driver event: ${driverEventId}`,

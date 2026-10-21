@@ -73,8 +73,17 @@ const remote = (path: string, authorization?: string) => ({
   host: "gateway.test",
   authorization,
 });
-const readyState = (failing: string[]) => ({ ready: failing.length === 0, failing });
-const unready = { ready: false, failing: ["discord", "telegram"], uptimeMs: 8_000 };
+const readyState = (failing: string[], coreReady = true) => ({
+  ready: failing.length === 0,
+  coreReady,
+  failing,
+});
+const unready = {
+  ready: false,
+  coreReady: true,
+  failing: ["discord", "telegram"],
+  uptimeMs: 8_000,
+};
 const startupDetails = (status: "starting" | "started" | "draining", pendingReason?: string) => ({
   ok: status === "started",
   status,
@@ -201,7 +210,12 @@ describe("gateway probe endpoints", () => {
   it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
     await withControlUi(
       {
-        getReadiness: () => ({ ready: false, failing: ["gateway-draining"], uptimeMs: 1_000 }),
+        getReadiness: () => ({
+          ready: false,
+          coreReady: false,
+          failing: ["gateway-draining"],
+          uptimeMs: 1_000,
+        }),
       },
       async (probe) => {
         await probe.json("/readyz", 503, { ready: false });
@@ -246,7 +260,7 @@ describe("gateway probe endpoints", () => {
 
         await probe.json("/healthz", 200, { ok: true, status: "live" }, true);
 
-        await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+        await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
 
         for (const [path, method] of [
           ["/v1/chat/completions", "POST"],
@@ -400,7 +414,12 @@ describe("gateway probe endpoints", () => {
         },
       },
       (probe) =>
-        probe.json("/ready", 503, { ready: false, failing: ["internal"], uptimeMs: 0 }, true),
+        probe.json(
+          "/ready",
+          503,
+          { ready: false, coreReady: false, failing: ["internal"], uptimeMs: 0 },
+          true,
+        ),
     );
   });
 
@@ -453,7 +472,7 @@ describe("gateway probe endpoints", () => {
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -548,6 +567,7 @@ describe("gateway probe endpoints", () => {
     const shouldEnforcePluginGatewayAuth = vi.fn(() => true);
     const getReadiness = vi.fn(() => ({
       ready: true,
+      coreReady: true,
       failing: [],
       uptimeMs: 123,
     }));
@@ -564,7 +584,7 @@ describe("gateway probe endpoints", () => {
       async (probe) => {
         for (const [path, body, exact] of [
           ["/health", { ok: true, status: "live" }, true],
-          ["/ready", { ready: true, failing: [], uptimeMs: 123 }, true],
+          ["/ready", { ready: true, coreReady: true, failing: [], uptimeMs: 123 }, true],
           [
             "/startup",
             {

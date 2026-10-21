@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { HeapSpaceInfo } from "node:v8";
+import type { sampleTrackedWorkerMemory } from "../../src/infra/worker-cpu.ts";
 import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
@@ -31,8 +33,16 @@ export type GatewayCpuUsageSnapshot = {
 
 export type GatewayResourceSnapshot = GatewayCpuUsageSnapshot & {
   memory: NodeJS.MemoryUsage;
+  heapSpaces: HeapSpaceInfo[];
+  workers?: ReturnType<typeof sampleTrackedWorkerMemory>;
   activeResources: Record<string, number>;
   runtime: { node: string; platform: string; arch: string };
+  sessionCensus?: {
+    scope: "source-main-isolate";
+    SessionManager: number;
+    AgentSession: number;
+    Agent: number;
+  };
 };
 
 export type GatewayBenchCommand =
@@ -49,7 +59,10 @@ export type GatewayBenchCommand =
       kind: "resource-usage";
       action: "sample";
       initial?: boolean;
+      includeWorkers?: boolean;
       collectGarbage?: boolean;
+      sessionCensus?: boolean;
+      clearPromptCacheObservations?: boolean;
       snapshotPath?: string;
     };
 
@@ -248,7 +261,14 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
+  options: {
+    initial?: boolean;
+    includeWorkers?: boolean;
+    collectGarbage?: boolean;
+    sessionCensus?: boolean;
+    clearPromptCacheObservations?: boolean;
+    snapshotPath?: string;
+  } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,
@@ -299,6 +319,8 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
+  // Constructor census scans the full heap three times, unlike a resource sample.
+  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);
@@ -327,8 +349,8 @@ async function sendGatewayBenchCommand(
     const onDisconnect = () =>
       finish(new Error(`Gateway disconnected during ${kind} profile ${action}`));
     const timer = setTimeout(
-      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after 30000ms`)),
-      30_000,
+      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);

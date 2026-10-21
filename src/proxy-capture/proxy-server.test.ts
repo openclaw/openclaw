@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import {
   request as httpRequest,
   createServer as createHttpServer,
-  type IncomingMessage,
+  IncomingMessage,
+  ServerResponse,
   type Server,
 } from "node:http";
 import net, { Socket, type AddressInfo } from "node:net";
@@ -130,6 +131,14 @@ type ProxyResponseResult = {
   statusCode?: number;
 };
 
+function captureMethodCall<Key extends PropertyKey, Args extends unknown[], Result>(
+  owner: Record<Key, (...args: Args) => Result>,
+  key: Key,
+) {
+  const method = owner[key];
+  return (receiver: typeof owner, ...args: Args): Result => method.apply(receiver, args);
+}
+
 async function getThroughProxy(
   proxyUrl: string,
   targetUrl: string,
@@ -242,7 +251,7 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
 async function rawSlowGetThroughProxy(params: {
   abortAfterBytes?: number;
   abortWithReset?: boolean;
-  onResume?: () => void;
+  signal?: AbortSignal;
   pauseBeforeReadMs: number;
   proxyUrl: string;
   targetUrl: string;
@@ -262,6 +271,14 @@ async function rawSlowGetThroughProxy(params: {
     let statusLine = "";
     let resumeTimeout: ReturnType<typeof setTimeout> | undefined;
     const socket = net.connect(Number(proxy.port), proxy.hostname);
+    const abort = () => {
+      aborted = true;
+      socket.destroy();
+    };
+    params.signal?.addEventListener("abort", abort, { once: true });
+    if (params.signal?.aborted) {
+      abort();
+    }
     const timeout = setTimeout(() => {
       socket.destroy();
       reject(new Error("slow proxy client timed out"));
@@ -269,6 +286,7 @@ async function rawSlowGetThroughProxy(params: {
     const finish = () => {
       clearTimeout(timeout);
       clearTimeout(resumeTimeout);
+      params.signal?.removeEventListener("abort", abort);
       resolve({ aborted, bodyBytes, resumed, statusLine });
     };
     const maybeFinishCompleteBody = () => {
@@ -284,7 +302,6 @@ async function rawSlowGetThroughProxy(params: {
       socket.pause();
       resumeTimeout = setTimeout(() => {
         resumed = true;
-        params.onResume?.();
         socket.resume();
       }, params.pauseBeforeReadMs);
     });
@@ -408,16 +425,83 @@ describe("startDebugProxyServer", () => {
     const responseBodyBytes = 16 * 1024 * 1024;
     const origin = await startStreamingProxyOrigin(responseBodyBytes);
     const { settings, proxy } = await startProxy();
-    let queuedBytesAtResume = 0;
-
-    const forwarded = await rawSlowGetThroughProxy({
-      onResume: () => {
-        queuedBytesAtResume = origin.state.queuedBytes;
-      },
-      pauseBeforeReadMs: 150,
-      proxyUrl: proxy.proxyUrl,
-      targetUrl: `${origin.url}/capture`,
+    const targetUrl = `${origin.url}/capture`;
+    const originPort = Number(new URL(origin.url).port);
+    const abortController = new AbortController();
+    const firstDrain = createDeferredCore();
+    let isUpstreamPaused: (() => boolean) | undefined;
+    let waitingForDrain = false;
+    let bytesReadWhileBackpressured = 0;
+    const drainStates: { pausedBefore: boolean | undefined; pausedAfter: boolean | undefined }[] =
+      [];
+    const callOn = captureMethodCall<
+      "on",
+      Parameters<IncomingMessage["on"]>,
+      ReturnType<IncomingMessage["on"]>
+    >(IncomingMessage.prototype, "on");
+    vi.spyOn(IncomingMessage.prototype, "on").mockImplementation(function (
+      this: IncomingMessage,
+      ...args: Parameters<IncomingMessage["on"]>
+    ) {
+      if (args[0] === "data" && this.statusCode === 200 && this.socket.remotePort === originPort) {
+        isUpstreamPaused = () => this.isPaused();
+        // Origin writes include TCP buffering; count bytes at the proxy's reader.
+        callOn(this, "data", (chunk: Buffer | string) => {
+          if (waitingForDrain) {
+            bytesReadWhileBackpressured += Buffer.byteLength(chunk);
+          }
+        });
+      }
+      return callOn(this, ...args);
     });
+    const callWrite = captureMethodCall<
+      "write",
+      Parameters<ServerResponse["write"]>,
+      ReturnType<ServerResponse["write"]>
+    >(ServerResponse.prototype, "write");
+    vi.spyOn(ServerResponse.prototype, "write").mockImplementation(function (
+      this: ServerResponse,
+      ...args: Parameters<ServerResponse["write"]>
+    ) {
+      const accepted = callWrite(this, ...args);
+      if (this.req.url === targetUrl && !accepted) {
+        waitingForDrain = true;
+      }
+      return accepted;
+    });
+    const callEmit = captureMethodCall<
+      "emit",
+      Parameters<ServerResponse["emit"]>,
+      ReturnType<ServerResponse["emit"]>
+    >(ServerResponse.prototype, "emit");
+    vi.spyOn(ServerResponse.prototype, "emit").mockImplementation(function (
+      this: ServerResponse,
+      ...args: Parameters<ServerResponse["emit"]>
+    ) {
+      if (this.req.url !== targetUrl || args[0] !== "drain" || !waitingForDrain) {
+        return callEmit(this, ...args);
+      }
+      // A later promise callback may already see the next pause/drain cycle.
+      const pausedBefore = isUpstreamPaused?.();
+      waitingForDrain = false;
+      const emitted = callEmit(this, ...args);
+      drainStates.push({ pausedBefore, pausedAfter: isUpstreamPaused?.() });
+      firstDrain.resolve();
+      return emitted;
+    });
+    const forwarding = rawSlowGetThroughProxy({
+      pauseBeforeReadMs: 0,
+      proxyUrl: proxy.proxyUrl,
+      signal: abortController.signal,
+      targetUrl,
+    });
+    cleanup.push(async () => {
+      abortController.abort();
+      await Promise.allSettled([forwarding]);
+    });
+    await Promise.race([firstDrain.promise, forwarding]);
+    expect(drainStates[0]).toEqual({ pausedBefore: true, pausedAfter: false });
+    const forwarded = await forwarding;
 
     expect(forwarded).toMatchObject({
       aborted: false,
@@ -425,7 +509,8 @@ describe("startDebugProxyServer", () => {
       resumed: true,
       statusLine: "HTTP/1.1 200 OK",
     });
-    expect(queuedBytesAtResume).toBeLessThan(responseBodyBytes);
+    expect(bytesReadWhileBackpressured).toBe(0);
+    expect(drainStates.every((state) => state.pausedBefore && !state.pausedAfter)).toBe(true);
     expect(origin.state.drainWaits).toBeGreaterThan(0);
     expect(origin.state.queuedBytes).toBe(responseBodyBytes);
     await proxy.stop();

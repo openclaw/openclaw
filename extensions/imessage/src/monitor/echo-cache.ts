@@ -54,18 +54,16 @@ export function createSentMessageCache() {
   async function has(
     scope: string,
     lookup: SentMessageLookup,
-    options: boolean | SentMessageLookupOptions = false,
+    options: SentMessageLookupOptions = {},
   ): Promise<boolean> {
-    const resolvedOptions =
-      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
     if (
       await hasPersistedIMessageEcho({
         scope,
         text: lookup.text,
         media: lookup.media,
         messageId: lookup.messageId,
-        skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
-        includePendingText: resolvedOptions.includePendingText,
+        skipIdShortCircuit: options.skipIdShortCircuit,
+        includePendingText: options.includePendingText,
       })
     ) {
       return true;
@@ -86,7 +84,7 @@ export function createSentMessageCache() {
       const hasTextOnlyMatch = hasContentOnlyMatch(text);
       const hasMediaOnlyMatch = hasContentOnlyMatch(media);
       canUseMediaFallback = hasMediaOnlyMatch;
-      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
+      if (!options.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }

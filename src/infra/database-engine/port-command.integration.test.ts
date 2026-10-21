@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
+import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
 import { openClientCredentialCustody } from "../client-credential-store.js";
 import * as recovery from "../database-port-recovery.js";
 import * as disk from "../disk-space.js";
@@ -225,7 +226,13 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       {
         using credentials = openClientCredentialCustody(state.env);
         assert(credentials);
-        expect(readClientCredentialReceipt(credentials.database)?.receipt.source).toBeNull();
+        expect(readClientCredentialReceipt(credentials.database)).toMatchObject({
+          phase: "complete",
+          receipt: {
+            source: { kind: "canonical", engine: "postgres", identity: anchor.storeId },
+            sharedFile: readClientCredentialFileIdentity(shared),
+          },
+        });
       }
       expect(
         (

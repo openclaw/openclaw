@@ -93,8 +93,11 @@ Packaging verifies the Bun revision, CLI version, Gateway help, SQLite and
 `sqlite-vec` loading, native capabilities, and worker readiness in temporary
 state before and after signing, then replaces the previous app. It also rejects
 any Node executable in the app. `scripts/restart-mac.sh` uses the same path;
-`SKIP_TSC=1` does not bypass the runtime build. Existing content-checked build
-caches still avoid unnecessary declaration work.
+`SKIP_TSC=1` does not bypass the runtime build. App packaging skips SDK declaration
+compilation by default. Its private installation artifacts omit type-only package
+metadata; public npm packages retain their typed SDK contract. Set
+`OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to also build declarations during app
+packaging. Existing content-checked caches still apply to the selected build.
 
 The private worker preserves the app's saved desktop-sharing preference and
 profile selection. Packaging checks startup with sharing enabled, disabled,
@@ -282,8 +285,11 @@ Native exec-policy fixtures reuse the Linux job's runtime artifact from the same
 workflow run, verified against the selected checkout SHA. The macOS job installs
 only the root and native-asset dependency closures, keeping platform-specific
 dependencies local. The artifact omits UI, plugin, and sealed remote-worker outputs.
-It waits for the existing Linux build instead of rebuilding
-the runtime and plugins on a macOS runner. The prepared CLI remains the normal
+Swift compilation starts after preflight without waiting for Linux. Before native
+tests execute, the job waits for the existing Linux build's published artifact,
+from the current producer attempt, rather than rebuilding the runtime and plugins
+on macOS or waiting for the remaining Linux verification steps. Package tests
+need no runtime artifact. The prepared CLI remains the normal
 production launcher, including request validation, state ownership, and cleanup.
 The default suite keeps real CLI coverage in the native cwd, socket half-close,
 and skill-policy commit cases. The larger socket cancellation and Gateway trust

@@ -3,9 +3,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createQaBusState } from "../../bus-state.js";
 import { createQaStateBackedTransportAdapter } from "../../qa-transport.js";
 import { readQaScenarioById } from "../../scenario-catalog.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
-import { createDriver, runtimeEnv } from "./runtime.test-support.js";
+import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { runQaSuiteScenarioDefinition } from "../../suite-runtime-flow.js";
+import { createDriver, observedMessage, runtimeEnv } from "./runtime.test-support.js";
 import { createWhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
+import { whatsappScenarioImplementations } from "./scenario-implementations.js";
+import { runWhatsAppScenario } from "./scenario-runtime.js";
 
 vi.mock("../../suite-runtime-gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../suite-runtime-gateway.js")>()),
@@ -15,6 +18,86 @@ vi.mock("../../suite-runtime-gateway.js", async (importOriginal) => ({
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+it("targets group approval reactions at the approval prompt participant", async () => {
+  const scenario = requireFlowScenario(
+    readQaScenarioById("whatsapp-approval-exec-group-reaction-native"),
+  );
+  const name = scenario.execution.config?.whatsappScenario;
+  const implementation =
+    typeof name === "string" ? whatsappScenarioImplementations[name] : undefined;
+  if (!implementation) {
+    throw new Error(`missing WhatsApp test implementation for ${scenario.id}`);
+  }
+  const run = implementation.buildRun();
+  if (run.kind !== "approval") {
+    throw new Error("expected approval scenario run");
+  }
+  const sendReaction = vi.fn(async () => ({ messageId: "reaction-1" }));
+  let approvalId = "";
+  let waitCount = 0;
+  const driver = createDriver({
+    sendReaction,
+    waitForMessage: async ({ match }) => {
+      waitCount += 1;
+      const isPending = waitCount === 1;
+      const message = observedMessage(isPending ? "approval-message-1" : "approval-resolved-1", {
+        fromJid: "12345@g.us",
+        observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
+        participantJid: "999@lid",
+        text: isPending
+          ? `Exec approval required\nID: ${approvalId}\n` +
+            `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
+            "React with:\n\n👍 Allow Once\n👎 Deny"
+          : `✅ Exec approval allow-once. ID: ${approvalId}`,
+      });
+      if (!match(message)) {
+        throw new Error(`approval test message ${waitCount} did not match`);
+      }
+      return message;
+    },
+  });
+  const gateway: Parameters<typeof runWhatsAppScenario>[0]["gateway"] = {
+    baseUrl: "http://127.0.0.1:1",
+    tempRoot: "/qa",
+    workspaceDir: "/qa/workspace",
+    runtimeEnv: {},
+    call: async (method, payload) => {
+      if (method === "exec.approval.request") {
+        if (
+          !payload ||
+          typeof payload !== "object" ||
+          !("id" in payload) ||
+          typeof payload.id !== "string"
+        ) {
+          throw new Error("expected approval request id");
+        }
+        approvalId = payload.id;
+        return { id: approvalId, status: "accepted" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once" };
+      }
+      throw new Error(`unexpected gateway call ${method}`);
+    },
+  };
+
+  await runWhatsAppScenario({
+    preparedScenario: { implementation, run },
+    driverAuthDir: "/qa/driver",
+    getDriver: () => driver,
+    replaceDriver: async () => {},
+    gateway,
+    runtimeEnv: { ...runtimeEnv, groupJid: "12345@g.us" },
+    scenario: { id: scenario.id, timeoutMs: scenario.execution.timeoutMs ?? 60_000 },
+    sutAccountId: "work",
+  });
+
+  expect(sendReaction).toHaveBeenCalledWith("12345@g.us", "approval-message-1", "👍", {
+    fromMe: false,
+    participant: "999@lid",
+  });
 });
 
 it.each([
@@ -145,7 +228,6 @@ it.each([
         cfg: {},
       },
       scenario: readQaScenarioById(scenarioId),
-      runScenario: runQaSuiteScenarioSteps,
       constants: {
         imageUnderstandingPngBase64: "",
         imageUnderstandingLargePngBase64: "",

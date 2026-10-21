@@ -246,9 +246,8 @@ async function publishInstallation(params: {
         return installed;
       }
       signal.throwIfAborted();
-      let recovery: string | undefined;
-      if (existing) {
-        recovery = `${destination}.recovery-${randomUUID()}`;
+      const recovery = existing ? `${destination}.recovery-${randomUUID()}` : undefined;
+      if (recovery) {
         // Preserve damaged installations, including files we did not create, outside staging cleanup.
         await fs.rename(destination, recovery);
       }
@@ -258,27 +257,6 @@ async function publishInstallation(params: {
         await fs.rename(payload, destination);
         return { binary, version: params.version };
       } catch (error) {
-        // Cooperating installers hold the same lock. Retain ambiguous externally changed state.
-        if (recovery) {
-          try {
-            if (!(await inspectInstallationDirectory(destination))) {
-              await fs.rename(recovery, destination);
-              recovery = undefined;
-            }
-          } catch (restoreError) {
-            throw new AggregateError(
-              [error, restoreError],
-              `Crabbox publication failed; previous installation is preserved at ${recovery}`,
-              { cause: restoreError },
-            );
-          }
-        }
-        if (!signal.aborted && (await inspectInstallationDirectory(destination))) {
-          const winner = await probeInstallation(binary, runCommand, signal);
-          if (winner) {
-            return winner;
-          }
-        }
         if (recovery) {
           throw new Error(
             `Crabbox publication failed; previous installation is preserved at ${recovery}`,

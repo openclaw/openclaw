@@ -1,7 +1,7 @@
-// Line tests cover the channel-scoped block streaming choice reaching the turn.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { lineConfig } from "./channel-account.test-support.js";
+import type { LineConfig } from "./types.js";
 
 type LineHandleWebhook = ReturnType<typeof import("./bot.js").createLineBot>["handleWebhook"];
 type LineBotOptions = Parameters<typeof import("./bot.js").createLineBot>[0];
@@ -17,30 +17,22 @@ const { createLineBotMock, registerWebhookTargetWithPluginRouteMock } = vi.hoist
 
 vi.mock("./bot.js", () => ({ createLineBot: createLineBotMock }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
-    "openclaw/plugin-sdk/runtime-env",
-  );
-  return { ...actual, danger: (value: unknown) => String(value), logVerbose: vi.fn() };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  danger: (value: unknown) => String(value),
+  logVerbose: vi.fn(),
+}));
 
-vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
-    "openclaw/plugin-sdk/webhook-ingress",
-  );
-  return {
-    ...actual,
-    normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
-    registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
-  };
-});
+vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
+  normalizePluginHttpPath: (path: string | undefined, fallback: string) => path ?? fallback,
+  registerWebhookTargetWithPluginRoute: registerWebhookTargetWithPluginRouteMock,
+}));
 
-vi.mock("openclaw/plugin-sdk/webhook-request-guards", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-request-guards")>(
-    "openclaw/plugin-sdk/webhook-request-guards",
-  );
-  return { ...actual, runDetachedWebhookWork: vi.fn() };
-});
+vi.mock("openclaw/plugin-sdk/webhook-request-guards", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-request-guards")>()),
+  runDetachedWebhookWork: vi.fn(),
+}));
 
 vi.mock("./auto-reply-delivery.js", () => ({ deliverLineAutoReply: vi.fn() }));
 
@@ -60,7 +52,6 @@ afterAll(() => {
 
 beforeEach(() => {
   createLineBotMock.mockClear();
-  // The provider unregisters its route on stop, so the double has to hand one back.
   registerWebhookTargetWithPluginRouteMock
     .mockReset()
     .mockImplementation((params: { target: { path: string } }) => ({
@@ -69,13 +60,7 @@ beforeEach(() => {
     }));
 });
 
-/** Runs one inbound turn and returns the reply options the agent would receive. */
-async function replyOptionsFor(params: {
-  /** Config the provider was started with. */
-  startupConfig?: OpenClawConfig;
-  /** Config admission resolved for this event. */
-  turnConfig: OpenClawConfig;
-}): Promise<ResolvedTurn["replyOptions"]> {
+async function disableBlockStreamingFor(line: LineConfig, startupLine: LineConfig = {}) {
   let resolvedTurn: ResolvedTurn | undefined;
   setLineRuntime({
     channel: {
@@ -91,7 +76,7 @@ async function replyOptionsFor(params: {
   const monitor = await monitorLineProvider({
     channelAccessToken: "token",
     channelSecret: "secret", // pragma: allowlist secret
-    config: params.startupConfig ?? ({} as OpenClawConfig),
+    config: lineConfig(startupLine),
     runtime: {} as RuntimeEnv,
   });
   const onMessage = createLineBotMock.mock.calls[0]?.[0]?.onMessage;
@@ -108,63 +93,34 @@ async function replyOptionsFor(params: {
         accountId: "default",
         turn: { record: {} },
       } as unknown as Parameters<typeof onMessage>[0],
-      { cfg: params.turnConfig } as Parameters<typeof onMessage>[1],
+      { cfg: { channels: { line } } } as Parameters<typeof onMessage>[1],
     );
   } finally {
-    // A leaked registration makes later shared-path signature tests ambiguous.
     await monitor.stop();
   }
 
-  return resolvedTurn?.replyOptions;
-}
-
-function lineCfg(streaming?: unknown): OpenClawConfig {
-  return { channels: { line: streaming ? { streaming } : {} } } as OpenClawConfig;
+  return resolvedTurn?.replyOptions?.disableBlockStreaming;
 }
 
 describe("the channel-scoped block streaming choice", () => {
-  it("lets a named account override the channel-wide choice", async () => {
-    const replyOptions = await replyOptionsFor({
-      turnConfig: {
-        channels: {
-          line: {
-            streaming: { block: { enabled: true } },
-            accounts: { default: { streaming: { block: { enabled: false } } } },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
-  });
-
-  it("keeps a channel-wide disable when an account only tunes coalescing", async () => {
-    // Account config is merged shallowly, so the account's streaming object replaces
-    // the channel's outright. Reading only the merged view would lose the disable and
-    // hand the turn back to an agent default of "on".
-    const replyOptions = await replyOptionsFor({
-      turnConfig: {
-        channels: {
-          line: {
-            streaming: { block: { enabled: false } },
-            accounts: { default: { streaming: { block: { coalesce: { idleMs: 1000 } } } } },
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
+  it.each([
+    ["account overrides channel", true, { enabled: false }],
+    ["account coalescing inherits channel disable", false, { coalesce: { idleMs: 1000 } }],
+  ] as const)("disables block streaming when %s", async (_name, enabled, block) => {
+    expect(
+      await disableBlockStreamingFor({
+        streaming: { block: { enabled } },
+        accounts: { default: { streaming: { block } } },
+      }),
+    ).toBe(true);
   });
 
   it("reads the choice from the turn's own config, not the one the provider started with", async () => {
-    // LINE resolves config per event so a hot-applied change reaches the next turn.
-    // Reading the startup snapshot here would silently pin the streaming choice to
-    // whatever was configured when the provider was created.
-    const replyOptions = await replyOptionsFor({
-      startupConfig: lineCfg({ block: { enabled: false } }),
-      turnConfig: lineCfg({ block: { enabled: true } }),
-    });
-
-    expect(replyOptions?.disableBlockStreaming).toBe(false);
+    expect(
+      await disableBlockStreamingFor(
+        { streaming: { block: { enabled: true } } },
+        { streaming: { block: { enabled: false } } },
+      ),
+    ).toBe(false);
   });
 });

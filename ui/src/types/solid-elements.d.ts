@@ -21,6 +21,12 @@ type ChatCiProperties = {
   pullRequest?: ControlUiSessionPullRequest;
   sessionKey: string;
   presented: boolean;
+  inline?: boolean;
+  // Match the native menu registry without pulling renderer modules into SDK declarations.
+  controls?: {
+    readonly elements: ReadonlySet<HTMLElement>;
+    ref(this: void): (element: HTMLElement) => void;
+  };
 };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {
@@ -38,6 +44,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-cron-scratch-editor": HTMLAttributes<HTMLElement>;
       "openclaw-ip-location": HTMLAttributes<HTMLElement>;
       "openclaw-home-session": HTMLAttributes<HTMLElement>;
       "openclaw-session-owner-chip": HTMLAttributes<HTMLElement> & {
@@ -61,9 +68,10 @@ declare module "@solidjs/web" {
       "openclaw-chat-tool-review-outcome": HTMLAttributes<HTMLElement>;
       "openclaw-custodian-setup-card": HTMLAttributes<HTMLElement>;
       "openclaw-agent-memory-panel": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> & ElementProperties<ChatCiProperties>;
+      "openclaw-chat-ci-details": HTMLAttributes<HTMLElement> &
+        ElementProperties<ChatCiProperties & { menuControls?: boolean }>;
       "openclaw-chat-ci-automation": HTMLAttributes<HTMLElement> &
-        ElementProperties<ChatCiProperties & { sessionId: string }>;
+        ElementProperties<ChatCiProperties & { sessionId: string; menuPresentation?: boolean }>;
       "openclaw-panel-empty-state": HTMLAttributes<HTMLElement>;
       "openclaw-panel-loading-skeleton": HTMLAttributes<HTMLElement> & {
         compact?: string;

@@ -1,6 +1,5 @@
-// Matrix tests cover fake-indexeddb transaction pruning for crypto stores.
 import "fake-indexeddb/auto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
 
 function openDatabase(name: string): Promise<IDBDatabase> {
@@ -13,9 +12,7 @@ function openDatabase(name: string): Promise<IDBDatabase> {
     request.addEventListener(
       "error",
       () => reject(request.error ?? new Error("database open failed")),
-      {
-        once: true,
-      },
+      { once: true },
     );
   });
 }
@@ -23,9 +20,9 @@ function openDatabase(name: string): Promise<IDBDatabase> {
 function deleteDatabase(name: string): Promise<void> {
   return new Promise((resolve) => {
     const request = indexedDB.deleteDatabase(name);
-    request.addEventListener("success", () => resolve(), { once: true });
-    request.addEventListener("error", () => resolve(), { once: true });
-    request.addEventListener("blocked", () => resolve(), { once: true });
+    for (const event of ["success", "error", "blocked"]) {
+      request.addEventListener(event, () => resolve(), { once: true });
+    }
   });
 }
 
@@ -34,20 +31,13 @@ function putRecord(db: IDBDatabase, key: string): Promise<void> {
     const transaction = db.transaction("sessions", "readwrite");
     transaction.objectStore("sessions").put({ key, value: "payload" });
     transaction.addEventListener("complete", () => resolve(), { once: true });
-    transaction.addEventListener(
-      "error",
-      () => reject(transaction.error ?? new Error("transaction failed")),
-      {
-        once: true,
-      },
-    );
-    transaction.addEventListener(
-      "abort",
-      () => reject(transaction.error ?? new Error("transaction aborted")),
-      {
-        once: true,
-      },
-    );
+    for (const event of ["error", "abort"]) {
+      transaction.addEventListener(
+        event,
+        () => reject(transaction.error ?? new Error(`transaction ${event}`)),
+        { once: true },
+      );
+    }
   });
 }
 
@@ -59,55 +49,34 @@ function rawTransactions(db: IDBDatabase): Array<{ _state?: string }> {
   );
 }
 
-describe("Matrix fake-indexeddb transaction pruning", () => {
-  const databaseNames = new Set<string>();
+const databaseNames = new Set<string>();
 
-  afterEach(async () => {
-    for (const name of databaseNames) {
-      await deleteDatabase(name);
-    }
-    databaseNames.clear();
-  });
-
-  it("prunes finished transactions for Matrix crypto databases", async () => {
-    installFakeIndexedDbTransactionPruner();
-    const databaseName = `openclaw-matrix-prune-test-${Date.now()}::matrix-sdk-crypto`;
-    databaseNames.add(databaseName);
-    const db = await openDatabase(databaseName);
-
-    for (let i = 0; i < 5; i += 1) {
-      await putRecord(db, `key-${i}`);
-    }
-
-    expect(rawTransactions(db)).toHaveLength(0);
-    db.close();
-  });
-
-  it("prunes finished transactions for Matrix crypto metadata databases", async () => {
-    installFakeIndexedDbTransactionPruner();
-    const databaseName = `openclaw-matrix-meta-prune-test-${Date.now()}::matrix-sdk-crypto-meta`;
-    databaseNames.add(databaseName);
-    const db = await openDatabase(databaseName);
-
-    for (let i = 0; i < 5; i += 1) {
-      await putRecord(db, `key-${i}`);
-    }
-
-    expect(rawTransactions(db)).toHaveLength(0);
-    db.close();
-  });
-
-  it("does not prune unrelated fake-indexeddb databases", async () => {
-    installFakeIndexedDbTransactionPruner();
-    const databaseName = `openclaw-matrix-unrelated-prune-test-${Date.now()}`;
-    databaseNames.add(databaseName);
-    const db = await openDatabase(databaseName);
-
-    await putRecord(db, "key-1");
-
-    expect(
-      rawTransactions(db).filter((transaction) => transaction["_state"] === "finished").length,
-    ).toBeGreaterThan(0);
-    db.close();
-  });
+afterEach(async () => {
+  for (const name of databaseNames) {
+    await deleteDatabase(name);
+  }
+  databaseNames.clear();
 });
+
+it.each(["::matrix-sdk-crypto", "::matrix-sdk-crypto-meta", ""])(
+  "prunes finished transactions only for Matrix crypto databases (suffix: %s)",
+  async (suffix) => {
+    installFakeIndexedDbTransactionPruner();
+    const databaseName = `openclaw-matrix-prune-test-${Date.now()}${suffix}`;
+    databaseNames.add(databaseName);
+    const db = await openDatabase(databaseName);
+
+    for (let i = 0; i < (suffix ? 5 : 1); i += 1) {
+      await putRecord(db, `key-${i}`);
+    }
+
+    if (suffix) {
+      expect(rawTransactions(db)).toHaveLength(0);
+    } else {
+      expect(
+        rawTransactions(db).filter((transaction) => transaction["_state"] === "finished").length,
+      ).toBeGreaterThan(0);
+    }
+    db.close();
+  },
+);

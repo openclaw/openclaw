@@ -391,7 +391,9 @@ vector index is not a PostgreSQL JavaScript-scan fallback. An embedding-provider
 does not silently authorize keyword-only PostgreSQL admission.
 
 Memory admits its search definitions through the agent
-database owner. PostgreSQL rebuilds use connection-local temporary staging and
+database owner, including on the first turn after a port that omits rebuildable
+memory indexes. No manual memory-index rebuild is required before chatting.
+PostgreSQL rebuilds use connection-local temporary staging and
 publish canonical rows and their derived search projections in one writer
 transaction. SQLite retains its existing shadow-file publication. Memory search
 uses these same admitted projections. Forgetting removes derived text and vector
@@ -610,6 +612,11 @@ and recovery must account for that durability policy. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
 
+PostgreSQL model-context navigation reads parse each selected transcript row once
+and keep intermediate projections as JSONB until the navigation and byte counts
+cross the database boundary. The read remains bounded by the context page, and
+PostgreSQL transcript writes do not precompute navigation envelopes.
+
 ## Anchors and backups
 
 A PostgreSQL store keeps a small SQLite anchor at its usual local database path.
@@ -619,6 +626,13 @@ PostgreSQL schema metadata must match the anchor's store UUID and expected schem
 version. Admission checks run once per physical store per process load, and
 workers and handles reuse the admitted facts. Confirmed commits and uncertain
 commit outcomes invalidate cached store facts through the anchor's write token.
+
+When an agent worker is refused before opening its native writer, the host releases
+its prepared lease after native exit. The original refusal reaches its caller,
+and other logical borrowers can retry. This explicit refusal also preserves
+SQLite's clean-restart seal because no native writer opened. Unknown outcomes
+still invalidate that proof, and native and cleanup failures retain their
+existing retirement rules.
 
 PostgreSQL catalog admission captures column types, nullability, exact defaults,
 keys, CHECK expressions, index definitions (including partial predicates), and
@@ -829,6 +843,15 @@ writes invalidate only their declared replica scopes; raw writes and schema
 changes invalidate the whole store. Empty commits leave replica revisions
 unchanged, so unrelated reads can reuse their cached snapshots.
 A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
+Worker commit receipts carry only explicitly staged domain facts on both engines.
+A write without staged facts still commits and invalidates caches, but publishes
+no domain receipt. Native operation settlement is independent of those facts.
+
+Full transcript hydration reads PostgreSQL payloads in byte-budgeted pages within
+one read snapshot. Paging preserves all selected events and their sequence order;
+it does not impose a history cutoff. Individual oversized events retain bounded
+byte slicing.
 
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are

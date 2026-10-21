@@ -66,7 +66,7 @@ describe("A2A task store", () => {
     const task = store.create("ctx-alice");
     store.start(task.id);
 
-    await expect(store.wait(task.id, 0)).resolves.toMatchObject({
+    await expect(store.wait(task, 0)).resolves.toMatchObject({
       status: { state: "TASK_STATE_WORKING" },
     });
     expect(store.complete(task.id, "late reply")).toMatchObject({
@@ -79,7 +79,7 @@ describe("A2A task store", () => {
     const store = createTaskStore();
     const task = store.create("ctx-alice");
     store.start(task.id);
-    const waiting = store.wait(task.id, 120_000);
+    const waiting = store.wait(task, 120_000);
 
     store.stop();
 
@@ -93,9 +93,9 @@ describe("A2A task store", () => {
       const store = createTaskStore();
       const task = store.create("ctx-alice");
       store.start(task.id);
-      const first = store.wait(task.id, 10);
+      const first = store.wait(task, 10);
       await vi.advanceTimersByTimeAsync(5);
-      const second = store.wait(task.id, 20);
+      const second = store.wait(task, 20);
       const secondSettled = vi.fn();
       void second.then(secondSettled);
 

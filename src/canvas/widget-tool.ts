@@ -7,10 +7,7 @@ import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/i
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
-import {
-  callInProcessGatewayTool,
-  type InProcessGatewayCaller,
-} from "../agents/tools/in-process-gateway.js";
+import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { normalizeBoardWidgetDeclared } from "../boards/board-capabilities.js";
 import {
   BOARD_REPORT_GUIDANCE,
@@ -43,7 +40,6 @@ import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
 const REGISTERED_WIDGET_CODE_MAX_CHARS = 262_144;
-const WIDGET_MAX_PER_SCOPE = 32;
 
 function currentPluginRegistry() {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
@@ -151,8 +147,6 @@ type ShowWidgetToolOptions = {
   sessionId?: string;
   agentId?: string;
   agentSessionKey?: string;
-  stateDir?: string;
-  callGateway?: InProcessGatewayCaller;
   inlineHostEnabled?: boolean;
   inlineClientAvailable?: boolean;
   /** Admitted callers without a rendering client may author only durable dashboard widgets. */
@@ -273,7 +267,6 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 }
 
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
-  const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const pinnedOnly = options.pinnedOnly === true;
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =
@@ -470,7 +463,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             inputName: "widget document after wrapping",
           });
         }
-        const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
+        const snapshot = await callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", {
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
@@ -537,20 +530,13 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       let document: Awaited<ReturnType<typeof createCanvasDocument>> | undefined;
       const hostDocument = async () =>
-        (document ??= await createCanvasDocument(
-          {
-            title,
-            html: wrappedDocument,
-            surface: "assistant_message",
-            retentionScope: resolveRetentionScope(options),
-            // Direct navigation must not run widget script as the Control UI origin.
-            cspSandbox: "scripts",
-          },
-          {
-            stateDir: options.stateDir,
-            maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
-          },
-        ));
+        (document ??= await createCanvasDocument({
+          title,
+          html: wrappedDocument,
+          retentionScope: resolveRetentionScope(options),
+          // Direct navigation must not run widget script as the Control UI origin.
+          cspSandbox: "scripts",
+        }));
 
       let presentationAttempt: WidgetPresentationAttempt | undefined;
       if (wantsCurrentChannel && currentChannelPresenter) {

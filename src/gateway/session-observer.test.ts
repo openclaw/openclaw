@@ -71,7 +71,11 @@ it("keeps global observer streams scoped to their owning agents", async () => {
 });
 
 it("terminalizes a preamble-only digest without a utility model", async () => {
-  const harness = createHarness({ subscribe: false, broadSubscribe: true, utilityModelRef: null });
+  const harness = createHarness({
+    subscribe: false,
+    broadSubscribe: true,
+    config: { agents: { defaults: { utilityModel: "" } } },
+  });
   await preamble(harness, "**Running** [tests](https://example.com) [[reply_to_current]]");
   expectBroadcast(harness, { headline: "Running tests" }, 0);
   expect(harness.completeModel).not.toHaveBeenCalled();
@@ -90,11 +94,11 @@ it("terminalizes a preamble-only digest without a utility model", async () => {
 });
 
 it("synthesizes terminal health when the final model request becomes stale", async ({ signal }) => {
-  let utilityModelRef: string | undefined = "openai/gpt-a";
+  const config = { agents: { defaults: { utilityModel: "openai/gpt-a" } } };
   const model = createDeferred<ReturnType<typeof modelMessage>>();
   const harness = createHarness({
+    config,
     completeModel: vi.fn(() => model.promise),
-    resolveUtilityModelRef: vi.fn(() => utilityModelRef),
   });
   await preamble(harness, "Running tests");
   await emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: 40_000 });
@@ -103,7 +107,7 @@ it("synthesizes terminal health when the final model request becomes stale", asy
 
   const terminalBroadcast = createDeferred();
   harness.broadcastToConnIds.mockImplementationOnce(() => terminalBroadcast.resolve());
-  utilityModelRef = "openai/gpt-b";
+  config.agents.defaults.utilityModel = "openai/gpt-b";
   model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
   await withinTest(terminalBroadcast.promise, signal);
 
@@ -173,7 +177,7 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
     const terminalPublished = createDeferred();
     harness.broadcastToConnIds.mockImplementationOnce(() => terminalPublished.resolve());
     await emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
-    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal.aborted).toBe(true);
+    expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal?.aborted).toBe(true);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
     second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));
@@ -324,7 +328,7 @@ it("accepts a model digest after the preamble generation advances", async () => 
 });
 
 it("stops live model attempts at the budget when requests are superseded", async () => {
-  let utilityModelRef = "openai/gpt-a";
+  const config = { agents: { defaults: { utilityModel: "openai/gpt-a" } } };
   const attempts: ReturnType<typeof createDeferred<ReturnType<typeof modelMessage>>>[] = [];
   const completeModel = vi.fn(() => {
     const attempt = createDeferred<ReturnType<typeof modelMessage>>();
@@ -332,17 +336,17 @@ it("stops live model attempts at the budget when requests are superseded", async
     return attempt.promise;
   });
   const harness = createHarness({
+    config,
     completeModel,
-    resolveUtilityModelRef: vi.fn(() => utilityModelRef),
   });
   await startAndAddToolNotes(harness.observer);
   await vi.advanceTimersByTimeAsync(12_000);
   expect(completeModel).toHaveBeenCalledOnce();
 
   for (let attempt = 1; attempt <= 39; attempt += 1) {
-    utilityModelRef = "openai/gpt-b";
+    config.agents.defaults.utilityModel = "openai/gpt-b";
     await emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
-    utilityModelRef = "openai/gpt-a";
+    config.agents.defaults.utilityModel = "openai/gpt-a";
     await emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
     attempts.at(-1)?.resolve(modelMessage({ headline: "Superseded", health: "on-track" }));
     await flushObserver();

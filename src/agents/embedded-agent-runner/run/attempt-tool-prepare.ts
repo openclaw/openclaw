@@ -199,9 +199,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef = {};
   const inheritedToolAllowlist: string[] = [];
-  const inheritedPublicationToolRef: NonNullable<
-    OpenClawCodingToolsOptions["inheritedPublicationToolRef"]
-  > = {};
+  const additionalInheritedToolNamesRef: string[] = [];
   const generationCleanups: Array<(reason: string) => Promise<void>> = [];
   const retiringGenerations = new Set<Promise<void>>();
   let retiredCleanupFailed = false;
@@ -310,7 +308,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
-    inheritedPublicationToolRef.current = undefined;
+    additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
     if (shouldConstructTools) {
@@ -399,7 +397,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         enableHeartbeatTool: attempt.enableHeartbeatTool,
         forceHeartbeatTool: attempt.forceHeartbeatTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
-        inheritedPublicationToolRef,
+        additionalInheritedToolNamesRef,
         cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
         authProfileStore: attempt.authProfileStore,
@@ -535,7 +533,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       forceDirectMessageTool,
       requireExplicitMessageTarget,
       inheritedToolAllowlist,
-      inheritedPublicationToolRef,
+      additionalInheritedToolNamesRef,
       localModelLeanEnabled,
       localModelLeanPreserveToolNames,
       replaySafetyOptions,

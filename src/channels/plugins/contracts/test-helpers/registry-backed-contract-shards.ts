@@ -1,9 +1,4 @@
 import { beforeAll, describe, it } from "vitest";
-/**
- * Registry-backed channel contract shard installers.
- *
- * Installs surface, directory, threading, and plugin contract suites for bundled channel shards.
- */
 import { expectChannelPluginContract } from "../../../../plugin-sdk/test-helpers/channel-contract-suites.js";
 import {
   getBundledChannelDirectoryPluginAsync,
@@ -27,133 +22,83 @@ type ContractShardParams = {
   shardCount: number;
 };
 
-function installEmptyShardSuite(label: string) {
-  describe(label, () => {
-    it("has no matching bundled channels", () => {
+function installRegistryShard<Entry extends { id: string }, Plugin>(
+  entries: readonly Entry[],
+  label: string,
+  testName: string,
+  load: (id: string) => Promise<Plugin | undefined>,
+  check: (plugin: Plugin, entry: Entry) => void | Promise<void>,
+) {
+  if (entries.length === 0) {
+    describe(`${label} registry shard`, () => {
       // Keeps intentionally empty id-based shards visible to Vitest.
+      it("has no matching bundled channels", () => {});
     });
+    return;
+  }
+  const pluginCache = new Map<string, Plugin | undefined>();
+  beforeAll(async () => {
+    await Promise.all(
+      entries.map(async ({ id }) => {
+        pluginCache.set(id, await load(id));
+      }),
+    );
   });
+  for (const entry of entries) {
+    describe(`${entry.id} ${label}`, () => {
+      it(testName, () => {
+        const plugin = pluginCache.get(entry.id);
+        if (!plugin) {
+          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
+        }
+        return check(plugin, entry);
+      });
+    });
+  }
 }
 
 export function installSurfaceContractRegistryShard(params: ContractShardParams) {
-  const ids = getSurfaceContractRegistryShardIds(params);
-  if (ids.length === 0) {
-    installEmptyShardSuite("surface contract registry shard");
-    return;
-  }
-  const pluginCache = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
-  beforeAll(async () => {
-    await Promise.all(
-      ids.map(async (id) => {
-        pluginCache.set(id, await getBundledChannelPluginAsync(id));
-      }),
-    );
-  });
-
-  for (const id of ids) {
-    describe(`${id} surface contracts`, () => {
-      it("exposes declared surface contracts", () => {
-        const plugin = pluginCache.get(id);
-        if (!plugin) {
-          throw new Error(`Missing bundled channel plugin for ${id}`);
+  installRegistryShard(
+    getSurfaceContractRegistryShardIds(params).map((id) => ({ id })),
+    "surface contracts",
+    "exposes declared surface contracts",
+    getBundledChannelPluginAsync,
+    (plugin) => {
+      for (const surface of channelPluginSurfaceKeys) {
+        if (surface === "setup" ? (plugin.setupContract ?? plugin.setup) : plugin[surface]) {
+          expectChannelSurfaceContract({ plugin, surface });
         }
-        const surfaces = channelPluginSurfaceKeys.filter((surface) =>
-          Boolean(surface === "setup" ? (plugin.setupContract ?? plugin.setup) : plugin[surface]),
-        );
-        for (const surface of surfaces) {
-          expectChannelSurfaceContract({
-            plugin,
-            surface,
-          });
-        }
-      });
-    });
-  }
+      }
+    },
+  );
 }
 
 export function installDirectoryContractRegistryShard(params: ContractShardParams) {
-  const entries = getDirectoryContractRegistryShardRefs(params);
-  if (entries.length === 0) {
-    installEmptyShardSuite("directory contract registry shard");
-    return;
-  }
-  const pluginCache = new Map<
-    string,
-    Awaited<ReturnType<typeof getBundledChannelDirectoryPluginAsync>>
-  >();
-  beforeAll(async () => {
-    await Promise.all(
-      entries.map(async (entry) => {
-        pluginCache.set(entry.id, await getBundledChannelDirectoryPluginAsync(entry.id));
-      }),
-    );
-  });
-  for (const entry of entries) {
-    describe(`${entry.id} directory contract`, () => {
-      it("exposes the base directory contract", async () => {
-        const plugin = pluginCache.get(entry.id);
-        if (!plugin) {
-          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
-        }
-        await expectChannelDirectoryBaseContract({
-          plugin,
-          coverage: entry.coverage,
-        });
-      });
-    });
-  }
+  installRegistryShard(
+    getDirectoryContractRegistryShardRefs(params),
+    "directory contract",
+    "exposes the base directory contract",
+    getBundledChannelDirectoryPluginAsync,
+    (plugin, { coverage }) => expectChannelDirectoryBaseContract({ plugin, coverage }),
+  );
 }
 
 export function installThreadingContractRegistryShard(params: ContractShardParams) {
-  const entries = getThreadingContractRegistryShardRefs(params);
-  if (entries.length === 0) {
-    installEmptyShardSuite("threading contract registry shard");
-    return;
-  }
-  const pluginCache = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
-  beforeAll(async () => {
-    await Promise.all(
-      entries.map(async (entry) => {
-        pluginCache.set(entry.id, await getBundledChannelPluginAsync(entry.id));
-      }),
-    );
-  });
-  for (const entry of entries) {
-    describe(`${entry.id} threading contract`, () => {
-      it("keeps threading return values normalized", () => {
-        const plugin = pluginCache.get(entry.id);
-        if (!plugin) {
-          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
-        }
-        expectChannelThreadingReturnValuesNormalized(plugin);
-      });
-    });
-  }
+  installRegistryShard(
+    getThreadingContractRegistryShardRefs(params),
+    "threading contract",
+    "keeps threading return values normalized",
+    getBundledChannelPluginAsync,
+    expectChannelThreadingReturnValuesNormalized,
+  );
 }
 
 export function installPluginContractRegistryShard(params: ContractShardParams) {
-  const entries = getPluginContractRegistryShardRefs(params);
-  if (entries.length === 0) {
-    installEmptyShardSuite("plugin contract registry shard");
-    return;
-  }
-  const pluginCache = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
-  beforeAll(async () => {
-    await Promise.all(
-      entries.map(async (entry) => {
-        pluginCache.set(entry.id, await getBundledChannelPluginAsync(entry.id));
-      }),
-    );
-  });
-  for (const entry of entries) {
-    describe(`${entry.id} plugin contract`, () => {
-      it("satisfies the base channel plugin contract", () => {
-        const plugin = pluginCache.get(entry.id);
-        if (!plugin) {
-          throw new Error(`Missing bundled channel plugin for ${entry.id}`);
-        }
-        expectChannelPluginContract(plugin);
-      });
-    });
-  }
+  installRegistryShard(
+    getPluginContractRegistryShardRefs(params),
+    "plugin contract",
+    "satisfies the base channel plugin contract",
+    getBundledChannelPluginAsync,
+    expectChannelPluginContract,
+  );
 }

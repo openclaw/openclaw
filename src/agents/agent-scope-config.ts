@@ -52,7 +52,6 @@ export type AgentSelectionContext = {
 export class AgentSelectionRequiredError extends Error {
   readonly code = "AGENT_SELECTION_REQUIRED";
   readonly agentIds: string[];
-  readonly surface: string;
   readonly hint: string;
 
   constructor(agentIds: string[], context?: AgentSelectionContext) {
@@ -63,7 +62,6 @@ export class AgentSelectionRequiredError extends Error {
     super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
     this.name = "AgentSelectionRequiredError";
     this.agentIds = agentIds;
-    this.surface = surface;
     this.hint = hint;
   }
 }

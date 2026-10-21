@@ -3,10 +3,12 @@ import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
@@ -14,21 +16,11 @@ type FocusTarget = "back" | "search" | "workspace";
 
 function SettingsIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon width="24" height="24">
       <path d="M4 7h8m4 0h4M4 17h2m4 0h10" />
       <circle cx="14" cy="7" r="2" />
       <circle cx="8" cy="17" r="2" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -55,7 +47,6 @@ export function PaletteSessionSettingsView(properties: {
     };
   };
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
-  let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   const close = () => {
     setOpen(false);
@@ -114,7 +105,7 @@ export function PaletteSessionSettingsView(properties: {
         showPlaces(false);
       } else {
         close();
-        trigger.focus({ preventScroll: true });
+        popover.overlay.trigger?.focus({ preventScroll: true });
       }
       return;
     }
@@ -284,13 +275,13 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
-    onCleanup(() => {
-      readAgentControls = undefined;
-    });
     onSettled(() => {
       if (focusTarget === "workspace") {
         focusTargets.workspace?.focus({ preventScroll: true });
       }
+      return () => {
+        readAgentControls = undefined;
+      };
     });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
@@ -368,7 +359,8 @@ export function PaletteSessionSettingsView(properties: {
                   place().remotePlacement
                     ? t("newSession.checkoutRemoteLocked")
                     : !place().worktreeAvailable()
-                      ? t("newSession.gitCheckUnavailable")
+                      ? (repositoryIssueText(place().repository) ??
+                        t("newSession.gitCheckUnavailable"))
                       : undefined
                 }
                 disabled={view().locked || place().remotePlacement}
@@ -388,79 +380,64 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   return (
-    <>
-      <button
-        id={properties.id + "-settings-trigger"}
-        ref={(node) => {
-          trigger = node;
-        }}
-        onClick={() => popover.overlay.request(!popover.overlay.open)}
-        class="palette-session-settings__trigger"
-        type="button"
-        aria-label={t("commandPalette.newSessionSettings")}
-        title={t("commandPalette.newSessionSettings")}
-        aria-haspopup="dialog"
-        aria-controls={properties.id + "-settings-popover"}
-        aria-expanded={open() ? "true" : "false"}
-      >
-        <SettingsIcon />
-      </button>
-      <Popover
-        ref={(handle) => {
-          popover = handle;
-        }}
-        id={properties.id + "-settings-popover"}
-        label={t("commandPalette.newSessionSettings")}
-        class="palette-session-settings"
-        anchor={trigger}
-        placement="bottom-end"
-        open={open()}
-        onOpenChange={(value) => (value ? setOpen(true) : close())}
-      >
-        <div class="palette-session-settings__content" ref={keydown}>
-          {places() ? <SettingsPlaces /> : <SettingsSummary />}
-          {!places() || properties.options.preferences.failed ? (
-            <div class="palette-session-settings__footer">
-              {!places() ? (
-                <label
-                  class="palette-session-settings__remember"
-                  title={
-                    !properties.options.preferences.available
-                      ? t("commandPalette.rememberUnavailable")
-                      : undefined
+    <Popover
+      triggerId={properties.id + "-settings-trigger"}
+      triggerClass="palette-session-settings__trigger"
+      triggerTitle={t("commandPalette.newSessionSettings")}
+      trigger={<SettingsIcon />}
+      ref={(handle) => {
+        popover = handle;
+      }}
+      id={properties.id + "-settings-popover"}
+      label={t("commandPalette.newSessionSettings")}
+      class="palette-session-settings"
+      placement="bottom-end"
+      open={open()}
+      onOpenChange={(value) => (value ? setOpen(true) : close())}
+    >
+      <div class="palette-session-settings__content" ref={keydown}>
+        {places() ? <SettingsPlaces /> : <SettingsSummary />}
+        {!places() || properties.options.preferences.failed ? (
+          <div class="palette-session-settings__footer">
+            {!places() ? (
+              <label
+                class="palette-session-settings__remember"
+                title={
+                  !properties.options.preferences.available
+                    ? t("commandPalette.rememberUnavailable")
+                    : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  ref={controlRef()}
+                  checked={properties.options.preferences.remember}
+                  disabled={view().locked || !properties.options.preferences.available}
+                  onChange={(event) =>
+                    properties.options.preferences.setRemember(event.currentTarget.checked)
                   }
-                >
-                  <input
-                    type="checkbox"
-                    ref={controlRef()}
-                    checked={properties.options.preferences.remember}
-                    disabled={view().locked || !properties.options.preferences.available}
-                    onChange={(event) =>
-                      properties.options.preferences.setRemember(event.currentTarget.checked)
-                    }
+                />
+                <span>
+                  <ShortcutText
+                    text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
+                    shortcut={() => (
+                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
+                    )}
                   />
-                  <span>
-                    <ShortcutText
-                      text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
-                      shortcut={() => (
-                        <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
-                      )}
-                    />
-                  </span>
-                </label>
-              ) : undefined}
-              {properties.options.preferences.failed ? (
-                <div class="palette-session-settings__error" role="alert">
-                  {t("commandPalette.settingsSaveFailed")}{" "}
-                  <button type="button" class="btn btn--sm" ref={[controlRef(), retry]}>
-                    {t("common.retry")}
-                  </button>
-                </div>
-              ) : undefined}
-            </div>
-          ) : undefined}
-        </div>
-      </Popover>
-    </>
+                </span>
+              </label>
+            ) : undefined}
+            {properties.options.preferences.failed ? (
+              <div class="palette-session-settings__error" role="alert">
+                {t("commandPalette.settingsSaveFailed")}{" "}
+                <button type="button" class="btn btn--sm" ref={[controlRef(), retry]}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            ) : undefined}
+          </div>
+        ) : undefined}
+      </div>
+    </Popover>
   );
 }

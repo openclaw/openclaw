@@ -110,7 +110,6 @@ async function handleDiscordCommandArgInteraction(
     prompt,
     command: commandDefinition,
     commandArgs: commandArgsWithRaw,
-    preferFollowUp: true,
     responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
     pluginCommandDispatch: { kind: "non-plugin" },
   });

@@ -45,6 +45,7 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     view: null,
     loading: false,
     errorText: null,
+    errorRetry: null,
     noticeText: null,
     mode: "interact",
     strokes: [],
@@ -85,6 +86,10 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     },
 
     setState<Key extends keyof BrowserPanelState>(key: Key, value: BrowserPanelState[Key]): void {
+      // Recovery belongs to the displayed failure, not to the next operation.
+      if (key === "errorText" && value === null) {
+        panel.errorRetry = null;
+      }
       if (Object.is(panel[key], value)) {
         return;
       }
@@ -160,11 +165,25 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("evaluateUnavailable", false);
     },
 
-    reportError(error: unknown): void {
+    reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
       const detail = isBrowserNavigationBlockedError(error)
         ? t("browser.navigationBlocked")
         : formatUiError(error);
+      panel.setState("errorRetry", retry);
       panel.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
+    },
+
+    async retryEmptyError(): Promise<void> {
+      if (!panel.errorText || !host.available || !host.isConnected || !host.browserPanelIsOpen()) {
+        return;
+      }
+      if (panel.errorRetry) {
+        await panel.errorRetry();
+      } else if (panel.running === false && !host.fixedTab) {
+        await panel.startBrowserNow();
+      } else {
+        await panel.refreshAll();
+      }
     },
 
     async refreshAll(): Promise<void> {

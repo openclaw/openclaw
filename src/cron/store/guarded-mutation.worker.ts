@@ -145,7 +145,9 @@ function cancelChangedQueuedRuns(
         receiptSchema,
         handle: receipt,
         pendingReceiptId:
-          current?.state.runningAtMs === undefined ? undefined : current.state.runningReceiptId,
+          current?.state.runningAtMs === undefined
+            ? receipt.receiptId
+            : current.state.runningReceiptId,
         status: "skipped",
         finishedAtMs: input.snapshot.nowMs,
         error,

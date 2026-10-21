@@ -27,6 +27,7 @@ type WorkerMemorySample = Pick<
   "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
 > & {
   heapSizeLimitBytes?: number;
+  oldGenerationAfterGcBytes?: number;
   heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
   retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
   gc?: GcSample[];
@@ -52,6 +53,7 @@ type WorkerSource = {
     value: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external"> & {
       arrayBuffers?: number;
       heapSizeLimitBytes?: number;
+      oldGenerationAfterGcBytes?: number;
       heapSpaces?: WorkerMemorySample["heapSpaces"];
       retainedData?: WorkerMemorySample["retainedData"];
     };
@@ -450,6 +452,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         "memory",
         "from_worker",
         ("heapUsed" in record ? 32 + (record.heapSizeLimitBytes === undefined ? 0 : 8) : 0) +
+          ("heapUsed" in record && record.oldGenerationAfterGcBytes !== undefined ? 8 : 0) +
           ("heapUsed" in record ? (record.heapSpaces?.length ?? 0) * 8 : 0) +
           ("heapUsed" in record
             ? (record.retainedData?.reduce(

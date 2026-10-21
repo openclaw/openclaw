@@ -5,10 +5,12 @@ import type {
   ClawsDraftsReadResult,
   ClawsDraftsReviewResult,
 } from "@openclaw/gateway-protocol";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
@@ -17,7 +19,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { clawDraftUrl } from "./draft-navigation.ts";
+import { canCreateClawDraft } from "./draft-navigation.ts";
 
 type Target = {
   agentId: string;
@@ -44,7 +46,7 @@ function hasCompleteScope(content: string) {
 
 /** Connection-scoped presentation; the Gateway owns draft bytes and publication authority. */
 export class ClawCreatorFlow {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private editTimer: ReturnType<typeof setTimeout> | null = null;
@@ -75,16 +77,9 @@ export class ClawCreatorFlow {
     });
   }
 
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
-  private changed() {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  private readonly changed = this.listeners.publish;
 
   private mainSessionKey(agentId: string) {
     const mainKey = resolveUiConfiguredMainKey({
@@ -158,12 +153,17 @@ export class ClawCreatorFlow {
         client,
       };
       const generation = this.reset(target);
-      const reviewUrl = clawDraftUrl(this.context.basePath, target);
-      const message = `${created.prompt}\nReview: [Create a Claw](${reviewUrl})`;
       const ack = await client.request<{ status?: string }>("chat.send", {
         sessionKey: target.sessionKey,
         ...(isUiGlobalSessionKey(target.sessionKey) ? { agentId } : {}),
-        message,
+        message: created.prompt,
+        workContext: {
+          page: "claw-create",
+          title: t("clawsDraft.title"),
+          agentId,
+          sessionKey: target.sessionKey,
+          detail: { draftId: target.draftId },
+        },
         deliver: false,
         idempotencyKey: generateUUID(),
       });
@@ -263,6 +263,7 @@ export class ClawCreatorFlow {
       this.reviewCurrent = true;
       this.choices ??= {
         name: result.name.split("/").at(-1) ?? result.name,
+        displayName: result.displayName,
         description: result.description,
         excluded: result.items.filter((item) => !item.included).map((item) => item.id),
       };
@@ -317,6 +318,15 @@ export class ClawCreatorFlow {
         this.publication = result;
         this.modalOpen = false;
         this.error = null;
+        showToast({
+          message: t(
+            result.publicationStatus === "published"
+              ? "clawsDraft.published"
+              : "clawsDraft.pending",
+          ),
+          actionLabel: t("clawsDraft.viewPublication"),
+          onAction: () => openExternalUrlSafe(result.url),
+        });
       }
     } catch (error) {
       if (this.current(target, generation)) {
@@ -359,4 +369,11 @@ export function clawCreatorFlow(context: ApplicationContext) {
     flows.set(context, flow);
   }
   return flow;
+}
+
+export function clawCreatorAction(context: ApplicationContext, agentId: string | undefined) {
+  if (!agentId || !canCreateClawDraft(context)) {
+    return undefined;
+  }
+  return () => void clawCreatorFlow(context).start(agentId);
 }

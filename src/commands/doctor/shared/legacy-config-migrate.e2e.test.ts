@@ -4,6 +4,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-defau
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
+import { projectRetiredHeartbeatConfig } from "../../doctor-heartbeat-legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -27,7 +28,7 @@ describe("legacy config migration end to end", () => {
   it.each([
     { prefsPath: "/tmp/synthetic-tts.json" },
     { personas: { narrator: { prompt: { style: "Synthetic instruction" } } } },
-  ])("converges legacy TTS ownership and retirement in one pass: %j", (tts) => {
+  ])("converges legacy TTS ownership without replacing its model: %j", (tts) => {
     const raw = { messages: { tts: { ...tts, summaryModel: "anthropic/claude-sonnet-4-5" } } };
     const result = migrate(raw);
     expect(result.partiallyValid).toBeUndefined();
@@ -35,7 +36,7 @@ describe("legacy config migration end to end", () => {
     expect(result.config).not.toHaveProperty("messages.tts");
     expect(result.config).not.toHaveProperty("tts.prefsPath");
     expect(result.config).not.toHaveProperty("tts.personas.narrator.prompt");
-    expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-5");
     expectIdempotent(result.config);
   });
 
@@ -143,7 +144,6 @@ describe("legacy config migration end to end", () => {
         ownership: "explicit",
         defaults: {
           systemAgent: { agentId: "main" },
-          heartbeat: { agentId: "main" },
         },
         entries: {
           main: { name: "first", workspace: resolveDefaultAgentWorkspaceDir() },
@@ -245,7 +245,7 @@ describe("legacy config migration end to end", () => {
     },
   );
 
-  it("canonicalizes a multi-family legacy config and is idempotent", () => {
+  it("canonicalizes a multi-family legacy config and is idempotent", async () => {
     const raw = {
       env: { shellEnv: { enabled: true }, API_ORIGIN: "https://example.test" },
       agents: {
@@ -324,7 +324,6 @@ describe("legacy config migration end to end", () => {
     };
     const result = migrate(raw);
 
-    expect(result.partiallyValid).toBeUndefined();
     expect(result.config).toMatchObject({
       env: { shellEnv: { enabled: true }, vars: { API_ORIGIN: "https://example.test" } },
       agents: {
@@ -362,7 +361,13 @@ describe("legacy config migration end to end", () => {
     expect(result.changes).toContain(
       "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
     );
-    expectValid(result.config);
+    expect(result.partiallyValid).toBe(true);
+    if (!result.config) {
+      throw new Error("Expected normalized legacy configuration");
+    }
+    const projected = projectRetiredHeartbeatConfig(result.config);
+    expect(projected).not.toHaveProperty("channels.defaults.heartbeatVisibility");
+    expectValid(projected);
     expect(apply(result.config)).toEqual({ next: null, changes: [] });
     const serialized = JSON.stringify(result.config);
     for (const key of [

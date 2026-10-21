@@ -173,7 +173,7 @@ describe("routeReply", () => {
     {
       name: "reasoning",
       payload: { text: "step", isReasoning: true },
-      outcome: { delivered: false, suppressed: true, reason: "reasoning_payload_not_external" },
+      outcome: { delivered: false, suppressed: true },
     },
     {
       name: "recorded silence",
@@ -305,7 +305,6 @@ describe("routeReply", () => {
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "empty_after_reply_payload_sending_hook",
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });

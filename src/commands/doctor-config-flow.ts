@@ -4,10 +4,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { applyMessageQueueDefaults } from "../config/defaults.js";
-import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -19,11 +17,13 @@ import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withDoctorProgress } from "../flows/doctor-health-startup.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
+import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heartbeat-repair.js";
 import {
   noteDoctorHookConfigWarnings,
   noteImplicitFallbackClobberWarnings,
@@ -42,10 +42,13 @@ import { emitDoctorNotes, sanitizeDoctorNote } from "./doctor/emit-notes.js";
 import { finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
 import {
   applyLegacyCompatibilityStep,
-  applyUnknownConfigKeyStep,
+  applyRetiredConfigStep,
   prepareDoctorConfigReferenceSource,
 } from "./doctor/shared/config-flow-steps.js";
-import { prepareDoctorConfigMigrationResult } from "./doctor/shared/config-migration-result.js";
+import {
+  prepareDoctorConfigMigrationResult,
+  retainHeartbeatMigrationInput,
+} from "./doctor/shared/config-migration-result.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationResult,
@@ -63,39 +66,34 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   retiredStateAdmitted?: boolean;
   stateSchemaPreparation?: LegacyStateMigrationStepReceipt;
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  automaticHeartbeatRepair?: AutomaticHeartbeatRepairAdmission;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
   runtime?: RuntimeEnv;
   prompter?: DoctorPrompter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
   const shouldRepair = params.options.repair === true || params.options.yes === true;
-  const preflight = await withProgress(
-    {
-      label: "Checking OpenClaw state…",
-      enabled: params.options.nonInteractive !== true && params.options.json !== true,
-      delayMs: 200,
-    },
-    (progress) =>
-      runDoctorConfigPreflight({
-        retiredStateAdmitted: params.retiredStateAdmitted,
-        stateSchemaPreparation: params.stateSchemaPreparation,
-        integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
-        observe: false,
-        invocationPurpose: "doctor",
-        repairPrefixedConfig: shouldRepair,
-        doctorOnlyStateMigrations: shouldRepair,
-        preparePluginMetadataSnapshot: true,
-        agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
-        beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(
-          params.prompter,
-          progress.done,
-        ),
-        measure: async (name, run) => {
-          progress.setLabel(`${name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " ")}…`);
-          return await run();
-        },
-      }),
-  );
+  const preflight = await runDoctorConfigPreflight({
+    retiredStateAdmitted: params.retiredStateAdmitted,
+    stateSchemaPreparation: params.stateSchemaPreparation,
+    integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
+    observe: false,
+    invocationPurpose: "doctor",
+    repairPrefixedConfig: shouldRepair,
+    doctorOnlyStateMigrations: shouldRepair,
+    preparePluginMetadataSnapshot: true,
+    ...(params.automaticHeartbeatRepair
+      ? { automaticHeartbeatRepair: params.automaticHeartbeatRepair }
+      : {}),
+    agentDatabaseMigrationDiscovery: params.agentDatabaseMigrationDiscovery,
+    beforeWorkspaceStateMigration: createWorkspaceAliasMigrationRepair(params.prompter),
+    measure: (name, run) =>
+      withDoctorProgress(
+        name.slice(name.lastIndexOf(".") + 1).replaceAll("-", " "),
+        run,
+        params.options.json !== true,
+      ),
+  });
   const { snapshot, baseConfig: baseCfg } = preflight;
   preparingResources.use(preflight.pluginCache);
   if (!snapshot.exists || snapshot.valid) {
@@ -133,7 +131,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   };
   let state: DoctorConfigMutationState = {
     cfg: baseCfg,
-    candidate: structuredClone(baseCfg),
+    candidate: await retainHeartbeatMigrationInput(baseCfg, preflight.heartbeatMigrationSource),
     pendingChanges: false,
     fixHints: [],
   };
@@ -514,27 +512,32 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (shouldRepair) {
     const { runDoctorRepairSequence } = await import("./doctor/repair-sequencing.js");
     const prompter = params.prompter;
-    const repairSequence = await runDoctorRepairSequence({
-      state,
-      installedPluginIdRecovery: installedPluginRecovery.recovery,
-      doctorFixCommand,
-      env: process.env,
-      blockedCodexProviderPlan,
-      pluginMetadataSnapshotState,
-      runWithPluginMetadataSnapshot,
-      ...(prompter
-        ? {
-            onCapabilityConsent: createPluginCapabilityConsentPrompter({
-              note: async (message, title) => note(message, title),
-              confirm: (confirmation) =>
-                prompter.confirmRuntimeRepair({
-                  ...confirmation,
-                  requiresInteractiveConfirmation: true,
+    const repairSequence = await withDoctorProgress(
+      "Config repairs",
+      () =>
+        runDoctorRepairSequence({
+          state,
+          installedPluginIdRecovery: installedPluginRecovery.recovery,
+          doctorFixCommand,
+          env: process.env,
+          blockedCodexProviderPlan,
+          pluginMetadataSnapshotState,
+          runWithPluginMetadataSnapshot,
+          ...(prompter
+            ? {
+                onCapabilityConsent: createPluginCapabilityConsentPrompter({
+                  note: async (message, title) => note(message, title),
+                  confirm: (confirmation) =>
+                    prompter.confirmRuntimeRepair({
+                      ...confirmation,
+                      requiresInteractiveConfirmation: true,
+                    }),
                 }),
-            }),
-          }
-        : {}),
-    });
+              }
+            : {}),
+        }),
+      params.options.json !== true,
+    );
     state = repairSequence.state;
     configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
@@ -593,29 +596,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(sanitizeDoctorNote(mutableAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
-  const unknownStep = applyUnknownConfigKeyStep({
+  const modelBillingRouteConfig = state.candidate;
+  state = await applyRetiredConfigStep({
     state,
     shouldRepair,
     doctorFixCommand,
-    preservedPaths: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig)?.flatMap(
-      (pending) => (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
-    ),
+    sourceConfig: snapshot.sourceConfig,
+    emitChanges: changesPanelSink.emit,
   });
-  state = unknownStep.state;
-  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
-    const lines = [
-      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
-      ...unknownStep.repairs.map((change) => `- ${change}`),
-    ];
-    if (shouldRepair) {
-      changesPanelSink.emit(lines);
-    } else {
-      note(lines.join("\n"), "Unknown config keys");
-    }
-  }
-  if (unknownStep.warnings.length > 0) {
-    note(unknownStep.warnings.join("\n"), "Doctor warnings");
-  }
 
   const finalized = await finalizeDoctorConfigFlow({
     ...state,
@@ -675,6 +663,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
+    modelBillingRouteConfig,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,

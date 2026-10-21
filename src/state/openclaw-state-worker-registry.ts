@@ -132,7 +132,6 @@ const loaders = {
       (m) => m.nativeHookRelayOperations,
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
-  promotions: () => import("../infra/promotions-feed.worker.js").then((m) => m.promotionOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
   doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>

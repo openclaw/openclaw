@@ -619,6 +619,29 @@ export function hasOrphanedMainSessionWork(
   );
 }
 
+/** A new turn may retire an aborted claim only when restart recovery will not resume it. */
+export function canReplaceAbortedRestartRecoveryClaim(
+  entry: SessionEntry,
+  sessionKey: string,
+  admissionRunId: string | undefined,
+): boolean {
+  const activeClaimRunId = normalizeRunId(entry.restartRecoveryDeliveryRunId);
+  return Boolean(
+    admissionRunId &&
+    activeClaimRunId &&
+    admissionRunId !== activeClaimRunId &&
+    entry.abortedLastRun === true &&
+    (entry.status === undefined || entry.status === "interrupted") &&
+    entry.pendingFinalDelivery === undefined &&
+    entry.restartRecoveryBeforeAgentReplyState === undefined &&
+    entry.restartRecoveryDeliveryReceiptState === undefined &&
+    // Main-session recovery resumes other claims before new input. It never owns child,
+    // cron, or ACP sessions, so their interrupted claim would otherwise reject every turn.
+    (entry.restartRecoverySourceIngress === "control-ui" ||
+      !isMainRestartRecoveryCandidate(entry, sessionKey)),
+  );
+}
+
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,

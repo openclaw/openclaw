@@ -13,6 +13,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
+import { waitForAbort } from "./contract.test-support.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
 import type { DecisionProviderV1 } from "./types.js";
 
@@ -30,11 +31,10 @@ it.each(
   ),
 )(
   "preserves the Decision V$version caller budget through $ending preparation",
-  async ({ version, ending }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  ({ version, ending }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot(config);
-      const context = createContext();
-      context.getRuntimeConfig = () => config;
+      const context = createContext([], () => config);
       const client = createOperatorClient({
         profileName: "decision-preparation",
         scopes: ["operator.write"],
@@ -52,36 +52,27 @@ it.each(
         });
       const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async (_batch, { signal }) => {
         if (ending === "partial") {
-          await new Promise<void>((resolve) => {
-            signal.addEventListener("abort", () => resolve(), { once: true });
-          });
+          await waitForAbort(signal);
         }
         return answer;
       });
       const host = registered(evaluate);
       const controller = new AbortController();
       let current = true;
-      let now = 1_000;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-      const pending = withPluginRuntimeGatewayRequestScope(
+      const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+      const requestOptions = { ...options(), timeoutMs: 500, signal: controller.signal };
+      const settled = withPluginRuntimeGatewayRequestScope(
         {
           client,
           context,
           hasCurrentClientAuthority: () => current,
           isWebchatConnect: () => false,
         },
-        () => {
-          const requestOptions = {
-            ...options(),
-            timeoutMs: 500,
-            signal: controller.signal,
-          };
-          return version === 1
+        () =>
+          version === 1
             ? host.api.runtime.decisions.evaluate(batch, requestOptions)
-            : host.api.runtime.decisions.evaluateV2(decisionBatchV1ToV2(batch)!, requestOptions);
-        },
-      );
-      const settled = pending.then(
+            : host.api.runtime.decisions.evaluateV2(decisionBatchV1ToV2(batch)!, requestOptions),
+      ).then(
         (outcome) => ({ outcome }),
         (error: unknown) => ({ error }),
       );
@@ -89,38 +80,33 @@ it.each(
         await Promise.race([entered.promise, settled]);
         expect(preparation).toHaveBeenCalledOnce();
         expect(evaluate).not.toHaveBeenCalled();
-        now += ending === "partial" ? 200 : 500;
+        clock.mockReturnValue(ending === "partial" ? 1_200 : 1_500);
         const cancellation = new Error("Decision caller cancelled");
         if (ending === "caller-aborted") {
           controller.abort(cancellation);
-        } else if (ending === "authority-closed") {
-          current = false;
         }
+        current = ending !== "authority-closed";
         // Start fake timers after real profile I/O; only provider timing is simulated.
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         resume.resolve();
         if (ending === "partial") {
           await Promise.race([host.started, settled]);
-          expect(evaluate).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(299);
           expect(evaluate.mock.calls[0]?.[1].signal.aborted).toBe(false);
-          now += 300;
+          clock.mockReturnValue(1_500);
           await vi.advanceTimersByTimeAsync(1);
           expect(evaluate.mock.calls[0]?.[1].signal.aborted).toBe(true);
         }
-        if (ending === "caller-aborted") {
-          expect(await settled).toEqual({ error: cancellation });
-        } else if (ending === "authority-closed") {
-          expect(await settled).toEqual({
-            error: expect.objectContaining({
-              message: "Gateway caller authority is no longer active.",
-            }),
-          });
-        } else {
-          expect(await settled).toEqual({
-            outcome: { status: "unavailable", reason: "deadline" },
-          });
-        }
+        const authorityError = expect.objectContaining({
+          message: "Gateway caller authority is no longer active.",
+        });
+        expect(await settled).toEqual(
+          ending === "caller-aborted"
+            ? { error: cancellation }
+            : ending === "authority-closed"
+              ? { error: authorityError }
+              : { outcome: { status: "unavailable", reason: "deadline" } },
+        );
         expect(evaluate).toHaveBeenCalledTimes(ending === "partial" ? 1 : 0);
         expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
       } finally {
@@ -131,6 +117,5 @@ it.each(
         clock.mockRestore();
         preparation.mockRestore();
       }
-    });
-  },
+    }),
 );

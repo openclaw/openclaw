@@ -91,36 +91,14 @@ suite.define(() => {
       await page.screenshot({ animations: "disabled", path: path.join(proofDir, file) });
     }
   }
-  async function expectActions(header: Locator, y: number, right: number) {
-    const buttons = header.locator(
-      ".page-header-actions button:visible, .page-header-actions a.btn:visible",
-    );
-    const count = await buttons.count();
-    expect(count).toBeGreaterThan(0);
-    for (let index = 0; index < count; index++) {
-      await expectAligned(buttons.nth(index), y, "y");
-      expect((await buttons.nth(index).boundingBox())!.x).toBeGreaterThan(right);
-    }
-  }
 
+  // Built-in Pages use the stacked hub header; Memory import keeps the toolbar-row title.
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(
-      "usage",
+      "memory-import",
       native ? installNativeWebChrome : undefined,
       undefined,
-      {
-        methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "research", name: "Research" },
-            ],
-          },
-        },
-      },
+      undefined,
       native ? undefined : "rtl",
     );
     const header = page.locator(".content .content-header").first();
@@ -129,7 +107,6 @@ suite.define(() => {
     await expectAligned(title, y, "y");
     await expectAligned(title, header, "x");
     const titleBox = (await title.boundingBox())!;
-    let right = titleBox.x + titleBox.width;
     if (native) {
       expect(toolbar.y + toolbar.height).toBe(52);
       expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
@@ -139,9 +116,8 @@ suite.define(() => {
       const edges = await page
         .locator(".shell-chrome-controls button:visible")
         .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
-      right = Math.max(right, ...edges);
+      expect(titleBox.x).toBeGreaterThan(Math.max(...edges));
     }
-    await expectActions(header, y, right);
   });
 
   it.each([
@@ -172,7 +148,7 @@ suite.define(() => {
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--mobile-nav");
       }
-      const header = page.locator(".agents-home__header .content-header");
+      const header = page.locator(".content-header.agents-home__header");
       const title = header.getByRole("heading", { name: "Agents", exact: true });
       const subtitle = header.locator(".page-subtitle");
       await expect
@@ -326,7 +302,7 @@ suite.define(() => {
   );
 
   it("keeps the legacy Mac app's lowered web controls clear of intro text", async () => {
-    const { page } = await openPage("usage", async (target) => {
+    const { page } = await openPage("memory-import", async (target) => {
       await target.addInitScript(() => {
         const stamp = () => document.documentElement.classList.add("openclaw-native-macos");
         if (document.documentElement) {
@@ -341,7 +317,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Open command palette"]);
+    ).toEqual(["Expand sidebar", "Command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

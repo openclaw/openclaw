@@ -1,31 +1,33 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
-  createContext,
-  createGateway,
   createSessionResult,
-  enterQuery,
   findPaletteOption,
-  mountPalette,
+  mountSearch,
+  registerCommandPaletteTestHooks,
+  searchPalette,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
 
-describe("CommandPalette session search", () => {
-  let restoreDialogPolyfill: () => void;
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+registerCommandPaletteTestHooks({ mockScroll: false });
 
+function transcript(sessionKey: string, snippet: string): SessionsSearchResult["results"] {
+  return [
+    {
+      sessionKey,
+      sessionId: "session",
+      messageId: "message",
+      role: "assistant",
+      timestamp: 1,
+      snippet,
+      score: 1,
+    },
+  ];
+}
+
+describe("CommandPalette session search", () => {
   it.each([
     {
       name: "punctuation-normalized title",
@@ -68,18 +70,11 @@ describe("CommandPalette session search", () => {
       options?.search && !scenario.serverMatch ? metadata : roster,
     );
     const searchResult: SessionsSearchResult = {
+      results: transcript(
+        contextOnly.sessions[0]!.key,
+        "The needle appears only in the conversation body.",
+      ),
       sessions: contextOnly.sessions,
-      results: [
-        {
-          sessionKey: contextOnly.sessions[0]!.key,
-          sessionId: "context",
-          messageId: "message-context",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "The needle appears only in the conversation body.",
-          score: 10,
-        },
-      ],
       ...scenario.response,
     };
     const request = vi.fn(async (method: string) => {
@@ -91,11 +86,8 @@ describe("CommandPalette session search", () => {
       }
       return searchResult;
     });
-    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, query);
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, query);
     expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1);
     expect(request).toHaveBeenCalledWith("sessions.search", {
       query,
@@ -164,25 +156,12 @@ describe("CommandPalette session search", () => {
       return {
         sessions: includesOlder ? older.sessions : [],
         results: includesOlder
-          ? [
-              {
-                sessionKey: "agent:main:older",
-                sessionId: "older",
-                messageId: "older-message",
-                role: "assistant",
-                timestamp: 1,
-                snippet: "The uncommonneedle is only in this older conversation.",
-                score: 1,
-              },
-            ]
+          ? transcript("agent:main:older", "The uncommonneedle is only in this older conversation.")
           : [],
       };
     });
-    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-    const { palette } = await mountPalette(createContext(gateway, list));
-    await enterQuery(palette, "uncommonneedle");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
+    await searchPalette(palette, "uncommonneedle");
 
     expect(palette.textContent).toContain("Older planning discussion");
     expect(palette.textContent).toContain("uncommonneedle is only in this older conversation");

@@ -37,7 +37,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
 import { registerChatPane } from "./chat-pane-elements.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";

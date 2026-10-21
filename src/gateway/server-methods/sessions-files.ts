@@ -1,9 +1,9 @@
 import { resolve as resolvePath } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
   isCloudWorkerPlacementState,
-  type SessionFileEntry,
   type SessionsFilesGetParams,
   type SessionsFilesListParams,
   type SessionsFilesAssetsParams,
@@ -47,7 +47,11 @@ import {
   createSessionFileReadAuthority,
   sessionFileWorkspaceMatches,
 } from "./session-file-read-authority.js";
-import { sessionFilesError } from "./session-files-errors.js";
+import {
+  respondSessionFileNotFound,
+  respondSessionFileTooLarge,
+  sessionFilesError,
+} from "./session-files-errors.js";
 import {
   getRepositoryArtifact,
   listRepositoryArtifacts,
@@ -92,24 +96,17 @@ function rejectDeviceFolderFiles(
 }
 
 async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
-  if (!loaded.entry?.sessionId) {
-    return {
-      ...loaded,
-      agentId: undefined,
+  if (!loaded.entry?.sessionId || loaded.entry.repositoryWorkspaceId) {
+    const unavailable = {
+      source: undefined,
       root: undefined,
       fileRoot: undefined,
       diffCwd: undefined,
       fileWorkspace: undefined,
     };
-  }
-  if (loaded.entry.repositoryWorkspaceId) {
-    return {
-      ...loaded,
-      root: undefined,
-      fileRoot: undefined,
-      diffCwd: undefined,
-      fileWorkspace: undefined,
-    };
+    return loaded.entry?.sessionId
+      ? { ...loaded, ...unavailable }
+      : { ...loaded, ...unavailable, agentId: undefined };
   }
   const fileWorkspace = await prepareSessionFileWorkspace(
     loaded.cfg,
@@ -118,11 +115,16 @@ async function loadSessionFileRoot(loaded: GatewaySessionEntryRead) {
     loaded.entry,
   );
   const { spawnedCwd, root, diffCwd } = fileWorkspace;
+  const fileRoot = resolveFileRoot({ root, spawnedCwd });
+  const source = loaded.entry.worktree?.id
+    ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
+    : undefined;
   return {
     ...loaded,
     fileWorkspace,
     root,
-    fileRoot: resolveFileRoot({ root, spawnedCwd }),
+    fileRoot,
+    source,
     diffCwd,
   };
 }
@@ -252,29 +254,6 @@ async function loadSessionFiles(
       return a.path.localeCompare(b.path);
     }),
   };
-}
-
-function respondSessionFileNotFound(respond: RespondFn, filePath: string, reason?: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_not_found", "session file not found", {
-      path: filePath,
-      ...(reason ? { reason } : {}),
-    }),
-  );
-}
-
-function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, filePath: string) {
-  respond(
-    false,
-    undefined,
-    sessionFilesError("session_file_too_large", "session file is too large to preview", {
-      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      path: file.path || filePath,
-      size: file.size,
-    }),
-  );
 }
 
 function requireSessionFilesAgentId(params: {
@@ -468,6 +447,7 @@ async function handleSessionFilesRead(
                 : {
                     sessionKey: params.sessionKey,
                     ...result,
+                    ...(request.kind === "get" && source.source ? { source: source.source } : {}),
                     ...(repository ? { root: undefined } : {}),
                   },
             );
@@ -553,10 +533,24 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           respondSessionFileNotFound(respond, params.path);
           return;
         }
+        const source = loaded.source;
         const authorize = () => {
           assertSourceCurrent();
           sessionMutationAuthorization?.assertCurrent();
+          if (
+            params.expectedSource !== undefined &&
+            !isDeepStrictEqual(params.expectedSource, source)
+          ) {
+            throw new SessionMutationAuthorizationChangedError(
+              sessionFilesError(
+                "session_file_source_changed",
+                "The file's workspace changed. Reopen the file before saving; your draft was preserved.",
+                { path: params.path },
+              ),
+            );
+          }
         };
+        authorize();
         using repository = await resolveRepositoryWorkspaceAccess(loaded, context, authorize);
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
@@ -613,6 +607,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         }
         respond(true, {
           sessionKey: params.sessionKey,
+          ...(source ? { source } : {}),
           ...(repository ? {} : { root: update.root }),
           file: update.file,
         });

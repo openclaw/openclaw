@@ -35,13 +35,25 @@ function safeBlocker(diagnostic: Pick<ClawDiagnostic, "code" | "path">) {
   };
 }
 
-function safeAction(action: { kind: string; id: string; action: string; blocked: boolean }) {
+function safeAction(action: {
+  kind: string;
+  id: string;
+  action: string;
+  blocked: boolean;
+  reason?: string;
+}) {
   return {
     kind: action.kind,
     id: action.id,
     action: action.action,
     blocked: action.blocked,
     ...(action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {}),
+    ...(!action.blocked &&
+    action.kind === "cronJob" &&
+    action.id.startsWith("$portable-heartbeat") &&
+    action.reason
+      ? { reason: action.reason }
+      : {}),
   };
 }
 

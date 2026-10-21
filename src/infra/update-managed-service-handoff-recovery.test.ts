@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as childTree from "../process/child-process-tree.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
@@ -216,6 +217,149 @@ it.each(["installation repair", "settlement receipt"] as const)(
     }
   },
 );
+
+it("settles a dead original's cancelled family with its retained service root", async () => {
+  // Redact all sibling roots so host temp-path length cannot truncate this receipt.
+  env = { ...env, HOME: path.dirname(fixture.root) };
+  const keys = fixture.seedCancellation();
+  const family = fixture.rows();
+  expect(nextUpdate()).toBe("busy");
+  using repair = await prepareRepair();
+  // The claim replaces the original; every other family row retires with it.
+  expect(fixture.rows().map((row) => row.install_root)).toEqual([fixture.root]);
+  const run = newRun();
+  repair.bindRun(run.runId);
+  repair.complete(run.runId);
+  const detail = settlement(run.runId)?.detail ?? "";
+  expect(detail).toContain(`cancelled update custody settled: updater PID ${keys.updater.pid}`);
+  // History shortens every family key under the fixture home.
+  const settled = /Settled keys: (.*)\. Current-installation/.exec(detail)?.[1]?.split(", ");
+  expect(settled).toHaveLength(family.length);
+  expect(settled).toEqual(
+    expect.arrayContaining(
+      [keys.slot, keys.service].flatMap((key) => {
+        const shortened = `~${path.sep}${path.basename(key)}`;
+        return [shortened, `${shortened}${keys.lineage}`];
+      }),
+    ),
+  );
+  expect(fixture.rows()).toEqual([]);
+  expect(nextUpdate()).toBe("acquired");
+  expect(fixture.store.acquire(keys.service, "next-service", { kind: "update" }).kind).toBe(
+    "acquired",
+  );
+});
+
+it.each([
+  ["recent custody", /recovery grace ends at/],
+  ["recent retained service root", /recovery grace ends at/],
+  ["process referencing the retained service root", /PID 81236/],
+  [
+    "surviving descendants of the cancelled updater",
+    process.platform === "win32"
+      ? /descendants remain alive or unverified: PID 81237/
+      : /descendants remain live or unverified/,
+  ],
+  ["unverified candidate", /live or unverified: PID 1000004/],
+  ["alias outside the family", /unsupported custody at .*-other\/\.openclaw-update-child-/],
+] as const)("retains cancelled custody unchanged for %s", async (reason, expected) => {
+  const keys = fixture.seedCancellation(
+    reason === "recent custody"
+      ? { ageMs: 44 * 60_000 }
+      : reason === "recent retained service root"
+        ? { serviceAgeMs: 44 * 60_000 }
+        : undefined,
+  );
+  if (reason === "process referencing the retained service root") {
+    // The run's own facts name other paths; every retired family key is censused too.
+    fixture.pathCensus.set(keys.service, [81236]);
+  }
+  if (reason === "surviving descendants of the cancelled updater") {
+    // Windows descendants are observed by the host census, not a POSIX process group.
+    if (process.platform === "win32") {
+      fixture.processCensus.matchingPids.push(81237);
+    } else {
+      const groupAlive = childTree.isChildProcessTreeAlive;
+      vi.spyOn(childTree, "isChildProcessTreeAlive").mockImplementation((child) =>
+        child.pid === keys.updater.pid ? true : groupAlive(child),
+      );
+    }
+  }
+  if (reason === "unverified candidate") {
+    fixture.births.set(fixture.candidate.pid, null);
+  }
+  if (reason === "alias outside the family") {
+    const child = fixture.rows().find((row) => row.install_root.endsWith(keys.lineage));
+    fixture.insert([{ ...child!, install_root: `${fixture.root}-other${keys.lineage}` }]);
+  }
+  const family = fixture.rows();
+  await expect(prepareRepair()).rejects.toMatchObject({
+    name: "ManagedHandoffCustodyRetainedError",
+    custody: { key: fixture.root, owner: "original-owner", leaseVersion: 4, reason: expected },
+  });
+  expect(fixture.rows()).toEqual(family);
+  expect(nextUpdate()).toBe("busy");
+});
+
+it("preserves a dependent admitted while cancelled custody was inspected", async () => {
+  const keys = fixture.seedCancellation();
+  const inspecting = createDeferred();
+  const observation = createDeferred<typeof fixture.facts>();
+  fixture.repairFacts.mockImplementationOnce(() => {
+    inspecting.resolve();
+    return observation.promise;
+  });
+  const result = prepareRepair();
+  // A repair that skips fact inspection settles first instead of hanging the test.
+  await Promise.race([inspecting.promise, result]);
+  const mirror = fixture.rows().find((row) => row.install_root === keys.slot);
+  fixture.insert([{ ...mirror!, install_root: `${keys.slot}-newer`, updated_at: Date.now() }]);
+  const family = fixture.rows();
+  observation.resolve(fixture.facts);
+  await expect(result).rejects.toThrow("ownership changed; retry");
+  expect(fixture.rows()).toEqual(family);
+});
+
+it("resumes a failed cancelled-custody repair from its retained original", async () => {
+  fixture.seedCancellation();
+  const [original] = fixture.rows();
+  await expect(
+    withRepair(() => {
+      throw new Error("Current installation repair failed");
+    }),
+  ).rejects.toThrow("Current installation repair failed");
+  const retained = fixture.current();
+  expect(retained.action).toMatchObject({ kind: "triage", phase: "uncertain" });
+  expect(fixture.readMetadata(retained)?.source).toEqual({
+    owner: original!.owner,
+    payload_json: original!.payload_json,
+    updated_at: original!.updated_at,
+  });
+  expect(nextUpdate()).toBe("busy");
+  // The interrupted claim's own process is live: report the cancelled custody, keep the claim.
+  const custody = {
+    key: fixture.root,
+    owner: original!.owner,
+    leaseVersion: 4,
+    lastActivityAt: new Date(original!.updated_at).toISOString(),
+  };
+  await expect(prepareRepair()).rejects.toMatchObject({
+    name: "ManagedHandoffCustodyRetainedError",
+    custody: { ...custody, reason: expect.stringContaining(`PID ${process.pid}`) },
+  });
+  expect(fixture.current()).toEqual(retained);
+  // Once that process is gone, grace counts from the cancelled family, not the claim.
+  fixture.births.set(process.pid, 20);
+  const nextStore = createManagedHandoffLeaseStore();
+  using resumed = await prepareRepair(nextStore);
+  expect(resumed.cancelledCustody).toEqual(custody);
+  const run = newRun();
+  resumed.bindRun(run.runId);
+  resumed.complete(run.runId);
+  expect(settlement(run.runId)?.detail).toContain("cancelled update custody settled");
+  expect(fixture.rows()).toEqual([]);
+  expect(nextUpdate(nextStore)).toBe("acquired");
+});
 
 it("preserves interrupted repair evidence across reboot until explicit repair settles it", async () => {
   let now = Date.now();

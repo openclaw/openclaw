@@ -4,7 +4,7 @@ import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "../../components/mcp-app-resources.tsx";
+} from "../../components/mcp-app-resource-mention.ts";
 import {
   WIDGET_PROMPT_EVENT,
   MCP_APP_CONTEXT_EVENT,
@@ -36,6 +36,7 @@ import {
   chatAttachmentBatchBytes,
 } from "./components/chat-attachment-admission.ts";
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
+import type { SessionWorkspacePreview } from "./components/chat-sidebar-content-types.ts";
 import type { ChatComposerScope } from "./composer-persistence.ts";
 
 registerMcpAppEnglish();
@@ -74,7 +75,7 @@ export type ChatPaneMcpAppOwner = {
   launch?: McpAppOpenDetail;
   replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
-  openFile: (path: string) => void;
+  openFile: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
 };
 
 /** Create inside the mounted pane's Solid owner. */
@@ -231,7 +232,7 @@ export function createChatPaneMcpApps(options: {
     }
     const detail = event.detail;
     event.preventDefault();
-    owner.openFile(detail.path);
+    void owner.openFile(detail.path);
     detail.respond(true);
   }
 

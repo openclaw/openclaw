@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createRoot, onSettled, runWithOwner, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -56,6 +56,7 @@ import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
+import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   private readonly emptyNarrationLines = new Map<string, string>();
@@ -73,21 +74,15 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
   // Native sidebar custody outlives provider/view roots.
-  private readonly menuRoot = runWithOwner(null, () =>
-    createRoot((dispose) => ({
-      menus: createSidebarMenus({
-        host: this,
-        element: this.hostElement,
-        commit: () => {
-          this.invalidate();
-          return this.updateComplete;
-        },
-      }),
-      dispose,
-    })),
-  );
-  override readonly sidebarMenus = this.menuRoot.menus;
-  readonly disposeMenus = this.menuRoot.dispose;
+  override readonly sidebarMenus = createSidebarMenus({
+    host: this,
+    element: this.hostElement,
+    commit: () => {
+      this.invalidate();
+      return this.updateComplete;
+    },
+  });
+  readonly disposeMenus = this.sidebarMenus.dispose;
   readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
@@ -529,6 +524,17 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   </openclaw-tooltip>
                 </Show>
               </div>
+            </Show>
+            <Show
+              when={
+                this.context.theme.branding.communityLinks &&
+                this.context.config.current.communityInvite
+              }
+            >
+              <SidebarCommunityInvite
+                mode={this.context.theme.resolvedMode}
+                onDismiss={() => this.navigationViewElements.get(this.navigationView)?.focus()}
+              />
             </Show>
           </div>
           {menus}

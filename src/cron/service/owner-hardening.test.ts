@@ -84,7 +84,8 @@ beforeEach(async () => {
         storePath,
         cronEnabled: true,
         log: logger,
-        enqueueSystemEvent() {
+        enqueueSystemEvent() {},
+        enqueueSessionEvent() {
           if (mode === "manual-postcommit-crash") process.kill(process.pid, "SIGKILL");
         },
         requestHeartbeat() {},

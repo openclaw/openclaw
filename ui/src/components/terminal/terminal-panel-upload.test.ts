@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -11,53 +11,23 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import "./terminal-panel-registration.ts";
 import { createTerminalPanelUpload, type TerminalPanelUpload } from "./terminal-panel-upload.ts";
-import { terminalOpenResult } from "./terminal-panel.test-support.ts";
+import {
+  createTerminalController,
+  createTestTerminalPanel,
+  defineTestTerminalPanelElement,
+  terminalOpenResult,
+  type CreateGhosttyTerminalMock,
+} from "./terminal-panel.test-support.ts";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-type CreateOptions = {
-  parent: HTMLElement;
-  terminalOptions?: { fontFamily?: string };
-  onData?: (bytes: Uint8Array) => void;
-  onResize?: (size: { columns: number; rows: number }) => void;
-};
-
-function createTerminalController() {
-  return {
-    readOnly: false,
-    terminal: {
-      options: { fontFamily: "" },
-      cols: 100,
-      rows: 30,
-      viewportY: 0,
-      write: vi.fn(),
-      focus: vi.fn(),
-      reset: vi.fn(),
-      paste: vi.fn(),
-    },
-    write: vi.fn(),
-    fit: vi.fn(),
-    resize: vi.fn(),
-    setReadOnly: vi.fn(),
-    attach: vi.fn(),
-    dispose: vi.fn(),
-  };
-}
-
-type TerminalFactory = typeof import("./terminal-runtime.ts").createIsolatedGhosttyTerminal;
-type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
->;
-
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
+const panelTag = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
 function createUploadPanel(): OpenClawTerminalPanel {
-  const panel = document.createElement("openclaw-terminal-panel");
-  panel.createTerminalController = createGhosttyTerminalMock as unknown as TerminalFactory;
-  return panel;
+  return createTestTerminalPanel(panelTag);
 }
 
 function terminalUploadFile(name: string, content: string): File {
@@ -133,11 +103,12 @@ describe("OpenClawTerminalPanel upload lifecycle", () => {
     expect(terminal.terminal.paste).not.toHaveBeenCalled();
     expect(upload.hasPendingBatch()).toBe(false);
   });
-  it("reacts to upload policy changes without intercepting text drops", async () => {
+  it("reacts to mobile upload policy changes without intercepting text drops", async () => {
     const config = createApplicationConfigCapability({ resourceBasePath: "" });
     const host = createApplicationContextProvider({ ...createInitializationContext(), config });
     const panel = createUploadPanel();
     panel.embedded = true;
+    panel.mobile = true;
     panel.available = true;
     host.append(panel);
     document.body.append(host);

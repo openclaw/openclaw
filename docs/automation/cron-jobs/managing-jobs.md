@@ -22,7 +22,7 @@ Run links from automation messages and notifications open the exact recorded run
       --name "Calendar check" \
       --at "20m" \
       --session main \
-      --system-event "Next heartbeat: check calendar." \
+      --system-event "Check the calendar for upcoming events." \
       --wake now
     ```
   </Tab>
@@ -239,7 +239,9 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
   <Accordion title="Maintenance">
     `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 
-    Gateway retention waits for deferred agent database startup preparation before its first sweep, logging the wait as an intentional deferral. Retention continues even when scheduled execution is disabled.
+    Per-agent run-session retention skips agent databases still undergoing startup preparation while maintaining healthy agents. Completed preparation wakes retention for the newly available database. These sweeps keep the Gateway's maintenance context rather than borrowing the publisher's temporary startup admission. Retention continues even when scheduled execution is disabled.
+
+    The seven-day session registry sweep checks descendants only for expired, unprotected run rows. It retains an exact-run parent while it has a non-archived descendant, including through archived intermediate sessions or in another agent's store. If a non-deleted agent's store is unavailable or held for recovery, the registry sweep defers pruning across healthy stores too and retries every minute: the unavailable store may still contain a live descendant. Once those stores are available and no live descendants remain, the expired parent can be pruned. This preserves the parent communication policy for `sessions_send`; it does not restore parent rows deleted before this fix.
 
     After each registry sweep, the Gateway waits until the next candidate expiry or a committed cron-session or store-topology change. Empty, unchanged registries do not need periodic reads. Protected expired sessions and failed sweeps retry every minute; run-history recovery keeps its existing minute cadence.
 

@@ -644,16 +644,30 @@ export const AgentEntrySchema = AgentEntryBaseSchema.extend({
   tts: AgentTtsConfigSchema,
   skillsLimits: AgentSkillsLimitsSchema,
   contextLimits: AgentContextLimitsSchema,
-  heartbeat: HeartbeatSchema,
   identity: IdentitySchema,
   groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
   sandbox: AgentSandboxSchema,
   tools: AgentToolsSchema,
 }).strict();
 
+const GatewayToolPolicyNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.:/-]*$/, "Use a concrete tool or action identity")
+  .refine((value) => !value.toLowerCase().startsWith("group:"), "Tool groups are not permitted");
+
+const GatewayToolPolicySchema = z.strictObject({
+  /** Required ceiling on model-visible Gateway tools. Empty means no tools. */
+  allow: z.array(GatewayToolPolicyNameSchema),
+  /** Action-bearing tools require an explicit list, including tools with a default action. */
+  actions: z.record(GatewayToolPolicyNameSchema, z.array(GatewayToolPolicyNameSchema)).optional(),
+});
+
 export const ToolsSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
+    gatewayPolicy: GatewayToolPolicySchema.optional(),
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
     github: GitHubToolIdentitySchema,

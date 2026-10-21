@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { readSqliteDatabaseAdmissionDeadline } from "../../infra/sqlite-worker-database-admission-relay.js";
 import type {
   createManagedHandoffLeaseStore,
   ManagedHandoffLease,
@@ -80,7 +81,8 @@ const cleanupResults = ["forced", "uncertain"] as const;
 const cleanupCases = kinds.flatMap((kind) =>
   cleanupResults.map((cleanupResult) => ({ kind, cleanupResult })),
 );
-const fakeTimers = () => vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+const fakeTimers = () =>
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
 
 function settlement(cleanupResult: "forced" | "uncertain" = "forced") {
   const admitted = createDeferredCore();
@@ -591,3 +593,60 @@ it.each([
     expect(rows.size).toBe(kind === "delegated" ? 2 : cleanupResult === "uncertain" ? 1 : 0);
   },
 );
+
+it("keeps the update operation deadline bounded when the wall clock rewinds", async () => {
+  vi.useFakeTimers();
+  const onExpired = vi.fn();
+  const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>(onExpired);
+  const budget = 1000;
+  deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
+  const finish = createDeferredCore();
+  const work = deadline
+    .run(async () => {
+      await finish.promise;
+    })
+    .catch((error: unknown) => error);
+  await setImmediate();
+  expect(deadline.signal.aborted).toBe(false);
+  // Advance 500ms; both clocks move together so far.
+  await vi.advanceTimersByTimeAsync(500);
+  // A clock correction rewinds the wall clock by 90s. A wall-clock-based
+  // remaining budget would compute ~90.5s; the monotonic deadline must
+  // still fire at the original 1000ms budget.
+  vi.setSystemTime(Date.now() - 90_000);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(deadline.signal.aborted).toBe(true);
+  expect(onExpired).toHaveBeenCalledTimes(1);
+  finish.resolve();
+  const result = await work;
+  expect(result).toBeInstanceOf(UpdateActivationTimeoutError);
+  vi.useRealTimers();
+});
+
+it("exposes an epoch admission deadline that preserves the relay's remaining budget", async () => {
+  // Set the wall clock to a realistic epoch value while keeping performance at
+  // zero, so a monotonic deadlineAtMs (~budget) is distinguishable from an epoch
+  // one (~Date.now() + budget). The relay computes Math.max(0, deadlineAtMs -
+  // Date.now()); a raw monotonic value would underflow to zero and time out.
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(1_790_000_000_000);
+  const deadline = createUpdateOperationDeadline<UpdateActivationTimeoutError>();
+  const budget = 60_000;
+  deadline.start(new UpdateActivationTimeoutError(root, budget), budget);
+  const finish = createDeferredCore();
+  let admissionDeadline: number | undefined;
+  deadline
+    .run(async () => {
+      admissionDeadline = readSqliteDatabaseAdmissionDeadline();
+      await finish.promise;
+    })
+    .catch(() => {});
+  await setImmediate();
+  finish.resolve();
+  vi.useRealTimers();
+  expect(admissionDeadline).toBeDefined();
+  expect(admissionDeadline!).toBeGreaterThan(1_790_000_000_000);
+  const remaining = admissionDeadline! - 1_790_000_000_000;
+  expect(remaining).toBeGreaterThan(0);
+  expect(remaining).toBeLessThanOrEqual(budget);
+});

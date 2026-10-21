@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -196,7 +196,7 @@ export function renderSessionSection(params: {
     ) : undefined,
   );
   let personHeader: HTMLElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host().presencePeople?.get(section().id) === personHeader) {
       host().presencePeople?.delete(section().id);
     }
@@ -210,6 +210,9 @@ export function renderSessionSection(params: {
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
           "sidebar-recent-sessions__group--headless": !section().renderHeader,
+          // Only a single selected owner's Person section renders without a header.
+          "sidebar-recent-sessions__group--inline-owner":
+            !section().renderHeader && section().id.startsWith("person:"),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,

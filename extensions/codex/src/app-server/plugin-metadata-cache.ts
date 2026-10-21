@@ -121,9 +121,7 @@ export class CodexPluginMetadataCache {
     try {
       return await promise;
     } finally {
-      if (this.inFlight.get(entryKey)?.promise === promise) {
-        this.inFlight.delete(entryKey);
-      }
+      this.inFlight.delete(entryKey);
     }
   }
 

@@ -1,7 +1,10 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  type AgentHarnessAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
@@ -3076,6 +3079,75 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
     ]);
   });
+
+  it.each(["catalog drift", "resume failure"] as const)(
+    "preserves the reviewed thread before refusing acknowledgment after %s",
+    async (change) => {
+      const { sessionFile, workspaceDir } = createPaths();
+      const params = createParams(sessionFile, workspaceDir);
+      let rejectResume = change === "resume failure";
+      const { client, request, endTurn } = await createSequentialLifecycleHarness(() => {
+        if (rejectResume) {
+          throw new CodexAppServerRpcError(
+            { code: -32603, message: "Synthetic resume failure" },
+            "thread/resume",
+          );
+        }
+        return threadStartResult("thread-1");
+      });
+      const dynamicTools = [createNamedDynamicTool("message")];
+      await startOrResumeThread({ client, params, dynamicTools });
+      await endTurn("thread-1");
+      const reviewedBinding = await readCodexAppServerBinding(sessionFile);
+      type Acknowledgment = NonNullable<
+        AgentHarnessAttemptParamsV2["providerReviewAcknowledgment"]
+      >;
+      const methods: Pick<Acknowledgment, "read" | "assertRuntime" | "acceptNativeTurn"> = {
+        read: () => ({
+          phase: "pending",
+          review: {
+            id: "review-1",
+            sessionId: params.sessionId,
+            runId: "failed-run",
+            provider: params.provider,
+            model: params.modelId,
+            runtimeId: "codex",
+            api: params.model.api,
+            nativeThreadId: "thread-1",
+            nativeTurnId: "failed-turn",
+            review: {
+              explanation: "Review the intended operation.",
+              continuation: { message: "Continue the reviewed operation." },
+            },
+          },
+        }),
+        assertRuntime: vi.fn(),
+        acceptNativeTurn: vi.fn(),
+      };
+      // The host issues the opaque acknowledgment; lifecycle consumes its public contract.
+      params.providerReviewAcknowledgment = Object.freeze(methods) as Acknowledgment;
+      request.mockClear();
+
+      await expect(
+        startOrResumeThread({
+          client,
+          params,
+          dynamicTools:
+            change === "catalog drift"
+              ? [...dynamicTools, createNamedDynamicTool("web_search")]
+              : dynamicTools,
+        }),
+      ).rejects.toThrow("restore its original tools and runtime configuration");
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/start");
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(reviewedBinding);
+      expect(methods.acceptNativeTurn).not.toHaveBeenCalled();
+
+      rejectResume = false;
+      const retried = await startOrResumeThread({ client, params, dynamicTools });
+      expect(retried.threadId).toBe("thread-1");
+      expect(retried.lifecycle.action).toBe("resumed");
+    },
+  );
 
   it("resumes a Codex thread when context-engine sidecar metadata is compatible", async () => {
     const { sessionFile, workspaceDir } = createPaths();

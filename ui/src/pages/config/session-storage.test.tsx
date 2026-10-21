@@ -152,7 +152,12 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   expect(input.value).toBe("14");
   expect(runtimeConfig.state.configFormDirty).toBe(false);
 
+  const retired = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementationOnce(() => retired.promise);
+  click(page, "Refresh");
   publish(false, client, null);
+  retired.resolve(inventory(700));
+  await retired.promise;
   flush();
   expect(input).toMatchObject({ value: "14", disabled: true });
   expect(page.textContent).toContain("42 uncompressed");
@@ -174,6 +179,40 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   publish(true, { request: vi.fn(respond) } as unknown as GatewayBrowserClient);
   await waitText(page, "7 uncompressed");
   expect(input.value).toBe("30");
+});
+
+it("keeps the focused days draft and Refresh control through a failed inventory read and retry", async () => {
+  const { page, request, respond } = await mount();
+  const input = draft(page, "14");
+  const failure = createDeferred<SessionsStorageStatusResult>();
+  request.mockImplementationOnce(() => failure.promise);
+  const refresh = button(page, "Refresh");
+  input.focus();
+  click(page, "Refresh");
+  failure.reject(new Error("Inventory unavailable"));
+  await waitText(page, "Inventory unavailable");
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("14");
+  expect(page.textContent).not.toContain("7 uncompressed");
+
+  request.mockImplementation(respond);
+  click(page, "Refresh");
+  await waitText(page, "7 uncompressed");
+  expect(page.textContent).not.toContain("Inventory unavailable");
+  expect(button(page, "Refresh")).toBe(refresh);
+  expect(input.value).toBe("14");
+});
+
+it("clears a failed inventory read after disconnect", async () => {
+  const { page, request, publish, client } = await mount();
+  request.mockRejectedValueOnce(new Error("Inventory unavailable"));
+  click(page, "Refresh");
+  await waitText(page, "Inventory unavailable");
+  publish(false, client, null);
+  await waitForSolid(() => {
+    expect(page.querySelector('[role="alert"]')).toBeNull();
+    expect(page.textContent).not.toContain("Inventory unavailable");
+  });
 });
 
 it("retires the days draft and inventory when a fresh hello removes access", async () => {

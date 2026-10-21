@@ -18,9 +18,7 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
     await broker.ready();
   });
 
-  afterAll(async () => {
-    await broker?.close();
-  });
+  afterAll(() => broker?.close());
 
   it.runIf(process.platform === "linux").each([
     { name: "adjusted", enabled: true, missing: false },
@@ -53,39 +51,31 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
     expect(await readFile(scorePath, "utf8")).toBe(original);
   });
 
-  it.each(["exec", "buffered", "adapter", "one-shot"] as const)(
-    "routes %s commands to the scope's process owner",
-    async (transport) => {
-      await runWithSpawnBroker(transport === "one-shot" ? undefined : broker, async () => {
-        const args = ["-e", "process.stdout.write(String(process.ppid))"];
-        let output = "";
-        if (transport === "buffered") {
-          const result = await runCommandBuffered([process.execPath, ...args]);
-          expect(result.termination).toBe("exit");
-          output = result.stdout.toString();
-        } else if (transport === "adapter") {
-          const { adapter, ready } = await createChildAdapter({
-            argv: [process.execPath, ...args],
-            stdinMode: "pipe-closed",
-            exactEnv: true,
-          });
-          adapter.onStdout((chunk) => {
-            output += chunk;
-          });
-          adapter.onStderr(() => {});
-          try {
-            await ready;
-            await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-          } finally {
-            adapter.dispose();
-          }
-        } else {
-          output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
-        }
-        expect(Number(output)).toBe(transport === "one-shot" ? process.pid : broker.pid);
-      });
-    },
-  );
+  it.each(["exec", "buffered", "adapter", "one-shot"] as const)("routes %s", async (transport) => {
+    await runWithSpawnBroker(transport === "one-shot" ? undefined : broker, async () => {
+      const args = ["-e", "process.stdout.write(String(process.ppid))"];
+      let output = "";
+      if (transport === "buffered") {
+        const result = await runCommandBuffered([process.execPath, ...args]);
+        expect(result.termination).toBe("exit");
+        output = result.stdout.toString();
+      } else if (transport === "adapter") {
+        const { adapter, ready } = await createChildAdapter({
+          argv: [process.execPath, ...args],
+          stdinMode: "pipe-closed",
+          exactEnv: true,
+        });
+        adapter.onStdout((chunk) => {
+          output += chunk;
+        });
+        const result = await ready.then(() => adapter.wait()).finally(() => adapter.dispose());
+        expect(result).toEqual({ code: 0, signal: null });
+      } else {
+        output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
+      }
+      expect(Number(output)).toBe(transport === "one-shot" ? process.pid : broker.pid);
+    });
+  });
 
   it("preserves runExec launch error metadata across asynchronous readiness", async () => {
     const command = "/openclaw-nonexistent-spawn-broker-command";
@@ -95,7 +85,7 @@ describe.skipIf(skipBrokerTests)("Gateway spawn transports", () => {
       runExec(command, [], options).catch((error: unknown) => error),
     );
     expect(local).toBeInstanceOf(Error);
-    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "" });
-    expect(remote).toMatchObject({ message: (local as Error).message });
+    const message = (local as Error).message;
+    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "", message });
   });
 });

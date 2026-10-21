@@ -137,6 +137,7 @@ it(
         controlUiEnabled: false,
         mutateConfig: (cfg) => ({
           ...cfg,
+          cron: { ...cfg.cron, enabled: false },
           gateway: { ...cfg.gateway, nodes: { commands: { allow: COMMANDS } } },
           agents: {
             ownership: "explicit",
@@ -148,7 +149,6 @@ it(
               workspace: state.workspaceDir,
               systemAgent: { agentId: "qa" },
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
           },
           plugins: {

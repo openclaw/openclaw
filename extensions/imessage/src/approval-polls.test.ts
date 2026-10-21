@@ -1,13 +1,11 @@
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  buildApprovalPollOptions,
-  iMessageApprovalPollTargets,
-  mapSentPollOptionsToDecisions,
-  maybeResolveIMessageApprovalPollVote,
-} from "./approval-polls.js";
+import { buildApprovalPollOptions, mapSentPollOptionsToDecisions } from "./approval-polls.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { pollVote } from "./test-support/approval.js";
+
+let iMessageApprovalPollTargets: typeof import("./approval-polls.js").iMessageApprovalPollTargets;
+let maybeResolveIMessageApprovalPollVote: typeof import("./approval-polls.js").maybeResolveIMessageApprovalPollVote;
 
 const resolverMocks = vi.hoisted(() => ({
   resolve: vi.fn(),
@@ -105,8 +103,10 @@ async function expectUnresolved(
   expect(resolverMocks.resolve).not.toHaveBeenCalled();
 }
 
-beforeEach(() => {
-  iMessageApprovalPollTargets.clearForTest();
+beforeEach(async () => {
+  vi.resetModules();
+  ({ iMessageApprovalPollTargets, maybeResolveIMessageApprovalPollVote } =
+    await import("./approval-polls.js"));
   resolverMocks.resolve.mockReset().mockResolvedValue({ applied: true, approval: {} });
   resolverMocks.isApprovalNotFoundError.mockReset().mockReturnValue(false);
 });
@@ -346,7 +346,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("does not resolve once the binding expired", async () => {
-    // The persistent store outlives clearForTest; avoid sibling tombstones.
+    // The persistent store survives module reload; avoid sibling tombstones.
     const expiredPollGuid = "poll-guid-expired";
     expect(
       await bind({

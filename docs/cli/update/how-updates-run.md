@@ -254,10 +254,14 @@ helper's fingerprint. Explicit runtime links into those recovery artifacts are
 rejected; the evidence remains untouched for its recovery owner.
 
 Unchanged retained runtime files use hard links when the filesystem supports
-them. Retention verifies each source before linking and checks the resulting
-inode and metadata, without rehashing bytes for the change time caused by its
-own link. Files requiring independent plugin-safety checks or relocation still
-use verified copies.
+them. The same-inode path does not rehash content. If linking changes file
+identity, retention verifies size, mode, and a stable content hash against the
+inventory, accepting equivalent filesystem copy-up. A failed check makes the
+whole retained runtime unusable: the updater logs a warning naming the file and
+check, leaves the tree unbound, and continues. Package rollback keeps its separate
+verified backup; the warning makes clear that no verified retained rollback
+runtime is available. Files requiring plugin-safety checks or relocation use
+verified copies.
 
 Candidate verification uses the same best-effort contract when its scan reaches
 the resource limits: activation and publication continue with directory identity,
@@ -681,7 +685,10 @@ inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
 successful health checks and a Gateway hello handshake matching the
-expected version and Git build identity, and requires HTTP 200 from `/readyz`.
+expected version and Git build identity, and verifies HTTP liveness and core readiness.
+A channel-only HTTP 503 can complete with a warning when the detailed `/readyz`
+response explicitly reports `coreReady: true`; ordinary service-start checks
+still require full readiness.
 Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
 Channel probe errors, timeouts, and stopped or suppressed channels become named
@@ -1269,6 +1276,8 @@ the sentinel.
     If the resolved target SHA equals `HEAD` and the installed runtime passes artifact verification, finishes `skipped` with reason `already-current` before staging or stopping the service.
 
     Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
+
+    Git fetches and remote-ref probes, including dry runs, retry once after a transient transport failure or incomplete ref advertisement. The retry shares an explicit timeout budget; omitted work deadlines remain unbounded. Cancellation, authentication failures, and ref-lock conflicts are not retried. This behavior belongs to the installed updater, so an older updater may still need a manual retry to obtain the fix.
 
     An explicit detached full commit ID already present locally skips optional remote discovery. This does not skip candidate validation or promise an offline update: missing tree/blob objects in partial clones are still hydrated privately before activation. Symbolic and tracked targets retain their remote freshness and ancestry checks.
 

@@ -41,6 +41,14 @@ export type CronFormState = {
   scheduleExact: boolean;
   staggerAmount: string;
   staggerUnit: "seconds" | "minutes";
+  activeHoursEnabled: boolean;
+  activeHoursStart: string;
+  activeHoursEnd: string;
+  activeHoursTimezone: string;
+  idleOnly: boolean;
+  payloadSkipIfScratchEmpty: boolean;
+  deliveryTarget: "" | "owner";
+  deliveryDirectPolicy: "" | "allow" | "block";
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
@@ -54,6 +62,7 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
+  payloadIncludeReasoning: boolean;
   deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;
@@ -81,12 +90,16 @@ export type CronFieldKey =
   | "everyAmount"
   | "cronExpr"
   | "staggerAmount"
+  | "activeHoursStart"
+  | "activeHoursEnd"
+  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"
   | "timeoutSeconds"
   | "deliveryMode"
+  | "deliveryDirectPolicy"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";
@@ -139,7 +152,6 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsRunId?: string | null;
   cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
-  cronRunsTotal: number;
   cronRunsHasMore: boolean;
   cronRunsNextOffset: number | null;
   cronRunsLimit: number;

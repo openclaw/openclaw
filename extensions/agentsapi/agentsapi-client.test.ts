@@ -5,6 +5,7 @@ import {
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
 import { createTurn } from "./agentsapi.test-support.js";
+import { agentsApiConfigSchema } from "./config.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -129,7 +130,12 @@ describe("Agents API session creation", () => {
     queueResponse(Response.json({ id: "session-fixture" }));
     const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
 
-    await expect(client.create(signal, "Fixture instructions", model)).resolves.toBe(
+    const options = {
+      nativeTools: agentsApiConfigSchema.parse({}).nativeTools,
+      functions: [],
+      mcpTools: [],
+    };
+    await expect(client.create(signal, "Fixture instructions", model, options)).resolves.toBe(
       "session-fixture",
     );
 

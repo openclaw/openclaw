@@ -30,7 +30,7 @@ import {
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import { advancePreparedModelRuntimeConfig } from "../../prepared-model-runtime.js";
-import type { RequesterOrigin } from "../../requester-origin.js";
+import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester-origin.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
@@ -289,6 +289,17 @@ export function registerParticipantSpawnCases(
                 );
                 expect(authority.profileId).toBe(profileId);
                 expectOrigin(requesterOrigin, profileId);
+                expect(requesterCreatorProfileId(requesterOrigin)).toBe("alice");
+                const persisted = loadSessionEntry({
+                  storePath: bound.storePath,
+                  sessionKey: details.childSessionKey,
+                });
+                expect(persisted?.createdActor?.delegatedBy).toEqual({
+                  type: "human",
+                  source: "profile",
+                  id: "alice",
+                });
+                expect(persisted?.createdActor?.type).toBe("agent");
                 if (queued) {
                   expect(tools).toContain("read");
                   expect(tools).not.toContain("write");

@@ -1,27 +1,19 @@
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import * as personalAccountAuth from "../plugins/personal-account-auth.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 
 it("settles an accepted personal account write across the real close prelude", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-personal-account-close");
-  const writeEntered = createDeferred();
-  const releaseWrite = createDeferred();
-  const preludeEntered = createDeferred();
-  let closing: Promise<void> | undefined;
+  const race = await createGatewayCloseRace("gateway-personal-account-close", signal);
+  const { fixture, kernel } = race;
   let providerSignal: AbortSignal | undefined;
   const method = vi
     .spyOn(personalAccountAuth, "resolvePersonalAccountAuthMethod")
@@ -45,11 +37,8 @@ it("settles an accepted personal account write across the real close prelude", a
         };
       },
     });
-  let restoreWorker: (() => void) | undefined;
+  race.onCleanup(() => method.mockRestore());
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const service = expectDefined(
       kernel.gatewayRequestContext.modelAccountConnectService,
       "Account service",
@@ -59,48 +48,29 @@ it("settles an accepted personal account write across the real close prelude", a
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
       if (command.type === "userProfiles.modelAccount.connect") {
-        writeEntered.resolve();
-        await releaseWrite.promise;
+        await race.block();
       }
       return scope.execute(command, executeOptions);
     });
-    restoreWorker = () => worker.mockRestore();
+    race.onCleanup(() => worker.mockRestore());
     // The Wizard outlives its initiating request but inherits that request's work scope.
     await kernel.gatewayRequestContext.trackExecution(() =>
       service.start(action, "example", "api-key"),
     );
-    await withinTest(writeEntered.promise, signal);
-    kernel.requestEntryLifetime.signal.addEventListener("abort", () => preludeEntered.resolve(), {
-      once: true,
-    });
-    let closed = false;
-    closing = server.close({ reason: "gateway restarting", restartExpectedMs: 1_500 }).then(() => {
-      closed = true;
-    });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        preludeEntered.promise,
-        closing,
-        "Gateway closed before fencing requests",
-      ),
-      signal,
-    );
+    await race.waitForEntry();
+    await race.close();
     expect(providerSignal?.aborted).toBe(true);
     await expect(service.start(action, "example", "api-key")).rejects.toThrow(
       "current authorized connection",
     );
-    expect(closed).toBe(false);
+    expect(race.closed).toBe(false);
     expect(shared.isOpen).toBe(true);
-    releaseWrite.resolve();
-    await withinTest(closing, signal);
+    await race.finish();
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
-      expect(
-        database
-          .prepare(`
+    expect(
+      readClosedDatabase(
+        resolveOpenClawStateSqlitePath(fixture.state.env),
+        `
             SELECT COUNT(*) AS linked
             FROM secret_store_entries AS links
             JOIN secret_store_entries AS account
@@ -110,17 +80,11 @@ it("settles an accepted personal account write across the real close prelude", a
               AND links.name = 'model-accounts'
               AND links.deleted_at_ms IS NULL AND account.deleted_at_ms IS NULL
               AND json_extract(account.value, '$.credential.provider') = 'example'
-          `)
-          .get(owner.id),
-      ).toEqual({ linked: 1 });
-    } finally {
-      database.close();
-    }
+          `,
+        owner.id,
+      ),
+    ).toEqual([{ linked: 1 }]);
   } finally {
-    releaseWrite.resolve();
-    await closing?.catch(() => {});
-    restoreWorker?.();
-    method.mockRestore();
-    await fixture.cleanup();
+    await race.dispose();
   }
 });

@@ -39,7 +39,6 @@ export type SubagentAnnounceDeliveryResult = {
   // makes trying a second path unsafe.
   terminal?: boolean;
   disposition?: SubagentAnnounceDeliveryDisposition;
-  missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 

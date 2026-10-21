@@ -1,4 +1,3 @@
-// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -9,20 +8,13 @@ import { buildPluginShapeSummary } from "../inspect-shape.js";
 describe("plugin shape compatibility matrix", () => {
   it("keeps hook-only, plain capability, and hybrid capability shapes explicit", () => {
     const { config, registry } = createPluginRegistryFixture({
-      plugins: {
-        entries: {
-          "hook-only": {
-            hooks: {
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
+      plugins: { entries: { "hook-only": { hooks: { allowConversationAccess: true } } } },
     });
+    const register = (
+      plugin: Omit<Parameters<typeof registerVirtualTestPlugin>[0], "registry" | "config">,
+    ) => registerVirtualTestPlugin({ registry, config, ...plugin });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "hook-only",
       name: "Hook Only",
       register(api) {
@@ -30,31 +22,19 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "plain-provider",
       name: "Plain Provider",
       register(api) {
-        api.registerProvider({
-          id: "plain-provider",
-          label: "Plain Provider",
-          auth: [],
-        });
+        api.registerProvider({ id: "plain-provider", label: "Plain Provider", auth: [] });
       },
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "hybrid-company",
       name: "Hybrid Company",
       register(api) {
-        api.registerProvider({
-          id: "hybrid-company",
-          label: "Hybrid Company",
-          auth: [],
-        });
+        api.registerProvider({ id: "hybrid-company", label: "Hybrid Company", auth: [] });
         api.registerWebSearchProvider({
           id: "hybrid-search",
           label: "Hybrid Search",
@@ -76,9 +56,7 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "channel-demo",
       name: "Channel Demo",
       register(api) {
@@ -103,9 +81,7 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "session-catalog-demo",
       name: "Session Catalog Demo",
       register(api) {
@@ -118,9 +94,7 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
+    register({
       id: "document-extract-test",
       name: "Document Extract Test",
       contracts: { documentExtractors: ["pdf"] },
@@ -136,42 +110,14 @@ describe("plugin shape compatibility matrix", () => {
     );
 
     expect(
-      inspect.map((entry) => ({
-        id: entry.plugin.id,
-        shape: entry.shape,
-        capabilityMode: entry.capabilityMode,
-      })),
+      inspect.map(({ plugin, shape, capabilityMode }) => [plugin.id, shape, capabilityMode]),
     ).toEqual([
-      {
-        id: "hook-only",
-        shape: "hook-only",
-        capabilityMode: "none",
-      },
-      {
-        id: "plain-provider",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "hybrid-company",
-        shape: "hybrid-capability",
-        capabilityMode: "hybrid",
-      },
-      {
-        id: "channel-demo",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "session-catalog-demo",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "document-extract-test",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
+      ["hook-only", "hook-only", "none"],
+      ["plain-provider", "plain-capability", "plain"],
+      ["hybrid-company", "hybrid-capability", "hybrid"],
+      ["channel-demo", "plain-capability", "plain"],
+      ["session-catalog-demo", "plain-capability", "plain"],
+      ["document-extract-test", "plain-capability", "plain"],
     ]);
 
     expect(inspect.map((entry) => entry.capabilities.map((capability) => capability.kind))).toEqual(

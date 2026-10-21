@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { onTestFinished, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import * as questionDispatch from "../../../src/agents/harness/gateway-question-dispatch.js";
 import type { AgentQuestionDispatcher } from "../../../src/agents/harness/gateway-question-dispatch.js";
 import { createAskUserTool } from "../../../src/agents/tools/ask-user-tool.js";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
@@ -242,11 +244,15 @@ export async function createGuestQuestionFixture(deliver: (frame: unknown) => Pr
       return result.payload;
     },
   };
+  const nativeDispatcher = questionDispatch.resolveAgentQuestionGatewayCall(gatewayCall);
+  const dispatcherSpy = vi
+    .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+    .mockReturnValue(nativeDispatcher);
+  onTestFinished(() => dispatcherSpy.mockRestore());
   const tool = createAskUserTool({
     agentId: "main",
     sessionKey: guestQuestionSessionKey,
     runId,
-    gatewayCall,
   });
   return {
     profileId: profile.id,

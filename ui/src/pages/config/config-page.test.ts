@@ -17,6 +17,7 @@ import {
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import {
   installDialogPolyfill,
   nextFrame,
@@ -150,6 +151,63 @@ it("refreshes notification presentation from in-place owner publications", () =>
   Object.assign(context.webPush.snapshot, { loading: true });
   publishConfigSource(context.webPush);
   expect(state.configProps().webPush?.loading).toBe(true);
+});
+
+it("renders Web Push registration publications and dispatches Unsubscribe without reloading", () => {
+  const snapshot: WebPushSnapshot = {
+    supported: true,
+    canManage: true,
+    canReadPreferences: true,
+    permission: "default",
+    subscription: "unknown",
+    loading: false,
+  };
+  const run = vi.fn();
+  const webPush = { snapshot, run };
+  const context = configContext({
+    webPush,
+    runtimeConfig: { state: { connected: true } },
+  });
+  const { container } = mountConfigPage(context, { pageId: "notifications" });
+  expect(container.textContent).toContain("Checking");
+  expect(container.textContent).toContain("Not requested");
+
+  snapshot.loading = true;
+  publishConfigSource(webPush);
+  const enable = container.querySelector<HTMLButtonElement>("button.btn.primary")!;
+  expect(enable.textContent).toContain("Subscribing");
+  expect(enable.disabled).toBe(true);
+
+  const user = {
+    categories: {
+      approvalRequested: true,
+      agentFinished: true,
+      agentQuestion: true,
+      humanMentioned: true,
+      scheduledTaskFailed: true,
+    },
+    detailLevel: "private" as const,
+    quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+    agentIds: [],
+  };
+  const device = { enabled: true, label: "Settings test browser" };
+  snapshot.permission = "granted";
+  snapshot.subscription = "registered";
+  snapshot.loading = false;
+  snapshot.preferences = { durableIdentity: true, user, device, effective: { ...user, ...device } };
+  publishConfigSource(webPush);
+  expect(container.textContent).toContain("Granted");
+  expect(container.textContent).toContain("Subscribed");
+  expect(container.textContent).not.toContain("Checking");
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="Notification label"]')?.value,
+  ).toBe("Settings test browser");
+  const unsubscribe = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.trim() === "Unsubscribe",
+  )!;
+  expect(unsubscribe.disabled).toBe(false);
+  unsubscribe.click();
+  expect(run).toHaveBeenCalledExactlyOnceWith({ kind: "disable" });
 });
 
 it.each([

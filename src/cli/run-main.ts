@@ -34,7 +34,7 @@ import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-c
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -123,7 +123,7 @@ async function tryRunGatewayRunFastPath(
       import("../runtime.js"),
     ]),
   );
-  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
@@ -531,7 +531,6 @@ async function resolveCliCommandSurfaceOwner(params: {
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
-    env: process.env,
   });
   if (manifestOwner) {
     return manifestOwner;

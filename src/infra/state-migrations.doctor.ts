@@ -599,10 +599,10 @@ export async function detectLegacyStateMigrations(params: {
     ],
     [apns.hasLegacy, "- APNs registrations: legacy JSON → shared SQLite state"],
     [deviceAuth.hasLegacy, "- Device auth tokens: legacy JSON → shared SQLite state"],
-    [deviceIdentity.hasLegacy, "- Primary device identity: legacy JSON → shared SQLite state"],
+    [deviceIdentity.hasLegacy, "- Client identities: legacy JSON → local SQLite credentials"],
     [
       deviceIdentity.hasInvalidCanonical && !deviceIdentity.hasLegacy,
-      "- Primary device identity: invalid SQLite row → new device identity",
+      "- Client device identities: invalid SQLite row → repaired device identity",
     ],
     [execApprovals.hasLegacy, execApprovals.preview],
     [mcpOauth.hasLegacy, "- MCP OAuth credentials: legacy JSON → shared SQLite state"],
@@ -1096,10 +1096,8 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       detected.pairingStores.hasLegacy,
     ],
     "device-identity": [
-      pathEndpoints(
-        detected.deviceIdentity.sourcePath,
-        detected.deviceIdentity.claimPath,
-        detected.deviceIdentity.nativeClaimPath,
+      detected.deviceIdentity.sources.flatMap((source) =>
+        pathEndpoints(source.sourcePath, source.claimPath, source.nativeClaimPath),
       ),
       detected.deviceIdentity.hasLegacy || detected.deviceIdentity.hasInvalidCanonical,
     ],
@@ -1501,6 +1499,7 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         env,
         mode: params.mode,
         requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+        integrityCheck: params.integrityCheck,
       }),
       createRetiredCoreStateStep({
         stateDir,
@@ -2073,7 +2072,6 @@ export async function runLegacyStateMigrations(params: {
   const detected = params.detected;
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
     buildLegacyStateMigrationSteps({
       mode: "doctor",
@@ -2086,7 +2084,7 @@ export async function runLegacyStateMigrations(params: {
       // The health contribution's later session repair consumes preflight's handoff.
       // This migration pass does not own that separate phase.
       deferPostSessionPluginMigrations: false,
-      legacySessionSurfaces,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
   const { preparation: preparationSteps, remaining: remainingSteps } = buildSteps();
   const preparation = await runLegacyStateMigrationSteps(

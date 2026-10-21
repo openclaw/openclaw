@@ -114,6 +114,24 @@
   outline-offset: 2px;
 }
 
+.markdown-hex-color {
+  white-space: nowrap;
+}
+
+.markdown-hex-color__swatch {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-start: 0.3em;
+  vertical-align: -0.05em;
+  border: 1px solid var(--muted);
+  border-radius: 3px;
+  background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--border) 0% 50%) 50% / 8px
+    8px;
+  pointer-events: none;
+  user-select: none;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table, details, .markdown-table) {
   margin: 0;
 }
@@ -372,7 +390,7 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, not the window, owns spare width (including split panes).
+/* The transcript, excluding reserved Details space, owns spare width.
    Only top-level assistant tables borrow it; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-virtual-row {
@@ -382,8 +400,9 @@
         12rem,
         calc(
           (
-              100cqw - var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) -
-                2 * var(--chat-thread-side-inset)
+              100cqw - var(--chat-table-reserved-space, 0px) -
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
+                var(--chat-thread-side-inset)
             ) /
             2
         )

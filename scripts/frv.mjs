@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
+import { parse as parseYaml } from "yaml";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
 import {
   publicationAdmissionContract,
@@ -70,6 +71,7 @@ const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
 const DEFAULT_RECONCILE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCH_POLL_MS = 60_000;
 const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
+const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
   "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
@@ -481,10 +483,12 @@ async function recheckArtifactProducers(
   }
 }
 
-async function npmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
-  // Older workflow revisions did not dispatch npm qualification independently.
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
+
+async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
-    return [];
+    return { pending: false, producers: [] };
   }
   const matches = parentJobs.filter(
     (job) =>
@@ -495,11 +499,11 @@ async function npmRecoveryProducers(plan, parentJobs, client, repository, workfl
     throw new Error("Original npm dispatch job is missing or ambiguous");
   }
   const [job] = matches;
-  if (job.conclusion === "skipped") {
-    return [];
+  if (!job || job.conclusion === "skipped") {
+    return { pending: false, producers: [] };
   }
   if (job.status !== "completed") {
-    return undefined;
+    return { pending: true, producers: [] };
   }
   const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
   const dispatches = [
@@ -514,19 +518,139 @@ async function npmRecoveryProducers(plan, parentJobs, client, repository, workfl
   ) {
     throw new Error("Original npm dispatch identity is unavailable or ambiguous");
   }
-  return [
-    {
+  return {
+    pending: false,
+    producers: [
+      {
+        request: {
+          stage: "npm",
+          repository,
+          dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-npm`,
+          toolingSha: plan.workflowSha,
+          workflowRef: plan.workflowRef,
+        },
+        runId: dispatches[0][2],
+        runAttempt: dispatches[0][3],
+      },
+    ],
+  };
+}
+
+function artifactRecoveryJobs(workflow) {
+  let source;
+  try {
+    source = parseYaml(workflow);
+  } catch {
+    throw new Error("Source workflow artifact producer contract is unavailable");
+  }
+  const jobs = source?.jobs;
+  if (!jobs || typeof jobs !== "object" || Array.isArray(jobs)) {
+    return [];
+  }
+  const producers = [];
+  for (const job of Object.values(jobs)) {
+    if (!job || typeof job !== "object" || Array.isArray(job)) {
+      continue;
+    }
+    const childKind = job.env?.CHILD_WORKFLOW_KIND;
+    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+      continue;
+    }
+    const stage = childKind.slice("artifact-".length);
+    if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
+      throw new Error("Source workflow artifact producer contract is unsupported");
+    }
+    // Candidate acquisition gates later candidate consumers. A failed acquisition
+    // leaves those selected consumers undispatched, so same-parent continuation
+    // cannot recover the complete graph by rerunning the producer alone.
+    if (!ARTIFACT_RECOVERY_STAGES.has(stage)) {
+      continue;
+    }
+    const reuseStep = Array.isArray(job.steps)
+      ? job.steps.find((step) => step?.id === "reused")
+      : undefined;
+    const allowsReuse =
+      reuseStep?.if === "env.PUBLICATION_ARTIFACTS_REUSED == 'true'" &&
+      typeof job.env?.PUBLICATION_ARTIFACTS_REUSED === "string";
+    producers.push({ jobName: job.name, stage, allowsReuse });
+  }
+  if (
+    new Set(producers.map(({ stage }) => stage)).size !== producers.length ||
+    new Set(producers.map(({ jobName }) => jobName)).size !== producers.length
+  ) {
+    throw new Error("Source workflow artifact producer contract is ambiguous");
+  }
+  if (producers.length > 0 && source.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+    throw new Error("Source workflow artifact producer recovery contract is unsupported");
+  }
+  return producers;
+}
+
+async function artifactRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
+  let source;
+  try {
+    source = parseYaml(workflow);
+  } catch {
+    throw new Error("Source workflow artifact producer contract is unavailable");
+  }
+  if (source?.env?.FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT !== "1") {
+    return legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options);
+  }
+  const producers = [];
+  let pending = false;
+  for (const { jobName, stage, allowsReuse } of artifactRecoveryJobs(workflow)) {
+    const matches = parentJobs.filter(
+      (job) => job.name === jobName && Number(job.run_attempt) === plan.parentRunAttempt,
+    );
+    if (matches.length !== 1) {
+      throw new Error(`Original ${stage} dispatch job is missing or ambiguous`);
+    }
+    const [job] = matches;
+    if (!job || job.conclusion === "skipped") {
+      continue;
+    }
+    if (job.status !== "completed") {
+      pending = true;
+      continue;
+    }
+    const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
+    const dispatches = [
+      ...log.matchAll(
+        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+      ),
+    ];
+    if (
+      dispatches.length === 0 &&
+      plan.evidenceReuse?.requested === true &&
+      allowsReuse &&
+      job.conclusion === "success"
+    ) {
+      continue;
+    }
+    if (
+      dispatches.length !== 1 ||
+      dispatches[0][1] !== stage ||
+      dispatches[0][2] !== plan.targetSha ||
+      dispatches[0][3] !== repository
+    ) {
+      throw new Error(`Original ${stage} dispatch identity is unavailable or ambiguous`);
+    }
+    producers.push({
       request: {
-        stage: "npm",
+        stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-npm`,
+        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
-      runId: dispatches[0][2],
-      runAttempt: dispatches[0][3],
-    },
-  ];
+      runId: dispatches[0][4],
+      runAttempt: dispatches[0][5],
+    });
+  }
+  if (new Set(producers.map((producer) => producer.runId)).size !== producers.length) {
+    throw new Error("Original artifact producer dispatch identities overlap");
+  }
+  return { pending, producers };
 }
 
 function assertRootRunIdentity(run, source, allowNewerAttempt = false) {
@@ -659,7 +783,7 @@ export async function preflightContinuation(
       throw new Error("continuation differs from the authenticated original publication plan");
     }
   }
-  const artifactProducers = await npmRecoveryProducers(
+  const artifactRecovery = await artifactRecoveryProducers(
     plan,
     parentJobs,
     client,
@@ -693,8 +817,8 @@ export async function preflightContinuation(
   }
   return {
     ...sourceRun,
-    artifactProducers: artifactProducers ?? [],
-    pendingArtifactProducers: artifactProducers === undefined,
+    artifactProducers: artifactRecovery.producers,
+    pendingArtifactProducers: artifactRecovery.pending,
     parentBinding: source,
   };
 }
@@ -2048,10 +2172,12 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
   };
 }
 
+export class MissingFrvPlanError extends Error {}
+
 export async function loadPlan(options, loadExecutionPlan = downloadExecutionPlan) {
   const payload = await loadExecutionPlan(options.repository, options.runId);
   if (!payload) {
-    throw new Error("run has no authenticated immutable FRV plan");
+    throw new MissingFrvPlanError("run has no authenticated immutable FRV plan");
   }
   const plan = validateReleaseExecutionPlanArtifact(payload, { parentRunId: options.runId });
   if (plan.attemptEvidenceVersion === undefined) {
@@ -2061,6 +2187,133 @@ export async function loadPlan(options, loadExecutionPlan = downloadExecutionPla
     throw new Error("FRV continuation requires an all-group root");
   }
   return plan;
+}
+
+function unsealedParentIdentity(run, options) {
+  const identity = {
+    ...runIdentity(run),
+    runAttempt: positiveInteger(run.run_attempt, `${options.runId} run attempt`),
+    status: String(run.status ?? ""),
+    conclusion: run.conclusion ?? null,
+    triggeringActor: String(run.triggering_actor?.login ?? ""),
+  };
+  if (
+    identity.id !== options.runId ||
+    identity.repository !== options.repository ||
+    identity.event !== "workflow_dispatch" ||
+    identity.path.split("@", 1)[0] !== ".github/workflows/full-release-validation.yml" ||
+    identity.displayTitle !== "Full Release Validation" ||
+    !/^[a-f0-9]{40}$/u.test(identity.headSha) ||
+    !identity.headBranch ||
+    !["requested", "queued", "pending", "waiting", "in_progress", "completed"].includes(
+      identity.status,
+    )
+  ) {
+    throw new Error(`run ${options.runId} is not the exact Full Release Validation parent`);
+  }
+  return identity;
+}
+
+/** Project only authenticated lifecycle facts while the immutable plan is not yet available. */
+export async function inspectUnsealedPlan(options, client) {
+  const operationDeadline = createOperationDeadline();
+  const parent = await client.getRun(options.runId, { operationDeadline });
+  const before = unsealedParentIdentity(parent, options);
+  const jobs = await client.getAttemptJobs(options.runId, before.runAttempt, {
+    operationDeadline,
+  });
+  if (!Array.isArray(jobs)) {
+    throw new Error(`run ${options.runId} returned invalid current-attempt jobs`);
+  }
+  const sealJobs = jobs.filter((job) => {
+    if (job.run_id !== undefined && String(job.run_id) !== options.runId) {
+      throw new Error(`run ${options.runId} current-attempt job identity changed`);
+    }
+    if (job.run_attempt !== undefined && Number(job.run_attempt) !== before.runAttempt) {
+      throw new Error(`run ${options.runId} current-attempt job identity changed`);
+    }
+    return job.name === "Seal release execution plan";
+  });
+  if (sealJobs.length > 1) {
+    throw new Error(
+      `run ${options.runId} attempt ${before.runAttempt} has ambiguous plan seal jobs`,
+    );
+  }
+  const seal = sealJobs[0];
+  const uploads =
+    seal?.steps?.filter((step) => step.name === "Upload immutable release execution plan") ?? [];
+  if (uploads.length > 1) {
+    throw new Error(`run ${options.runId} attempt ${before.runAttempt} has ambiguous plan uploads`);
+  }
+  const upload = uploads[0];
+  const current = unsealedParentIdentity(
+    await client.getRun(options.runId, { operationDeadline }),
+    options,
+  );
+  if (JSON.stringify(current) !== JSON.stringify(before)) {
+    throw new Error(`run ${options.runId} changed while inspecting plan availability`);
+  }
+  const uploadSucceeded = upload?.status === "completed" && upload.conclusion === "success";
+  const uploadCompletedAt = uploadSucceeded ? Date.parse(upload.completed_at) : Number.NaN;
+  if (
+    uploadSucceeded &&
+    Number.isFinite(uploadCompletedAt) &&
+    Date.now() >= uploadCompletedAt &&
+    (before.status !== "completed" ||
+      Date.now() - uploadCompletedAt <= PLAN_ARTIFACT_PROPAGATION_MS)
+  ) {
+    return {
+      action: "waiting-for-plan",
+      planAvailability: {
+        state: "artifact-propagating",
+        runAttempt: before.runAttempt,
+        parentStatus: before.status,
+        sealStatus: seal.status,
+      },
+      nextCommand: `pnpm frv watch --run ${options.runId}`,
+    };
+  }
+  if (uploadSucceeded) {
+    throw new Error("run has no authenticated immutable FRV plan after its successful upload");
+  }
+  if (seal?.status === "completed" || before.status === "completed") {
+    throw new Error(
+      `run ${options.runId} attempt ${before.runAttempt} completed without an authenticated immutable FRV plan`,
+    );
+  }
+  const state = before.runAttempt > 1 ? "reseal-in-progress" : "not-yet-sealed";
+  return {
+    action: "waiting-for-plan",
+    planAvailability: {
+      state,
+      runAttempt: before.runAttempt,
+      parentStatus: before.status,
+      sealStatus: seal?.status ?? "not-started",
+    },
+    nextCommand: `pnpm frv watch --run ${options.runId}`,
+  };
+}
+
+export async function loadPlanForCommand(
+  options,
+  client,
+  loadExecutionPlan = downloadExecutionPlan,
+) {
+  try {
+    return { plan: await loadPlan(options, loadExecutionPlan) };
+  } catch (error) {
+    if (!(error instanceof MissingFrvPlanError)) {
+      throw error;
+    }
+    const pending = await inspectUnsealedPlan(options, client);
+    if (options.command === "status") {
+      return { pending };
+    }
+    throw new Error(
+      `run ${options.runId} plan is ${pending.planAvailability.state}; ${options.command} is unavailable until the immutable plan is sealed; next: ${pending.nextCommand}`,
+      { cause: error },
+    );
+  }
 }
 
 async function createPublicationReader(repository) {
@@ -3121,6 +3374,12 @@ function print(value, json) {
     }
     console.log(`next: ${value.nextCommand}`);
   }
+  if (value.planAvailability) {
+    console.log(
+      `plan: ${value.planAvailability.state}; attempt=${value.planAvailability.runAttempt}; parent=${value.planAvailability.parentStatus}; seal=${value.planAvailability.sealStatus}`,
+    );
+    console.log(`next: ${value.nextCommand}`);
+  }
   for (const child of value.status?.children ?? value.children ?? []) {
     console.log(
       `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
@@ -3207,13 +3466,18 @@ async function main() {
     return;
   }
   if (options.command === "verify") {
-    const plan = await loadPlan(options);
+    const { plan } = await loadPlanForCommand(options, client);
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
     return;
   }
-  const plan = await loadPlan(options);
+  const loaded = await loadPlanForCommand(options, client);
+  if (loaded.pending) {
+    print(loaded.pending, options.json);
+    return;
+  }
+  const plan = loaded.plan;
   if (options.command === "status") {
     print(await inspectQualificationStatus(plan, options.runId, client), options.json);
     return;

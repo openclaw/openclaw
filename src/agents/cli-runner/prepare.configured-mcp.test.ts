@@ -32,6 +32,11 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
 
+const PROBE_SERVER_INSTRUCTIONS =
+  "PROBE_GUIDANCE: echo one word per call.\n" +
+  "x".repeat(2_500) +
+  "\nPROBE_TAIL: preserve the complete native guidance.";
+
 const claudeBackend: CliBackendPlugin & { pluginId: string } = {
   id: "claude-cli",
   pluginId: "anthropic",
@@ -76,7 +81,7 @@ async function startProbeServer() {
               protocolVersion: message.params?.protocolVersion,
               capabilities: { tools: {} },
               serverInfo: { name: "probe", version: "1" },
-              instructions: "PROBE_GUIDANCE: echo one word per call.",
+              instructions: PROBE_SERVER_INSTRUCTIONS,
             }
           : message.method === "tools/list"
             ? {
@@ -122,7 +127,7 @@ async function startProbeServer() {
   };
 }
 
-describe("configured MCP servers on exclusive CLI turns", () => {
+describe("configured MCP servers on CLI turns", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
   const mintGrant = vi.fn<typeof MintMcpLoopbackClientGrant>();
 
@@ -164,6 +169,77 @@ describe("configured MCP servers on exclusive CLI turns", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
   });
+
+  it.each(["config", "run"] as const)(
+    "bridges configured MCP with a %s-selected node exec host without restricting native tools",
+    async (source) => {
+      const { sessionTarget } = fixture.session;
+      const probeServer = await startProbeServer();
+      const scheduler = createTestGatewayScheduler();
+      const config: OpenClawConfig = {
+        session: { store: sessionTarget.storePath },
+        plugins: { enabled: false },
+        tools: { exec: { host: source === "config" ? "node" : "gateway" } },
+        mcp: {
+          servers: {
+            probe: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${probeServer.port}/mcp`,
+            },
+            openclaw: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${probeServer.port}/mcp`,
+            },
+          },
+        },
+      };
+      try {
+        await setSessionMcpRuntimeScheduler(scheduler);
+        const context = await fixture.prepare({
+          sessionKey: sessionTarget.sessionKey,
+          sessionId: sessionTarget.sessionId,
+          provider: "claude-cli",
+          model: "opus",
+          modelHasVision: false,
+          sourceReplyDeliveryMode: "automatic",
+          config,
+          toolOverrides: { mcpServers: { openclaw: false }, webSearch: false },
+          ...(source === "run" ? { execOverrides: { host: "node" as const } } : {}),
+        });
+        try {
+          expect(context.params.cliToolAvailability).toBeUndefined();
+          expect(context.hostOwnedTools).toBeUndefined();
+          const args = context.preparedBackend.backend.args ?? [];
+          expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
+          const bundle = JSON.parse(
+            fs.readFileSync(args[args.indexOf("--mcp-config") + 1] ?? "", "utf-8"),
+          ) as { mcpServers: Record<string, unknown> };
+          expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+          const minted = mintGrant.mock.lastCall?.[0];
+          expect(minted).toBeDefined();
+          const scoped = await resolveMcpLoopbackScopedTools({
+            cfg: config,
+            context: minted!.context,
+            admittedRunContext: context.params.admittedRunContext,
+            bundledTools: minted!.bundledTools,
+          });
+          const probe = scoped.tools.find((tool) => tool.name === "probe__echo");
+          expect(scoped.tools.some((tool) => tool.name === "openclaw__echo")).toBe(false);
+          expect(probe).toBeDefined();
+          expect(getTextContent(await probe!.execute("configured-mcp", { word: "pong" }))).toBe(
+            "probe:pong",
+          );
+          expect(probeServer.calls).toBe(1);
+        } finally {
+          await context.preparedBackend.cleanup?.();
+        }
+      } finally {
+        await disposeAllSessionMcpRuntimes();
+        await scheduler.stop();
+        await probeServer.close();
+      }
+    },
+  );
 
   it.each([
     { name: "allowed", allow: ["read", "probe__*"], deny: [] as string[], childAllow: undefined },
@@ -280,8 +356,7 @@ describe("configured MCP servers on exclusive CLI turns", () => {
         listed: expectedTools,
         // Native Claude saw the server's guidance; the bridge keeps it, unless
         // the server has no listed tools.
-        instructions:
-          deny.length > 0 ? undefined : "## probe\nPROBE_GUIDANCE: echo one word per call.",
+        instructions: deny.length > 0 ? undefined : `## probe\n${PROBE_SERVER_INSTRUCTIONS}`,
         result: deny.length > 0 ? undefined : "probe:pong",
       });
       // One catalog for ordinary and completion turns keeps the Claude prefix stable.

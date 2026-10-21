@@ -1,4 +1,3 @@
-/** Tests core secret target registry queries without plugin discovery. */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -11,9 +10,13 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const resolvePlan = (configFile: "openclaw.json" | "auth-profile-store", path: string[]) =>
+  resolveSecretPlanTargetByPathCore({ configFile, pathSegments: path });
+
 describe("secret target registry", () => {
   it("discovers PostgreSQL connection refs for configure, apply, and audit", () => {
-    const connection = { source: "env" as const, provider: "default", id: "DATABASE_DSN" };
+    const connection = envRef("DATABASE_DSN");
     const config: OpenClawConfig = { database: { engine: "postgres", postgres: { connection } } };
     const [target] = discoverConfigSecretTargetsByIds(
       config,
@@ -24,12 +27,9 @@ describe("secret target registry", () => {
       value: connection,
       entry: { includeInPlan: true, includeInConfigure: true, includeInAudit: true },
     });
-    expect(
-      resolveSecretPlanTargetByPathCore({
-        configFile: "openclaw.json",
-        pathSegments: ["database", "postgres", "connection"],
-      })?.entry.id,
-    ).toBe("database.postgres.connection");
+    expect(resolvePlan("openclaw.json", ["database", "postgres", "connection"])?.entry.id).toBe(
+      "database.postgres.connection",
+    );
   });
 
   it("preserves dotted provider header keys during discovery", () => {
@@ -37,18 +37,8 @@ describe("secret target registry", () => {
       models: {
         providers: {
           openai: {
-            headers: {
-              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
-            },
-            request: {
-              headers: {
-                "X.Request.Trace": {
-                  source: "env",
-                  provider: "default",
-                  id: "REQUEST_TRACE_HEADER",
-                },
-              },
-            },
+            headers: { "X.Trace": envRef("TRACE_HEADER") },
+            request: { headers: { "X.Request.Trace": envRef("REQUEST_TRACE_HEADER") } },
           },
         },
       },
@@ -65,40 +55,20 @@ describe("secret target registry", () => {
     ]);
   });
 
-  it("returns null when no config target path matches", () => {
-    const target = resolveConfigSecretTargetByPath(["gateway", "auth", "mode"]);
-
-    expect(target).toBeNull();
+  it.each([
+    ["gateway", "auth", "mode"],
+    ["memory", "search", "remote", "headers", "Authorization"],
+    ["agents", "entries", "main", "memory", "search", "remote", "headers", "Authorization"],
+  ])("rejects non-target or string-only header path %j", (...segments) => {
+    expect(resolveConfigSecretTargetByPath(segments)).toBeNull();
   });
 
-  it.each([{ prefix: [] }, { prefix: ["agents", "entries", "main"] }])(
-    "does not offer string-only memory headers as structured SecretRef apply targets ($prefix)",
-    ({ prefix }) => {
-      expect(
-        resolveConfigSecretTargetByPath([
-          ...prefix,
-          "memory",
-          "search",
-          "remote",
-          "headers",
-          "Authorization",
-        ]),
-      ).toBeNull();
-    },
-  );
-
   it("resolves plan targets by owning config document", () => {
-    const configTarget = resolveSecretPlanTargetByPathCore({
-      configFile: "openclaw.json",
-      pathSegments: ["models", "providers", "openai", "apiKey"],
-    });
-    const authProfileTarget = resolveSecretPlanTargetByPathCore({
-      configFile: "auth-profile-store",
-      pathSegments: ["profiles", "openai:default", "key"],
-    });
-
-    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
-    expect(configTarget?.providerId).toBe("openai");
-    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
+    expect(resolvePlan("openclaw.json", ["models", "providers", "openai", "apiKey"])).toMatchObject(
+      { entry: { targetType: "models.providers.apiKey" }, providerId: "openai" },
+    );
+    expect(
+      resolvePlan("auth-profile-store", ["profiles", "openai:default", "key"])?.entry.targetType,
+    ).toBe("auth-profiles.api_key.key");
   });
 });
