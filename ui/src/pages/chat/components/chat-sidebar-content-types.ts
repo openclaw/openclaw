@@ -235,7 +235,7 @@ type SessionDiffSidebarContent = {
   /** Last accepted native Uncommitted result for this exact diff loader. */
   uncommitted?: SessionsDiffResult;
   /** Visible Environment demand shares this content's native diff loader. */
-  requestUncommitted?: () => void;
+  requestUncommitted?: () => void | (() => void);
   onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
   openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;

@@ -563,6 +563,10 @@ describe("session menu", () => {
       session: { icon: "🦞", color: "blue" },
     });
     await openAppearance(menu, compact);
+    if (compact) {
+      await selectMenuValue(menu, "compact:back-advanced");
+      await selectMenuValue(menu, "compact:open-icon");
+    }
     const blue = queryButton(menu, '.session-menu__color-choice[aria-label="Blue"]');
     expect(blue?.getAttribute("aria-pressed")).toBe("true");
     expect(menu.querySelectorAll('.session-menu__colors [aria-pressed="true"]')).toHaveLength(1);
@@ -861,6 +865,23 @@ describe("session menu", () => {
 
 describe("sidebar snooze menu", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("keeps custom snooze usable after compact Back and reentry", async () => {
+    const { menu, onAction } = await actionMenu({ compact: true, snoozeAllowed: true });
+    await selectMenuValue(menu, "compact:open-snooze");
+    await selectMenuValue(menu, "compact:back");
+    await selectMenuValue(menu, "compact:open-snooze");
+    await selectMenuValue(menu, "snooze-custom");
+    const input = menu.querySelector<HTMLInputElement>('input[type="datetime-local"]')!;
+    await waitForSolid(() => expect(document.activeElement).toBe(input));
+    input.value = "2099-01-01T09:00";
+    input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    expect(onAction).toHaveBeenCalledWith({
+      kind: "snooze",
+      snoozedUntil: new Date(2099, 0, 1, 9).getTime(),
+      rememberCustom: true,
+    });
+  });
 
   it.each([false, true])("selects snooze time (compact=%s)", async (compact) => {
     vi.useFakeTimers({ toFake: ["Date"] });

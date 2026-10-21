@@ -1396,6 +1396,62 @@ contention acceptance rule is at least a 60% paired RPC p99 reduction with no
 agent Git regression. Inspect command counts and queue waits to distinguish
 scheduling changes from reduced Git work.
 
+Add `--cold --tabs 40 --poll-ms 5000` to measure reconnect polls against a fresh Gateway process
+without warming diff targets or Git workers. Connections are prepared concurrently;
+the first 40 diff requests start at `--start-at` alongside the existing load loops.
+Use repeated `--poll-state-dir <seeded-fixture>` arguments for distinct checkout
+roots; each tab stays on `tab % checkoutCount`, with one outstanding request.
+Cold mode requires a positive `--poll-ms` and at least one tab per checkout.
+Each client independently retries `computing` after 500 ms and waits `--poll-ms`
+after receiving content. Omit `--summary` for full diffs. For large nested fixtures, seed each
+with `--boundary rpc --tracked 267000 --untracked 5 --nested-repository` sequentially
+under the host's preparation CPU allocation. This measures cold process caches,
+not cold disk or the WebSocket handshake.
+
+For the reconnect workload, distribute 40 clients across 14 roots: two large
+nested fixtures and twelve small fixtures. A five-second interval approaches
+480 full-diff requests per minute, plus temporary computing retries; request
+latency lowers the steady rate. The observed production rate of about 500 requests
+per minute includes all RPCs, so this is a conservative diff stress workload,
+not a replay of the production request mix. The UI's full-diff reader retries
+computing results; recurring five-second polling belongs to active-run summaries.
+Use the report's actual `rpcPerMinute` and completed counts when comparing sides.
+
+Use `--scope uncommitted` for working-tree-only polls (the default is `all`). Add
+`--poll` in cold mode to opt into the nonblocking RPC contract on supporting revisions. When
+comparing that contract against an older blocking baseline, pass `--poll` only
+to the candidate and record the mode difference alongside the results.
+
+For a cache-owner-only comparison with one source checkout and dependency install,
+place the baseline beside `src/infra/git-read-cache.ts` and pass its path through
+`--read-cache-owner` on the baseline process only. A benchmark resolver redirects
+the production owner's import before Gateway loading; the adjacent location
+preserves its relative imports. The report records the override and load count,
+and fails if the selected owner was never loaded. Keep state directories and ports
+separate even when both processes share source.
+
+Cold mode prohibits `--mutate` and `--missing-cwd`. It verifies fixture contents
+and all materialized response hashes after measurement instead of prewarming
+them. `firstRequestLatencyMs` includes the initial response for each assigned tab;
+`firstContentLatencyMs` also includes polling until any `computing: true` response
+becomes materialized. The `phases.cold` and `phases.steady` fields separately report
+RPC latency, computing-response counts, and summed `sessions.diff` handler seconds.
+Their `refreshLatencyMs` includes all computing retries and actual timer delays from
+each refresh's first request to usable content, excluding the recurring poll cadence.
+`measurementStartedAtUnixMs`, `contentReadyAtMs`, and each refresh's `startedAtMs`
+allow paired runs to use a common steady window: refreshes starting after both sides
+received their final initial content, before either nominal deadline. Include the
+full completion latency for those refreshes, even when they finish after that window.
+Refreshes are tagged by their start phase; individual RPCs are tagged on completion.
+Completions are tagged cold until every client has received content and their
+diagnostics have drained, then tagged steady. Clients that finish early keep their
+own cadence. Cold samples use a per-client `sequence`; `rpcPollSequenceMaxLatencyMs`
+groups matching ordinals, not synchronized rounds. Warm mode retains its cross-product
+polling and synchronized round metrics. A run fails
+if any client never receives content or no steady refresh completes; increase
+`--duration-ms` when needed. Compare both first-response and first-content tails,
+then the steady distribution, in concurrent pairs with swapped CPU halves.
+
 ### Large-worktree revision validation
 
 Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
