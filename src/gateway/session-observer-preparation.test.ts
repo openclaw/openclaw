@@ -77,7 +77,8 @@ it.each(["claude-cli", "anthropic"])(
       completeModel: vi.fn(defaultCompleteModel),
     });
     await startAndAddToolNotes(harness.observer);
-    await advance(12_000);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await flushObserver();
     await vi.dynamicImportSettled();
     await flushObserver();
 
@@ -155,7 +156,8 @@ it.each([
     const harness = createHarness({ prepareModel });
     await startAndAddToolNotes(harness.observer);
 
-    await advance(12_000);
+    await vi.advanceTimersByTimeAsync(12_000);
+    await flushObserver();
     expect(prepareModel).toHaveBeenCalledOnce();
     expect(harness.completeModel).toHaveBeenCalledOnce();
     if (initial) {

@@ -143,7 +143,10 @@ async function withRecovery(
 
 function holdRecoveryTurn(
   target: OperatorRecoveryTarget,
-  inspect: (principal: AgentTurnPrincipal | undefined, runId: string) => void = () => {},
+  inspect: (
+    principal: Parameters<typeof startTurn>[0]["principal"],
+    runId: string,
+  ) => void = () => {},
 ) {
   const finish = createDeferred();
   let registration: ReturnType<typeof registerRecovery> | undefined;

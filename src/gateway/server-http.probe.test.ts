@@ -152,7 +152,7 @@ it("uses Accept to route only the unclaimed Control UI SPA fallback", async () =
             method: "GET",
             headers: { accept },
           });
-          const label = String(accept) + " ready=" + ready;
+          const label = `${accept} ready=${ready}`;
           expect(res.statusCode, label).toBe(html ? 200 : ready ? 404 : 503);
           if (html) {
             expect(getBody(), label).toContain("spa fallback");
