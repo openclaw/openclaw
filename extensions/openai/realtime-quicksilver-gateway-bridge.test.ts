@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
+import { createBridgeCallbacks } from "./realtime-quicksilver-bridge.test-support.js";
 import { delegation } from "./realtime-quicksilver-events.test-support.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
@@ -31,15 +32,7 @@ function delegate(socket: FakeSocket, id: string, text: string) {
 
 type BridgeConfig = ConstructorParameters<typeof OpenAIQuicksilverGatewayBridge>[0];
 function createBridge(overrides: Partial<BridgeConfig> = {}) {
-  const observed = {
-    onAudio: vi.fn(),
-    onClearAudio: vi.fn(),
-    onEvent: vi.fn(),
-    onReady: vi.fn(),
-    onClose: vi.fn(),
-    onError: vi.fn(),
-    logger: { debug: vi.fn(), warn: vi.fn() },
-  };
+  const observed = createBridgeCallbacks();
   const peer = createPeer();
   const createSocket = vi.fn(() => new FakeSocket());
   const fetchImpl = vi.fn<typeof fetch>(async () =>

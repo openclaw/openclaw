@@ -5,7 +5,6 @@ import {
   transcript as transcriptEvent,
   turn,
 } from "./realtime-quicksilver-events.test-support.js";
-import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
 const { captureWsEventAsyncMock } = vi.hoisted(() => ({
   captureWsEventAsyncMock: vi.fn().mockResolvedValue(undefined),
@@ -16,8 +15,6 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => {
   return { ...actual, captureWsEventAsync: captureWsEventAsyncMock };
 });
 
-import { openAIRealtimeHost } from "./realtime-host.js";
-import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import {
   createHarness,
   FakeSocket,
@@ -512,23 +509,14 @@ it("discards audio closed before the first connection and reconnects fresh", asy
 
 it("does not carry queued audio across terminal close and explicit reconnect", async () => {
   const sockets: FakeSocket[] = [];
-  const bridge = new OpenAIQuicksilverVoiceBridge(
-    {
-      providerConfig: {},
-      model: "gpt-live-test-canary",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-      resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
-      mediaSocketFactory: fakeQuicksilverMediaSocket((_url, _options) => {
-        const socket = new FakeSocket(false);
-        sockets.push(socket);
-        queueMicrotask(() => socket.open());
-        return socket;
-      }),
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
+  const { bridge } = createHarness({
+    autoStart: false,
+    socketFactory: () => {
+      const socket = new FakeSocket(false);
+      sockets.push(socket);
+      return socket;
     },
-    openAIRealtimeHost,
-  );
+  });
 
   const firstConnect = bridge.connect();
   await vi.waitFor(() => expect(sockets[0]?.readyState).toBe(1));

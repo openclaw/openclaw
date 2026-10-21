@@ -12,6 +12,7 @@ import {
   AUDIO_ONLY_SDP,
   requestTarget,
   postOffer as post,
+  startOffer,
   makeBridge,
   reserveGaSession,
   reserveLiveSession,
@@ -113,11 +114,10 @@ describe("GPT-Live offer broker", () => {
       expect(reservation).not.toHaveProperty("model");
       expect(reservation).not.toHaveProperty("voice");
       expect(reservation.offerResponseMaxBytes).toBe(256 * 1024);
-      const response = createResponseHarness();
-      const handling = realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-        response.res,
-      );
+      const { response, handling } = startOffer(realtime, {
+        token: reservation.clientSecret,
+        body: AUDIO_ONLY_SDP,
+      });
       await vi.waitFor(() => expect(bridge.connect).toHaveBeenCalledOnce());
       expect(response.end).not.toHaveBeenCalled();
       expect(createBridge).toHaveBeenCalledWith({
@@ -235,11 +235,7 @@ describe("GPT-Live offer broker", () => {
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const reservation = await reserveLiveSession(realtime);
-    const response = createResponseHarness();
-    const handling = realtime.handler(
-      createRequest({ token: reservation.clientSecret }),
-      response.res,
-    );
+    const { response, handling } = startOffer(realtime, { token: reservation.clientSecret });
     await vi.advanceTimersByTimeAsync(0);
     expect(sockets).toHaveLength(1);
     expect(sockets[0]?.readyState).toBe(0);
@@ -477,11 +473,7 @@ describe("GPT-Live offer broker", () => {
     );
     const { realtime, sockets } = makeBroker({ fetchImpl });
     const reservation = await reserveLiveSession(realtime, { model: "gpt-live-1" });
-    const response = createResponseHarness();
-    const handling = realtime.handler(
-      createRequest({ token: reservation.clientSecret }),
-      response.res,
-    );
+    const { response, handling } = startOffer(realtime, { token: reservation.clientSecret });
     await vi.waitFor(() => expect(upstreamSignal).toBeDefined());
 
     await realtime.broker.cancelBrowserSession(reservation);
@@ -667,11 +659,10 @@ describe("GPT-Live browser session lifecycle", () => {
       gatewayControl: { bindBridge, bindControl, onReady, onTranscript, onEvent, onClose },
     });
     const reservation = await reserve(realtime, request);
-    const response = createResponseHarness();
-    const handling = realtime.handler(
-      createRequest({ token: reservation.clientSecret, body: AUDIO_ONLY_SDP }),
-      response.res,
-    );
+    const { response, handling } = startOffer(realtime, {
+      token: reservation.clientSecret,
+      body: AUDIO_ONLY_SDP,
+    });
     await vi.waitFor(() => expect(socket.listenerCount("open")).toBeGreaterThan(0));
     expect(response.end).not.toHaveBeenCalled();
     expect(bindControl).not.toHaveBeenCalled();

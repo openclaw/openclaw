@@ -13,10 +13,11 @@ import {
   AUDIO_ONLY_SDP,
   requestTarget,
   makeBridge as retirementBridge,
+  postOffer,
   reserveGaSession,
+  reserveLiveSession,
+  type TestBroker,
 } from "./realtime-quicksilver.test-helpers.js";
-
-const OPAQUE_REALTIME_MODEL = "gpt-live-test-canary";
 
 function callResponse(answer = "v=answer\r\n", callId = "rtc_retirement") {
   return new Response(answer, {
@@ -37,6 +38,9 @@ function retirementFetch(
 function offerRequest(token: string) {
   return createRequest({ token, body: AUDIO_ONLY_SDP });
 }
+
+const offer = (realtime: TestBroker, token: string, origin?: string) =>
+  postOffer(realtime, { token, body: AUDIO_ONLY_SDP, ...(origin ? { origin } : {}) });
 
 async function expectRetrySchedule(readAttempts: () => number, check = expect) {
   for (const [delay, attempts] of [
@@ -81,15 +85,7 @@ describe("GA Realtime call retirement", () => {
         { ...openAIRealtimeHost, resolveProviderRequestHeaders: replacementHeaders },
       );
       expect(retained).toBe(first);
-      const response = createResponseHarness();
-      await retained.handler(
-        createRequest({
-          token: reservation.clientSecret,
-          body: AUDIO_ONLY_SDP,
-          origin: "https://updated.example",
-        }),
-        response.res,
-      );
+      const response = await offer(retained, reservation.clientSecret, "https://updated.example");
       expect(response.res.statusCode).toBe(201);
       expect(originalConfig).not.toHaveBeenCalled();
       expect(nextConfig).toHaveBeenCalledOnce();
@@ -198,8 +194,7 @@ describe("GA Realtime call retirement", () => {
           ? 0
           : 1,
       );
-      const replay = createResponseHarness();
-      await realtime.handler(offerRequest(reservation.clientSecret), replay.res);
+      const replay = await offer(realtime, reservation.clientSecret);
       expect(replay.res.statusCode).toBe(401);
       await realtime.cleanup();
       await vi.advanceTimersByTimeAsync(30 * 60_000);
@@ -266,7 +261,7 @@ describe("GA Realtime call retirement", () => {
     const { realtime } = createBroker({ fetchImpl: retirementFetch(hangup) });
     try {
       const reservation = await reserveGaSession(realtime, () => bridge);
-      await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
+      await offer(realtime, reservation.clientSecret);
       const closing = realtime.broker.cancelBrowserSession(reservation);
       const concurrent = realtime.cleanup();
       expect(realtime.getSessionCounts()).toMatchObject({ active: 0, reservations: 1 });
@@ -302,7 +297,7 @@ describe("GA Realtime call retirement", () => {
         });
         return bridge;
       });
-      await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
+      await offer(realtime, reservation.clientSecret);
       const first = realtime.broker.cancelBrowserSession(reservation);
       const concurrent = realtime.cleanup();
       expect(bridge.close).toHaveBeenCalledOnce();
@@ -338,17 +333,11 @@ describe("GA Realtime call retirement", () => {
     const old = acquireBroker(params, openAIRealtimeHost);
     let replacement: typeof old | undefined;
     const reserveNext = (current: typeof old, clientOwner = ownerConnId) =>
-      current.broker.createBrowserSession(
-        {
-          providerConfig: {},
-          model: OPAQUE_REALTIME_MODEL,
-          ownerConnId: clientOwner,
-          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-          clientControl: { owner: "gateway" },
-          gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
-        },
-        { type: "api-key", token: "platform-key" },
-      );
+      reserveLiveSession(current, {
+        ownerConnId: clientOwner,
+        clientControl: { owner: "gateway" },
+        gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
+      });
     try {
       for (let index = 0; index < count; index += 1) {
         const reservation = await reserveGaSession(
@@ -357,7 +346,7 @@ describe("GA Realtime call retirement", () => {
           undefined,
           ownerConnId,
         );
-        await old.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
+        await offer(old, reservation.clientSecret);
       }
       await expect(releaseBroker(old)).rejects.toThrow();
       replacement = acquireBroker(params, openAIRealtimeHost);

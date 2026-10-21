@@ -112,6 +112,20 @@ export function emitSideband(socket: FakeSocket, payload: unknown, isBinary = fa
   socket.emit("message", Buffer.from(JSON.stringify(payload)), isBinary);
 }
 
+export function publicTranscript(
+  role: "user" | "assistant",
+  delta: string,
+  start_ms = 0,
+  end_ms = 100,
+) {
+  return {
+    type: `session.${role === "user" ? "input" : "output"}_transcript.delta`,
+    delta,
+    start_ms,
+    end_ms,
+  };
+}
+
 export function createBroker(params?: {
   fetchImpl?: typeof fetch;
   runAgentConsult?: (params: { prompt: string; signal?: AbortSignal }) => Promise<{ text: string }>;
@@ -165,13 +179,10 @@ export async function reserveSession(
   return reservation;
 }
 
-export function reserveLiveSession(
-  realtime: TestBroker,
-  overrides: Pick<
-    RealtimeVoiceBrowserSessionCreateRequest,
-    "model" | "runAgentConsult" | "gatewayControl" | "voice"
-  > = {},
-) {
+type LiveSessionOverrides<T = RealtimeVoiceBrowserSessionCreateRequest> = T extends unknown
+  ? Omit<T, "providerConfig"> & { ownerConnId?: string }
+  : never;
+export function reserveLiveSession(realtime: TestBroker, overrides: LiveSessionOverrides = {}) {
   return reserveSession(realtime, {
     providerConfig: {},
     model: "gpt-live-test-canary",
@@ -202,9 +213,14 @@ export function reserveGaSession(
 }
 
 export async function postOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {
-  const response = createResponseHarness();
-  await realtime.handler(createRequest(params), response.res);
+  const { response, handling } = startOffer(realtime, params);
+  await handling;
   return response;
+}
+
+export function startOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {
+  const response = createResponseHarness();
+  return { response, handling: realtime.handler(createRequest(params), response.res) };
 }
 
 export function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}) {

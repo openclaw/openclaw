@@ -1,5 +1,8 @@
+import { once } from "node:events";
+import { MessageChannel } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { OPENAI_QUICKSILVER_RELAY_FRAME_BYTES } from "./realtime-quicksilver-audio-buffer.js";
+import { createBridgeCallbacks } from "./realtime-quicksilver-bridge.test-support.js";
 import { delegation } from "./realtime-quicksilver-events.test-support.js";
 import {
   createGatewayHarness,
@@ -28,11 +31,7 @@ function createHarness(overrides: Partial<GatewayConfig> = {}) {
   let socket: FakeSocket | undefined;
   const webSocketFactory = vi.fn(() => (socket = new FakeSocket()));
   const callbacks = {
-    onAudio: vi.fn(),
-    onClose: vi.fn(),
-    onReady: vi.fn(),
-    onTranscript: vi.fn(),
-    logger: { debug: vi.fn(), warn: vi.fn() },
+    ...createBridgeCallbacks(),
     createPeer: vi.fn(),
     fetchImpl: vi.fn<typeof fetch>(),
   };
@@ -70,80 +69,109 @@ function frame(value = 0) {
 }
 
 describe("GPT-Live Gateway direct transport", () => {
-  it("retains opening and backoff capture until the retry is adopted exactly once", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const sockets: FakeSocket[] = [];
-    const capturedByAttempt: Buffer[][] = [];
-    const createSocket = fakeQuicksilverMediaSocket(() => {
-      const socket = new FakeSocket("manual");
-      sockets.push(socket);
-      return socket;
-    });
-    const { bridge, onReady } = createHarness({
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      mediaSocketFactory: (...args) => {
-        const socket = createSocket(...args);
-        const captured: Buffer[] = [];
-        capturedByAttempt.push(captured);
-        const sendAudio = socket.sendAudio.bind(socket);
-        socket.sendAudio = (audio) => {
-          captured.push(Buffer.from(audio));
-          sendAudio(audio);
-        };
+  it.each(["open handoff", "after adoption"])(
+    "retains capture and binds output only to the adopted retry (%s)",
+    async (readiness) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const { port1, port2 } = new MessageChannel();
+      const state = new SharedArrayBuffer(4);
+      const boundAttempts: number[] = [];
+      const sockets: FakeSocket[] = [];
+      const capturedByAttempt: Buffer[][] = [];
+      const createSocket = fakeQuicksilverMediaSocket(() => {
+        const socket = new FakeSocket("manual");
+        sockets.push(socket);
         return socket;
-      },
-    });
-    const frames = [1, 2, 3, 4, 5].map(frame);
-    const producer = frame();
-    const capture = (audio: Buffer) => {
-      audio.copy(producer);
-      bridge.sendAudio(producer);
-      producer.fill(0);
-    };
-    let connecting: Promise<void> | undefined;
-    try {
-      capture(frames[0]!);
-      connecting = bridge.connect();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sockets).toHaveLength(1);
-      capture(frames[1]!);
-      expect(capturedByAttempt).toEqual([[]]);
+      });
+      const { bridge, onReady } = createHarness({
+        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+        mediaSocketFactory: (...args) => {
+          const socket = createSocket(...args);
+          const bind = socket.setAudioOutputPort.bind(socket);
+          socket.setAudioOutputPort = (output) => {
+            boundAttempts.push(sockets.length);
+            bind(output);
+          };
+          const captured: Buffer[] = [];
+          capturedByAttempt.push(captured);
+          const sendAudio = socket.sendAudio.bind(socket);
+          socket.sendAudio = (audio) => {
+            captured.push(Buffer.from(audio));
+            sendAudio(audio);
+          };
+          return socket;
+        },
+      });
+      const frames = [1, 2, 3, 4, 5].map(frame);
+      const producer = frame();
+      const capture = (audio: Buffer) => {
+        audio.copy(producer);
+        bridge.sendAudio(producer);
+        producer.fill(0);
+      };
+      let connecting: Promise<void> | undefined;
+      try {
+        bridge.setAudioOutputPort({ port: port1, state });
+        capture(frames[0]!);
+        connecting = bridge.connect();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sockets).toHaveLength(1);
+        expect(boundAttempts).toEqual([]);
+        capture(frames[1]!);
+        expect(capturedByAttempt).toEqual([[]]);
 
-      sockets[0]!.emit("error", new Error("first attempt failed"));
-      await vi.advanceTimersByTimeAsync(100);
-      expect(sockets[0]!.closed).toBe(true);
-      expect(sockets).toHaveLength(1);
-      capture(frames[2]!);
-      expect(capturedByAttempt).toEqual([[]]);
+        sockets[0]!.emit("error", new Error("first attempt failed"));
+        await vi.advanceTimersByTimeAsync(100);
+        expect(sockets[0]!.closed).toBe(true);
+        expect(sockets).toHaveLength(1);
+        capture(frames[2]!);
+        expect(capturedByAttempt).toEqual([[]]);
 
-      await vi.advanceTimersByTimeAsync(100);
-      expect(sockets).toHaveLength(2);
-      capture(frames[3]!);
-      expect(capturedByAttempt).toEqual([[], []]);
-      const adopted = sockets[1]!;
-      adopted.readyState = 1;
-      adopted.emit("open");
-      // Readiness can arrive in the open handoff, before the bridge adopts it.
-      emitSideband(adopted, { type: "session.started", session: {} });
-      await connecting;
-      expect(onReady).toHaveBeenCalledOnce();
-      expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4))]]);
-      capture(frames[4]!);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(readAudio(adopted)).toEqual([...frames, frame()]);
-      expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4)), frames[4]]]);
-      expect(sockets[0]!.sent).toEqual([]);
-    } finally {
-      const closing = bridge.close();
-      for (const socket of sockets) {
-        if (!socket.closed) {
-          closeReceipt(socket);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(sockets).toHaveLength(2);
+        expect(boundAttempts).toEqual([]);
+        capture(frames[3]!);
+        expect(capturedByAttempt).toEqual([[], []]);
+        const adopted = sockets[1]!;
+        adopted.readyState = 1;
+        adopted.emit("open");
+        if (readiness === "after adoption") {
+          await vi.advanceTimersByTimeAsync(0);
+          expect(adopted.sent).toHaveLength(1);
+          expect(boundAttempts).toEqual([2]);
+          expect(Atomics.load(new Int32Array(state), 0)).toBe(0);
         }
+        // The other row replays readiness buffered in the open handoff.
+        emitSideband(adopted, { type: "session.started", session: {} });
+        await connecting;
+        expect(onReady).toHaveBeenCalledOnce();
+        expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4))]]);
+        capture(frames[4]!);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(readAudio(adopted)).toEqual([...frames, frame()]);
+        expect(capturedByAttempt).toEqual([[], [Buffer.concat(frames.slice(0, 4)), frames[4]]]);
+        expect(sockets[0]!.sent).toEqual([]);
+        const audio = once(port2, "message");
+        emitSideband(adopted, { type: "session.output_audio.delta", delta: "AQE=" });
+        expect((await audio)[0]).toEqual({ type: "audio", audio: new Uint8Array([1, 1]) });
+        const closing = bridge.close();
+        expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
+        closeReceipt(adopted);
+        await closing;
+      } finally {
+        const closing = bridge.close();
+        for (const socket of sockets) {
+          if (!socket.closed) {
+            closeReceipt(socket);
+          }
+        }
+        await Promise.allSettled([connecting, closing]);
+        port1.close();
+        port2.close();
+        vi.useRealTimers();
       }
-      await Promise.allSettled([connecting, closing]);
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("paces buffered public microphone audio and silence until transport error", async () => {
     const { bridge, start, onReady } = createHarness();
