@@ -1961,6 +1961,25 @@ the lookup callback only counts demand, so registry allocation and whole-Gateway
 cost still require the workload below. Run baseline/candidate pairs under the
 benchmark host's measurement policy; keep import/startup outside these samples.
 
+For provider request preparation alone, run the source owner directly:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/provider-request-prepare-measure.ts \
+  --messages 500 --iterations 300 --mode prepare --output /path/to/result
+```
+
+Use `--mode transport` to isolate standalone request-body serialization. The
+driver compares wire bytes with native JSON, including a custom `toJSON` and
+ordered getters, then counts JSON serialization/parsing, UTF-8 encoding, and
+hash calls and bytes for one request. `wholeRequestCalls` counts operations
+whose byte size equals the full request; field and prefix hashes remain in the
+totals. Counting runs separately from allocation/timing capture. The profile
+includes objects collected by both minor and major GC. These measurements cover
+the owner in the driver's isolate, excluding worker transport and the Gateway;
+use the Gateway `chat.send --allocations` workload for main-isolate turn cost.
+Pass the same future `--start-at` to each side of a concurrent pair and swap CPU
+halves between pairs.
+
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
 
 ```sh
