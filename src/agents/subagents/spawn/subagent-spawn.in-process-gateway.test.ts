@@ -151,21 +151,8 @@ const thinkingCases: ThinkingCase[] = [
   ["inherits configured effort", {}, undefined, "high", undefined, "high"],
 ];
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promise<void> {
-  let lastError: unknown;
-  for (let elapsed = 0; elapsed <= timeoutMs; elapsed += 10) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw lastError;
-}
+const waitForAssertion = (assertion: () => void) =>
+  vi.waitFor(assertion, { timeout: 2_000, interval: 10 });
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   beforeEach(async () => {
@@ -275,11 +262,12 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const launchedRunIds: string[] = [];
     const subordinateAdmissionStates: boolean[] = [];
     let launchCount = 0;
+    const unexpectedRecovery = async () => {
+      throw new Error("Unexpected fixture recovery");
+    };
     gatewayContext.recoveryRuntime = {
       prepareRestartRecovery: () => undefined,
-      resumeChatInput: async () => {
-        throw new Error("Unexpected fixture chat input recovery");
-      },
+      resumeChatInput: unexpectedRecovery,
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {
         const index = launchedRunIds.indexOf(params.runId);
         const terminal = expectDefined(terminalReplies[index], "launched collector terminal owner");
@@ -293,15 +281,9 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
           terminalReply: { disposition: "visible", text: "collector finished" },
         } as T;
       },
-      dispatchAgent: async () => {
-        throw new Error("Unexpected fixture recovery agent dispatch");
-      },
-      dispatchSessionMethod: async (method) => {
-        throw new Error(`Unexpected fixture recovery session method ${method}`);
-      },
-      sendRecoveryNotice: async () => {
-        throw new Error("Unexpected fixture recovery notice");
-      },
+      dispatchAgent: unexpectedRecovery,
+      dispatchSessionMethod: unexpectedRecovery,
+      sendRecoveryNotice: unexpectedRecovery,
     } satisfies GatewayRecoveryRuntime;
     subagentSpawnTesting.setDepsForTest({
       dispatchGatewayMethodInProcess: async <T>(
@@ -339,20 +321,14 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       expect(parentAdmission).not.toBeNull();
       spawning = parentAdmission!.run(() =>
         inGateway(() => {
-          spawnedWork = [
+          spawnedWork = ["first", "second"].map((order, index) =>
             spawn({
-              task: "first collector",
+              task: `${order} collector`,
               collect: true,
               groupId: "swarm-queued-launch",
-              swarmLaunchReplayKey: "code-mode:agentSpawn:1",
+              swarmLaunchReplayKey: `code-mode:agentSpawn:${index + 1}`,
             }),
-            spawn({
-              task: "second collector",
-              collect: true,
-              groupId: "swarm-queued-launch",
-              swarmLaunchReplayKey: "code-mode:agentSpawn:2",
-            }),
-          ];
+          );
           return Promise.all(spawnedWork);
         }, gatewayContext),
       );

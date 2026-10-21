@@ -329,14 +329,11 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
         source.closeRequest();
         expect(source.holds).toBeGreaterThan(0);
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        const acceptedRunId = expectDefined(childRunId, "accepted child run");
+        const completion = () => subagentRuns.get(acceptedRunId)?.collectorCompletion?.status;
         releaseSwarmRun("host-capacity");
         if (scopes?.length === 0) {
-          await vi.waitFor(() =>
-            expect(
-              subagentRuns.get(expectDefined(childRunId, "accepted child run"))?.collectorCompletion
-                ?.status,
-            ).toBe("failed"),
-          );
+          await vi.waitFor(() => expect(completion()).toBe("failed"));
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           // The queued native launch reaches the real Gateway, which must keep [] exact.
           await expect(settleRootWork(true)).rejects.toMatchObject({
@@ -352,21 +349,10 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           });
           return;
         }
-        await waitForEmbeddedRun(
-          bound,
-          expectDefined(childRunId, "accepted child run"),
-          modelStarted.promise,
-        );
-        expect(
-          subagentRuns.get(expectDefined(childRunId, "accepted child run"))?.execution.status,
-        ).toBe("running");
+        await waitForEmbeddedRun(bound, acceptedRunId, modelStarted.promise);
+        expect(subagentRuns.get(acceptedRunId)?.execution.status).toBe("running");
         finishModel.resolve();
-        await vi.waitFor(() =>
-          expect(
-            subagentRuns.get(expectDefined(childRunId, "accepted child run"))?.collectorCompletion
-              ?.status,
-          ).toBe("done"),
-        );
+        await vi.waitFor(() => expect(completion()).toBe("done"));
         const nextSource = createSpawnOperatorSource();
         try {
           await inReply(nextSource, "followup-run", async () => {
@@ -403,7 +389,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               });
               await expect(
                 nativeSubagentRuntime.collect({
-                  ids: [expectDefined(childRunId, "accepted child run")],
+                  ids: [acceptedRunId],
                   timeoutSeconds: 0,
                 }),
               ).rejects.toThrow("collector denied");
@@ -412,7 +398,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
               resetGlobalHookRunner();
             }
             const result = await nativeSubagentRuntime.collect({
-              ids: [expectDefined(childRunId, "accepted child run")],
+              ids: [acceptedRunId],
               awaitResults: true,
             });
             expect(result).toMatchObject({
