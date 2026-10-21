@@ -212,7 +212,6 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
   let inspectedEntryStatePaths = new Set<string>();
-  let mediaPreparedEntryStateCount = 0;
   let mediaEntryStatePreparationError: Error | undefined;
   const versionMigrationPaths = new Set(
     params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
@@ -278,12 +277,17 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                   }
                 },
               });
-              mediaPreparedEntryStateCount += report.repaired;
-              return true;
+              return {
+                completed: true,
+                changes:
+                  report.repaired > 0
+                    ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+                    : [],
+              };
             } catch (error) {
               mediaEntryStatePreparationError ??=
                 error instanceof Error ? error : new Error(String(error));
-              return false;
+              return { completed: false, changes: [] };
             }
           },
           onPreparedRepairTargets: (targets) => {
@@ -316,11 +320,10 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 sqlitePath: target.path,
               })),
           });
-          const repaired = mediaPreparedEntryStateCount + report.repaired;
           return {
             changes:
-              repaired > 0
-                ? [`Canonicalized entry state for ${repaired} durable session row(s).`]
+              report.repaired > 0
+                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
                 : [],
             warnings: [],
           };

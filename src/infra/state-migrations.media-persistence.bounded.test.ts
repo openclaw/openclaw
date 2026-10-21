@@ -168,8 +168,14 @@ it("keeps entry state outside a precommitted version-only migration", async () =
   ).toBeUndefined();
 });
 
-it("defers entry repair until media recovers a quarantined database", async () => {
-  const stateDir = makeTempDir(tempDirs, "media-bounded-quarantine-");
+it.each([
+  { name: "completes entry and media repair after quarantine recovery", malformedMedia: false },
+  { name: "reports committed entry repair when resumed media refuses", malformedMedia: true },
+])("$name", async ({ malformedMedia }) => {
+  const stateDir = makeTempDir(
+    tempDirs,
+    `media-bounded-quarantine-${malformedMedia ? "refusal" : "success"}-`,
+  );
   const env = { OPENCLAW_STATE_DIR: stateDir };
   openOpenClawStateDatabase({ env });
   const pathname = createLegacyDatabaseFixture({
@@ -200,6 +206,9 @@ it("defers entry repair until media recovers a quarantined database", async () =
         '{"sessionId":"index-original","updatedAt":1,"memoryFlushCompactionCount":2}',
         sessionKey,
       );
+    if (malformedMedia) {
+      database.prepare("UPDATE transcript_events SET event_json = 'not json'").run();
+    }
   }
   const index = "sqlite_autoindex_session_nodes_1";
   corruptSqliteIndexKey(pathname, index, "index-original", "index-damaged!");
@@ -248,18 +257,20 @@ it("defers entry repair until media recovers a quarantined database", async () =
     },
   });
 
-  expect(result.receipts.find((receipt) => receipt.id === "session-entry-state")?.warnings).toEqual(
-    [],
-  );
+  const mediaReceipt = result.receipts.find((receipt) => receipt.id === "media-persistence");
+  const entryReceipt = result.receipts.find((receipt) => receipt.id === "session-entry-state");
   expect(result.receipts).toMatchObject([
     { id: "session-entry-state-preparation", outcome: "skipped" },
-    { id: "media-persistence", outcome: "completed" },
-    { id: "session-entry-state", outcome: "completed" },
+    { id: "media-persistence", outcome: malformedMedia ? "refused" : "completed" },
+    { id: "session-entry-state", outcome: malformedMedia ? "refused" : "skipped" },
   ]);
-  expect(result.sources.flatMap((source) => source.warnings)).toEqual([]);
-  expect(result.sources.flatMap((source) => source.changes)).toContain(
+  expect(mediaReceipt?.changes).toContain(
     `Warning: Rebuilt corrupt agent main SQLite indexes: ${index}. No table rows were removed.`,
   );
+  expect(mediaReceipt?.changes).toContain(
+    "Canonicalized entry state for 1 durable session row(s).",
+  );
+  expect(entryReceipt?.changes).toEqual([]);
   expect(readPersistedQuarantineRow(pathname, { env })).toBeUndefined();
   using database = openNodeSqliteDatabase(pathname, { readOnly: true });
   expect(database.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
@@ -269,6 +280,12 @@ it("defers entry repair until media recovers a quarantined database", async () =
     sessionId: "index-original",
     memoryFlush: { kind: "succeeded", compactionCount: 2 },
   });
+  if (malformedMedia) {
+    expect(mediaReceipt?.warnings).not.toEqual([]);
+    expect(entryReceipt).toMatchObject({ originatingRefusal: { stepId: "media-persistence" } });
+    return;
+  }
+  expect(result.sources.flatMap((source) => source.warnings)).toEqual([]);
   expect(
     database
       .prepare("SELECT 1 FROM schema_meta WHERE meta_key = 'media-persistence-rows-v1'")

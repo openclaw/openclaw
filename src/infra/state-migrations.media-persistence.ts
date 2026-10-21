@@ -494,7 +494,9 @@ export async function migrateLegacyMediaPersistence(
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
     isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
-    prepareSessionEntryState?: (target: AgentDatabaseMigrationTarget) => Promise<boolean>;
+    prepareSessionEntryState?: (
+      target: AgentDatabaseMigrationTarget,
+    ) => Promise<{ completed: boolean; changes: string[] }>;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
@@ -607,7 +609,9 @@ export async function migrateLegacyMediaPersistence(
           // The normal entry writer owns its own maintenance admission and backup.
           // Let the media lease settle before that writer runs, then re-admit media once.
           const preparationWarnings = result.warnings;
-          if (await params.prepareSessionEntryState(entry)) {
+          const preparation = await params.prepareSessionEntryState(entry);
+          changes.push(...preparation.changes);
+          if (preparation.completed) {
             const resumed = await migrateWithLease(true);
             result = {
               ...resumed,
