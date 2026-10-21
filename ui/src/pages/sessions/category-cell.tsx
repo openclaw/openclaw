@@ -39,7 +39,12 @@ export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow
             props.onRequestNewCategory(props.row.key);
             return;
           }
-          props.onAssignCategory(props.row.key, select.value || null);
+          const picked = select.value;
+          // Same contract as the create branch: a pick is a request, so restore the stored
+          // group until the owner publishes a confirmed one. A rejected patch must not leave
+          // the control showing the group the gateway refused.
+          select.value = current();
+          props.onAssignCategory(props.row.key, picked || null);
         }}
       >
         <option value="" selected={!current()}>

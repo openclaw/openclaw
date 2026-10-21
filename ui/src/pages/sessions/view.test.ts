@@ -843,6 +843,62 @@ describe("session category controls", () => {
   });
 });
 
+describe("session selects after a rejected patch", () => {
+  it("keeps the stored group and override instead of the refused pick", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    const onPatch = vi.fn();
+    const result = buildResult({
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      category: "Research",
+      thinkingLevel: "medium",
+    });
+    const overrides = {
+      groupBy: "category" as const,
+      knownCategories: ["Research", "Ops"],
+      expandedSessionKey: "agent:main:main",
+      onAssignCategory,
+      onPatch,
+    };
+    renderView(result, overrides, container);
+    await Promise.resolve();
+
+    const groupSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    );
+    const thinkingSelect = Array.from(
+      container.querySelectorAll<HTMLSelectElement>(".session-override-field select"),
+    ).find(
+      (select) =>
+        select
+          .closest(".session-override-field")
+          ?.querySelector(".session-override-field__label")
+          ?.textContent?.trim() === "Thinking",
+    );
+    if (!groupSelect || !thinkingSelect) {
+      throw new Error("Expected group and thinking selects");
+    }
+    expect(groupSelect.value).toBe("Research");
+    expect(thinkingSelect.value).toBe("medium");
+
+    // The user picks new values. The gateway rejects both, so the page publishes an
+    // error while the rows keep their stored values.
+    groupSelect.value = "Ops";
+    groupSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    thinkingSelect.value = "";
+    thinkingSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Ops");
+    expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: null });
+    renderView(result, { ...overrides, error: "patch failed" }, container);
+    await Promise.resolve();
+
+    expect(groupSelect.value).toBe("Research");
+    expect(thinkingSelect.value).toBe("medium");
+  });
+});
+
 it("preserves the saved ultrafast override until explicitly changed", async () => {
   const key = "agent:main:main";
   const onPatch = vi.fn();

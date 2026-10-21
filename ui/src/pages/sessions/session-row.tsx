@@ -471,7 +471,16 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                           class="settings-select"
                           disabled={props.loading || Boolean(props.patchAdminDisabledReason)}
                           title={props.patchAdminDisabledReason ?? undefined}
-                          onChange={(event) => override().onChange(event.currentTarget.value)}
+                          onChange={(event) => {
+                            const select = event.currentTarget;
+                            const picked = select.value;
+                            // The pick is a request, not stored state: restore the stored value
+                            // until the owner publishes a confirmed one. A rejected
+                            // sessions.patch leaves the control on the value the session
+                            // actually has instead of the one the gateway refused.
+                            select.value = current();
+                            override().onChange(picked);
+                          }}
                         >
                           <For each={choices()} keyed={(option) => option.value}>
                             {(option) => {
