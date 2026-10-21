@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { WorkboardListResult } from "@openclaw/workboard-contract";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -21,31 +22,21 @@ const { default: workboard } = await loadBundledPluginFacade<{
 const { registerWorkboardGatewayMethods } = await loadBundledPluginFacade<{
   registerWorkboardGatewayMethods: (params: { api: OpenClawPluginApi }) => void;
 }>({ pluginId: "workboard", artifactBasename: "runtime-api.js" });
-async function program() {
-  const result = new Command().exitOverride();
-  const registrars: Array<Parameters<OpenClawPluginApi["registerCli"]>[0]> = [];
+async function createProgram() {
+  const program = new Command().exitOverride();
+  const registerCli = vi.fn<OpenClawPluginApi["registerCli"]>();
   const api = createTestPluginApi({
     registrationMode: "cli-metadata",
     runtimeSource,
-    registerCli: (registrar) => {
-      registrars.push(registrar);
-    },
+    registerCli,
   });
   workboard.register(api);
-  for (const registrar of registrars) {
-    await registrar({
-      program: result,
-      parentPath: [],
-      config: fixture.config,
-      logger: api.logger,
-    });
+  for (const [register] of registerCli.mock.calls) {
+    await register({ program, parentPath: [], config: fixture.config, logger: api.logger });
   }
-  return (...args: string[]) => result.parseAsync(["workboard", ...args], { from: "user" });
+  return (...args: string[]) => program.parseAsync(["workboard", ...args], { from: "user" });
 }
-const listCards = async () =>
-  (await invoke("workboard.cards.list", {})) as {
-    cards: Array<{ id: string; status: string; title: string }>;
-  };
+const listCards = async () => (await invoke("workboard.cards.list", {})) as WorkboardListResult;
 async function expectCards(...expected: Record<string, unknown>[]) {
   const { cards } = await listCards();
   expect(cards).toEqual(expected.map((card) => expect.objectContaining(card)));
@@ -71,7 +62,7 @@ async function startOwner(runtime?: OpenClawPluginApi["runtime"]) {
 it("routes Workboard writes to the resident owner and invalidates its warmed list", async () => {
   await startOwner();
   await invoke("workboard.cards.list", {});
-  const cli = await program();
+  const cli = await createProgram();
   await cli("create", "Routed card");
   const id = (await expectCards({ title: "Routed card", status: "todo" }))[0]!.id;
   await cli("move", id, "--status", "review");
@@ -85,7 +76,7 @@ it("routes Workboard writes to the resident owner and invalidates its warmed lis
 
 it("never replays an uncertain Workboard create and rejects revoked authority", async () => {
   await startOwner();
-  const cli = await program();
+  const cli = await createProgram();
   ownerTransport.failReply = true;
   await expect(cli("create", "Accepted once")).rejects.toThrow("No local fallback");
   ownerTransport.failReply = false;
@@ -108,7 +99,7 @@ it.each(["accepted", "rejected"])(
       return { runId: "accepted-run" };
     });
     await startOwner(createPluginRuntimeMock({ subagent: { run } }));
-    const cli = await program();
+    const cli = await createProgram();
     await cli("create", "First", "--status", "ready");
     await cli("create", "Later", "--status", "ready");
     await cli("dispatch", "--admin", "--timeout", "12345");
@@ -130,7 +121,7 @@ it.each(["accepted", "rejected"])(
 );
 
 it("admits CLI metadata without opening SQLite and retains the offline command paths", async () => {
-  const cli = await program();
+  const cli = await createProgram();
   const database = path.join(process.env.OPENCLAW_STATE_DIR!, "plugins/workboard/workboard.sqlite");
   await expect(fs.stat(database)).rejects.toMatchObject({ code: "ENOENT" });
   await cli("create", "Offline card");
