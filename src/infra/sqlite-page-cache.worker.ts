@@ -38,9 +38,11 @@ function readIo() {
   try {
     io = fs.readFileSync("/proc/self/io", "utf8");
   } catch (error) {
+    // Stock WSL kernels ship no CONFIG_TASKSTATS procfs I/O accounting, so the
+    // read fails with ENOENT and warming proceeds with zeroed, unmetered byte
+    // counters instead of aborting every maintenance cycle.
+    // SAFETY: Node filesystem errors expose `code`; only ENOENT is benign here.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      // Stock WSL kernels ship no CONFIG_TASKSTATS procfs I/O accounting.
-      // Warming does not depend on it; byte counters stay zeroed and unmetered.
       return { readBytes: 0, diskBytes: 0 };
     }
     throw error;
