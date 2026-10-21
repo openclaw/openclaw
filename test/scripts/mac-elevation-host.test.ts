@@ -120,6 +120,26 @@ function writeExecutable(filePath: string, contents: string): void {
   chmodSync(filePath, 0o755);
 }
 
+function shellScript(...lines: string[]) {
+  return ["#!/usr/bin/env bash", "set -euo pipefail", ...lines, ""].join("\n");
+}
+
+function cliScript(nodeStatus: string[], prefix: string[] = []) {
+  return shellScript(
+    ...prefix,
+    'case "$*" in',
+    "  *'config get gateway.mode'*) printf '%s\\n' '\"remote\"' ;;",
+    "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
+    "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
+    "  *'config get gateway.remote.password'*) exit 1 ;;",
+    "  'node identity --identity primary --json'|'node identity --identity node --json')",
+    '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
+    ...nodeStatus,
+    "  *) exit 2 ;;",
+    "esac",
+  );
+}
+
 function commandFixturesPath(binDir: string): string {
   return path.join(binDir, "command-fixtures.bash");
 }
@@ -320,6 +340,16 @@ async function installMigration(
   );
 }
 
+async function installedHarness(
+  mac: MacScriptFixture,
+  options: Parameters<typeof createRollbackHarness>[1] = {},
+) {
+  const harness = createRollbackHarness(mac, { launchdBootstrapFails: false, ...options });
+  const installed = await installMigration(mac, harness);
+  expect(installed.status, installed.stderr).toBe(0);
+  return harness;
+}
+
 async function recoverAuthenticated(
   mac: MacScriptFixture,
   harness: ReturnType<typeof createRollbackHarness>,
@@ -415,9 +445,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
   writeCommandFixture(
     binDir,
     "codesign",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'target="${!#}"',
       'if [[ "$*" == *"--verify"* && -e "$target/Contents/invalid-signature" ]]; then',
       "  exit 1",
@@ -438,28 +466,22 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
       "fi",
       "exit 0",
-      "",
-    ].join("\n"),
+    ),
   );
   writeExecutable(
     path.join(binDir, "launchctl"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'if [[ "${1:-}" == "print" && "${2:-}" == */ai.openclaw.mac.elevation-host ]]; then',
       "  printf '%s\\n' '    pid = 4242'",
       "  exit 0",
       "fi",
       "exit 1",
-      "",
-    ].join("\n"),
+    ),
   );
   writeCommandFixture(
     binDir,
     "plutil",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'case "${2:-}" in',
       "  CFBundleIdentifier) printf '%s\\n' 'ai.openclaw.mac' ;;",
       "  OpenClawGitCommit) printf '%040d\\n' 0 ;;",
@@ -473,8 +495,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
       "  RunAtLoad|KeepAlive) printf '%s\\n' 'true' ;;",
       "  *) exit 1 ;;",
       "esac",
-      "",
-    ].join("\n"),
+    ),
   );
   writeLipoFixture(binDir);
   writeCommandFixture(binDir, "pgrep", "#!/bin/sh\nexit 1\n");
@@ -487,9 +508,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
   writeCommandFixture(
     binDir,
     "peekaboo",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'if [[ "${1:-}" == "bridge" ]]; then',
       '  printf \'%s\\n\' \'{"success":true,"data":{"selected":{"handshake":{"hostIdentity":{"processIdentifier":4242}}}}}\'',
       "  exit 0",
@@ -500,8 +519,7 @@ function createStatusHarness(mac: MacScriptFixture, permissionMode: "fail" | "in
       "  exit 0",
       "fi",
       "exit 2",
-      "",
-    ].join("\n"),
+    ),
   );
 
   return {
@@ -562,36 +580,21 @@ function createMigrationPlanHarness(
   writeCommandFixture(
     binDir,
     "launchctl",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       '[[ "${1:-}" == "print" ]] || exit 2',
       'case "$TEST_LAUNCH_STATE" in',
       "  loaded) printf '%s\\n' '    pid = 4242' ; exit 0 ;;",
       "  absent) printf '%s\\n' 'Could not find service in domain' >&2; exit 113 ;;",
       "  error) printf '%s\\n' 'launchctl transport failed' >&2; exit 5 ;;",
       "esac",
-      "",
-    ].join("\n"),
+    ),
   );
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'case "$*" in',
-      "  *'config get gateway.mode'*) printf '%s\\n' '\"remote\"' ;;",
-      "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
-      "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
-      "  *'config get gateway.remote.password'*) exit 1 ;;",
-      "  'node identity --identity primary --json'|'node identity --identity node --json')",
-      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
+    cliScript([
       '  *\'nodes status\'*) printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":false}]}\' ;;',
-      "  *) exit 2 ;;",
-      "esac",
-      "",
-    ].join("\n"),
+    ]),
   );
 
   return {
@@ -655,22 +658,12 @@ function createNodeHarness(mac: MacScriptFixture, nodeId = "fixture-node") {
   chmodSync(wrapperPath, 0o700);
   writeExecutable(
     nodePath,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      "shift",
-      'case "$*" in',
-      "  *'config get gateway.mode'*) printf '%s\\n' '\"remote\"' ;;",
-      "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
-      "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
-      "  *'config get gateway.remote.password'*) exit 1 ;;",
-      "  'node identity --identity primary --json'|'node identity --identity node --json')",
-      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
-      '  *\'nodes status\'*) printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":true,"connectedAtMs":10}]}\' ;;',
-      "  *) exit 2 ;;",
-      "esac",
-      "",
-    ].join("\n"),
+    cliScript(
+      [
+        '  *\'nodes status\'*) printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":true,"connectedAtMs":10}]}\' ;;',
+      ],
+      ["shift"],
+    ),
   );
   writeFileSync(
     plistPath,
@@ -868,9 +861,7 @@ function createArtifactHarness(mac: MacScriptFixture) {
   writeCommandFixture(
     binDir,
     "ditto",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       ': >"$TEST_DITTO_MARKER"',
       'if [[ "$#" == "2" ]]; then',
       '  /usr/bin/ditto "$1" "$2"',
@@ -974,15 +965,12 @@ function createArtifactHarness(mac: MacScriptFixture) {
       "  none) ;;",
       "  *) exit 64 ;;",
       "esac",
-      "",
-    ].join("\n"),
+    ),
   );
   writeCommandFixture(
     binDir,
     "codesign",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'target="${!#}"',
       'if [[ "$*" == *"--verify"* && "$*" == *"--all-architectures"* && "${TEST_ROLLBACK_NON_NATIVE_SIGNATURE_INVALID:-0}" == "1" && -e "$target/Contents/old-fixture" ]]; then',
       "  exit 1",
@@ -1028,8 +1016,7 @@ function createArtifactHarness(mac: MacScriptFixture) {
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
       "fi",
       "exit 0",
-      "",
-    ].join("\n"),
+    ),
   );
   writeArtifactFileFixture(binDir);
   writeLipoFixture(binDir);
@@ -1242,9 +1229,7 @@ function createRollbackHarness(
     writeCommandFixture(
       binDir,
       "shasum",
-      [
-        "#!/usr/bin/env bash",
-        "set -euo pipefail",
+      shellScript(
         'target="${!#}"',
         'if [[ "$target" == */openclaw-elevation.*/OpenClaw.app/Contents/MacOS/OpenClaw ]]; then',
         '  if [[ -e "$TEST_RENAME_HELPER_HASH_MARKER" ]]; then',
@@ -1255,16 +1240,13 @@ function createRollbackHarness(
         "  fi",
         "fi",
         'exec /usr/bin/shasum "$@"',
-        "",
-      ].join("\n"),
+      ),
     );
   }
   writeCommandFixture(
     binDir,
     "pgrep",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'state="$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")"',
       'if [[ "$TEST_FAIL_PGREP_INSPECTION" == "1" && "$state" == "source-absent" ]]; then',
       "  exit 7",
@@ -1283,26 +1265,20 @@ function createRollbackHarness(
       "  exit 0",
       "fi",
       "exit 1",
-      "",
-    ].join("\n"),
+    ),
   );
   writeExecutable(
     path.join(binDir, "lsof"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       '[[ "$TEST_FAIL_LSOF_INSPECTION" != "1" ]] || exit 7',
       `printf '%s\\n' p777777 n${JSON.stringify(path.join(appPath, "Contents", "MacOS", "OpenClaw"))}`,
-      "",
-    ].join("\n"),
+    ),
   );
   writeCommandFixture(binDir, "sleep", "#!/bin/sh\nexit 0\n");
   writeCommandFixture(
     binDir,
     "mv",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'destination="${!#}"',
       'if [[ "$TEST_SIGNAL_DURING_CUSTODY" == "1" && "$destination" == *.custody.* ]]; then',
       '  /bin/mv "$@"',
@@ -1328,36 +1304,23 @@ function createRollbackHarness(
       "  exit 7",
       "fi",
       'exec /bin/mv "$@"',
-      "",
-    ].join("\n"),
+    ),
   );
   writeCommandFixture(
     binDir,
     "cp",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'destination="${!#}"',
       'if [[ "$TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY" == "1" && "$destination" == *elevation-host-install.json.restore.* ]]; then',
       "  printf '%s\\n' partial >\"$destination\"",
       "  exit 7",
       "fi",
       'exec /bin/cp "$@"',
-      "",
-    ].join("\n"),
+    ),
   );
   writeExecutable(
     path.join(binDir, "openclaw"),
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'case "$*" in',
-      "  *'config get gateway.mode'*) printf '%s\\n' '\"remote\"' ;;",
-      "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
-      "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
-      "  *'config get gateway.remote.password'*) exit 1 ;;",
-      "  'node identity --identity primary --json'|'node identity --identity node --json')",
-      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
+    cliScript([
       "  *'nodes status'*)",
       '    state="$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")"',
       '    if [[ "$state" == "elevation-loaded" ]]; then',
@@ -1367,17 +1330,12 @@ function createRollbackHarness(
       "    else",
       '      printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":true,"connectedAtMs":10}]}\'',
       "    fi ;;",
-      "  *) exit 2 ;;",
-      "esac",
-      "",
-    ].join("\n"),
+    ]),
   );
   writeCommandFixture(
     binDir,
     "launchctl",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'command_name="${1:-}"',
       'target="${2:-}"',
       'state="$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")"',
@@ -1461,8 +1419,7 @@ function createRollbackHarness(
       "  fi",
       "fi",
       "exit 0",
-      "",
-    ].join("\n"),
+    ),
     // This shim sends SIGKILL to its actual installer parent.
     Boolean(
       options.killDuringMigrationRestoreBootstrapOnce ||
@@ -1472,9 +1429,7 @@ function createRollbackHarness(
   writeCommandFixture(
     binDir,
     "peekaboo",
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
+    shellScript(
       'if [[ "${1:-}" == "bridge" ]]; then',
       '  if [[ "${TEST_REMOVE_INSTALLED_EXECUTABLE_AFTER_READINESS:-0}" == "1" ]]; then',
       '    rm -f "$TEST_INSTALLED_APP_PATH/Contents/MacOS/OpenClaw"',
@@ -1487,8 +1442,7 @@ function createRollbackHarness(
       "  exit 0",
       "fi",
       "exit 2",
-      "",
-    ].join("\n"),
+    ),
   );
   writeCommandFixture(
     binDir,
@@ -1646,8 +1600,7 @@ describe("mac elevation host command contract", () => {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe(fields[key]);
       } else {
-        expect(result.status).toBe(1);
-        expect(result.stdout).toBe("");
+        expect(result).toMatchObject({ status: 1, stdout: "" });
       }
     }),
   );
@@ -1664,9 +1617,7 @@ describe("mac elevation host command contract", () => {
       const codesign = path.join(binDir, "codesign");
       writeExecutable(
         codesign,
-        [
-          "#!/usr/bin/env bash",
-          "set -euo pipefail",
+        shellScript(
           "printf '%s\\n' 'Format=app bundle with Mach-O universal (x86_64 arm64)' 'CodeDirectory v=20400' >&2",
           "printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
           "printf '%s\\n' 'Authority=Developer ID Certification Authority' >&2",
@@ -1680,8 +1631,7 @@ describe("mac elevation host command contract", () => {
           "fi",
           "for _ in $(seq 1 10000); do printf '%s\\n' 'Padding=0123456789abcdef' >&2; done",
           '[[ "${CODESIGN_FAIL_AFTER_OUTPUT:-0}" != "1" ]] || exit 7',
-          "",
-        ].join("\n"),
+        ),
       );
       const script = readFileSync(scriptPath, "utf8");
       const start = script.indexOf("codesign_metadata_value() {");
@@ -1713,8 +1663,7 @@ describe("mac elevation host command contract", () => {
       ]);
 
       const failed = await run('codesign_value_for_arch "$1" CDHash arm64', true);
-      expect(failed.status).toBe(7);
-      expect(failed.stdout).toBe("");
+      expect(failed).toMatchObject({ status: 7, stdout: "" });
     }));
 
   it.concurrent("keeps the elevation service separate and fail-closed", async ({ mac }) =>
@@ -2362,13 +2311,10 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "never restores a CUA-bearing current elevation job after explicit recovery fails",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, {
+      const harness = await installedHarness(mac, {
         currentCuaSignatureInvalid: true,
-        launchdBootstrapFails: false,
         migrationRestoreBootstrapFails: true,
       });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
       const currentReceipt = readFileSync(harness.installReceiptPath, "utf8");
       const resources = path.join(harness.appPath, "Contents", "Resources");
       mkdirSync(resources, { recursive: true });
@@ -2736,9 +2682,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "rejects managed upgrades that change the recorded config or node profile",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
 
       const mismatchedConfig = await runManagedInstall(
         mac,
@@ -2878,12 +2822,9 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "fails closed when a durable recovery binding cannot be read",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, {
+      const harness = await installedHarness(mac, {
         killDuringMigrationRestoreBootstrapOnce: true,
-        launchdBootstrapFails: false,
       });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
       const recoveryArgs = ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir];
       const interrupted = await runInstaller(mac, harness.installerPath, recoveryArgs, harness.env);
       expect(interrupted.signal).toBe("SIGKILL");
@@ -2905,9 +2846,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "rejects a symlinked current app before recovery mutation",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
       const installReceiptPath = harness.installReceiptPath;
       const receiptContents = readFileSync(installReceiptPath, "utf8");
       const backupPath = (JSON.parse(receiptContents) as { backupPath: string }).backupPath;
@@ -2931,12 +2870,7 @@ describe("mac elevation host command contract", () => {
     "preserves concurrent replacement during damaged-app custody: %s",
     async (failure, { mac }) =>
       mac.lifetime.run(async () => {
-        const harness = createRollbackHarness(mac, {
-          launchdBootstrapFails: false,
-          [failure]: true,
-        });
-        const installed = await installMigration(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
+        const harness = await installedHarness(mac, { [failure]: true });
         const receiptContents = readFileSync(harness.installReceiptPath, "utf8");
         const backupPath = (JSON.parse(receiptContents) as { backupPath: string }).backupPath;
         rmSync(path.join(harness.appPath, "Contents", "Info.plist"));
@@ -2973,12 +2907,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "reverses a failed recovery back to an initially missing current app",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, {
-        launchdBootstrapFails: false,
-        migrationRestoreBootstrapFails: true,
-      });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac, { migrationRestoreBootstrapFails: true });
       const installReceiptPath = harness.installReceiptPath;
       const receiptContents = readFileSync(installReceiptPath, "utf8");
       const backupPath = (JSON.parse(receiptContents) as { backupPath: string }).backupPath;
@@ -3007,13 +2936,10 @@ describe("mac elevation host command contract", () => {
     "preserves concurrent migration replacement during failed-recovery reversal: %s",
     async (failure, { mac }) =>
       mac.lifetime.run(async () => {
-        const harness = createRollbackHarness(mac, {
-          launchdBootstrapFails: false,
+        const harness = await installedHarness(mac, {
           migrationRestoreBootstrapFails: true,
           [failure]: true,
         });
-        const installed = await installMigration(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
         const receiptContents = readFileSync(harness.installReceiptPath, "utf8");
         const currentBinary = readFileSync(harness.appBinary);
         const recovered = await recover(mac, harness);
@@ -3044,9 +2970,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "refuses recovery before mutation when process inspection tools are unavailable",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
       const binDir = path.join(harness.env.HOME, "bin");
       rmSync(path.join(binDir, "lsof"));
       const jqPath = (
@@ -3072,9 +2996,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "preserves recovery custody across uninstall until explicit recovery",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
       const installReceiptPath = harness.installReceiptPath;
 
       const uninstalled = await runHost(mac, harness, "uninstall");
@@ -3151,9 +3073,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "recovers a migrated source owner when no prior app existed",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
       const installReceiptPath = harness.installReceiptPath;
       const receipt = JSON.parse(readFileSync(installReceiptPath, "utf8")) as {
         backupCDHashes: { arm64: string; x86_64: string };
@@ -3179,13 +3099,10 @@ describe("mac elevation host command contract", () => {
     "preserves the current generation after failed recovery (receipt copy failure: %s)",
     async (failCurrentReceiptRestoreCopy, { mac }) =>
       mac.lifetime.run(async () => {
-        const harness = createRollbackHarness(mac, {
+        const harness = await installedHarness(mac, {
           failCurrentReceiptRestoreCopy,
-          launchdBootstrapFails: false,
           migrationRestoreBootstrapFails: true,
         });
-        const installed = await installMigration(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
         const currentReceipt = readFileSync(harness.installReceiptPath, "utf8");
         const currentBinary = readFileSync(harness.appBinary);
         const rollbackPath = (JSON.parse(currentReceipt) as { backupPath: string }).backupPath;
@@ -3220,9 +3137,7 @@ describe("mac elevation host command contract", () => {
     "refuses recovery before mutation with a %s backup",
     async ([kind, diagnostic], { mac }) =>
       mac.lifetime.run(async () => {
-        const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-        const installed = await installMigration(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
+        const harness = await installedHarness(mac);
         const currentReceipt = readFileSync(harness.installReceiptPath, "utf8");
         const currentBinary = readFileSync(harness.appBinary);
         const receipt = JSON.parse(currentReceipt) as {
@@ -3336,9 +3251,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "inherits legacy managed-upgrade config from the installed elevation plist",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
       const installReceiptPath = harness.installReceiptPath;
       const currentReceipt = JSON.parse(readFileSync(installReceiptPath, "utf8")) as Record<
         string,
@@ -3393,9 +3306,7 @@ describe("mac elevation host command contract", () => {
           expect(restoreBody).toContain('/bin/link "$restore_tmp" "$destination"');
           expect(restoreBody).not.toContain('ln "$restore_tmp" "$destination"');
         }
-        const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-        const installed = await installMigration(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
+        const harness = await installedHarness(mac);
         const installedBinary = readFileSync(harness.appBinary);
         if (kind === "file") {
           writeFileSync(harness.sourcePlist, "replacement owner\n", "utf8");
@@ -3415,9 +3326,7 @@ describe("mac elevation host command contract", () => {
   it.skipIf(process.platform !== "darwin").concurrent(
     "rejects a receipt backup path that lexically escapes the canonical state directory",
     withMac(async (mac) => {
-      const harness = createRollbackHarness(mac, { launchdBootstrapFails: false });
-      const installed = await installMigration(mac, harness);
-      expect(installed.status, installed.stderr).toBe(0);
+      const harness = await installedHarness(mac);
 
       const installReceiptPath = harness.installReceiptPath;
       const installReceipt = JSON.parse(readFileSync(installReceiptPath, "utf8")) as {
@@ -3672,8 +3581,7 @@ describe("mac elevation host command contract", () => {
         `${appPath}/Contents/MacOS/OpenClaw`,
         "--elevation-host",
       ]);
-      expect(plist.RunAtLoad).toBe(true);
-      expect(plist.KeepAlive).toBe(true);
+      expect(plist).toMatchObject({ RunAtLoad: true, KeepAlive: true });
       expect(plist.EnvironmentVariables).toMatchObject({
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_STATE_DIR: stateDir,
