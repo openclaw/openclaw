@@ -173,12 +173,11 @@ overrides:
   '@codemirror/commands@6.11.1>@codemirror/view': 6.43.14
   '@codemirror/view@6.43.14>@codemirror/state': 6.7.6
   '@anthropic-ai/sdk': 0.133.0
-  '@anthropic-ai/vertex-sdk@0.20.4>google-auth-library': 11.2.0
+  '@anthropic-ai/vertex-sdk@0.20.4>google-auth-library': 11.3.0
   '@opentelemetry/core': 2.12.0
   '@opentelemetry/propagator-jaeger': 2.12.0
-  '@solidjs/vite-plugin@3.0.0-next.49>@solidjs/babel-plugin': 2.0.0-rc.14
-  '@aws-sdk/core': 3.978.2
-  '@aws-sdk/credential-provider-node': 3.972.85
+  '@aws-sdk/core': 3.978.3
+  '@aws-sdk/credential-provider-node': 3.972.86
   '@aws-sdk/xml-builder': 3.972.41
   '@hono/node-server': 2.1.4
   axios: 1.20.0
@@ -199,7 +198,7 @@ overrides:
   proxy-addr: 2.0.8
   qs: 6.16.0
   node-domexception: npm:@nolyfill/domexception@1.0.28
-  typebox: 1.3.36
+  typebox: 1.3.37
   tar: 7.5.22
   tough-cookie: 6.0.2
   tsdown>rolldown-plugin-dts: 0.28.8
@@ -209,7 +208,7 @@ overrides:
   protobufjs: 8.8.1
   uuid: 14.0.3
 
-packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
+packageExtensionsChecksum: sha256-+aaViXQWMTYboC/2zljN8mTDYzt1x2ZpXFjRkJd9Eys=
 
 patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
@@ -225,10 +224,10 @@ importers:
     dependencies:
       '@agentclientprotocol/sdk':
         specifier: 1.8.0
-        version: 1.8.0(zod@4.6.6)
+        version: 1.8.0(zod@4.6.7)
       '@anthropic-ai/sdk':
         specifier: 0.133.0
-        version: 0.133.0(zod@4.6.6)
+        version: 0.133.0(zod@4.6.7)
       '@babel/generator':
         specifier: 8.0.6
         version: 8.0.6
@@ -245,11 +244,11 @@ importers:
         specifier: 1.8.1
         version: 1.8.1
       '@earendil-works/pi-tui':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.2.0
+        version: 1.2.0
       '@google/genai':
         specifier: 2.28.0
-        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(supports-color@10.2.2)
+        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(supports-color@10.2.2)
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
@@ -270,7 +269,7 @@ importers:
         version: 2.1.1(@modelcontextprotocol/server@2.3.1)
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(supports-color@10.2.2)(zod@4.6.6)
+        version: 1.32.1(supports-color@10.2.2)(zod@4.6.7)
       '@modelcontextprotocol/server':
         specifier: 2.3.1
         version: 2.3.1
@@ -390,7 +389,10 @@ importers:
         version: 12.2.0
       openai:
         specifier: 7.32.0
-        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.85)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.6)
+        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7)
+      openid-client:
+        specifier: 6.8.8
+        version: 6.8.8
       p-limit:
         specifier: 7.3.3
         version: 7.3.3
@@ -425,8 +427,8 @@ importers:
         specifier: 5.2.0
         version: 5.2.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       undici:
         specifier: 8.11.2
         version: 8.11.2
@@ -443,15 +445,12 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
       zod-to-json-schema:
         specifier: 3.25.2
-        version: 3.25.2(zod@4.6.6)
+        version: 3.25.2(zod@4.6.7)
     devDependencies:
-      '@a2ui/lit':
-        specifier: 0.13.0
-        version: 0.13.0(signal-polyfill@0.2.2)
       '@a2ui/web_core':
         specifier: 0.13.0
         version: 0.13.0
@@ -459,8 +458,8 @@ importers:
         specifier: 8.0.6
         version: 8.0.6
       '@copilotkit/aimock':
-        specifier: 1.45.0
-        version: 1.45.0(vitest@5.0.3)
+        specifier: 1.45.1
+        version: 1.45.1(vitest@5.0.3)
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
@@ -528,8 +527,8 @@ importers:
         specifier: 5.0.3
         version: 5.0.3(@vitest/browser@5.0.3)(vitest@5.0.3)
       acpx:
-        specifier: 0.19.4
-        version: 0.19.4
+        specifier: 0.19.5
+        version: 0.19.5
       apache-arrow:
         specifier: 21.2.0
         version: 21.2.0
@@ -552,14 +551,14 @@ importers:
         specifier: 10.0.0
         version: 10.0.0(@types/markdown-it@14.2.0)(markdown-it@15.0.2)
       marked:
-        specifier: 18.1.0
-        version: 18.1.0
+        specifier: 18.1.1
+        version: 18.1.1
       minipass:
         specifier: 7.1.3
         version: 7.1.3
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20261011.1)
+        version: 2.25.2(typescript@7.1.0-dev.20261012.1)
       oxfmt:
         specifier: 0.72.0
         version: 0.72.0
@@ -576,8 +575,8 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       postcss:
-        specifier: 8.5.29
-        version: 8.5.29
+        specifier: 8.5.30
+        version: 8.5.30
       postcss-selector-parser:
         specifier: 7.1.6
         version: 7.1.6
@@ -595,10 +594,10 @@ importers:
         version: 8.3.0
       stylelint:
         specifier: 17.16.0
-        version: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261011.1)
+        version: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261012.1)
       stylelint-config-recommended:
         specifier: 18.0.0
-        version: 18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261011.1))
+        version: 18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261012.1))
       tinyglobby:
         specifier: 0.2.17
         version: 0.2.17
@@ -607,7 +606,7 @@ importers:
         version: 0.25.1
       tsdown:
         specifier: 0.23.1
-        version: 0.23.1(tsx@4.23.15)(typescript@7.1.0-dev.20261011.1)(unrun@0.3.1)
+        version: 0.23.1(tsx@4.23.15)(typescript@7.1.0-dev.20261012.1)(unrun@0.3.1)
       tsrs:
         specifier: 0.16.0-ts7.1.0-dev.20260929
         version: 0.16.0-ts7.1.0-dev.20260929
@@ -615,8 +614,8 @@ importers:
         specifier: 4.23.15
         version: 4.23.15
       typescript:
-        specifier: 7.1.0-dev.20261011.1
-        version: 7.1.0-dev.20261011.1
+        specifier: 7.1.0-dev.20261012.1
+        version: 7.1.0-dev.20261012.1
       unrun:
         specifier: 0.3.1
         version: 0.3.1
@@ -640,8 +639,8 @@ importers:
   extensions/a2a:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -654,7 +653,7 @@ importers:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':
         specifier: 0.89.1
-        version: 0.89.1(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))
+        version: 0.89.1(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))
       '@agentclientprotocol/codex-acp':
         specifier: 2.2.2
         version: 2.2.2
@@ -662,14 +661,14 @@ importers:
         specifier: 0.26.8
         version: 0.26.8
       acpx:
-        specifier: 0.19.4
-        version: 0.19.4
+        specifier: 0.19.5
+        version: 0.19.5
       smol-toml:
         specifier: 1.9.1
         version: 1.9.1
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -697,10 +696,10 @@ importers:
     dependencies:
       openai:
         specifier: 7.32.0
-        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.85)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.6)
+        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7)
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -715,14 +714,14 @@ importers:
   extensions/amazon-bedrock:
     dependencies:
       '@aws-sdk/client-bedrock':
-        specifier: 3.1149.0
-        version: 3.1149.0
+        specifier: 3.1150.0
+        version: 3.1150.0
       '@aws-sdk/client-bedrock-runtime':
-        specifier: 3.1149.0
-        version: 3.1149.0
+        specifier: 3.1150.0
+        version: 3.1150.0
       '@aws-sdk/credential-provider-node':
-        specifier: 3.972.85
-        version: 3.972.85
+        specifier: 3.972.86
+        version: 3.972.86
       '@smithy/node-http-handler':
         specifier: 4.12.1
         version: 4.12.1
@@ -738,7 +737,7 @@ importers:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: 0.133.0
-        version: 0.133.0(zod@4.6.6)
+        version: 0.133.0(zod@4.6.7)
       '@aws/bedrock-token-generator':
         specifier: 1.1.0
         version: 1.1.0
@@ -757,10 +756,10 @@ importers:
     dependencies:
       '@anthropic-ai/vertex-sdk':
         specifier: 0.20.4
-        version: 0.20.4(supports-color@10.2.2)(zod@4.6.6)
+        version: 0.20.4(supports-color@10.2.2)(zod@4.6.7)
       google-auth-library:
-        specifier: 11.2.0
-        version: 11.2.0(supports-color@10.2.2)
+        specifier: 11.3.0
+        version: 11.3.0(supports-color@10.2.2)
       undici:
         specifier: 8.11.2
         version: 8.11.2
@@ -772,8 +771,8 @@ importers:
   extensions/apple-fm:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -788,8 +787,8 @@ importers:
   extensions/autoreview:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -808,6 +807,12 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/beam:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/bifrost:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -844,18 +849,18 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       yargs-parser:
         specifier: 22.0.0
         version: 22.0.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(supports-color@10.2.2)(zod@4.6.6)
+        version: 1.32.1(supports-color@10.2.2)(zod@4.6.7)
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -870,10 +875,10 @@ importers:
     dependencies:
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20261011.1)
+        version: 2.25.2(typescript@7.1.0-dev.20261012.1)
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -890,31 +895,31 @@ importers:
 
   extensions/canvas:
     dependencies:
-      '@a2ui/lit':
-        specifier: 0.13.0
-        version: 0.13.0(signal-polyfill@0.2.2)
       '@a2ui/web_core':
         specifier: 0.13.0
         version: 0.13.0
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
-      signal-utils:
-        specifier: 0.21.1
-        version: 0.21.1(signal-polyfill@0.2.2)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+      dompurify:
+        specifier: 3.4.17
+        version: 3.4.17
+      marked:
+        specifier: 18.1.1
+        version: 18.1.1
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
 
   extensions/cerebras:
     devDependencies:
@@ -931,30 +936,27 @@ importers:
   extensions/clawrouter:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
 
   extensions/clickclack:
     dependencies:
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -962,12 +964,15 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
 
   extensions/cloudflare:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: 3.1149.0
-        version: 3.1149.0
+        specifier: 3.1150.0
+        version: 3.1150.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1004,14 +1009,14 @@ importers:
         specifier: 1.9.1
         version: 1.9.1
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       ws:
         specifier: 8.22.0
         version: 8.22.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1032,8 +1037,8 @@ importers:
   extensions/copilot:
     dependencies:
       '@github/copilot-sdk':
-        specifier: 1.0.19
-        version: 1.0.19
+        specifier: 1.0.20
+        version: 1.0.20
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1063,8 +1068,8 @@ importers:
         specifier: 0.4.0
         version: 0.4.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1155,11 +1160,11 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1189,8 +1194,8 @@ importers:
         specifier: 2.1.0
         version: 2.1.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       undici:
         specifier: 8.11.2
         version: 8.11.2
@@ -1198,8 +1203,8 @@ importers:
         specifier: 8.22.0
         version: 8.22.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1239,8 +1244,8 @@ importers:
   extensions/facetime:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1264,8 +1269,8 @@ importers:
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
-        specifier: 1.74.0
-        version: 1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
+        specifier: 1.75.0
+        version: 1.75.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       mdast-util-from-markdown:
         specifier: 2.1.0
         version: 2.1.0(supports-color@10.2.2)
@@ -1276,11 +1281,11 @@ importers:
         specifier: 2.1.2
         version: 2.1.2
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1298,8 +1303,8 @@ importers:
         specifier: 10.2.6
         version: 10.2.6
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1308,8 +1313,8 @@ importers:
   extensions/firecrawl:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1359,13 +1364,13 @@ importers:
     dependencies:
       '@google/genai':
         specifier: 2.28.0
-        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(supports-color@10.2.2)
+        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(supports-color@10.2.2)
       dotenv:
         specifier: 18.0.7
         version: 18.0.7
       google-auth-library:
-        specifier: 11.2.0
-        version: 11.2.0(supports-color@10.2.2)
+        specifier: 11.3.0
+        version: 11.3.0(supports-color@10.2.2)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1377,8 +1382,8 @@ importers:
         specifier: 3.10.2
         version: 3.10.2
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1390,11 +1395,11 @@ importers:
   extensions/googlechat:
     dependencies:
       google-auth-library:
-        specifier: 11.2.0
-        version: 11.2.0(supports-color@10.2.2)
+        specifier: 11.3.0
+        version: 11.3.0(supports-color@10.2.2)
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1449,11 +1454,11 @@ importers:
   extensions/imessage:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1471,8 +1476,8 @@ importers:
   extensions/irc:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1508,11 +1513,11 @@ importers:
         specifier: 11.3.0
         version: 11.3.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1524,8 +1529,8 @@ importers:
   extensions/linux-node:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1550,8 +1555,8 @@ importers:
   extensions/llm-task:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1565,8 +1570,8 @@ importers:
         specifier: 2026.9.16
         version: 2026.9.16
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1608,14 +1613,14 @@ importers:
         specifier: 43.0.0
         version: 43.0.0(patch_hash=c3ad7f3afbd9ded4643fbfa31f5862d48d4e05d198cb438efbb4fcdaa845b0cc)
       music-metadata:
-        specifier: 12.1.1
-        version: 12.1.1(supports-color@10.2.2)
+        specifier: 12.2.0
+        version: 12.2.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1627,8 +1632,8 @@ importers:
   extensions/mattermost:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1655,8 +1660,8 @@ importers:
         specifier: 0.26.8
         version: 0.26.8
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1667,18 +1672,18 @@ importers:
         specifier: 7.3.3
         version: 7.3.3
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -1693,10 +1698,10 @@ importers:
         version: 21.2.0
       openai:
         specifier: 7.32.0
-        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.85)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.6)
+        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@lancedb/lancedb':
         specifier: 0.40.0
@@ -1733,14 +1738,14 @@ importers:
         specifier: 2.1.0
         version: 2.1.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       yaml:
         specifier: 2.9.1
         version: 2.9.1
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/memory-core':
         specifier: workspace:*
@@ -1836,11 +1841,11 @@ importers:
         specifier: 5.3.0
         version: 5.3.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@microsoft/teams.common':
         specifier: 2.1.0
@@ -1858,8 +1863,8 @@ importers:
   extensions/muse:
     dependencies:
       '@muse-code/sdk':
-        specifier: 1.4.4
-        version: 1.4.4(@types/node@26.6.5)
+        specifier: 1.4.7
+        version: 1.4.7(@types/node@26.6.5)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1871,8 +1876,8 @@ importers:
         specifier: 0.9.0
         version: 0.9.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1884,8 +1889,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1897,24 +1902,24 @@ importers:
   extensions/nostr:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       nostr-tools:
         specifier: 2.25.2
-        version: 2.25.2(typescript@7.1.0-dev.20261011.1)
+        version: 2.25.2(typescript@7.1.0-dev.20261012.1)
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -1959,8 +1964,8 @@ importers:
   extensions/ollama:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1984,8 +1989,8 @@ importers:
         specifier: 0.2.0
         version: 0.2.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2010,8 +2015,8 @@ importers:
         specifier: 8.22.0
         version: 8.22.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2044,8 +2049,8 @@ importers:
         specifier: 7.3.3
         version: 7.3.3
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2088,11 +2093,11 @@ importers:
   extensions/qa-channel:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2104,8 +2109,8 @@ importers:
   extensions/qa-lab:
     dependencies:
       '@copilotkit/aimock':
-        specifier: 1.45.0
-        version: 1.45.0(vitest@5.0.3)
+        specifier: 1.45.1
+        version: 1.45.1(vitest@5.0.3)
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
@@ -2131,12 +2136,12 @@ importers:
         specifier: 2.9.1
         version: 2.9.1
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.1
-        version: 1.32.1(supports-color@10.2.2)(zod@4.6.6)
+        version: 1.32.1(supports-color@10.2.2)(zod@4.6.7)
       '@openclaw/crabbox-provider':
         specifier: workspace:*
         version: link:../crabbox
@@ -2186,8 +2191,8 @@ importers:
   extensions/raft:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2208,8 +2213,8 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2251,8 +2256,8 @@ importers:
         specifier: 0.26.8
         version: 0.26.8
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2273,14 +2278,14 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       undici:
         specifier: 8.11.2
         version: 8.11.2
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2301,8 +2306,8 @@ importers:
   extensions/sms:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2323,8 +2328,8 @@ importers:
   extensions/synology-chat:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2339,8 +2344,8 @@ importers:
   extensions/tavily:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2349,8 +2354,8 @@ importers:
   extensions/team-reports:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2380,14 +2385,14 @@ importers:
         specifier: 1.46.0
         version: 1.46.0(supports-color@10.2.2)
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       undici:
         specifier: 8.11.2
         version: 8.11.2
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2405,11 +2410,11 @@ importers:
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: 3.1149.0
-        version: 3.1149.0
+        specifier: 3.1150.0
+        version: 3.1150.0
       '@aws-sdk/s3-request-presigner':
-        specifier: 3.1149.0
-        version: 3.1149.0
+        specifier: 3.1150.0
+        version: 3.1150.0
       '@tloncorp/tlon-skill':
         specifier: 0.7.0
         version: 0.7.0
@@ -2417,8 +2422,8 @@ importers:
         specifier: 3.0.0
         version: 3.0.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2464,8 +2469,8 @@ importers:
         specifier: 8.2.0
         version: 8.2.0(@twurple/auth@8.2.0)
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2474,8 +2479,8 @@ importers:
   extensions/typesafe:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2502,11 +2507,11 @@ importers:
   extensions/visitor-access:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2521,11 +2526,11 @@ importers:
   extensions/voice-call:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2568,8 +2573,8 @@ importers:
   extensions/whatsapp:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       audio-decode:
         specifier: 3.12.0
         version: 3.12.0
@@ -2577,18 +2582,18 @@ importers:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -2605,17 +2610,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/workboard-contract
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/gateway-client':
         specifier: workspace:*
@@ -2627,8 +2632,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -2639,27 +2644,27 @@ importers:
   extensions/x:
     dependencies:
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       linkify-it:
         specifier: 6.1.0
         version: 6.1.0
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       tlds:
         specifier: 1.261.0
         version: 1.261.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -2670,8 +2675,8 @@ importers:
   extensions/xai:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       ws:
         specifier: 8.22.0
         version: 8.22.0
@@ -2695,8 +2700,8 @@ importers:
   extensions/zalo:
     dependencies:
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2708,14 +2713,14 @@ importers:
   extensions/zalouser:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zca-js:
         specifier: 2.2.0
         version: 2.2.0
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2751,17 +2756,17 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
 
   packages/ai:
     dependencies:
       '@anthropic-ai/sdk':
         specifier: 0.133.0
-        version: 0.133.0(zod@4.6.6)
+        version: 0.133.0(zod@4.6.7)
       '@google/genai':
         specifier: 2.28.0
-        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(supports-color@10.2.2)
+        version: 2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(supports-color@10.2.2)
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.1
@@ -2779,19 +2784,19 @@ importers:
         version: 1.43.0
       openai:
         specifier: 7.32.0
-        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.85)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.6)
+        version: 7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7)
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
       zod-to-json-schema:
         specifier: 3.25.2
-        version: 3.25.2(zod@4.6.6)
+        version: 3.25.2(zod@4.6.7)
     devDependencies:
       '@mistralai/mistralai':
         specifier: 2.7.0
@@ -2822,8 +2827,8 @@ importers:
   packages/gateway-protocol:
     dependencies:
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
     devDependencies:
       '@openclaw/normalization-core':
         specifier: workspace:*
@@ -2838,8 +2843,8 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
 
   packages/markdown-core:
     dependencies:
@@ -2904,8 +2909,8 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       dompurify:
-        specifier: 3.4.16
-        version: 3.4.16
+        specifier: 3.4.17
+        version: 3.4.17
       mermaid:
         specifier: 12.1.0
         version: 12.1.0
@@ -2920,8 +2925,8 @@ importers:
         specifier: workspace:*
         version: link:../normalization-core
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
 
   packages/net-policy:
     dependencies:
@@ -2938,8 +2943,8 @@ importers:
         specifier: 1.13.15
         version: 1.13.15
       typebox:
-        specifier: 1.3.36
-        version: 1.3.36
+        specifier: 1.3.37
+        version: 1.3.37
 
   packages/plugin-package-contract: {}
 
@@ -3041,7 +3046,7 @@ importers:
         version: 2.3.1
       '@modelcontextprotocol/ext-apps':
         specifier: 2.0.3
-        version: 2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1)(zod@4.6.6)
+        version: 2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1)(zod@4.6.7)
       '@noble/ed25519':
         specifier: 3.2.0
         version: 3.2.0
@@ -3088,14 +3093,14 @@ importers:
         specifier: 4.6.2
         version: 4.6.2
       '@solidjs/signals':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       '@solidjs/web':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       '@tanstack/virtual-core':
-        specifier: 3.19.0
-        version: 3.19.0
+        specifier: 3.19.2
+        version: 3.19.2
       '@zag-js/menu':
         specifier: 2.0.0-next.3
         version: 2.0.0-next.3
@@ -3106,8 +3111,8 @@ importers:
         specifier: 2.0.0-next.3
         version: 2.0.0-next.3
       dompurify:
-        specifier: 3.4.16
-        version: 3.4.16
+        specifier: 3.4.17
+        version: 3.4.17
       ghostty-web:
         specifier: 0.4.0
         version: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
@@ -3130,8 +3135,8 @@ importers:
         specifier: 3.1.0
         version: 3.1.0
       mediabunny:
-        specifier: 1.61.3
-        version: 1.61.3
+        specifier: 1.61.4
+        version: 1.61.4
       parse5:
         specifier: 8.0.1
         version: 8.0.1
@@ -3139,21 +3144,21 @@ importers:
         specifier: 1.4.0
         version: 1.4.0
       solid-js:
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       zod:
-        specifier: 4.6.6
-        version: 4.6.6
+        specifier: 4.6.7
+        version: 4.6.7
     devDependencies:
       '@solidjs/compiler':
-        specifier: 2.0.0-rc.14
-        version: 2.0.0-rc.14
+        specifier: 2.0.0-rc.16
+        version: 2.0.0-rc.16
       '@solidjs/testing-library':
         specifier: 1.0.0-beta.3
-        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)
+        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)
       '@solidjs/vite-plugin':
-        specifier: 3.0.0-next.49
-        version: 3.0.0-next.49(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        specifier: 3.0.0-next.50
+        version: 3.0.0-next.50(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       '@types/markdown-it':
         specifier: 14.2.0
         version: 14.2.0
@@ -3179,8 +3184,8 @@ importers:
         specifier: 1.64.0
         version: 1.64.0
       postcss:
-        specifier: 8.5.29
-        version: 8.5.29
+        specifier: 8.5.30
+        version: 8.5.30
       vite:
         specifier: 8.3.4
         version: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
@@ -3189,14 +3194,6 @@ importers:
         version: 5.0.3(patch_hash=b9cf06b8bd5da1ffe896837133366083382a1bbe0fb5b39274ebde46d060d53d)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.3)(@vitest/coverage-v8@5.0.3)(@vitest/ui@5.0.3)(jsdom@30.1.2(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
-
-  '@a2ui/lit@0.13.0':
-    resolution: {integrity: sha512-dFqWFjW6R+XSjbTCP+MV/PIlFxRr22t7JfjtIpc0mAt6iZdu/WZI5Pc2ac4r26h5T+cbw6xcyxFwBmZ3Iiq9rQ==}
-    peerDependencies:
-      '@a2ui/markdown-it': ^0.2.1
-    peerDependenciesMeta:
-      '@a2ui/markdown-it':
-        optional: true
 
   '@a2ui/web_core@0.13.0':
     resolution: {integrity: sha512-4Clpksne0RY9KAheQoPoTwVDJ+6XI0Es2yqVME/PN0aWQ1321Wih69SEr8Nkc+7uKMyV5FlK32o88uoyM7ZBCw==}
@@ -3391,24 +3388,24 @@ packages:
     resolution: {integrity: sha512-meR9Y2I0TMbbA6yccSstZVTF6Bdi2aMsVcGmjY2GFvBpfla2eSf4iEMJ/sa4RX+eL8e4AVucgT5m05icBnDC8Q==}
     engines: {node: '>=18'}
 
-  '@aws-sdk/checksums@3.1001.2':
-    resolution: {integrity: sha512-gKRj5IXZ/O0ehk2rwfb55YygdNKNhK5N1l/Ztg/w06tk21AJtCPuyErETk2RS/6XOmpBkcZY6CN3GlQ2fWTh1g==}
+  '@aws-sdk/checksums@3.1001.3':
+    resolution: {integrity: sha512-CcAkVyEUKGngbEqJdVdSc53Iy52+XzVL5NIcTen2BlK8UByNC1DThVtf5VKSrNzyA+SqyTvs+3S+knVBbOUizQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock-runtime@3.1149.0':
-    resolution: {integrity: sha512-FArzHL7gOVLDCuF9VeYNgzlR7l119+iIexadd8tRp+UZvEIGWzIt9rWvNnGxJsXK5Ga2MEdKCu9MvTn7q2vFHg==}
+  '@aws-sdk/client-bedrock-runtime@3.1150.0':
+    resolution: {integrity: sha512-CEc95zjqHCqSiMyYb2GNRr6LzZ9P8ZgTIpJhaEq3aZ9riwpokGdxAf5mj5d/gkYyBUqZTxeW+uz2SqBVJdHoGw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-bedrock@3.1149.0':
-    resolution: {integrity: sha512-EVFHKVPWDu/rG/GuTKLuOGeVbHEfSmPH2JfYb3kpFRz4Fwi5a4AUlQa+ikzklBwjvJ3kmXeLeUtGTve5dS80LA==}
+  '@aws-sdk/client-bedrock@3.1150.0':
+    resolution: {integrity: sha512-UnxJ1BkQH9odfQQkqxRTaWfkVWn8eZxPeRsArBh4QAATgqMWu1r+qg5kftzLcj6zjHRrSeyKcGlFNK9xE13L5g==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1149.0':
-    resolution: {integrity: sha512-wEccG+3/ap7iIBO4DbWwqNHh2u5Qm5OCQJzJaAvtVFIoZbp0qia8HIXv4rpnNmJJEX8205mlq67F9QJ0nKlcxg==}
+  '@aws-sdk/client-s3@3.1150.0':
+    resolution: {integrity: sha512-tv7KzK7PY7GqBwA6nzAVAsazIY/tAagDjlqvmCwlIYpH2SMfUuD6pJklg++LGcMaNy5p0VMvz+F+/es1BpoyRw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/core@3.978.2':
-    resolution: {integrity: sha512-ViOBLuGSSyPAmkKGJ6KJXtVN7MOEp3rnI7uH+kWxnHccvo8C9cvunEAnN5/oaZH1laQfsTBw7IOnmNkWlFZl2A==}
+  '@aws-sdk/core@3.978.3':
+    resolution: {integrity: sha512-nslpzUCTI9b2IQMWSd6mSAXldBexPc8rr0d3dXUutXYFLFaTdsHa2GD7sJdsn3PhyjK0O5K8ypd6zi+RXXPVlg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-cognito-identity@3.972.71':
@@ -3419,60 +3416,60 @@ packages:
     resolution: {integrity: sha512-xTKO/FWJPozTIXbozVnVGoNBhaGba8TBcx+KyUjRVeOlXE+dUc7GTR1cLvu0uTdIdmemzaFbqqCshXeZA1fZew==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-env@3.972.73':
-    resolution: {integrity: sha512-PxlFZiF5IPUsPnuVSqjM9jlmRwZhL0xx40ccWfZiLQS8TRnHQpegpK1uAidatWuEqbJtbbY97A2Sezikz2AMUw==}
+  '@aws-sdk/credential-provider-env@3.972.74':
+    resolution: {integrity: sha512-rsRJcW2iFUhCgclyD6OSbMEaPl8Eu0qSeRZb2uuCK1ViZ66hl5wOe/p6Vr6MO3b+ydyKgFeqza2p6tZThvILlw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-http@3.972.74':
     resolution: {integrity: sha512-u91E/hT8f4d1xy0Jl7VG4nVKJ3lxbrZkoBTeSVoJdWBiSEUMwMS/9+e0H/aJVQV//Lt5wuzP+E69v4aRSsNTmw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-http@3.972.75':
-    resolution: {integrity: sha512-Q/uIDy8eAVN7JgSKDg16F/f+hmNJj/ZyLJN8AkW2ofVdDgJVh8fO/A26iZ7YsvM2/k76hsf/u2lLAtyXsK8Ziw==}
+  '@aws-sdk/credential-provider-http@3.972.76':
+    resolution: {integrity: sha512-pnKdh0Br7OJPj+7qKjzgTfDTFW0RhEMKXNDR2jv9CAM4oHuG/4z3hRh8KtutLfpmItuRtDbKBmwWkDqHwwAWXw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-ini@3.973.17':
     resolution: {integrity: sha512-ged4KXdBkvIC81bLvNHHuQKdKak/VXhQTR1NWYTTqW0474nlmsxy9O/vlgTIohDDWH3xpBdtVMZRyjb+DnocDA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-ini@3.973.18':
-    resolution: {integrity: sha512-KoyjZ9vdjuxEQ8obAH06xKP8H0WKqGhwUZLMqAOiS7G0xgUAht4X8f0ASLC/vhNLCWGblZOD3VQHWyTROGJHLg==}
+  '@aws-sdk/credential-provider-ini@3.973.19':
+    resolution: {integrity: sha512-kcjvAxqQEV8yuwkX58RelNn3ne65o7JgRWf3Z/gVvbi7Xuw1qSDLJlatrLD76+40cmRxmNkLxBoyp/vAQChQ5g==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-login@3.972.79':
     resolution: {integrity: sha512-L+Z85anONJd8MaiuraO4wRxATCdEejBZ3K3eymzWI5JPXa9sOS9CkIm72PBKqXKX+Z9p9NGMX5AIMXm0LEflgw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-login@3.972.80':
-    resolution: {integrity: sha512-xF9A0gaO7k+1dYPFoo69OQatA9Ov0QuDZfqE8H0FLyIoOph+mlEC+I1Qo9UULupGuDfSYh+kVpfcDSxSYf/2fg==}
+  '@aws-sdk/credential-provider-login@3.972.81':
+    resolution: {integrity: sha512-CeQHSbE2CnVdaHIJ/NayRaCecIER+Pm9faUPkmRATO54rCoMTEPSbVieGHzEwvm1dZM2HIs6qQZCznhayNTWJQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-node@3.972.85':
-    resolution: {integrity: sha512-CrFcML/xImiSlquH4W3V6Npz3aSkPXHDVciAU1JOBN0vqjmkcz9H9up2sCHQqN76J/WrT+TJ580L8h2joksQrg==}
+  '@aws-sdk/credential-provider-node@3.972.86':
+    resolution: {integrity: sha512-WNttSyr6e8innPtBSty//CdnqJcgZN6eAbtw3v/CR2IObz6MYZEo8eusdtuCHJ2ujwFqC2bSPHVyhXGHx8HruQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-process@3.972.72':
     resolution: {integrity: sha512-rLIp2xbMjX/k9/od7APpqq1ZgXXnV0pOL1Th3ZsL8Wu0TRtBsDTVS8iPqcfRFcHakFxPvR04OSTv2ka2qOb/2A==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-process@3.972.73':
-    resolution: {integrity: sha512-tyNnT4aVuOEXmKKKZPExBi828vRd9heshobBsKF0bov5EORHSJc1AGsHOMRP57sDt+dIuVASUOywaixiX26t4g==}
+  '@aws-sdk/credential-provider-process@3.972.74':
+    resolution: {integrity: sha512-Yj6kZFJQdbR+PygTkqdVLPHHpdDpOS9GCYVcDCuweCRRig9LF24ELQBMfyUw1vspvrZJUfnOGVyMjhaL094ahw==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-sso@3.973.16':
     resolution: {integrity: sha512-IGihaJfFZYacJJr/odqILCoK7W/mvrZ7cuK7ECn3sAu4vLC6u0V8bS7mCGbdugJ8Aum2tnvqmx0F2MRFp2rn9g==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-sso@3.973.17':
-    resolution: {integrity: sha512-gxKTWaUk2gSbBOH4m3NPRfEKcGXeDAOgHr7nNG5JktR1xZLo0R+DpMjbcleoHbB0uJREOG7hjIRE635IuBWsRQ==}
+  '@aws-sdk/credential-provider-sso@3.973.18':
+    resolution: {integrity: sha512-FnpPhdY4qUGtX/8X6eKxh+uD+9Y19i9FYibgk4SBe0M935s9vocHkHzaxaMNk+YkHmvzgdu8cHA5SCoeU+kkew==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-provider-web-identity@3.972.78':
     resolution: {integrity: sha512-/y9WvNtlcPBGLR0qc1a+9J/xtYZfVczvLUOuXaVWylzttH7ewsxwHtjmiJSolNrVSDorIxHGHMU61CbonRkmwA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/credential-provider-web-identity@3.972.79':
-    resolution: {integrity: sha512-/jn0Gs/qm6fs6nTIA5yncHayybz42SATZ3rNxCEBYPJ9v69PLrDRgk07E9xTT2gpRcNmDXXbi27ZbuU06N0Z6Q==}
+  '@aws-sdk/credential-provider-web-identity@3.972.80':
+    resolution: {integrity: sha512-TJF25Ndwy2HxcVj6oxMgp8qVlJAawlExHYBXqhuC6Zt2m+A7WpdkjBD6QglNbiArlteYljZHEY3R7KKmno6ISA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/credential-providers@3.1148.0':
@@ -3487,24 +3484,24 @@ packages:
     resolution: {integrity: sha512-4yvdTVwPGKCnrwuwlYEmwLqQXKwk0unx3f/FvBi4FA9ruK/WGoPJyqfK7hOYurheIyQL44FR0ovgOHqvkfdpAQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-sdk-s3@3.972.78':
-    resolution: {integrity: sha512-W1kXIqMBkfrpVTbOOUSt63D2mEM4882TLqGWXjkZ1OcJ2ggSEWzgyjlyVDIHu/goGJSREd5s/KQ9wAgVZ0djeQ==}
+  '@aws-sdk/middleware-sdk-s3@3.972.79':
+    resolution: {integrity: sha512-UfgAQosf4IEXldMsyntVuHsJnaQzlH6pmkOr6dQy7CaOYSlGz3mWiW4Di7XfQ/kPJP6xE7oMshz1V0E8RqGdRg==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/middleware-websocket@3.972.55':
-    resolution: {integrity: sha512-dHlEl3sCn1Cu+qddPoz5RxjgGCXEzs/pbrh/rDRaOeb/Tz//FF59hacDvy7kvUn19mkm2nQRjhpzBnX+Ye37Qw==}
+  '@aws-sdk/middleware-websocket@3.972.56':
+    resolution: {integrity: sha512-32d9EnnNM5UMwjVp/qnL0K4XYiZv+YlSbULI3BaoBdJvebAS6cD0bKfPJ7lzovN0qrelvmSh5jo/3tk0KoTuGQ==}
     engines: {node: '>= 14.0.0'}
 
   '@aws-sdk/nested-clients@3.997.46':
     resolution: {integrity: sha512-oRxtBcka/JGHGs9l9p9IVajGoTP8vTPmoAzdHGy4Qcy9P5vPnDf6nhIeM/COQNY9k/OahImTRaLkHftoXvfcmQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/nested-clients@3.997.47':
-    resolution: {integrity: sha512-bovCKvDsLocNTzaj6VrrMVJ2BGROqO0JlwcGseO67a+I9Bo+08nUJhSQfZUIx4+A4a7I4101GEJd/AYm7dQ68w==}
+  '@aws-sdk/nested-clients@3.997.48':
+    resolution: {integrity: sha512-B01jdXJtAW/XOiUzGdI2mz67WyEHbGEc9X6Euzw3bjLAa+txTqdZDER4X2FsIEcXzV2ABqudVZ5thali8tCCzQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/s3-request-presigner@3.1149.0':
-    resolution: {integrity: sha512-baBynYmUAeUkcgY/PZJJsEFzVYLhbvQo9e0kVm5NA4zmNQornvoN5FID4gaDvxZVnZjXsBEcEygjtbYg1l2gMQ==}
+  '@aws-sdk/s3-request-presigner@3.1150.0':
+    resolution: {integrity: sha512-aL2V49wz1FFZnWDT+7eZ7emTfQ+mMW/JeMS2n9+ZeKoCBil2Lp5Jgr0PDD12N6y5/gxZIAGvBVmbrjanI2Q/jg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/signature-v4-multi-region@3.996.47':
@@ -3519,8 +3516,8 @@ packages:
     resolution: {integrity: sha512-GpyAr0DD63YOEmYFM6Df+gJuIgC92MMTiBK4FTKfxii5MJ9ge20epR7LyroulscYlG89J+ZB2ivFDPjvfQhzdw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/token-providers@3.1149.0':
-    resolution: {integrity: sha512-CAwYyA8eVk1w6h8YgLvkjIOakWPwURaUFrP7BRVgkxTFUM+O87thyKsGKJ6rVPbP8eoEV10cBWQ5YfaYl3qSVQ==}
+  '@aws-sdk/token-providers@3.1150.0':
+    resolution: {integrity: sha512-wDU36ofhabZYu+d2KSriyDbwzxNoaOp+4dG0p3qkabk7HeALR5nIWyQbjoyJZLn3iqWkv/xNdyUfbfevDVDzzg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/types@3.974.6':
@@ -3873,8 +3870,8 @@ packages:
   '@codemirror/view@6.43.14':
     resolution: {integrity: sha512-hC45YnmJNR1rz42OF57BLoQNFMV12/13drnvibDsR2quNDmldcb4WvYVV81hFQg56i9lcqQMEDqilhX2QDcGQQ==}
 
-  '@copilotkit/aimock@1.45.0':
-    resolution: {integrity: sha512-BnD3+3p9nWC9cirqRnXmeJkav3oWqnGppiqSPSaNVFRqprurJceFM1BoUf+7xX4a+FsseUm/9vsOia7Qu5gJog==}
+  '@copilotkit/aimock@1.45.1':
+    resolution: {integrity: sha512-JYf6ThCKD8eNMVm0PYsfu1wASy2E2T8VCVoWnEpWHNV2QiSv4yMJ6JHTPm5Gp76azKqme2F43L6siFA1gU7UKQ==}
     engines: {node: '>=20.15.0'}
     hasBin: true
     peerDependencies:
@@ -3981,8 +3978,8 @@ packages:
     resolution: {integrity: sha512-3yJ255e4ag3wfZu/DSxeOZK1UtnqNxnspmLaQetGT0pDkThNZoHs+Zg6dgZZ19JEVomXygvfHn9lNpICZuYtEA==}
     engines: {node: '>=22.12.0'}
 
-  '@earendil-works/pi-tui@1.1.0':
-    resolution: {integrity: sha512-v7wkS0y2ErZvZkSfemqd9RrBZJ5x6p8Ujsv7NdJj01IXJyFM0kNL6rMdcKcvTe7EVTd6ugvDB9VPZSoaBF9QxQ==}
+  '@earendil-works/pi-tui@1.2.0':
+    resolution: {integrity: sha512-OdJCiYklkL3TqmdmGKUflHoLy9zw18GBYO0DPASZvGlP4RkDXAZzLLDt7cidJ6wUR7DBrKb13rrekDsXgMF60g==}
     engines: {node: '>=22.19.0'}
 
   '@emnapi/core@1.11.3':
@@ -4213,52 +4210,52 @@ packages:
     resolution: {integrity: sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@github/copilot-sdk-darwin-arm64@1.0.19':
-    resolution: {integrity: sha512-+4gOy6Gv6qyHzlCuIAYBNeMrLVzTIWVaB5Sl5Ydu3uptDKCEk7WworefUFAnGIl6v91gEFiM9wANfeL/9brJjA==}
+  '@github/copilot-sdk-darwin-arm64@1.0.20':
+    resolution: {integrity: sha512-TSUlQ3FZ7fnAKLyiOH6T/ZtgosPjN1GIn3/3Mo8YwseM6rPXUbe2ODiMPvQLcM2aDFbl2oqlAEtg5ezuAJOjHQ==}
     cpu: [arm64]
     os: [darwin]
 
-  '@github/copilot-sdk-darwin-x64@1.0.19':
-    resolution: {integrity: sha512-DhXVYreLKvl9vDBiXYc69u2S0VuPLOgyvse5M4KW12z7qsG2TPQFg5NNaHGsueWGfwJEQ+fhcjgpYoNNgRREUQ==}
+  '@github/copilot-sdk-darwin-x64@1.0.20':
+    resolution: {integrity: sha512-KNCkDDFLcnPEj9hr6Bj5ys1AQxO8BC67PB+UikbVWHn+OHJJGQR9suo8KTja4PggyYX3S1CYwUCPfQ8D8fRuOw==}
     cpu: [x64]
     os: [darwin]
 
-  '@github/copilot-sdk-linux-arm64@1.0.19':
-    resolution: {integrity: sha512-h1GI+LM/6YAIYWtoRofUFCF/tt0ph4X7iTMRVAgjXvpKnGEoVtBYdKR9+gCF0ZDnoyQ9BNCUyJrqtfNvmXpULg==}
+  '@github/copilot-sdk-linux-arm64@1.0.20':
+    resolution: {integrity: sha512-Q1Eb6t4X48QaWr8fm/oQOimkdjuVt66w7OaI4pof/2J9lETGE1pSERyd2RvkeAq0d5zW/VII22hYdUklS+vTxw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@github/copilot-sdk-linux-x64@1.0.19':
-    resolution: {integrity: sha512-WNCYiKOBJHVN43Rp364ilcitUgH7m0JJSSIbs1gDbEnGatF7qTGFAO9ZI3YpvD/0cJS7Vt9+9hQjALydrdWo5Q==}
+  '@github/copilot-sdk-linux-x64@1.0.20':
+    resolution: {integrity: sha512-ZF16fwYqpfZXFcX2iMklLj/GwaWXTy+NCZ0+K7f2I3SvDjjieoVPsIY8ZBA8zo9qpGRE3O4ItedAbNSF3ReRBQ==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@github/copilot-sdk-linuxmusl-arm64@1.0.19':
-    resolution: {integrity: sha512-4QdwqO6ZWEnf1D3CDfD8+N/XwJ/ahDs6wrMUNxF3oeGV8Rj3jeREbSB4UyiqkgK+vXXze+UW/nrzGRk13hIhnQ==}
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.20':
+    resolution: {integrity: sha512-9oalpTzS8bJCh34h7udzT6AZfiv2k6qzmbaivwTMiXe1BOR90PPRTM+L+npqiqUBsNK5WZrjvUQOceWvFARjpA==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@github/copilot-sdk-linuxmusl-x64@1.0.19':
-    resolution: {integrity: sha512-iWuCio2cOZCeoi4GFd4+xagjmxxycGi6ERLTUzG7YtRMaRg8c2KI6+3cNFkPu+yjmxhhHp7ONEFcjiKB2LWJBA==}
+  '@github/copilot-sdk-linuxmusl-x64@1.0.20':
+    resolution: {integrity: sha512-DMedbPomgJo6Zzj/oPxffiTIibudTBwsZW2PfHDKWqm3zIXgy2ljkie+YtKmyCPTkAhdrFAC4W5jeTH31sS3zQ==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@github/copilot-sdk-win32-arm64@1.0.19':
-    resolution: {integrity: sha512-rbor6VRRbSOuBHu56cdKEiwcNZQKK1W4ED/21rwR+dKn/oI6JgoFxpEGAn5h85FQAGdeMjKSEBNhC8fEs3qoFA==}
+  '@github/copilot-sdk-win32-arm64@1.0.20':
+    resolution: {integrity: sha512-0JJKl550JFWdeyDucwMcqnuy4q0/hyjgIvCrOeU6gfbPsxZisY3qzhJYIy3wRd5yRJVwa40ZBDkdMI1HSKLI6w==}
     cpu: [arm64]
     os: [win32]
 
-  '@github/copilot-sdk-win32-x64@1.0.19':
-    resolution: {integrity: sha512-OiIkXk930bF5mdkdsDW+0C60fJPw8+EKO7K0FBAuD5mkEJ5S7WNJZC7myWVndVi17A/lvH4TewER5684xLuuOA==}
+  '@github/copilot-sdk-win32-x64@1.0.20':
+    resolution: {integrity: sha512-O1QAIzjV7qDttOrPC3RqYl0mRIsjGOFnobUN238HXaz29x/v4enDvBShffjCeuIqNmO7Gnjd2p7QX5Jf4+Kkhg==}
     cpu: [x64]
     os: [win32]
 
-  '@github/copilot-sdk@1.0.19':
-    resolution: {integrity: sha512-hNI2eVXuQSU5l7qjjQUclQJc/LCxKZ8CAzJDPlCtWdeqy3+l8DPQRwOAcZCS2hoENVvTNtQqRQLK21ot5i0aQA==}
+  '@github/copilot-sdk@1.0.20':
+    resolution: {integrity: sha512-jPeAdTAv3acHNFPTULqP/IqLCc6dJyK8WQZq7gDlTGIXXoPTdbn8Uo8fh0vSqAz2DHy3lQ4e94J62oeGdAH0yA==}
     engines: {node: ^20.19.0 || >=22.12.0}
 
   '@google/genai@2.28.0':
@@ -4636,8 +4633,8 @@ packages:
       '@types/node':
         optional: true
 
-  '@larksuiteoapi/node-sdk@1.74.0':
-    resolution: {integrity: sha512-K2WoGy6x97u2kPPSFsu0v9X8CY+0q4OwO3rhXiOSRXYjGS7ovydFpEH07AS5VYcBnbQCoc5sGezo0IEGVViuoA==}
+  '@larksuiteoapi/node-sdk@1.75.0':
+    resolution: {integrity: sha512-HVHamfS/skiYsKTCpk6z7oIux3eo0DYQR6HZXGMHsNFZ4rYkhcKKSD9aU7iY26grupl9AP+cg3fisXNcMrqyLA==}
 
   '@leichtgewicht/ip-codec@2.0.5':
     resolution: {integrity: sha512-Vo+PSpZG2/fmgmiNzYK9qWRh8h/CHrwD0mo1h1DzL4yzHNSfWYujGTYsWGreD000gcgmZ7K4Ys6Tx9TxtsKdDw==}
@@ -4696,9 +4693,6 @@ packages:
   '@line/bot-sdk@11.3.0':
     resolution: {integrity: sha512-AHCtmdgcVDElRLlrR8jxSracF4beWholl3Ywnl6TrPgEiSYH81fSovgWVO/LbyN0tlGidCzJMAsOLXNddF5FGg==}
     engines: {node: '>=22'}
-
-  '@lit-labs/signals@0.3.0':
-    resolution: {integrity: sha512-PfB5FLtorVfkhwTWXOPNT/rvrVdSDY8siwPyR17ztrViRbMqxy1TQBcHqJoA4303QT8yXPGxYtGKJGj7fEfEwg==}
 
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
@@ -4851,8 +4845,8 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
-  '@muse-code/sdk@1.4.4':
-    resolution: {integrity: sha512-hoYbcXf9qjXHCXoY8Mkcic60oGRlhLQz/8lCLN7uefQLlmO19Udrg4/oAYTR8KHN55TxqxbOV6yiuyr6yKrtUw==}
+  '@muse-code/sdk@1.4.7':
+    resolution: {integrity: sha512-O4ZSSDZx8RLne0OhcR+AzBhGY+/0+nhk8Zs5v7FiNNHoNsV+14O9Wylpw1lq1dNyRehqVxBiCHehCRQBXI7Cpw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@types/node': '>=20'
@@ -4982,8 +4976,8 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
-  '@openclaw/fs-safe-darwin-arm64@0.21.3':
-    resolution: {integrity: sha512-ztAj99tTLFNtphtHNQJntsiNcb74c81Z83qeC86Da2INhXDjZTVk9W/jb1He9owaDo5fi7/oxRbt3MAbPaqRSw==}
+  '@openclaw/fs-safe-darwin-arm64@0.22.0':
+    resolution: {integrity: sha512-u7HSbjJAIiWZ0iFJzoXymMJUn0EMzJGMFtX7aIbQk2W6Sz+UxTuXszJk79yYNF46kxKXjlu9Vkx3oazT/6mE5g==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
@@ -4994,8 +4988,8 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/fs-safe-darwin-x64@0.21.3':
-    resolution: {integrity: sha512-bxxFN9l5BmaLxDO4hGnMl7LMFkmc4Uj/n7oNZCG407zZCY3wv+I0C3QocH/Nnrz3Of2zXtLElPYc2wqejryJ6Q==}
+  '@openclaw/fs-safe-darwin-x64@0.22.0':
+    resolution: {integrity: sha512-rkcMsgbQQzNFcEjq74J0hbwMoHlVXtQzC5owdAU6QG1O2UTGIPROpwNXmo1Phmz4tSTXwCKlH5vxxSgSHMv8Mw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
@@ -5018,8 +5012,8 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.21.3':
-    resolution: {integrity: sha512-JPDX4gk6vH/sYzQ6tHse0Zimb7lS0OBeJwT0iLF2BPQ1fobLH5X7iOrQgsqCfhRM0m+Ts6UJT7ebf/63T2uPoA==}
+  '@openclaw/fs-safe-linux-arm64-gnu@0.22.0':
+    resolution: {integrity: sha512-nwZl03/waPnBh7lKFnDiF7RfT85D9Ngbw23LL7jb2ilXu32zge4gqufYYIoLXk0EGL3bLkwssgnpxy7ErRQWow==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -5032,8 +5026,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.21.3':
-    resolution: {integrity: sha512-CcqsLepJQTK5Rn6x5tEv3kaDV5jeveQO1HKBwlcJ7tEWhLb9KDRYHiyStqyg10u/O+apMril6Sj5chjPXApciw==}
+  '@openclaw/fs-safe-linux-arm64-musl@0.22.0':
+    resolution: {integrity: sha512-2Gvr1vUvSpbdkAeUuYU8DmgzRGPx88V4quX1AWNZdFuip9SsGkbaBLx3kZlR4OFlEo6HxgGPS7KZanaG17nKSg==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
@@ -5046,8 +5040,8 @@ packages:
     os: [linux]
     libc: [musl]
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.21.3':
-    resolution: {integrity: sha512-+Xr7WLr2BCiPfx/xCYzn2Lcf+5IUj04EOUwwWbIGIlB8moXGF2uqe5vMtEifHyhvAqHES56QE3aYXqiLyNrhgQ==}
+  '@openclaw/fs-safe-linux-x64-gnu@0.22.0':
+    resolution: {integrity: sha512-xTb3icn5X+SREL30NNXy1ZgjkGGWanRm9Wsk5pGm96Iy1DWY18HRyjnhDHCthZ402JiVBXCJR/8nsdHI0loaRg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -5060,8 +5054,8 @@ packages:
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/fs-safe-linux-x64-musl@0.21.3':
-    resolution: {integrity: sha512-fI4ij+6v/tk8HAI2X/GWbeeipNr3FsRaroPW1SolgHmrt+N6uTL/jxBFIpAcIfeRWy9hb8Kfd4dT07MV1wOF5A==}
+  '@openclaw/fs-safe-linux-x64-musl@0.22.0':
+    resolution: {integrity: sha512-oOxSQNtPxEJRDUsydXX4TVw/vGXKxUR1bW8wieEsxlhJob+fbRcSZb6YyznPkGiirhcpCwwXgQwQbaD+9Ho9Hg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
@@ -5080,8 +5074,8 @@ packages:
     cpu: [arm64]
     os: [win32]
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.21.3':
-    resolution: {integrity: sha512-CuylNHU+zEayp18J/zU7qB1M/7/Jc/nWVigQ2US+EALB1LfGly45ZVSKnK7618z+xfBXpK+5c83n0piiukXH+g==}
+  '@openclaw/fs-safe-win32-x64-msvc@0.22.0':
+    resolution: {integrity: sha512-V0MR0A3nYbvJofxdcKfgp8sU46UDAESV2wxh4w4+coxPkfEFfedJa2tz0L1Fc1wFEcZPXIbywXNhOy2qF6QZug==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
@@ -5092,8 +5086,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@0.21.3':
-    resolution: {integrity: sha512-sBm68f4QiZrrqlZxbOlqVIutrmOK/KLZBrwyPIhV7xXJmlPFc6ZET8AggcU3hMDM3dDSUYgA8LUupxwTB2DZsg==}
+  '@openclaw/fs-safe@0.22.0':
+    resolution: {integrity: sha512-CW/T0NUcdn8PLVBgyXUbIn90a16uhP3YtKdd+eqJjmg0FR01KCCjCI3PxrvK1ygrUb/BfQsJJe+hXA9+/0rqKQ==}
     engines: {node: '>=22'}
 
   '@openclaw/fs-safe@0.26.8':
@@ -5334,6 +5328,7 @@ packages:
   '@opentelemetry/propagator-jaeger@2.12.0':
     resolution: {integrity: sha512-Kz2Vz+NILW7S1WtN4rV1wr76fMtT/RRWvAMFBc91uTIi2dDMXxrfBKNe2KH7yaCfFp1X0xfAuabzuFczvoPB6A==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Package no longer supported. See https://github.com/open-telemetry/opentelemetry-js/pull/7077
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -5382,12 +5377,14 @@ packages:
   '@opentelemetry/sdk-trace-base@2.12.0':
     resolution: {integrity: sha512-JOERgZCxRM06FEJ5kEWxlSRChah6MmXDx3KwCruqEv/iEyLkTokCSemf2y1w8oIHtfrr8EVTpzebq/31vn2Cpg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.3.0 <1.10.0'
 
   '@opentelemetry/sdk-trace-node@2.12.0':
     resolution: {integrity: sha512-9DufH1IlmQMoKAfot5y/FhTP1RnmhLb5K6eKmJO/bvzPjYwPAazoiAUbTZFdPbqxOXN0FEbhZx/e6SB1Og4jmg==}
     engines: {node: ^18.19.0 || >=20.6.0}
+    deprecated: Use @opentelemetry/sdk-trace package
     peerDependencies:
       '@opentelemetry/api': '>=1.0.0 <1.10.0'
 
@@ -6258,8 +6255,8 @@ packages:
     resolution: {integrity: sha512-V+NlX5931RwVamZhhEfZekMdcvXDKdMAmHW1AuGaykVQsNyBOq3bpmGpoKRBDCYgFWKIufJ0Dcg3m4cYhvUy6g==}
     engines: {node: '>= 10'}
 
-  '@solidjs/babel-plugin@2.0.0-rc.14':
-    resolution: {integrity: sha512-zMbK1GMHnChgfnalS5Q6rwPeQ9UoC7snavzes90R7+6J+8Fa7Yq4AfgqrfaAKYAjlpMgT0E8AmVwYCdIvSsG/A==}
+  '@solidjs/babel-plugin@2.0.0-rc.16':
+    resolution: {integrity: sha512-BGktwp90c5+acKPg3AhuoJlVxmY2FMqLx4TaHPtz50hU7jzAwhmuRURdK4eteTeA+gBtNN/tqunK67At7I1HEA==}
     peerDependencies:
       '@babel/core': ^7.20.12
       '@tsrx/core': 0.1.63
@@ -6267,42 +6264,42 @@ packages:
       '@tsrx/core':
         optional: true
 
-  '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
-    resolution: {integrity: sha512-WiOnnVov6XfT7QG9OrgqWfoJMrUYYbjO88qMzJ09tijV6Phu+BoeK2J3I0B3IpPPrOTMQ2mXpcwdvnSLuAtWdw==}
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.16':
+    resolution: {integrity: sha512-XS2YYSiNLfxK3cTXaTs4GWz9HU4jjezL+G3rWcGP7A7H3jnTHukbQSV2CoslH4ZD5GrcSyllfj/LrW9FC0Xv9g==}
     cpu: [arm64]
     os: [darwin]
 
-  '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
-    resolution: {integrity: sha512-pW1kmlbkRLjLBnsDL+lF8LKrdjK141uCYt2RFNcodud/JOqIWTMK3v+zULeJelqbQX78CjhQ5xz0V2ApKb6UsA==}
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.16':
+    resolution: {integrity: sha512-m/mr1+w2MpF9g+xF+Df5RABV637OFZF0KteCRM/iWfr15JRhn3qaMTl8SOrJ0vYng+b4XiRb6clUdcOCg9Imew==}
     cpu: [x64]
     os: [darwin]
 
-  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
-    resolution: {integrity: sha512-2d8F8x4sBae7DQHi9wholdzHir8UsHVHpPRPj4NRr4seD5rWkpIbQ3Pwk/9FMZoM4KZmCZ+6+SInQm7iGALgTw==}
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.16':
+    resolution: {integrity: sha512-9ky/nAbWT587MQ094B+5CtMuA3NuLN2Il44yjVxikyAMPrSVoAvW53AFNq28reKSaLyzUcu3ajlllNXN4zBJig==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
-    resolution: {integrity: sha512-dXt4PJeEKSD07X/k5PcsFczxJLof72hEw3aVu8S0WBWh+KTYjYx9tg3Hnnl0KntR61PyphUjwIOICsWWsgKQTA==}
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.16':
+    resolution: {integrity: sha512-w4R5FBh8wj1hDBTRGghev4Izb3mY5WQJKkh3t12LbUYv9Q/RgQLRJ0HCdgusA0M3pbmZa9+tNo/jC+kOcGkCcA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
-    resolution: {integrity: sha512-cTaAmM7Ca6JisgvnqsLT9Fce4sDmonCaTvBb5eF2iEfdt8htFZ2Z9RlUEK2yG6LxCN89/K/vZLbI7giLA4HUjw==}
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.16':
+    resolution: {integrity: sha512-waYVk1KOGfAAS0e2Y2F/g2pPxK5SKZGY8o9MzpYvw63vdohf2aM4dOztQ5PXhdj9EwBsNkCfs108LXQxmKHyZA==}
     engines: {node: '>=14.0.0'}
 
-  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
-    resolution: {integrity: sha512-JosTalJd6Pgb8mjNgPCEauQSOi647Vlm2mS0qvO3hYLvzcrODmrYsHIY1/DqbI1FxQdc9vUOKJ5zCHvhjlScuA==}
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.16':
+    resolution: {integrity: sha512-EruXUf1LlFl/Wz1API7+EgKrrjwGWnvc5LsRBOIDZeL4lijVxFUWuhu2If+Mwi6zFDojIImJau9o155n+3tfKw==}
     cpu: [x64]
     os: [win32]
 
-  '@solidjs/compiler@2.0.0-rc.14':
-    resolution: {integrity: sha512-eCTVcxXl1UHOisRMYg+hABwiiTkfTmSkaOFtAb8bjzeqpLlju3lo6pT2qWPfUbrvnslbNGnLZd+HZSIVgZu9VQ==}
+  '@solidjs/compiler@2.0.0-rc.16':
+    resolution: {integrity: sha512-WRnqxb3LHvR8XiQuETxI++BVdLZOPougnN50kZhwiHLODIc4orUFFlx6hC0Jt2aurO5LZCjSxStGEHVHeo7maQ==}
 
-  '@solidjs/signals@2.0.0-rc.14':
-    resolution: {integrity: sha512-s3v1wpPcX3wfNO0WUERrPrXS+qqJ4ylzH9QTIRKqrgcMVeLEOXgFa3hZrhEoVTp+lVAgido2NH6GCI79twe2fg==}
+  '@solidjs/signals@2.0.0-rc.16':
+    resolution: {integrity: sha512-WPMb8FuAVKyzF6sIgZn/c89V69VS3R4DtCnOoaS1ZXy5Uos9K/8yrclyQkG6kqkN3ubtPiPnaPfdjt/jfsi4qQ==}
     engines: {node: '>=22.12.0'}
 
   '@solidjs/testing-library@1.0.0-beta.3':
@@ -6312,8 +6309,8 @@ packages:
       '@solidjs/web': '>=2.0.0-0'
       solid-js: '>=2.0.0-0'
 
-  '@solidjs/vite-plugin@3.0.0-next.49':
-    resolution: {integrity: sha512-s50Tz24Nh061/lTSvG6VyVIAraQ4gYnnwjUCe2XfDAHY2jD85vYIckJiH1XV4ZnF4I79PaOsSoa7HhzZGO99+w==}
+  '@solidjs/vite-plugin@3.0.0-next.50':
+    resolution: {integrity: sha512-eCtI4SwZOCnhwFist0WpUtAf/HPQ26z74XOtzm3z41FFJdKprHEMEVKw8NKfViwp9mecMK4FLZSm6k6OY4yBsA==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
       '@solidjs/start-devtools': ^1.0.0-next.2
@@ -6327,11 +6324,11 @@ packages:
       '@testing-library/jest-dom':
         optional: true
 
-  '@solidjs/web@2.0.0-rc.14':
-    resolution: {integrity: sha512-MhHqUoVBdgAG7EZOANx7Y5SuCFH7sBxzt9uBSYLpJxE503tqoi7pX1UhV7PWxw4LvmPe1PZkdkSOZ8BLchZkhQ==}
+  '@solidjs/web@2.0.0-rc.16':
+    resolution: {integrity: sha512-dWbRvG8PlcXelWYdoOmyJwItFPrPSsppUbOJ/RLrQhesQD3sEL9BTRUi8vdXyi+rdA8klYvxJtB43/BTqxJcbw==}
     engines: {node: '>=22.12.0'}
     peerDependencies:
-      solid-js: ^2.0.0-rc.14
+      solid-js: ^2.0.0-rc.16
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -6339,8 +6336,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@tanstack/virtual-core@3.19.0':
-    resolution: {integrity: sha512-6k6+BXoM01iJTfqH5hvih0Kj49x130wRzty1muE1hBJJm5/P8h3aEYEtQPa4iYE239nF4i6UL/KIIuQI3zG4sw==}
+  '@tanstack/virtual-core@3.19.2':
+    resolution: {integrity: sha512-Ch+e8t097FdTfuihfRwBMqz/OfRZKHOH/C213dbM1lXDZ8bv6r330Bcc9k9XCrP6NkoMYy0/ZCHcddOAPihW4w==}
 
   '@testing-library/dom@10.4.2':
     resolution: {integrity: sha512-yzr2S9HyAIdhz2/6qHgbs665Q7PKVcDF05vsOlHPxG1mo36gKVesdYVeDLnXgfjJ03CrKRk08knc6+E/9m8v2Q==}
@@ -6790,44 +6787,44 @@ packages:
     resolution: {integrity: sha512-0GxiUGqMU0qXJt58cBsiG3DP8lUmBaFo2vChtUX+CT7PnR3v/VGLLrzVP4K9r1lNiZXjHYefMBbPunplr09v6w==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@typescript/typescript-darwin-arm64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-Kj6wL95dLXjtx7um9LaF61YPaMSKlmTh6IffZUCwQlJntRh613hVKfWtbj3k7odmRe/K5hghQox8cvyKkFotjA==}
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-Tcl7DIoA82kfbNwLXnkw2SEkFAs7zEk0kHb+6IQqNr+rqLLHIocuWfYHVteu+WJQ9YGyuaWoFHF5zkY/apks3g==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/typescript-darwin-x64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-ng8qcExjcmG2HG5Z22OcL07BntZQX7MwBlN9DmTwZX7+TMe1h9UitAiWPxCtmltcc5ObE+5YSF6AGyKMVgfMKg==}
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-ab32y7Hi3BhBb/RYfssDqWP7Kn83rpyJVZtCt4xWL19JyqRQqhurO7TeJpV/a2+sAsbwUSr5umbk8JGc8ZkqiQ==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/typescript-linux-arm64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-cX7seCo65VvUeQOvI2Ho4kVszrTMj+FMAJHDtJ6X4PBE2Dqv48OG+tNncPF1Z8VDNCCdJGr5FRjzxiHbUDzYLQ==}
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-Xi1MXdvDRvx+CDv03eaayyCZmdqtzDucma6sk1txDBVGHRmVWwNiXPSSm3Y5LSWMSRveB2IXH0MnaI7/h4rAiA==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/typescript-linux-arm@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-TbBRba9ft28ME4JfCPkQ1zSTkNle1+dmKrSBCu9LFP2e/SgvTbt4mX8LgCwzg9EPe0CH8k6Zd+i/xxZys65qgQ==}
+  '@typescript/typescript-linux-arm@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-TwGABpt7QOiBVdOPPfK9c0u0+C/aK4AOp2X9+sDMEiWORqSp2SKPMEBWb3X3ZyI68sm1ShY1MjTahaxkk82DeA==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/typescript-linux-x64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-0pt6E6fRcffVEUaHYIYGVYBghfeJL2E+JNz91dJf/UidoIU8kmj6qBd27xhsDzKe2aoxolt0t48ipRc+a2NjBA==}
+  '@typescript/typescript-linux-x64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-w4fm+dzdwiEUAPkTteEaZc9dNOvSVRU/598CacHclgiOHpMo4k+ak3Qkkgs0WTy3L7vXflGteEIvGRFs3SMd5g==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/typescript-win32-arm64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-8UkixI8b4a12rZXr1RZk8oyx8yPZg8QNiJhbe3vTSA45o43YViVPoAll8bA5oTzi9UjetFT2iPDSpAPCZENVug==}
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-MIsb7DtuO9+PiNyVcJCt/jnneuJLaYSBKzJzxtyOKCYeciiCYwBKedIG1tROzuYEzP5K1e/Qfo+LDd21yE1QZw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/typescript-win32-x64@7.1.0-dev.20261011.1':
-    resolution: {integrity: sha512-gw2jMUgKpICqDRFhpe1Cx/ol/xv2+/80y4dAf3CKnkG5GdSVZvULYL1MRXlHdZIi0WA27t8T+TKtqzi4WJ3WOw==}
+  '@typescript/typescript-win32-x64@7.1.0-dev.20261012.1':
+    resolution: {integrity: sha512-03NLP/GW81mn1HLnX3w4oESlBzRkzar4aBXUk1B1zE7D19g2BAKmril7sYNAZNh/EzqyhaT/VpCx+fgnJXU8Dg==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
@@ -7087,8 +7084,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.19.4:
-    resolution: {integrity: sha512-fN1c3Ype4LrwZoeJwcZEnyO+1ArThgymwswmJyd52dHKaz+3hjkR6lYdlyBPOZYIIcCVARezcfvkFUNxsylSBA==}
+  acpx@0.19.5:
+    resolution: {integrity: sha512-V88l8w3Opv1xWmMmFyO4RrR6Y695RrRJ/q5WgIlE/BNetQgxRaM4p8h7BsKPjdDHVBKpesCnXNd3r5Cwzz2Lmw==}
     engines: {node: '>=22.13.0'}
     hasBin: true
 
@@ -7859,8 +7856,8 @@ packages:
     resolution: {integrity: sha512-gYzvtM72ZtxQO0T048kd6HWSbbGCNOUwcnfQ01cqIJ4X2IYKFFHZ5mKvrQETcFXxsRObZulDaKmy//R7TPtsBg==}
     engines: {node: '>=20.19.0'}
 
-  dompurify@3.4.16:
-    resolution: {integrity: sha512-sqo+pNp3qRhCIpbgRi1y8Tgk27Bo2Ry7w0dC1NBeNTdZChWjz9Xb/KOoZbRP/R6pQZ80Qw8YhXw13hWWBbMRnQ==}
+  dompurify@3.4.17:
+    resolution: {integrity: sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==}
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
@@ -8342,8 +8339,8 @@ packages:
     resolution: {integrity: sha512-i1ydyHrqcIxXkWh/uBmVkzCvIuq5yiK2ATndIe5XxKholrG/MTYP9xGYka4sQhrbIAgGjL2B6NOE7rFaiF3fXw==}
     engines: {node: '>=18'}
 
-  google-auth-library@11.2.0:
-    resolution: {integrity: sha512-R9/Dwc3swSur04RnizQ6EBUmmcno2cC5cAKtrG/C+pY+W7c5l6rSnFWgMkR7NSYj1n6XWmb/KhcjxGslWm4yIA==}
+  google-auth-library@11.3.0:
+    resolution: {integrity: sha512-gZCyszARHj47WNcKrAcQtimDwtTZpydRZ3HSeb66hObfQU9uaG50ejsZ8LzGISIVAjpsZEouGVs65Q/XRau0Qg==}
     engines: {node: '>=22'}
 
   google-logging-utils@1.1.3:
@@ -9130,8 +9127,8 @@ packages:
     engines: {node: '>= 20'}
     hasBin: true
 
-  marked@18.1.0:
-    resolution: {integrity: sha512-PamYXWWWg2nboG3oX5Ffzpy3EFZROqZJK9hSlMmUnekp7TxPs5DcT95vwd46m73/exfKCRVMtgXoPMI4FEJL6w==}
+  marked@18.1.1:
+    resolution: {integrity: sha512-zEGgrtUG8crk+TrMacJSVABU4DYDDkS8uqgU3ohrn/2fW9C2AEfUrO3m6IhpIpQpl7YcVpiXXC9cSMWDANT3dg==}
     engines: {node: '>= 20'}
     hasBin: true
 
@@ -9209,6 +9206,9 @@ packages:
 
   mediabunny@1.61.3:
     resolution: {integrity: sha512-kUqLKVXQVwHR62GkOJxYosAmXERJbqnXBgJDTtRlxHEYviVkMg/Evhl9XN6kedqS5LP1tV4kFKyzY/V4a4ofow==}
+
+  mediabunny@1.61.4:
+    resolution: {integrity: sha512-gZPBi40ldiZGeU2DJxT/Q3hlNiaxfpwNYTfmi0Maq3SoBJT64+W+ySc0Z7t+2JUGxNbkXnLFrDkSS2OQuweOhA==}
 
   meow@14.1.0:
     resolution: {integrity: sha512-EDYo6VlmtnumlcBCbh1gLJ//9jvM/ndXHfVXIFrZVr6fGcwTUyCTFNTLCKuY3ffbK8L/+3Mzqnd58RojiZqHVw==}
@@ -9407,8 +9407,8 @@ packages:
     resolution: {integrity: sha512-uR/mHK6eyfl8h3jVCobF5b38Mfg1IDJMiBxIVbmm5F+G1OXEFcUpQHveO84tJBAqvY93GCRY2R4kDyx7s06Rug==}
     engines: {node: '>=18'}
 
-  music-metadata@12.1.1:
-    resolution: {integrity: sha512-/QtXkigK7oHhMsSduDHGaueXF9tN9cT0vVdetw5PO2Lu5oMp7YnMaiiBuD9NCkSHhCaUCnJunuAS24Q4Mwnkzg==}
+  music-metadata@12.2.0:
+    resolution: {integrity: sha512-nyqJ4s0wVz91D24x/WdvzNRFJU3DryddKuBaBZXPakEUz3ZA90xB68XURfJYF8MMsfy50yG+PHTEt4r2+l8R3Q==}
     engines: {node: '>=22'}
 
   nanoid@3.3.20:
@@ -9564,6 +9564,9 @@ packages:
     resolution: {integrity: sha512-GX0gsdbGVCgnRgbeGaubfjpBXyYRWOOCVeYh08bSQvDZqxz5ndXs1OTfAt/h36G1xvI94YIspsI0sVFqAV9+RQ==}
     engines: {node: '>=20.19.0'}
 
+  oauth4webapi@3.8.8:
+    resolution: {integrity: sha512-8N28E+a/oxfXWBgOMt+ZP/JUf/XR+IFbvkAEPP3gznXOMv9BpAAwiIj0TFNz3tGTPc0ZQ8zmWBNgN1nAys0gng==}
+
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
     engines: {node: '>=0.10.0'}
@@ -9624,7 +9627,7 @@ packages:
     resolution: {integrity: sha512-avqxu/jl1gsVBCBgFNPr9sTh+wZppQphuhhFy1zEvAJxEaJ4t0ery6hZdOT9kws/EcNTARoQcZs2IT3bliE1SA==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.85
+      '@aws-sdk/credential-provider-node': 3.972.86
       '@smithy/hash-node': '>=4.3.0 <5'
       '@smithy/signature-v4': '>=5.4.0 <6'
       undici: '>=5 <9'
@@ -9643,6 +9646,9 @@ packages:
         optional: true
       zod:
         optional: true
+
+  openid-client@6.8.8:
+    resolution: {integrity: sha512-ZsucJA5Ad04Uv7YN4ql+s4GXNmb9uAYQwyJTsJx7CH/MX3JZioLE2pVKi1SC+YrbSLA4Px3Gi30dMjgOZtb6pA==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -9912,8 +9918,8 @@ packages:
   postcss-value-parser@4.2.0:
     resolution: {integrity: sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ==}
 
-  postcss@8.5.29:
-    resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
+  postcss@8.5.30:
+    resolution: {integrity: sha512-zkd+e9S1AQHhmaBKye9zlFHWjOwVgqXl1q3ECYy8561K7qxR2cREf/STLskulBFd78k6AOFeA+ff1TtEzk9bAA==}
     engines: {node: ^10 || ^12 || >=14}
 
   postgres-array@2.0.0:
@@ -10249,14 +10255,14 @@ packages:
     resolution: {integrity: sha512-3NnuWfM6vBYoy5gZFvHiYsVbafvI9vZv/+jlIigFn4oP4zjNPK3LhcY0xSCgeb1a5L8jO71Mit9LlNoi2UfDDQ==}
     engines: {node: '>=10'}
 
-  seroval-plugins@1.6.9:
-    resolution: {integrity: sha512-kiDK/Tb8IWZ61WEU8pA2PDmAuw37gKph9Y77OZlD56mg0Y2g0Bg7gZ1HeHhs5d40w+nRoUq/wj08V26ilbez9g==}
+  seroval-plugins@1.6.7:
+    resolution: {integrity: sha512-4Nk35ttD3DTDJW4hgw5StsVAPeU6qnDFnULAouw6tQ7oLTV/ICXrWpsXo2EE52eSP2joUMazbVf52mFEcADqRw==}
     engines: {node: '>=10'}
     peerDependencies:
       seroval: ^1.0
 
-  seroval@1.6.9:
-    resolution: {integrity: sha512-UeEzHwAK+yl0YLbsvROV1t5yMYEwZZ0CfKYxDvUgS2fO9Vxdf8djqVIB+OuVpuawRNPqw68LE1Du/GMsW2ZPqA==}
+  seroval@1.6.7:
+    resolution: {integrity: sha512-AeDcLh0yO2SFm9W71essgnSzLV9DI8ZH0x0knXn2DMnUZj728mpLbxjlbB6IqKCmqh8JA3cEqRyGoNkt584JcQ==}
     engines: {node: '>=10'}
 
   serve-static@2.2.1:
@@ -10358,8 +10364,8 @@ packages:
     resolution: {integrity: sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==}
     engines: {node: '>= 10.0.0', npm: '>= 3.0.0'}
 
-  solid-js@2.0.0-rc.14:
-    resolution: {integrity: sha512-fmaqUHgbITf18Hedur6gPnaPE4GrdPgkTbLujHqM5Vl5jxWf9rxwFh6hZMXQs+Kg1pu8KYuOMfqnuSizFQ9I6Q==}
+  solid-js@2.0.0-rc.16:
+    resolution: {integrity: sha512-GtrX+ieB9ctN2eQ0raDOHAHZBpFPoMn98gCsUn6YD5hz0xSou3zzV4J3Hti6xclvvrnPIFO8NJ+kk+pXbuXPHg==}
     engines: {node: '>=22.12.0'}
 
   sonic-boom@4.2.1:
@@ -10468,8 +10474,8 @@ packages:
     resolution: {integrity: sha512-ki4hZQfh5rX0QDLLkOCj+h+CVNkqmp/CMf8v8kZpkNVK6jGQooMytqzLZYUVYIZcFZ6yDB70EfD8POcFXiF5oA==}
     engines: {node: '>=18'}
 
-  strtok3@10.4.0:
-    resolution: {integrity: sha512-zzNQzrgQUNHyFFDzGCkzgWPgxiBcfwqg+/RNK9cZHKRH95KuCKxqXBXe+jC/1Xq+MRLAe/DkizyPe3kR37QV3w==}
+  strtok3@10.4.1:
+    resolution: {integrity: sha512-MeSp4vHXiZRXM9K0rSWqTvXMU+YzmGICc5+briMVK+RY8qQ1GRTffFYVpK6cSgV/ueImFIEh3uCJJD3xBh1TaQ==}
     engines: {node: '>=18'}
 
   style-mod@4.1.4:
@@ -10713,16 +10719,16 @@ packages:
     resolution: {integrity: sha512-faYHw0anBbc/kWF3zFTEnxSFOAGUX9GFbOBthvDdLsIlEoWOFOtS0zgCiQYwIskL9iGXZL3kAXD8OoZ4GmMATA==}
     engines: {node: '>= 18'}
 
-  typebox@1.3.36:
-    resolution: {integrity: sha512-bu2Ec2Ti9B4IFSFj1FcZbtLNB/W7igQwxocMGJLAG2NTv1nI+ImtIA34YgHW4CVyGVlJqNXR1GJyLmdWgV3DuA==}
+  typebox@1.3.37:
+    resolution: {integrity: sha512-k+Qogwk7lztlItGvFf5v4GZPPStFAFehAyOKYeuqIHzi3dfTFqPOTx38JG09hmpcK6TQgctrTD06U/0CTTpM1g==}
 
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@7.1.0-dev.20261011.1:
-    resolution: {integrity: sha512-Oestzc61TT5cqxAyVxRsbL+pmMF8pzPlsnLcbCqAWqvC0eYQcp8EJrLWatIgjdUh4RiL79avUCHfM8hdkv07xg==}
+  typescript@7.1.0-dev.20261012.1:
+    resolution: {integrity: sha512-Zux+NC2mv6R657qD26m7EaI0ZhtGLkv28/eNipVKjoecip2gmoYp9z1UG72poSGAy5KEM/7lb8cJWD7JwkJrzw==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -11159,24 +11165,13 @@ packages:
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
-  zod@4.6.6:
-    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
-
-  '@a2ui/lit@0.13.0(signal-polyfill@0.2.2)':
-    dependencies:
-      '@a2ui/web_core': 0.13.0
-      '@lit-labs/signals': 0.3.0
-      '@lit/context': 1.1.6
-      lit: 3.3.3
-      signal-utils: 0.21.1(signal-polyfill@0.2.2)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - signal-polyfill
 
   '@a2ui/web_core@0.13.0':
     dependencies:
@@ -11188,10 +11183,10 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
 
-  '@agentclientprotocol/claude-agent-acp@0.89.1(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))':
+  '@agentclientprotocol/claude-agent-acp@0.89.1(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))':
     dependencies:
       '@agentclientprotocol/sdk': 1.8.0(zod@4.6.5)
-      '@anthropic-ai/claude-agent-sdk': 0.3.293(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(zod@4.6.5)
+      '@anthropic-ai/claude-agent-sdk': 0.3.293(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(zod@4.6.5)
       diff: 9.0.0
       zod: 4.6.5
     transitivePeerDependencies:
@@ -11200,25 +11195,25 @@ snapshots:
 
   '@agentclientprotocol/codex-acp@2.2.2':
     dependencies:
-      '@agentclientprotocol/sdk': 1.7.0(zod@4.6.5)
+      '@agentclientprotocol/sdk': 1.7.0(zod@4.6.7)
       '@openai/codex': 0.162.1
       cross-spawn: 7.0.6
       diff: 9.0.0
       open: 11.0.4
       vscode-jsonrpc: 9.0.3
-      zod: 4.6.5
+      zod: 4.6.7
 
-  '@agentclientprotocol/sdk@1.7.0(zod@4.6.5)':
+  '@agentclientprotocol/sdk@1.7.0(zod@4.6.7)':
     dependencies:
-      zod: 4.6.5
+      zod: 4.6.7
 
   '@agentclientprotocol/sdk@1.8.0(zod@4.6.5)':
     dependencies:
       zod: 4.6.5
 
-  '@agentclientprotocol/sdk@1.8.0(zod@4.6.6)':
+  '@agentclientprotocol/sdk@1.8.0(zod@4.6.7)':
     dependencies:
-      zod: 4.6.6
+      zod: 4.6.7
 
   '@ampproject/remapping@2.3.0':
     dependencies:
@@ -11254,10 +11249,10 @@ snapshots:
   '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.293':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.293(@anthropic-ai/sdk@0.133.0(zod@4.6.6))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(zod@4.6.5)':
+  '@anthropic-ai/claude-agent-sdk@0.3.293(@anthropic-ai/sdk@0.133.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(zod@4.6.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.133.0(zod@4.6.6)
-      '@modelcontextprotocol/sdk': 1.32.1(supports-color@10.2.2)(zod@4.6.6)
+      '@anthropic-ai/sdk': 0.133.0(zod@4.6.7)
+      '@modelcontextprotocol/sdk': 1.32.1(supports-color@10.2.2)(zod@4.6.7)
       zod: 4.6.5
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.293
@@ -11269,17 +11264,17 @@ snapshots:
       '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.293
       '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.293
 
-  '@anthropic-ai/sdk@0.133.0(zod@4.6.6)':
+  '@anthropic-ai/sdk@0.133.0(zod@4.6.7)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.1.1
     optionalDependencies:
-      zod: 4.6.6
+      zod: 4.6.7
 
-  '@anthropic-ai/vertex-sdk@0.20.4(supports-color@10.2.2)(zod@4.6.6)':
+  '@anthropic-ai/vertex-sdk@0.20.4(supports-color@10.2.2)(zod@4.6.7)':
     dependencies:
-      '@anthropic-ai/sdk': 0.133.0(zod@4.6.6)
-      google-auth-library: 11.2.0(supports-color@10.2.2)
+      '@anthropic-ai/sdk': 0.133.0(zod@4.6.7)
+      google-auth-library: 11.3.0(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
       - zod
@@ -11405,22 +11400,22 @@ snapshots:
       '@audio/decode-wma': 1.4.0
       audio-type: 2.8.0
 
-  '@aws-sdk/checksums@3.1001.2':
+  '@aws-sdk/checksums@3.1001.3':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock-runtime@3.1149.0':
+  '@aws-sdk/client-bedrock-runtime@3.1150.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/credential-provider-node': 3.972.85
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-node': 3.972.86
       '@aws-sdk/eventstream-handler-node': 3.972.36
       '@aws-sdk/middleware-eventstream': 3.972.31
-      '@aws-sdk/middleware-websocket': 3.972.55
-      '@aws-sdk/token-providers': 3.1149.0
+      '@aws-sdk/middleware-websocket': 3.972.56
+      '@aws-sdk/token-providers': 3.1150.0
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/fetch-http-handler': 5.8.0
@@ -11428,11 +11423,11 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-bedrock@3.1149.0':
+  '@aws-sdk/client-bedrock@3.1150.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/credential-provider-node': 3.972.85
-      '@aws-sdk/token-providers': 3.1149.0
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/token-providers': 3.1150.0
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/fetch-http-handler': 5.8.0
@@ -11440,12 +11435,12 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1149.0':
+  '@aws-sdk/client-s3@3.1150.0':
     dependencies:
-      '@aws-sdk/checksums': 3.1001.2
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/credential-provider-node': 3.972.85
-      '@aws-sdk/middleware-sdk-s3': 3.972.78
+      '@aws-sdk/checksums': 3.1001.3
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/middleware-sdk-s3': 3.972.79
       '@aws-sdk/signature-v4-multi-region': 3.996.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
@@ -11454,7 +11449,7 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/core@3.978.2':
+  '@aws-sdk/core@3.978.3':
     dependencies:
       '@aws-sdk/types': 3.974.6
       '@aws-sdk/xml-builder': 3.972.41
@@ -11475,15 +11470,15 @@ snapshots:
 
   '@aws-sdk/credential-provider-env@3.972.72':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-env@3.972.73':
+  '@aws-sdk/credential-provider-env@3.972.74':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
@@ -11491,7 +11486,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-http@3.972.74':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/fetch-http-handler': 5.8.0
@@ -11499,9 +11494,9 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-http@3.972.75':
+  '@aws-sdk/credential-provider-http@3.972.76':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/fetch-http-handler': 5.8.0
@@ -11511,7 +11506,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-ini@3.973.17':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/credential-provider-env': 3.972.72
       '@aws-sdk/credential-provider-http': 3.972.74
       '@aws-sdk/credential-provider-login': 3.972.79
@@ -11525,16 +11520,16 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-ini@3.973.18':
+  '@aws-sdk/credential-provider-ini@3.973.19':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/credential-provider-env': 3.972.73
-      '@aws-sdk/credential-provider-http': 3.972.75
-      '@aws-sdk/credential-provider-login': 3.972.80
-      '@aws-sdk/credential-provider-process': 3.972.73
-      '@aws-sdk/credential-provider-sso': 3.973.17
-      '@aws-sdk/credential-provider-web-identity': 3.972.79
-      '@aws-sdk/nested-clients': 3.997.47
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/credential-provider-env': 3.972.74
+      '@aws-sdk/credential-provider-http': 3.972.76
+      '@aws-sdk/credential-provider-login': 3.972.81
+      '@aws-sdk/credential-provider-process': 3.972.74
+      '@aws-sdk/credential-provider-sso': 3.973.18
+      '@aws-sdk/credential-provider-web-identity': 3.972.80
+      '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/credential-provider-imds': 4.5.2
@@ -11543,30 +11538,30 @@ snapshots:
 
   '@aws-sdk/credential-provider-login@3.972.79':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/nested-clients': 3.997.46
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-login@3.972.80':
+  '@aws-sdk/credential-provider-login@3.972.81':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/nested-clients': 3.997.47
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-node@3.972.85':
+  '@aws-sdk/credential-provider-node@3.972.86':
     dependencies:
-      '@aws-sdk/credential-provider-env': 3.972.73
-      '@aws-sdk/credential-provider-http': 3.972.75
-      '@aws-sdk/credential-provider-ini': 3.973.18
-      '@aws-sdk/credential-provider-process': 3.972.73
-      '@aws-sdk/credential-provider-sso': 3.973.17
-      '@aws-sdk/credential-provider-web-identity': 3.972.79
+      '@aws-sdk/credential-provider-env': 3.972.74
+      '@aws-sdk/credential-provider-http': 3.972.76
+      '@aws-sdk/credential-provider-ini': 3.973.19
+      '@aws-sdk/credential-provider-process': 3.972.74
+      '@aws-sdk/credential-provider-sso': 3.973.18
+      '@aws-sdk/credential-provider-web-identity': 3.972.80
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/credential-provider-imds': 4.5.2
@@ -11575,15 +11570,15 @@ snapshots:
 
   '@aws-sdk/credential-provider-process@3.972.72':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-process@3.972.73':
+  '@aws-sdk/credential-provider-process@3.972.74':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
@@ -11591,7 +11586,7 @@ snapshots:
 
   '@aws-sdk/credential-provider-sso@3.973.16':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/nested-clients': 3.997.46
       '@aws-sdk/token-providers': 3.1138.0
       '@aws-sdk/types': 3.974.6
@@ -11599,11 +11594,11 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-sso@3.973.17':
+  '@aws-sdk/credential-provider-sso@3.973.18':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/nested-clients': 3.997.47
-      '@aws-sdk/token-providers': 3.1149.0
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/nested-clients': 3.997.48
+      '@aws-sdk/token-providers': 3.1150.0
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
@@ -11611,17 +11606,17 @@ snapshots:
 
   '@aws-sdk/credential-provider-web-identity@3.972.78':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/nested-clients': 3.997.46
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/credential-provider-web-identity@3.972.79':
+  '@aws-sdk/credential-provider-web-identity@3.972.80':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/nested-clients': 3.997.47
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
@@ -11629,13 +11624,13 @@ snapshots:
 
   '@aws-sdk/credential-providers@3.1148.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/credential-provider-cognito-identity': 3.972.71
       '@aws-sdk/credential-provider-env': 3.972.72
       '@aws-sdk/credential-provider-http': 3.972.74
       '@aws-sdk/credential-provider-ini': 3.973.17
       '@aws-sdk/credential-provider-login': 3.972.79
-      '@aws-sdk/credential-provider-node': 3.972.85
+      '@aws-sdk/credential-provider-node': 3.972.86
       '@aws-sdk/credential-provider-process': 3.972.72
       '@aws-sdk/credential-provider-sso': 3.973.16
       '@aws-sdk/credential-provider-web-identity': 3.972.78
@@ -11660,18 +11655,18 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/middleware-sdk-s3@3.972.78':
+  '@aws-sdk/middleware-sdk-s3@3.972.79':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/signature-v4-multi-region': 3.996.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/middleware-websocket@3.972.55':
+  '@aws-sdk/middleware-websocket@3.972.56':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/fetch-http-handler': 5.8.0
@@ -11681,7 +11676,7 @@ snapshots:
 
   '@aws-sdk/nested-clients@3.997.46':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/signature-v4-multi-region': 3.996.47
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
@@ -11690,9 +11685,9 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/nested-clients@3.997.47':
+  '@aws-sdk/nested-clients@3.997.48':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/signature-v4-multi-region': 3.996.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
@@ -11701,9 +11696,9 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/s3-request-presigner@3.1149.0':
+  '@aws-sdk/s3-request-presigner@3.1150.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/signature-v4-multi-region': 3.996.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
@@ -11726,17 +11721,17 @@ snapshots:
 
   '@aws-sdk/token-providers@3.1138.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       '@aws-sdk/nested-clients': 3.997.46
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
-  '@aws-sdk/token-providers@3.1149.0':
+  '@aws-sdk/token-providers@3.1150.0':
     dependencies:
-      '@aws-sdk/core': 3.978.2
-      '@aws-sdk/nested-clients': 3.997.47
+      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/types': 3.974.6
       '@smithy/core': 3.35.2
       '@smithy/types': 4.19.0
@@ -11749,7 +11744,7 @@ snapshots:
 
   '@aws-sdk/util-format-url@3.972.48':
     dependencies:
-      '@aws-sdk/core': 3.978.2
+      '@aws-sdk/core': 3.978.3
       tslib: 2.8.1
 
   '@aws-sdk/xml-builder@3.972.41':
@@ -12335,7 +12330,7 @@ snapshots:
       style-mod: 4.1.4
       w3c-keyname: 2.2.8
 
-  '@copilotkit/aimock@1.45.0(vitest@5.0.3)':
+  '@copilotkit/aimock@1.45.1(vitest@5.0.3)':
     optionalDependencies:
       vitest: 5.0.3(patch_hash=b9cf06b8bd5da1ffe896837133366083382a1bbe0fb5b39274ebde46d060d53d)(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/browser-playwright@5.0.3)(@vitest/coverage-v8@5.0.3)(@vitest/ui@5.0.3)(jsdom@30.1.2(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
@@ -12454,7 +12449,7 @@ snapshots:
       - opusscript
       - utf-8-validate
 
-  '@earendil-works/pi-tui@1.1.0':
+  '@earendil-works/pi-tui@1.2.0':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.11
@@ -12609,53 +12604,53 @@ snapshots:
 
   '@gar/promise-retry@1.0.3': {}
 
-  '@github/copilot-sdk-darwin-arm64@1.0.19':
+  '@github/copilot-sdk-darwin-arm64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-darwin-x64@1.0.19':
+  '@github/copilot-sdk-darwin-x64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-linux-arm64@1.0.19':
+  '@github/copilot-sdk-linux-arm64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-linux-x64@1.0.19':
+  '@github/copilot-sdk-linux-x64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-linuxmusl-arm64@1.0.19':
+  '@github/copilot-sdk-linuxmusl-arm64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-linuxmusl-x64@1.0.19':
+  '@github/copilot-sdk-linuxmusl-x64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-win32-arm64@1.0.19':
+  '@github/copilot-sdk-win32-arm64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk-win32-x64@1.0.19':
+  '@github/copilot-sdk-win32-x64@1.0.20':
     optional: true
 
-  '@github/copilot-sdk@1.0.19':
+  '@github/copilot-sdk@1.0.20':
     dependencies:
       koffi: 3.2.1
       vscode-jsonrpc: 8.2.1
       zod: 4.3.6
     optionalDependencies:
-      '@github/copilot-sdk-darwin-arm64': 1.0.19
-      '@github/copilot-sdk-darwin-x64': 1.0.19
-      '@github/copilot-sdk-linux-arm64': 1.0.19
-      '@github/copilot-sdk-linux-x64': 1.0.19
-      '@github/copilot-sdk-linuxmusl-arm64': 1.0.19
-      '@github/copilot-sdk-linuxmusl-x64': 1.0.19
-      '@github/copilot-sdk-win32-arm64': 1.0.19
-      '@github/copilot-sdk-win32-x64': 1.0.19
+      '@github/copilot-sdk-darwin-arm64': 1.0.20
+      '@github/copilot-sdk-darwin-x64': 1.0.20
+      '@github/copilot-sdk-linux-arm64': 1.0.20
+      '@github/copilot-sdk-linux-x64': 1.0.20
+      '@github/copilot-sdk-linuxmusl-arm64': 1.0.20
+      '@github/copilot-sdk-linuxmusl-x64': 1.0.20
+      '@github/copilot-sdk-win32-arm64': 1.0.20
+      '@github/copilot-sdk-win32-x64': 1.0.20
 
-  '@google/genai@2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6))(supports-color@10.2.2)':
+  '@google/genai@2.28.0(@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7))(supports-color@10.2.2)':
     dependencies:
       google-auth-library: 10.9.1(supports-color@10.2.2)
       p-retry: 4.6.2
       protobufjs: 8.8.1
       ws: 8.22.0
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.32.1(supports-color@10.2.2)(zod@4.6.6)
+      '@modelcontextprotocol/sdk': 1.32.1(supports-color@10.2.2)(zod@4.6.7)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -12932,7 +12927,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@larksuiteoapi/node-sdk@1.74.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
+  '@larksuiteoapi/node-sdk@1.75.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)':
     dependencies:
       axios: 1.20.0(debug@4.4.3(supports-color@10.2.2))(supports-color@10.2.2)
       lodash.identity: 3.0.0
@@ -13045,11 +13040,6 @@ snapshots:
   '@line/bot-sdk@11.3.0':
     dependencies:
       '@types/node': 24.19.1
-
-  '@lit-labs/signals@0.3.0':
-    dependencies:
-      lit: 3.3.3
-      signal-polyfill: 0.2.2
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 
@@ -13188,8 +13178,8 @@ snapshots:
     dependencies:
       '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.22.0
-      zod: 4.6.6
-      zod-to-json-schema: 3.25.2(zod@4.6.6)
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/exporter-trace-otlp-http': 0.220.0(@opentelemetry/api@1.9.1)
@@ -13207,18 +13197,18 @@ snapshots:
       eventsource-parser: 3.1.1
       jose: 6.2.12
       pkce-challenge: 5.0.1
-      zod: 4.6.6
+      zod: 4.6.7
 
   '@modelcontextprotocol/core@2.3.1':
     dependencies:
-      zod: 4.6.6
+      zod: 4.6.7
 
-  '@modelcontextprotocol/ext-apps@2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1)(zod@4.6.6)':
+  '@modelcontextprotocol/ext-apps@2.0.3(@modelcontextprotocol/client@2.3.1)(@modelcontextprotocol/core@2.3.1)(@modelcontextprotocol/server@2.3.1)(zod@4.6.7)':
     dependencies:
       '@modelcontextprotocol/client': 2.3.1
       '@modelcontextprotocol/core': 2.3.1
       '@standard-schema/spec': 1.1.0
-      zod: 4.6.6
+      zod: 4.6.7
     optionalDependencies:
       '@modelcontextprotocol/server': 2.3.1
 
@@ -13228,7 +13218,7 @@ snapshots:
       '@modelcontextprotocol/server': 2.3.1
       hono: 4.13.13
 
-  '@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.6)':
+  '@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@4.6.7)':
     dependencies:
       '@hono/node-server': 2.1.4(hono@4.13.13)
       ajv: 8.20.0
@@ -13245,19 +13235,19 @@ snapshots:
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
-      zod: 4.6.6
-      zod-to-json-schema: 3.25.2(zod@4.6.6)
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
     transitivePeerDependencies:
       - supports-color
 
   '@modelcontextprotocol/server@2.3.1':
     dependencies:
       '@modelcontextprotocol/core': 2.3.1
-      zod: 4.6.6
+      zod: 4.6.7
 
   '@mozilla/readability@0.6.0': {}
 
-  '@muse-code/sdk@1.4.4(@types/node@26.6.5)':
+  '@muse-code/sdk@1.4.7(@types/node@26.6.5)':
     optionalDependencies:
       '@types/node': 26.6.5
 
@@ -13366,18 +13356,18 @@ snapshots:
       re2js: 2.8.6
       ws: 8.22.0
       yaml: 2.9.1
-      zod: 4.6.6
+      zod: 4.6.7
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe-darwin-arm64@0.21.3':
+  '@openclaw/fs-safe-darwin-arm64@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-darwin-arm64@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-darwin-x64@0.21.3':
+  '@openclaw/fs-safe-darwin-x64@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-darwin-x64@0.26.8':
@@ -13389,25 +13379,25 @@ snapshots:
   '@openclaw/fs-safe-freebsd-x64@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-gnu@0.21.3':
+  '@openclaw/fs-safe-linux-arm64-gnu@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-gnu@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-linux-arm64-musl@0.21.3':
+  '@openclaw/fs-safe-linux-arm64-musl@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-linux-arm64-musl@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-gnu@0.21.3':
+  '@openclaw/fs-safe-linux-x64-gnu@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-gnu@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-linux-x64-musl@0.21.3':
+  '@openclaw/fs-safe-linux-x64-musl@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-linux-x64-musl@0.26.8':
@@ -13416,21 +13406,21 @@ snapshots:
   '@openclaw/fs-safe-win32-arm64-msvc@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe-win32-x64-msvc@0.21.3':
+  '@openclaw/fs-safe-win32-x64-msvc@0.22.0':
     optional: true
 
   '@openclaw/fs-safe-win32-x64-msvc@0.26.8':
     optional: true
 
-  '@openclaw/fs-safe@0.21.3':
+  '@openclaw/fs-safe@0.22.0':
     optionalDependencies:
-      '@openclaw/fs-safe-darwin-arm64': 0.21.3
-      '@openclaw/fs-safe-darwin-x64': 0.21.3
-      '@openclaw/fs-safe-linux-arm64-gnu': 0.21.3
-      '@openclaw/fs-safe-linux-arm64-musl': 0.21.3
-      '@openclaw/fs-safe-linux-x64-gnu': 0.21.3
-      '@openclaw/fs-safe-linux-x64-musl': 0.21.3
-      '@openclaw/fs-safe-win32-x64-msvc': 0.21.3
+      '@openclaw/fs-safe-darwin-arm64': 0.22.0
+      '@openclaw/fs-safe-darwin-x64': 0.22.0
+      '@openclaw/fs-safe-linux-arm64-gnu': 0.22.0
+      '@openclaw/fs-safe-linux-arm64-musl': 0.22.0
+      '@openclaw/fs-safe-linux-x64-gnu': 0.22.0
+      '@openclaw/fs-safe-linux-x64-musl': 0.22.0
+      '@openclaw/fs-safe-win32-x64-msvc': 0.22.0
       jszip: 3.10.2
 
   '@openclaw/fs-safe@0.26.8':
@@ -14479,7 +14469,7 @@ snapshots:
       - '@emnapi/core'
       - '@emnapi/runtime'
 
-  '@solidjs/babel-plugin@2.0.0-rc.14(@babel/core@7.29.7(supports-color@10.2.2))':
+  '@solidjs/babel-plugin@2.0.0-rc.16(@babel/core@7.29.7(supports-color@10.2.2))':
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/helper-module-imports': 7.18.6
@@ -14488,72 +14478,72 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
-  '@solidjs/compiler-darwin-arm64@2.0.0-rc.14':
+  '@solidjs/compiler-darwin-arm64@2.0.0-rc.16':
     optional: true
 
-  '@solidjs/compiler-darwin-x64@2.0.0-rc.14':
+  '@solidjs/compiler-darwin-x64@2.0.0-rc.16':
     optional: true
 
-  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.14':
+  '@solidjs/compiler-linux-arm64-gnu@2.0.0-rc.16':
     optional: true
 
-  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.14':
+  '@solidjs/compiler-linux-x64-gnu@2.0.0-rc.16':
     optional: true
 
-  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.14':
+  '@solidjs/compiler-wasm32-wasi@2.0.0-rc.16':
     dependencies:
       '@emnapi/core': 1.11.3
       '@emnapi/runtime': 1.11.3
       '@napi-rs/wasm-runtime': 1.2.5(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
     optional: true
 
-  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.14':
+  '@solidjs/compiler-win32-x64-msvc@2.0.0-rc.16':
     optional: true
 
-  '@solidjs/compiler@2.0.0-rc.14':
+  '@solidjs/compiler@2.0.0-rc.16':
     optionalDependencies:
-      '@solidjs/compiler-darwin-arm64': 2.0.0-rc.14
-      '@solidjs/compiler-darwin-x64': 2.0.0-rc.14
-      '@solidjs/compiler-linux-arm64-gnu': 2.0.0-rc.14
-      '@solidjs/compiler-linux-x64-gnu': 2.0.0-rc.14
-      '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.14
-      '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.14
+      '@solidjs/compiler-darwin-arm64': 2.0.0-rc.16
+      '@solidjs/compiler-darwin-x64': 2.0.0-rc.16
+      '@solidjs/compiler-linux-arm64-gnu': 2.0.0-rc.16
+      '@solidjs/compiler-linux-x64-gnu': 2.0.0-rc.16
+      '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.16
+      '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.16
 
-  '@solidjs/signals@2.0.0-rc.14': {}
+  '@solidjs/signals@2.0.0-rc.16': {}
 
-  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)':
+  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)':
     dependencies:
-      '@solidjs/web': 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+      '@solidjs/web': 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       '@testing-library/dom': 10.4.2
-      solid-js: 2.0.0-rc.14
+      solid-js: 2.0.0-rc.16
 
-  '@solidjs/vite-plugin@3.0.0-next.49(@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14))(solid-js@2.0.0-rc.14)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
+  '@solidjs/vite-plugin@3.0.0-next.50(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@babel/core': 7.29.7(supports-color@10.2.2)
-      '@solidjs/babel-plugin': 2.0.0-rc.14(@babel/core@7.29.7(supports-color@10.2.2))
-      '@solidjs/compiler': 2.0.0-rc.14
-      '@solidjs/web': 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+      '@solidjs/babel-plugin': 2.0.0-rc.16(@babel/core@7.29.7(supports-color@10.2.2))
+      '@solidjs/compiler': 2.0.0-rc.16
+      '@solidjs/web': 2.0.0-rc.16(solid-js@2.0.0-rc.16)
       '@types/babel__core': 7.20.5
       merge-anything: 5.1.7
-      solid-js: 2.0.0-rc.14
+      solid-js: 2.0.0-rc.16
       vite: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitefu: 1.1.3(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
     transitivePeerDependencies:
       - '@tsrx/core'
       - supports-color
 
-  '@solidjs/web@2.0.0-rc.14(solid-js@2.0.0-rc.14)':
+  '@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16)':
     dependencies:
-      seroval: 1.6.9
-      seroval-plugins: 1.6.9(seroval@1.6.9)
-      solid-js: 2.0.0-rc.14
+      seroval: 1.6.7
+      seroval-plugins: 1.6.7(seroval@1.6.7)
+      solid-js: 2.0.0-rc.16
 
   '@stablelib/base64@1.0.1': {}
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@tanstack/virtual-core@3.19.0': {}
+  '@tanstack/virtual-core@3.19.2': {}
 
   '@testing-library/dom@10.4.2':
     dependencies:
@@ -15068,25 +15058,25 @@ snapshots:
       '@typescript-eslint/types': 8.71.1
       eslint-visitor-keys: 5.0.1
 
-  '@typescript/typescript-darwin-arm64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-darwin-arm64@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-darwin-x64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-darwin-x64@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-linux-arm64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-linux-arm64@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-linux-arm@7.1.0-dev.20261011.1':
+  '@typescript/typescript-linux-arm@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-linux-x64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-linux-x64@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-win32-arm64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-win32-arm64@7.1.0-dev.20261012.1':
     optional: true
 
-  '@typescript/typescript-win32-x64@7.1.0-dev.20261011.1':
+  '@typescript/typescript-win32-x64@7.1.0-dev.20261012.1':
     optional: true
 
   '@typespec/ts-http-runtime@0.3.9(supports-color@10.2.2)':
@@ -15362,14 +15352,14 @@ snapshots:
 
   acorn@8.19.0: {}
 
-  acpx@0.19.4:
+  acpx@0.19.5:
     dependencies:
-      '@agentclientprotocol/sdk': 1.8.0(zod@4.6.6)
-      '@openclaw/fs-safe': 0.21.3
+      '@agentclientprotocol/sdk': 1.8.0(zod@4.6.7)
+      '@openclaw/fs-safe': 0.22.0
       commander: 15.0.0
       skillflag: 0.2.1
       tsx: 4.23.15
-      zod: 4.6.6
+      zod: 4.6.7
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -15499,6 +15489,7 @@ snapshots:
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
       libsignal: 6.0.0
+      long: 5.3.2
       lru-cache: 11.5.3
       music-metadata: 11.16.1(supports-color@10.2.2)
       p-queue: 9.3.3
@@ -15759,14 +15750,14 @@ snapshots:
     dependencies:
       layout-base: 2.0.1
 
-  cosmiconfig@9.0.2(typescript@7.1.0-dev.20261011.1):
+  cosmiconfig@9.0.2(typescript@7.1.0-dev.20261012.1):
     dependencies:
       env-paths: 2.2.1
       import-fresh: 3.3.1
       js-yaml: 4.3.2
       parse-json: 5.2.0
     optionalDependencies:
-      typescript: 7.1.0-dev.20261011.1
+      typescript: 7.1.0-dev.20261012.1
 
   crelt@1.0.7: {}
 
@@ -16112,7 +16103,7 @@ snapshots:
     dependencies:
       domelementtype: 3.0.0
 
-  dompurify@3.4.16:
+  dompurify@3.4.17:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -16715,7 +16706,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  google-auth-library@11.2.0(supports-color@10.2.2):
+  google-auth-library@11.3.0(supports-color@10.2.2):
     dependencies:
       base64-js: 1.5.1
       ecdsa-sig-formatter: 1.0.11
@@ -17564,7 +17555,7 @@ snapshots:
 
   marked@18.0.11: {}
 
-  marked@18.1.0: {}
+  marked@18.1.1: {}
 
   matcher@4.0.0:
     dependencies:
@@ -17732,6 +17723,11 @@ snapshots:
       '@types/dom-mediacapture-transform': 0.1.12
       '@types/dom-webcodecs': 0.1.13
 
+  mediabunny@1.61.4:
+    dependencies:
+      '@types/dom-mediacapture-transform': 0.1.12
+      '@types/dom-webcodecs': 0.1.13
+
   meow@14.1.0: {}
 
   merge-anything@5.1.7:
@@ -17757,7 +17753,7 @@ snapshots:
       d3-sankey: 0.12.3
       dagre-d3-es: 7.0.14
       dayjs: 1.11.23
-      dompurify: 3.4.16
+      dompurify: 3.4.17
       elkjs: 0.9.3
       es-toolkit: 1.52.0
       katex: 0.16.47
@@ -18079,7 +18075,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  music-metadata@12.1.1(supports-color@10.2.2):
+  music-metadata@12.2.0(supports-color@10.2.2):
     dependencies:
       '@borewit/text-codec': 0.2.2
       '@tokenizer/token': 0.3.0
@@ -18087,7 +18083,7 @@ snapshots:
       debug: 4.4.3(supports-color@10.2.2)
       file-type: 22.1.1(supports-color@10.2.2)
       media-typer: 2.0.0
-      strtok3: 10.4.0
+      strtok3: 10.4.1
       token-types: 6.1.2
       uint8array-extras: 1.6.0
       win-guid: 0.2.1
@@ -18140,7 +18136,7 @@ snapshots:
 
   normalize-path@3.0.0: {}
 
-  nostr-tools@2.25.2(typescript@7.1.0-dev.20261011.1):
+  nostr-tools@2.25.2(typescript@7.1.0-dev.20261012.1):
     dependencies:
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
@@ -18150,7 +18146,7 @@ snapshots:
       '@scure/bip39': 2.0.1
       nostr-wasm: 0.1.0
     optionalDependencies:
-      typescript: 7.1.0-dev.20261011.1
+      typescript: 7.1.0-dev.20261012.1
 
   nostr-wasm@0.1.0: {}
 
@@ -18164,6 +18160,8 @@ snapshots:
   nth-check@3.0.1:
     dependencies:
       boolbase: 2.0.0
+
+  oauth4webapi@3.8.8: {}
 
   object-assign@4.1.1: {}
 
@@ -18235,14 +18233,19 @@ snapshots:
       - encoding
     optional: true
 
-  openai@7.32.0(@aws-sdk/credential-provider-node@3.972.85)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.6):
+  openai@7.32.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.7):
     optionalDependencies:
-      '@aws-sdk/credential-provider-node': 3.972.85
+      '@aws-sdk/credential-provider-node': 3.972.86
       '@smithy/hash-node': 4.5.2
       '@smithy/signature-v4': 5.7.4
       undici: 8.11.2
       ws: 8.22.0
-      zod: 4.6.6
+      zod: 4.6.7
+
+  openid-client@6.8.8:
+    dependencies:
+      jose: 6.2.12
+      oauth4webapi: 3.8.8
 
   optionator@0.9.4:
     dependencies:
@@ -18527,9 +18530,9 @@ snapshots:
       path-data-parser: 0.1.0
       points-on-curve: 0.2.0
 
-  postcss-safe-parser@7.1.0(postcss@8.5.29):
+  postcss-safe-parser@7.1.0(postcss@8.5.30):
     dependencies:
-      postcss: 8.5.29
+      postcss: 8.5.30
 
   postcss-selector-parser@7.1.6:
     dependencies:
@@ -18538,7 +18541,7 @@ snapshots:
 
   postcss-value-parser@4.2.0: {}
 
-  postcss@8.5.29:
+  postcss@8.5.30:
     dependencies:
       nanoid: 3.3.20
       picocolors: 1.1.1
@@ -18775,7 +18778,7 @@ snapshots:
 
   robust-predicates@3.0.3: {}
 
-  rolldown-plugin-dts@0.28.8(rolldown@1.2.13)(typescript@7.1.0-dev.20261011.1):
+  rolldown-plugin-dts@0.28.8(rolldown@1.2.13)(typescript@7.1.0-dev.20261012.1):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.6
@@ -18785,7 +18788,7 @@ snapshots:
       yuku-codegen: 0.19.0
       yuku-parser: 0.19.0
     optionalDependencies:
-      typescript: 7.1.0-dev.20261011.1
+      typescript: 7.1.0-dev.20261012.1
     transitivePeerDependencies:
       - oxc-resolver
 
@@ -18878,11 +18881,11 @@ snapshots:
       type-fest: 0.20.2
     optional: true
 
-  seroval-plugins@1.6.9(seroval@1.6.9):
+  seroval-plugins@1.6.7(seroval@1.6.7):
     dependencies:
-      seroval: 1.6.9
+      seroval: 1.6.7
 
-  seroval@1.6.9: {}
+  seroval@1.6.7: {}
 
   serve-static@2.2.1(supports-color@10.2.2):
     dependencies:
@@ -19010,12 +19013,12 @@ snapshots:
       ip-address: 10.7.4
       smart-buffer: 4.2.0
 
-  solid-js@2.0.0-rc.14:
+  solid-js@2.0.0-rc.16:
     dependencies:
-      '@solidjs/signals': 2.0.0-rc.14
+      '@solidjs/signals': 2.0.0-rc.16
       csstype: 3.2.3
-      seroval: 1.6.9
-      seroval-plugins: 1.6.9(seroval@1.6.9)
+      seroval: 1.6.7
+      seroval-plugins: 1.6.7(seroval@1.6.7)
 
   sonic-boom@4.2.1:
     dependencies:
@@ -19122,7 +19125,7 @@ snapshots:
     dependencies:
       '@tokenizer/token': 0.3.0
 
-  strtok3@10.4.0:
+  strtok3@10.4.1:
     dependencies:
       '@tokenizer/token': 0.3.0
 
@@ -19136,11 +19139,11 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.7
 
-  stylelint-config-recommended@18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261011.1)):
+  stylelint-config-recommended@18.0.0(stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261012.1)):
     dependencies:
-      stylelint: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261011.1)
+      stylelint: 17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261012.1)
 
-  stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261011.1):
+  stylelint@17.16.0(supports-color@10.2.2)(typescript@7.1.0-dev.20261012.1):
     dependencies:
       '@csstools/css-calc': 3.4.3(@csstools/css-parser-algorithms@4.0.2(@csstools/css-tokenizer@4.0.2))(@csstools/css-tokenizer@4.0.2)
       '@csstools/css-parser-algorithms': 4.0.2(@csstools/css-tokenizer@4.0.2)
@@ -19150,7 +19153,7 @@ snapshots:
       '@csstools/selector-resolve-nested': 4.0.2(postcss-selector-parser@7.1.6)
       '@csstools/selector-specificity': 6.0.1(postcss-selector-parser@7.1.6)
       colord: 2.10.0
-      cosmiconfig: 9.0.2(typescript@7.1.0-dev.20261011.1)
+      cosmiconfig: 9.0.2(typescript@7.1.0-dev.20261012.1)
       css-functions-list: 3.3.3
       css-tree: 3.2.1
       debug: 4.4.3(supports-color@10.2.2)
@@ -19168,8 +19171,8 @@ snapshots:
       micromatch: 4.0.8
       normalize-path: 3.0.0
       picocolors: 1.1.1
-      postcss: 8.5.29
-      postcss-safe-parser: 7.1.0(postcss@8.5.29)
+      postcss: 8.5.30
+      postcss-safe-parser: 7.1.0(postcss@8.5.30)
       postcss-selector-parser: 7.1.6
       postcss-value-parser: 4.2.0
       string-width: 8.3.0
@@ -19310,7 +19313,7 @@ snapshots:
 
   ts-dedent@2.3.0: {}
 
-  tsdown@0.23.1(tsx@4.23.15)(typescript@7.1.0-dev.20261011.1)(unrun@0.3.1):
+  tsdown@0.23.1(tsx@4.23.15)(typescript@7.1.0-dev.20261012.1)(unrun@0.3.1):
     dependencies:
       cac: 7.0.1
       defu: 6.1.7
@@ -19320,7 +19323,7 @@ snapshots:
       obug: 3.0.0
       picomatch: 4.0.7
       rolldown: 1.2.13
-      rolldown-plugin-dts: 0.28.8(rolldown@1.2.13)(typescript@7.1.0-dev.20261011.1)
+      rolldown-plugin-dts: 0.28.8(rolldown@1.2.13)(typescript@7.1.0-dev.20261012.1)
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tree-kill: 1.2.2
@@ -19328,7 +19331,7 @@ snapshots:
       verkit: 0.5.0
     optionalDependencies:
       tsx: 4.23.15
-      typescript: 7.1.0-dev.20261011.1
+      typescript: 7.1.0-dev.20261012.1
       unrun: 0.3.1
     transitivePeerDependencies:
       - '@typescript/native-preview'
@@ -19386,19 +19389,19 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typebox@1.3.36: {}
+  typebox@1.3.37: {}
 
   typescript@6.0.3: {}
 
-  typescript@7.1.0-dev.20261011.1:
+  typescript@7.1.0-dev.20261012.1:
     optionalDependencies:
-      '@typescript/typescript-darwin-arm64': 7.1.0-dev.20261011.1
-      '@typescript/typescript-darwin-x64': 7.1.0-dev.20261011.1
-      '@typescript/typescript-linux-arm': 7.1.0-dev.20261011.1
-      '@typescript/typescript-linux-arm64': 7.1.0-dev.20261011.1
-      '@typescript/typescript-linux-x64': 7.1.0-dev.20261011.1
-      '@typescript/typescript-win32-arm64': 7.1.0-dev.20261011.1
-      '@typescript/typescript-win32-x64': 7.1.0-dev.20261011.1
+      '@typescript/typescript-darwin-arm64': 7.1.0-dev.20261012.1
+      '@typescript/typescript-darwin-x64': 7.1.0-dev.20261012.1
+      '@typescript/typescript-linux-arm': 7.1.0-dev.20261012.1
+      '@typescript/typescript-linux-arm64': 7.1.0-dev.20261012.1
+      '@typescript/typescript-linux-x64': 7.1.0-dev.20261012.1
+      '@typescript/typescript-win32-arm64': 7.1.0-dev.20261012.1
+      '@typescript/typescript-win32-x64': 7.1.0-dev.20261012.1
 
   uc.micro@2.1.0: {}
 
@@ -19513,7 +19516,7 @@ snapshots:
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
-      postcss: 8.5.29
+      postcss: 8.5.30
       rolldown: 1.2.13
       tinyglobby: 0.2.17
     optionalDependencies:
@@ -19770,9 +19773,9 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  zod-to-json-schema@3.25.2(zod@4.6.6):
+  zod-to-json-schema@3.25.2(zod@4.6.7):
     dependencies:
-      zod: 4.6.6
+      zod: 4.6.7
 
   zod@3.25.76: {}
 
@@ -19780,6 +19783,6 @@ snapshots:
 
   zod@4.6.5: {}
 
-  zod@4.6.6: {}
+  zod@4.6.7: {}
 
   zwitch@2.0.4: {}

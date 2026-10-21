@@ -4,12 +4,13 @@ import {
   createTestWizardPrompter,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
-import { buildCohereCatalogModels, COHERE_BASE_URL } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
+const COHERE_BASE_URL = "https://api.cohere.ai/compatibility/v1";
 const COHERE_DEFAULT_MODEL_REF = `cohere/${manifest.modelCatalog.providers.cohere.defaultModel}`;
 const COHERE_DEFAULT_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
@@ -90,9 +91,84 @@ describe("Cohere onboarding", () => {
   });
 
   it("preserves authored rows in merge mode", async () => {
-    const authored = buildCohereCatalogModels().map((model) =>
-      Object.assign({}, model, { id: `operator-${model.id}`, name: "My model" }),
-    );
+    const reasoningCompat: NonNullable<ModelDefinitionConfig["compat"]> = {
+      supportsStore: false,
+      supportsUsageInStreaming: false,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "high"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        minimal: "high",
+        low: "high",
+        medium: "high",
+        high: "high",
+        xhigh: "high",
+        adaptive: "high",
+        max: "high",
+      },
+      maxTokensField: "max_tokens",
+    };
+    const authored: ModelDefinitionConfig[] = [
+      {
+        id: "operator-command-a-plus-05-2026",
+        name: "My model",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 64000,
+        compat: reasoningCompat,
+      },
+      {
+        id: "operator-command-a-03-2025",
+        name: "My model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 2.5, output: 10, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 8000,
+        compat: {
+          supportsStore: false,
+          supportsUsageInStreaming: false,
+          maxTokensField: "max_tokens",
+        },
+      },
+      {
+        id: "operator-command-a-reasoning-08-2025",
+        name: "My model",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 32000,
+        compat: reasoningCompat,
+      },
+      {
+        id: "operator-command-a-vision-07-2025",
+        name: "My model",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 8000,
+        compat: {
+          supportsStore: false,
+          supportsUsageInStreaming: false,
+          maxTokensField: "max_tokens",
+        },
+      },
+      {
+        id: "operator-north-mini-code-1-0",
+        name: "My model",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 64000,
+        compat: reasoningCompat,
+      },
+    ];
     const result = await configureCohere({
       models: {
         mode: "merge",

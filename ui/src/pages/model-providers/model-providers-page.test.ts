@@ -6,7 +6,7 @@ import type { ModelsProbeResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -57,7 +57,7 @@ describe("ModelProvidersPage agent scope", () => {
       selectionIntentRevision: context.settingsAgentSelection.intentRevision,
       data: {
         ...EMPTY_MODEL_PROVIDERS_DATA,
-        providerUsage: { ok: false as const, error: { kind: "request-failed" as const } },
+        providerUsage: { ok: false as const },
         updatedAt: Date.now(),
       },
       client: snapshot.client,

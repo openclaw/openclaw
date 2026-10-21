@@ -373,6 +373,18 @@ export function releaseLeasedSharedCodexAppServerClient(client: CodexAppServerCl
   return true;
 }
 
+/** Temporary probes own isolated processes but only borrow shared-client leases. */
+export async function releaseCodexProbeClient(
+  client: CodexAppServerClient,
+  factory: CodexAppServerClientFactory,
+): Promise<void> {
+  if (factory === createIsolatedCodexAppServerClient) {
+    await client.closeAndWait();
+  } else {
+    releaseLeasedSharedCodexAppServerClient(client);
+  }
+}
+
 /** Mutable ownership token for one shared-client lease across client replacement. */
 export type CodexAppServerClientLease = { client?: CodexAppServerClient };
 
@@ -514,9 +526,6 @@ async function acquireSharedCodexAppServerClient(
       abandonSignal,
       "codex app-server authentication timed out",
     );
-    if (entry.closeError) {
-      throw entry.closeError;
-    }
     // Later leases of the same keyed client may carry fresher config; the
     // runtime install itself stays one-per-physical-client.
     ensureCodexAppServerClientRuntime(client, {
@@ -653,9 +662,7 @@ export async function createIsolatedCodexAppServerClient(
 function startInitializedCodexAppServerClient(params: CodexAppServerClientStartupOptions) {
   return withCodexWebSocketOpenRetry({
     timeoutMs: params.timeoutMs ?? 0,
-    signal: params.abandonSignal
-      ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
-      : params.lifetime.controller.signal,
+    signal: params.abandonSignal ?? params.lifetime.controller.signal,
     start: (timeoutMs) => startInitializedCodexAppServerClientOnce({ ...params, timeoutMs }),
   });
 }
@@ -665,9 +672,7 @@ async function startInitializedCodexAppServerClientOnce(
 ): Promise<CodexAppServerClient> {
   const acquireStartedAt = performance.now();
   const timeoutMs = params.timeoutMs ?? 0;
-  const abandonSignal = params.abandonSignal
-    ? AbortSignal.any([params.lifetime.controller.signal, params.abandonSignal])
-    : params.lifetime.controller.signal;
+  const abandonSignal = params.abandonSignal ?? params.lifetime.controller.signal;
   const waitForStartup = <T>(
     operation: () => Promise<T>,
     timeoutErrorFactory?: () => CodexAppServerStartupError,
@@ -991,7 +996,6 @@ function captureSharedClientRegistration(client: CodexAppServerClient): () => bo
     state.clients.get(entry.key) === entry &&
     entry.client === client &&
     !entry.closeWhenIdle &&
-    !entry.closeError &&
     !client.getCloseError();
 }
 

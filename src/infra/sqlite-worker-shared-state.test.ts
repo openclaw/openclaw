@@ -22,6 +22,7 @@ import {
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
@@ -35,6 +36,7 @@ import {
 } from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
@@ -226,6 +228,7 @@ describe("canonical shared-state worker admission", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           role: "gateway",
           stateDir: captured.environment.OPENCLAW_STATE_DIR,
@@ -330,7 +333,7 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it.each(["config health", "device identity", "audit"] as const)(
+  it.each(["config health", "machine state", "audit"] as const)(
     "does not recreate a lazy actor's removed opening path through a warm hardlink (%s)",
     async (operation) => {
       const original = context();
@@ -381,8 +384,8 @@ describe("canonical shared-state worker admission", () => {
                   input,
                 }
               : {
-                  type: "deviceIdentity.load",
-                  input: { identityKey: "warm-alias-device" },
+                  type: "machineState.write",
+                  input: { key: "warm-alias-state", value: "must-not-commit" },
                 },
           ),
         ).rejects.toThrow();
@@ -397,6 +400,7 @@ describe("canonical shared-state worker admission", () => {
       ).toEqual({
         count: 0,
       });
+      expect(readConfigMachineStateRowInDatabase(database.db, "warm-alias-state")).toBeUndefined();
     },
   );
 

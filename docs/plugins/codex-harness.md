@@ -15,11 +15,24 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
+Turns without a routable source conversation, such as operator CLI turns, return
+their final response automatically to the caller. The `message` tool needs an
+explicit `target` for sends from these turns; it cannot post progress to a
+current conversation.
+
 Managed inference proxy restarts do not replace an otherwise reusable native
 thread. Thread identity uses the proxy's upstream provider and routing policy, not
 its temporary loopback address. Upstream, authentication-profile, and creation-time
 policy changes still invalidate thread reuse; live requests continue through the
 current owned proxy.
+
+Provider-review acknowledgments must continue the reviewed native thread. If
+changed tools or runtime configuration would require a replacement thread, or
+native resume fails, OpenClaw refuses the acknowledgment before creating or saving
+a replacement. Restore the original tools and runtime configuration and retry
+from the original conversation. The review remains pending until Codex accepts
+the continuation; acknowledgment does not bypass the review checks or repair a
+binding that was already replaced by an earlier failed attempt.
 
 ## Shared output projection
 
@@ -626,6 +639,12 @@ send another continuation for a result it has consumed. Explicit OpenClaw or ACP
 delegation continues to use `sessions_spawn`. Stored submission and result
 receipts are recovery evidence, not permission to adopt a child or deliver to a
 replacement parent.
+
+When a native child spawns its own child, Codex delivers that grandchild's result
+to the immediate native parent. OpenClaw retires the completed assignment without
+another root continuation, including after restart when native lineage can be
+verified. Unavailable lineage leaves the assignment pending for later recovery;
+native-parent rotation alone does not prove nested delivery.
 
 For native Codex V1 agents, a completed `wait` result also records delivery to
 the foreground parent. OpenClaw does not start another continuation for that

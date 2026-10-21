@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, onCleanup } from "solid-js";
-import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
+import { createUniqueId, onSettled } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -10,7 +9,7 @@ import {
 } from "../app-navigation.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { iconData, type IconName } from "./icon-data.ts";
+import type { IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import {
@@ -67,7 +66,8 @@ export type SidebarDropdownProps = {
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   const id = createUniqueId();
   let removeListeners: (() => void)[] = [];
-  onCleanup(() => removeListeners.forEach((stop) => stop()));
+  // Menu publishes its handle after settled setup has registered this teardown.
+  onSettled(() => () => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
       controls={params.controls}
@@ -154,7 +154,6 @@ export function renderSidebarNavLink(params: {
   onPreload?: (event: Event, immediate?: boolean) => void;
   onCancelPreload?: (event: Event) => void;
 }): JSX.Element {
-  const onPreload = params.onPreload;
   return (
     <a
       ref={(element) => params.ref?.(element)}
@@ -162,11 +161,11 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload}
-      onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload}
-      onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
+      onFocus={(event) => params.onPreload?.(event)}
+      onBlur={(event) => params.onCancelPreload?.(event)}
+      onPointerEnter={(event) => params.onPreload?.(event)}
+      onPointerLeave={(event) => params.onCancelPreload?.(event)}
+      onTouchStart={(event) => params.onPreload?.(event, true)}
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
           return;
@@ -180,44 +179,5 @@ export function renderSidebarNavLink(params: {
       </span>
       <span class="nav-item__text">{params.label}</span>
     </a>
-  );
-}
-
-export function renderSidebarPluginNavigationMenu(params: {
-  position: SidebarMenuPosition;
-  item: ControlUiNavigationItem;
-  anchor?: HTMLElement;
-  onSelect: (id: string) => Promise<void>;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
-  onClose: (restoreFocus: boolean) => void;
-}): JSX.Element {
-  return (
-    <SidebarDropdown
-      {...params}
-      class="sidebar-customize-menu sidebar-plugin-navigation-menu"
-      label={params.item.label}
-      onSelect={(id) => void params.onSelect(id)}
-      items={(params.item.actions ?? []).map((action): MenuItem => ({
-        id: action.id,
-        label: action.label,
-        class: [
-          "sidebar-customize-menu__item",
-          { "session-menu__item--destructive": action.destructive },
-        ],
-        variant: action.destructive ? "danger" : undefined,
-        icon:
-          action.icon && Object.hasOwn(iconData, action.icon) ? (
-            <span class="nav-item__icon" aria-hidden="true">
-              <Icon
-                name={
-                  // SAFETY: The preceding own-key guard admits only keys of iconData.
-                  action.icon as IconName
-                }
-              />
-            </span>
-          ) : undefined,
-        content: <span class="sidebar-customize-menu__text">{action.label}</span>,
-      }))}
-    />
   );
 }

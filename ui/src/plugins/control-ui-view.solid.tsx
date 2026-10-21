@@ -4,7 +4,6 @@ import {
   createRoot,
   createSignal,
   getOwner,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
@@ -20,7 +19,7 @@ import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
@@ -132,6 +131,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     },
     sync,
   );
+  // Registration replacement must abort the outgoing mount before Solid renders its successor.
   onSettled(() =>
     context?.plugins.subscribe(() => {
       const next = resolveRegistration();
@@ -276,25 +276,27 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       />
     );
   }
-  views.set(host, {
-    focus(options) {
-      if (handle?.focus) {
-        handle.focus();
-      } else {
-        // The plugin owns its markup; focus falls back to its first editable control.
-        const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
-        if (input) {
-          input.focus(options);
+  onSettled(() => {
+    views.set(host, {
+      focus(options) {
+        if (handle?.focus) {
+          handle.focus();
         } else {
-          HTMLElement.prototype.focus.call(host, options);
+          // The plugin owns its markup; focus falls back to its first editable control.
+          const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
+          if (input) {
+            input.focus(options);
+          } else {
+            HTMLElement.prototype.focus.call(host, options);
+          }
         }
-      }
-    },
-  });
-  onCleanup(() => {
-    disposed = true;
-    unmount();
-    views.delete(host);
+      },
+    });
+    return () => {
+      disposed = true;
+      unmount();
+      views.delete(host);
+    };
   });
   return (
     <>
@@ -350,16 +352,12 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
   const context = useOptionalApplication();
-  const runtime = projectSource(context?.plugins, {
-    read: (source) => source,
-    subscribe: (source, publish) => source?.subscribe(publish) ?? (() => {}),
-    equality: "revision",
-  });
+  const runtime = context && projectOwner(context.plugins, (source) => source);
   const contentPresented = useContext(ContentPresentation);
   const presented = () => (props.presented ?? true) && contentPresented();
   const selected = createParkedProjection(
     () =>
-      props.enabled === false ? undefined : runtime.read()?.selectedReplacement(props.surface),
+      props.enabled === false ? undefined : runtime?.read().selectedReplacement(props.surface),
     presented,
   );
   const mount = (target: HTMLElement, view: () => JSX.Element) =>

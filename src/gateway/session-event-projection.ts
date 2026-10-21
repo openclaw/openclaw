@@ -8,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
@@ -105,7 +106,9 @@ export function prepareSessionEventProjection(
     const audiences = new Map<
       string,
       {
-        row: NonNullable<ReturnType<ReturnType<typeof presentRecipient>["present"]>>;
+        row: NonNullable<
+          ReturnType<ReturnType<typeof presentRecipient>["presentation"]["present"]>
+        >;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: string[];
         payloads: Map<string | undefined, ProjectedPayload>;
@@ -147,10 +150,11 @@ export function prepareSessionEventProjection(
         accessRevision = currentAccessRevision;
       }
       // Resolve each recipient's live authority before reusing this synchronous publication.
-      const presentation = presentRecipient(client, runProjector);
-      const audienceKey = presentation.audienceKey;
+      const recipient = presentRecipient(client, runProjector);
+      const audienceKey = recipient.audienceKey;
       let audience = audiences.get(audienceKey);
       if (!audience) {
+        const { presentation } = recipient;
         const row = presentation.present(record, enrichment);
         if (!row) {
           return undefined;
@@ -241,11 +245,7 @@ export function prepareSessionEventProjection(
           wirePayload = compact;
         }
         const cacheKey = JSON.stringify([rowDelivery.key, rowDelivery.bases.map(baselineId)]);
-        let cached = deltaPayloads.get(wirePayload);
-        if (!cached) {
-          cached = new Map();
-          deltaPayloads.set(wirePayload, cached);
-        }
+        const cached = getOrCreateWeakOwnerMap(deltaPayloads, wirePayload);
         let deltaPayload = cached.get(cacheKey);
         if (!deltaPayload) {
           deltaPayload = {

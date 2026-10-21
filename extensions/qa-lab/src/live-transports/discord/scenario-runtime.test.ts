@@ -22,7 +22,6 @@ describe("Discord QA scenario runtime", () => {
     const environment = {
       configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
       driverIdentity: { id: "423456789012345678", bot: true },
-      observedMessages: [],
       outputDir: "/unused",
       runtimeEnv: {
         guildId: "123456789012345678",
@@ -46,7 +45,6 @@ describe("Discord QA scenario runtime", () => {
         messageId: "623456789012345678",
         channelId: environment.runtimeEnv.channelId,
         senderId: environment.sutIdentity.id,
-        senderIsBot: true,
         text: "pong",
         timestamp: "2026-09-02T12:00:01.750Z",
       },
@@ -79,7 +77,6 @@ describe("Discord QA scenario runtime", () => {
     const environment = {
       configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
       driverIdentity: { id: "423456789012345678", bot: true },
-      observedMessages: [],
       outputDir: "/unused",
       runtimeEnv: {
         guildId: "123456789012345678",

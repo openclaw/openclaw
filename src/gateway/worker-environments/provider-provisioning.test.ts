@@ -441,9 +441,9 @@ describe("worker environment service", () => {
       }),
       { logger: { warn } },
     );
-    service.subscribeMachineShapeChanged(() => {
+    service.machineShapeNotifications.onChanged = () => {
       throw new Error("observer unavailable");
-    });
+    };
     const environment = await service.createWithRequest({
       profileId: "development",
       idempotencyKey: "catalog-failure",

@@ -49,9 +49,11 @@ function renderView(overrides: Partial<ReturnType<typeof createProps>>, containe
 }
 
 function renderFiles(
-  params: Partial<Parameters<typeof AgentFiles>[0]> &
+  params: Partial<
+    Parameters<typeof AgentFiles>[0] & ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>
+  > &
     Pick<
-      Parameters<typeof AgentFiles>[0],
+      ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>,
       "agentFilesList" | "agentFileActive" | "agentFileEditors"
     >,
   container: HTMLElement,
@@ -59,7 +61,11 @@ function renderFiles(
   mountSolid(
     AgentFiles,
     {
+      readData() {
+        return { ...createProps().readData(), ...this };
+      },
       agentId: "alpha",
+      agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
       agentFilesError: null,
@@ -109,7 +115,14 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     const props = createProps();
     renderView(
-      { activePanel: "tools", tools: { ...props.tools, toolsCatalogLoading: true } },
+      {
+        tools: { ...props.tools },
+        readData: () => ({
+          ...createProps().readData(),
+          agentsPanel: "tools",
+          toolsCatalogLoading: true,
+        }),
+      },
       container,
     );
     expect(container.querySelector('.settings-loading-skeleton[aria-busy="true"]')).not.toBeNull();
@@ -118,7 +131,10 @@ describe("renderAgents", () => {
   it("renders the active agent tab and selects a different panel", () => {
     const container = document.createElement("div");
     const onSelectPanel = vi.fn();
-    renderView({ activePanel: "files", onSelectPanel }, container);
+    renderView(
+      { onSelectPanel, readData: () => ({ ...createProps().readData(), agentsPanel: "files" }) },
+      container,
+    );
 
     expect(container.querySelector("#agents-tab-files")?.hasAttribute("active")).toBe(true);
     expectAgentTab(container, "Tools").dispatchEvent(
@@ -157,20 +173,24 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     renderView(
       {
-        activePanel: "cron",
         selectedAgentId: "alpha",
-        cron: {
-          ...createProps().cron,
-          status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-          jobs: [job],
-          jobsTotal: 1,
-          jobsHasMore: false,
-          jobsLoadingMore: false,
-          scopedTotal: 1,
-          scopedNextWakeAtMs,
-          loading: false,
-          error: null,
-        },
+        cron: { ...createProps().cron },
+        readData: () => ({
+          ...createProps().readData(),
+          agentsPanel: "cron",
+          cron: {
+            ...createProps().readData().cron,
+            cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+            cronJobs: [job],
+            cronJobsTotal: 1,
+            cronJobsHasMore: false,
+            cronJobsLoadingMore: false,
+            cronScopedTotal: 1,
+            cronScopedNextWakeAtMs: scopedNextWakeAtMs,
+            cronLoading: false,
+            cronError: null,
+          },
+        }),
       },
       container,
     );
@@ -195,6 +215,54 @@ describe("renderAgents", () => {
       formatNextRun(scopedNextWakeAtMs),
     );
     expect(nextWakeRow?.textContent).not.toContain(formatNextRun(nextWakeAtMs));
+  });
+
+  it("shows a rejected agent jobs refresh beside retained jobs without hiding scheduler feedback", async () => {
+    const client = createTestGatewayClient(async () => {
+      throw new Error("Agent jobs could not be refreshed.");
+    });
+    const cronState = {
+      ...createInitialCronState({ client, connected: true }),
+      cronAgentId: "alpha",
+      cronError: "Scheduler status is unavailable.",
+      cronJobs: [createCronJob("retained-job", { name: "Retained reminder" })],
+    };
+    const container = document.createElement("div");
+    const renderCurrent = (): void => {
+      renderView(
+        {
+          selectedAgentId: "alpha",
+          cron: {
+            ...createProps().cron,
+            onRefresh: () => {
+              void loadCronJobsPage(cronState, { tableFilters: true }).then(renderCurrent);
+            },
+          },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "cron", cron: cronState }),
+        },
+        container,
+      );
+    };
+    renderCurrent();
+    const scheduler = [...container.querySelectorAll(".settings-section")].find(
+      (section) =>
+        section.querySelector("h2")?.textContent === t("agents.cronPanel.schedulerTitle"),
+    );
+    const refresh = scheduler?.querySelector<HTMLButtonElement>("button");
+    expect(refresh).toBeInstanceOf(HTMLButtonElement);
+    refresh?.click();
+
+    await waitForSolid(() => {
+      const jobs = [...container.querySelectorAll(".settings-section")].find(
+        (section) =>
+          section.querySelector("h2")?.textContent === t("agents.cronPanel.agentJobsTitle"),
+      );
+      expect(jobs?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Agent jobs could not be refreshed.",
+      );
+      expect(jobs?.textContent).toContain("Retained reminder");
+      expect(container.textContent).toContain("Scheduler status is unavailable.");
+    });
   });
 
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
@@ -229,25 +297,31 @@ describe("renderAgents", () => {
     const renderCurrentPage = (): void => {
       renderView(
         {
-          activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
             ...createProps().cron,
-            status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-            jobs: cronState.cronJobs,
-            jobsTotal: cronState.cronJobsTotal,
-            jobsHasMore: cronState.cronJobsHasMore,
-            jobsLoadingMore: cronState.cronJobsLoadingMore,
-            scopedTotal: 51,
-            scopedNextWakeAtMs: null,
-            loading: cronState.cronLoading,
-            error: cronState.cronError,
             onLoadMore: () => {
               const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
               renderCurrentPage();
               void nextPage.then(renderCurrentPage);
             },
           },
+          readData: () => ({
+            ...createProps().readData(),
+            agentsPanel: "cron",
+            cron: {
+              ...createProps().readData().cron,
+              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+              cronJobs: cronState.cronJobs,
+              cronJobsTotal: cronState.cronJobsTotal,
+              cronJobsHasMore: cronState.cronJobsHasMore,
+              cronJobsLoadingMore: cronState.cronJobsLoadingMore,
+              cronScopedTotal: 51,
+              cronScopedNextWakeAtMs: null,
+              cronLoading: cronState.cronLoading,
+              cronError: cronState.cronError,
+            },
+          }),
         },
         container,
       );
@@ -297,7 +371,7 @@ describe("renderAgents", () => {
           <Agents {...props} />
         </ApplicationProvider>
       ),
-      createProps({ activePanel: "memory" }),
+      createProps({ readData: () => ({ ...createProps().readData(), agentsPanel: "memory" }) }),
       container,
     );
 
@@ -468,18 +542,18 @@ describe("renderAgents", () => {
     const container = document.createElement("div");
     renderView(
       {
-        agentSkills: {
-          ...createProps().agentSkills,
-          report: {
+        agentSkills: { ...createProps().agentSkills, filter: "" },
+        readData: () => ({
+          ...createProps().readData(),
+          agentSkillsReport: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          loading: false,
-          error: null,
-          activeAgentId: "alpha",
-          filter: "",
-        },
+          agentSkillsLoading: false,
+          agentSkillsError: null,
+          agentSkillsAgentId: "alpha",
+        }),
       },
       container,
     );
@@ -491,18 +565,18 @@ describe("renderAgents", () => {
 
     renderView(
       {
-        agentSkills: {
-          ...createProps().agentSkills,
-          report: {
+        agentSkills: { ...createProps().agentSkills, filter: "" },
+        readData: () => ({
+          ...createProps().readData(),
+          agentSkillsReport: {
             workspaceDir: "/tmp/workspace",
             managedSkillsDir: "/tmp/skills",
             skills: [createSkill()],
           },
-          loading: false,
-          error: null,
-          activeAgentId: "beta",
-          filter: "",
-        },
+          agentSkillsLoading: false,
+          agentSkillsError: null,
+          agentSkillsAgentId: "beta",
+        }),
       },
       container,
     );
@@ -522,14 +596,15 @@ describe("renderAgents", () => {
     try {
       renderView(
         {
-          activePanel: "channels",
-          channels: {
-            ...createProps().channels,
-            snapshot: null,
-            loading: false,
-            error: null,
-            lastSuccess: null,
-          },
+          channels: { ...createProps().channels },
+          readData: () => ({ ...createProps().readData(), agentsPanel: "channels" }),
+          readChannels: () => ({
+            ...createProps().readChannels(),
+            channelsSnapshot: null,
+            channelsLoading: false,
+            channelsError: null,
+            channelsLastSuccess: null,
+          }),
         },
         container,
       );
@@ -572,17 +647,19 @@ describe("renderAgentChannels", () => {
           isDefault: true,
         },
         configForm: null,
-        snapshot: {
-          ts: Date.now(),
-          channelOrder: ["discord"],
-          channelLabels: { discord: "Discord" },
-          channels: {},
-          channelAccounts: { discord: accounts },
-          channelDefaultAccountId: { discord: "default" },
-        },
-        loading: false,
-        error: null,
-        lastSuccess: Date.now(),
+        readState: () => ({
+          channelsSnapshot: {
+            ts: Date.now(),
+            channelOrder: ["discord"],
+            channelLabels: { discord: "Discord" },
+            channels: {},
+            channelAccounts: { discord: accounts },
+            channelDefaultAccountId: { discord: "default" },
+          },
+          channelsLoading: false,
+          channelsError: null,
+          channelsLastSuccess: Date.now(),
+        }),
         onRefresh: () => undefined,
         onSelectPanel: () => undefined,
       },
@@ -816,14 +893,17 @@ describe("renderAgents toolbar", () => {
     const onCreateAgent = vi.fn();
     renderView(
       {
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [],
-        },
         selectedAgentId: "alpha",
         onCreateAgent,
+        readData: () => ({
+          ...createProps().readData(),
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [],
+          },
+        }),
       },
       container,
     );
@@ -842,12 +922,6 @@ describe("renderAgents toolbar", () => {
     try {
       renderView(
         {
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "alpha" }, { id: "beta" }],
-          },
           access: {
             canCreateAgent: false,
             canPatchConfig: false,
@@ -857,6 +931,15 @@ describe("renderAgents toolbar", () => {
             canRunCron: false,
           },
           onCreateAgent,
+          readData: () => ({
+            ...createProps().readData(),
+            agentsList: {
+              defaultId: "alpha",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "alpha" }, { id: "beta" }],
+            },
+          }),
         },
         container,
       );
@@ -915,15 +998,19 @@ it.each([
     state: {},
   };
   const props = createProps({
-    activePanel: "cron",
     selectedAgentId: "alpha",
     basePath: "/gateway",
+    readData: () => ({ ...createProps().readData(), agentsPanel: "cron" }),
   });
   renderView(
     {
       ...props,
       access: { ...props.access, canRunCron },
-      cron: { ...props.cron, jobs: [job], onRunNow: onCronRunNow },
+      cron: { ...props.cron, onRunNow: onCronRunNow },
+      readData: () => ({
+        ...props.readData(),
+        cron: { ...props.readData().cron, cronJobs: [job] },
+      }),
     },
     container,
   );

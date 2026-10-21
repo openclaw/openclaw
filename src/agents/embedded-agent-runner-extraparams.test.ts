@@ -1120,7 +1120,6 @@ describe("applyExtraParamsToAgent", () => {
     const resolvedTransport = resolveExplicitSettingsTransport({
       settingsManager: {
         getGlobalSettings: () => ({ transport: "websocket" }),
-        getProjectSettings: () => ({}),
       },
       sessionTransport: "websocket",
     });
@@ -1174,7 +1173,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveAgentTransportOverride({
         settingsManager: {
           getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
         },
         effectiveExtraParams,
       }),
@@ -1192,7 +1190,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveAgentTransportOverride({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
         },
         effectiveExtraParams,
       }),
@@ -1204,7 +1201,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),
@@ -1213,7 +1209,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),

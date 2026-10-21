@@ -29,6 +29,7 @@ import {
   type Admission,
   type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
 import {
@@ -47,6 +48,7 @@ export {
 export type {
   SqliteDatabaseAdmissions,
   SqliteDatabaseAdmissionKey,
+  SqliteDatabaseFactKey,
 } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
@@ -128,6 +130,7 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -550,7 +553,7 @@ export function hasPendingSqliteDatabaseSchemaMutation(
 
 export function publishSqliteDatabaseAdmission<T>(
   database: DatabaseSync | PostgresSqlConnection,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
   options: { schemaRevision?: number } = {},
 ): void {

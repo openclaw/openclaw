@@ -6,7 +6,6 @@ import {
 
 installDiscordIngressTestRuntime();
 import type { APIMessage } from "discord-api-types/v10";
-import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressQueueForTests,
   observeChannelIngressQueueWrite,
@@ -15,6 +14,7 @@ import {
   type ChannelIngressQueue,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
+import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,12 +24,10 @@ const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
 import { createDiscordMessageHandler } from "./message-handler.js";
 import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
 import type { DiscordMessagePreflightParams as PreflightParams } from "./message-handler.preflight.types.js";
-import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 import {
   createDiscordHandlerParams,
   createDiscordQueuePreflightContextForMessage as messageContext,
 } from "./message-handler.test-helpers.js";
-import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 
 type DiscordIngressPayload = {
   version: 1;
@@ -335,39 +333,26 @@ describe("Discord durable ingress settlement", () => {
     await withQueue(async (queue) => {
       const id = "queued-cancelled";
       const before = await seedPendingFailure(queue, id);
-      const params = createDiscordHandlerParams();
       const processDiscordMessage = vi.fn(async () => {});
       processMessage.mockImplementation(processDiscordMessage as never);
-      const messageRunQueue = createDiscordMessageRunQueue({
-        runtime: params.runtime,
-      });
-      const skipped = createDeferred<void>();
-      const monitor = createDiscordIngressMonitor({
-        accountId: "default",
-        client: {} as never,
-        runtime: params.runtime,
-        queue,
-        dispatch: async (_event, lifecycle) => {
-          const ingress = fanInChannelIngressLifecycles([lifecycle]);
-          messageRunQueue.enqueue({
-            context: await createBaseDiscordMessageContext(),
-            ingressSettlement: ingress,
-          });
-          await messageRunQueue.deactivate();
-          skipped.resolve();
-          return { kind: "deferred" };
-        },
-      });
-      monitor.start();
+      const queued = createDeferred<void>();
+      const createRunQueue = channelOutbound.createChannelRunQueue;
+      // Hold scheduling at the SDK boundary: the real handler must cancel an admitted
+      // job that has not started, rather than clearing its durable retry history.
+      vi.spyOn(channelOutbound, "createChannelRunQueue").mockImplementation((params) => ({
+        ...createRunQueue(params),
+        enqueue: () => queued.resolve(),
+      }));
+      prepareQueuedContext();
+      const handler = createHandler({ queue });
       try {
-        await skipped.promise;
-        await monitor.stop();
+        await queued.promise;
+        await handler.deactivate();
         expect(processDiscordMessage).not.toHaveBeenCalled();
         expect(await queue.listPending()).toHaveLength(1);
         expect(await retryFacts(queue, id)).toEqual(before);
       } finally {
-        await monitor.stop();
-        await messageRunQueue.deactivate();
+        await handler.deactivate();
       }
 
       await expectRecovered(queue, id);

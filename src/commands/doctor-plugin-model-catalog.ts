@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { parseModelCatalogJson } from "../agents/model-catalog-json.js";
 import { repairPluginModelCatalogTransportMetadata } from "../agents/plugin-model-catalog-repair.js";
 import {
   reviewRootProviderCopies,
@@ -53,7 +54,7 @@ function readRootModelsFile(agentDir: string): RootModelsFile | undefined {
     return undefined;
   }
   try {
-    const root: unknown = JSON.parse(raw);
+    const root = parseModelCatalogJson(raw);
     return isRecord(root) && isRecord(root.providers)
       ? { raw, root, providers: root.providers }
       : undefined;
@@ -106,14 +107,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   agentDirs?: readonly string[];
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
-  note?: typeof note;
-}): Promise<{
-  detected: number;
-  migrated: number;
-  repaired: number;
-  removedRootCopies: number;
-  warnings: string[];
-}> {
+}): Promise<void> {
   const warnings: string[] = [];
   const agents: Array<{
     agentDir: string;
@@ -171,7 +165,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     params.runtime.error(warning);
   }
 
-  const emitNote = params.note ?? note;
   if (detected > 0) {
     const details =
       migrations.length > 0
@@ -191,7 +184,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       }
     }
     details.push("Run openclaw doctor --fix to verify and repair these catalogs.");
-    emitNote(details.join("\n"), "Plugin model catalogs");
+    note(details.join("\n"), "Plugin model catalogs");
   }
   const shouldRepair =
     params.prompter.shouldRepair ||
@@ -201,11 +194,10 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
         initialValue: true,
       })));
   if (!shouldRepair) {
-    return { detected, migrated: 0, repaired: 0, removedRootCopies: 0, warnings };
+    return;
   }
 
   let migrated = 0;
-  let removedRootCopies = 0;
   const rootCopyChanges: string[] = [];
   const repairs: ReturnType<typeof repairPersistedPluginModelCatalogs> = [];
   for (const agent of agents) {
@@ -250,7 +242,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     }
     try {
       const backupPath = await removeRootProviderCopies({ agentDir: agent.agentDir, file, review });
-      removedRootCopies += review.copies.length;
       rootCopyChanges.push(
         ...review.copies.map(
           ({ providerId, pluginId }) =>
@@ -265,13 +256,13 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   }
 
   if (migrated > 0) {
-    emitNote(
+    note(
       `Migrated and verified ${migrated} generated provider catalog${migrated === 1 ? "" : "s"} in agent SQLite.`,
       "Doctor changes",
     );
   }
   if (repairs.length > 0) {
-    emitNote(
+    note(
       repairs
         .map(({ pluginId, removedModelCount, completedCostModelCount }) => {
           const actions = [
@@ -289,7 +280,6 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     );
   }
   if (rootCopyChanges.length > 0) {
-    emitNote(rootCopyChanges.join("\n"), "Doctor changes");
+    note(rootCopyChanges.join("\n"), "Doctor changes");
   }
-  return { detected, migrated, repaired: repairs.length, removedRootCopies, warnings };
 }

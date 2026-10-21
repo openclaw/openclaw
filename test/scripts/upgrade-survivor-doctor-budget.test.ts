@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson, runProcess } from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const runner = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
@@ -27,19 +27,12 @@ function seedState(sessions: number, events: number, cronJobs: number, pluginRoo
   ] as const) {
     const file = path.join(root, relative);
     mkdirSync(path.dirname(file), { recursive: true });
-    const db = new DatabaseSync(file);
-    try {
-      for (const [table, count] of Object.entries(tables)) {
-        db.exec(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY)`);
-        const insert = db.prepare(`INSERT INTO ${table} (id) VALUES (?)`);
-        db.exec("BEGIN");
-        for (let index = 0; index < count; index++) {
-          insert.run(index);
-        }
-        db.exec("COMMIT");
-      }
-    } finally {
-      db.close();
+    using db = new DatabaseSync(file);
+    for (const [table, count] of Object.entries(tables)) {
+      db.exec(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY);
+        WITH RECURSIVE ids(id) AS (
+          SELECT 0 WHERE ${count} > 0 UNION ALL SELECT id + 1 FROM ids WHERE id + 1 < ${count}
+        ) INSERT INTO ${table} SELECT id FROM ids;`);
     }
   }
   const plugins = Array.from({ length: pluginRoots }, (_, index) => ({
@@ -74,13 +67,7 @@ it.each([
   const artifacts = tempDirs.make("survivor-doctor-budget-");
   const clock = path.join(artifacts, "clock");
   writeFileSync(clock, "0");
-  const result = spawnSync(
-    "/bin/bash",
-    [
-      "-euo",
-      "pipefail",
-      "-c",
-      `source scripts/lib/openclaw-e2e-instance.sh
+  const script = `source scripts/lib/openclaw-e2e-instance.sh
 ${assertIdempotence}
 # Advance the injected clock when Doctor returns; no real process boot or sleep.
 date() { cat "$CLOCK"; }
@@ -96,51 +83,42 @@ node() {
   fi
 }
 assert_volume_idempotence
-`,
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        TMPDIR: artifacts,
-        GITHUB_ACTIONS: "false",
-        OPENCLAW_STATE_DIR: testCase.large ? largeState : emptyState,
-        // These deliberately disagree with persisted state and must not select the budget.
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "1",
-        OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "1",
-        ...(testCase.override === undefined
-          ? {}
-          : { OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS: testCase.override }),
-        ARTIFACT_ROOT: artifacts,
-        CLOCK: clock,
-        ELAPSED: String(testCase.elapsed),
-        COMMAND_TIMEOUT: "900s",
-        DOCTOR_LOG: path.join(artifacts, "doctor.log"),
-        survival_assert_stage: "survival",
-      },
-    },
-  );
+`;
+  const result = runProcess("/bin/bash", ["-euo", "pipefail", "-c", script], {
+    PATH: process.env.PATH,
+    TMPDIR: artifacts,
+    GITHUB_ACTIONS: "false",
+    OPENCLAW_STATE_DIR: testCase.large ? largeState : emptyState,
+    // These deliberately disagree with persisted state and must not select the budget.
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "1",
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "1",
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "1",
+    ...(testCase.override === undefined
+      ? {}
+      : { OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS: testCase.override }),
+    ARTIFACT_ROOT: artifacts,
+    CLOCK: clock,
+    ELAPSED: String(testCase.elapsed),
+    COMMAND_TIMEOUT: "900s",
+    DOCTOR_LOG: path.join(artifacts, "doctor.log"),
+    survival_assert_stage: "survival",
+  });
   expect(result.status, result.stdout + result.stderr).toBe(testCase.exit);
   expect(result.stdout).toContain(`(budget ${testCase.budget}s)`);
   expect(readFileSync(path.join(artifacts, "doctor-command"), "utf8")).toBe(
     "900s openclaw doctor --fix --non-interactive\n",
   );
-  expect(
-    JSON.parse(readFileSync(path.join(artifacts, "volume-doctor-budget.json"), "utf8")),
-  ).toEqual({
+  expect(readJson(path.join(artifacts, "volume-doctor-budget.json"))).toEqual({
     counts: testCase.large
       ? { sessions: 4800, events: 23890, cronJobs: 2200, pluginRoots: 7 }
       : { sessions: 0, events: 0, cronJobs: 0, pluginRoots: 0 },
     computedSeconds: testCase.large ? 676 : 60,
     budgetSeconds: testCase.budget,
   });
+  expect(result.stdout.includes("state-preserved")).toBe(testCase.exit === 0);
   if (testCase.exit === 1) {
     expect(result.stderr).toContain(
       `idempotence exceeded budget: ${testCase.elapsed}s > ${testCase.budget}s`,
     );
-    expect(result.stdout).not.toContain("state-preserved");
-  } else {
-    expect(result.stdout).toContain("state-preserved");
   }
 });

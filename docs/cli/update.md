@@ -260,6 +260,12 @@ recorded rollback outcome. Failed steps use stable identifiers such as
 `candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
+Snapshot watchdog failures also retain the last progress event, its age, and the
+last database's page count, copied bytes, and copy time in saved stderr and
+`openclaw update status`. The watchdog's byte estimate describes the total snapshot
+input, including plugins; it is not the size of the database active at timeout.
+Phase-only progress, such as plugin inventory after the shared database copy,
+replaces the active phase without losing the last database's copy counters.
 Schema inspection failures put recognized worker error codes and causes before private
 source context, including causes after warning lines, so they survive redaction. Saved
 diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
@@ -570,9 +576,11 @@ the update needs to replace the installation method or a separate serving root.
 The temporary candidate is removed without activating it.
 
 When replacement is needed, the updater retains its running worker files before
-changing the installed package. Linux OverlayFS installations use private copies
-so hard-link copy-up cannot invalidate the retained files’ identity checks.
-Other supported filesystems keep the hard-link fast path and copy fallback.
+changing the installed package. Ordinary files use hard links, with a copy
+fallback when linking is unavailable. If a linked file's identity changes, its
+size, mode, and content must match the inventory. A mismatch discards that runtime
+as a rollback source and logs the path and failed check; the update continues
+without using the unverified tree. Writes through the same inode remain best effort.
 
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
@@ -834,6 +842,12 @@ their own bounds. An explicit `--timeout <seconds>` supplies one overall budget 
 through activation, readiness, and recovery, including native service commands.
 Expiry reports `update-activation-timeout` or pending recovery; it does not start
 another recovery phase. Outstanding writers retain ownership until they settle.
+
+Candidate checks compute an automatic allowance from the copied SQLite and
+plugin state. A shorter update deadline limits that allowance; the update report
+and history warn with both values because checks may time out early. Increase
+`--timeout` to allow more time. This warning comes from the installed updater and
+protects subsequent updates after installation.
 
 The same deadline cancels runtime-retention inventory, its file-hashing workers,
 and materialization before activation. Retention makes one attempt and stops if

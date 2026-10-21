@@ -286,8 +286,7 @@ export abstract class CodexTurnProjection {
     const legacyFailClosed =
       !completedTurn || completedTurn.status !== "completed" || hasAssistantItemText;
     const hasDeliverableAssistantOnCompletedTurn =
-      completedTurn?.status === "completed" &&
-      assistantTexts.some((text) => text.trim().length > 0);
+      completedTurn?.status === "completed" && visibleReplies.length > 0;
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,

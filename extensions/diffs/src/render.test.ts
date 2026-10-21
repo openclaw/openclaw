@@ -39,7 +39,6 @@ it("renders before/after input into a complete viewer document", async () => {
   expect(rendered).toMatchObject({
     title: "src/example.ts",
     fileCount: 1,
-    viewerRuntime: "base",
   });
   expect(rendered.html).toContain("data-openclaw-diff-root");
   expect(rendered.html).toContain("src/example.ts");
@@ -70,7 +69,6 @@ it("uses the language-pack viewer runtime for uncommon languages when available"
     html.match(/data-openclaw-diff-payload>(.*?)<\/script>/)?.[1] ?? "",
   );
 
-  expect(rendered.viewerRuntime).toBe("language-pack");
   expect(html).toContain("../../../diffs-language-pack/assets/viewer.js");
   expect(payload.langs).toEqual(["abap"]);
 });

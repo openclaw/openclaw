@@ -43,6 +43,40 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Control UI development benchmark
+
+Measure CLI-to-listening readiness without a browser or source edits:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-dev-loop.mts \
+  --root <checkout> --mode warm --samples 5 --startup-only \
+  --label candidate --out-dir <proof-dir>
+```
+
+For before/after comparisons, alternate checkouts with `--samples 1`, run serially,
+and report the samples, median, p95, range, and recorded host load. `--mode cold`
+passes Vite's `--force` to rebuild optimizer inputs; it does not clear OS caches.
+`--mode warm` omits `--force` and assumes an existing valid optimizer cache.
+Startup-only mode stops at Vite's listening banner and cannot prime an empty cache:
+load the UI first, then check the retained server logs for re-optimization.
+Readiness is separate from a loaded application's boot time.
+
+Omit `--startup-only` to render the real chat loading component, change its first
+skeleton width from 82% to 42%, and measure the visible update after the Vite
+WebSocket connects. The benchmark rejects full-page reloads, saves synthetic
+screenshots and logs, and restores its own source edit and temporary fixtures,
+including on SIGINT/SIGTERM. Use a task-owned checkout without concurrent edits.
+
+If file edits produce no Vite update, try the existing watcher opt-in:
+
+```sh
+CHOKIDAR_USEPOLLING=1 pnpm ui:dev
+```
+
+The same environment setting applies to the benchmark. Polling uses more CPU;
+leave it opt-in for hosts where native directory events are unavailable. On macOS,
+the Vite config resolves this setting before Chokidar selects its native backend.
+
 ## Formatting and lint selection
 
 `lib/dev-tool.mts` selects the pinned Bun fork for local formatting, with an
@@ -74,6 +108,13 @@ to the hooks above. References in configuration, test fixtures, and scope
 classifiers do not invoke a formatter.
 
 ## Script Families
+
+The database-worker ratchet always analyzes current sources, including personal
+credential writers. Its historical inventory reuses the build-artifact cache
+under `.artifacts`: the key includes the base Git tree, analyzer/config source,
+native compiler/API bytes, Node version, platform and checkout path. One base
+generation is retained per cache root; changed inputs or damaged outputs rebuild
+it. The complete semantic program is preserved on cache misses.
 
 - `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package
   contents, boundaries, workflows, and generated artifacts.

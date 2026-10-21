@@ -144,6 +144,8 @@ Host background commands, CLI watchdog completions, ACP parent notifications,
 immediate HTTP hook wakes, restart continuations, and session-state notices enter
 the ordinary reply queue. They keep the originating session's history and captured
 delivery route, wait behind its existing work, and use its current permissions.
+An exec completion waits behind the heartbeat that started it, so that heartbeat
+can finish and acknowledge its cron reminders without being superseded by its own command.
 Heartbeat cadence, active hours, model, and visibility settings do not control
 these events. An originating run's automatic-delivery opt-out remains in effect.
 
@@ -565,6 +567,8 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 If no `--session-key` is given and multiple agents have `heartbeat` configured, `--mode now` runs each of those agent heartbeats immediately.
 
 Broadcast completion reports an agent failure even if another agent succeeded or was quietly skipped. Busy retries and guarded deferrals keep their existing retry behavior.
+
+Unexpected wake preparation failures are logged and finish that occurrence as failed rather than silently retrying it. A new explicit wake or the next scheduled occurrence can try again after the cause is resolved. Handler disposal and Gateway restart still retain interrupted notifications for the replacement runner.
 
 Related heartbeat controls in the same CLI group:
 

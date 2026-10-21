@@ -1,183 +1,143 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
 import { parseSessionLog } from "./helpers.ts";
 
-describe("usage-helpers", () => {
-  it("tokenizes query terms including quoted strings", () => {
-    const terms = extractQueryTerms(
-      'agent:main "model:gpt-5.2" label:"Team Planning" "free phrase" has:errors',
+type QuerySession = Parameters<typeof filterSessionsByQuery>[0][number];
+const makeSession = (
+  key: string,
+  usage: QuerySession["usage"],
+  fields: Omit<QuerySession, "key" | "usage"> = {},
+) => ({ key, usage, ...fields });
+
+it("tokenizes query terms including quoted strings", () => {
+  const terms = extractQueryTerms(
+    'agent:main "model:gpt-5.2" label:"Team Planning" "free phrase" has:errors',
+  );
+  expect(terms).toEqual([
+    { key: "agent", value: "main", raw: "agent:main" },
+    { key: "model", value: "gpt-5.2", raw: "model:gpt-5.2" },
+    { key: "label", value: "Team Planning", raw: 'label:"Team Planning"' },
+    { value: "free phrase", raw: '"free phrase"' },
+    { key: "has", value: "errors", raw: "has:errors" },
+  ]);
+});
+
+it("matches quoted multi-word session labels", () => {
+  const session = { key: "planning", label: "Team Planning", usage: null };
+
+  expect(filterSessionsByQuery([session], 'label:"Team Planning"').sessions).toEqual([session]);
+  expect(filterSessionsByQuery([session], '"Team Planning"').sessions).toEqual([session]);
+});
+
+function populatedSessions() {
+  const rows: [string, string, string, number, number, string][] = [
+    ["openai", "discord", "gpt", 100, 1, "read"],
+    ["anthropic", "slack", "claude", 80, 0, "write"],
+    ["google", "discord", "gemini", 60, 1, "read"],
+  ];
+  return rows.map(([key, channel, model, totalTokens, errors, name]) =>
+    makeSession(
+      key,
+      {
+        totalTokens,
+        messageCounts: { errors },
+        toolUsage: { totalCalls: 1, tools: [{ name }] },
+      },
+      { channel, modelProvider: key, model, hasContextWeight: true },
+    ),
+  );
+}
+it("unions categorical values while intersecting categories and other constraints", () => {
+  const sessions = populatedSessions();
+  const cases: Array<[query: string, keys: string[]]> = [
+    ["provider:openai provider:anthropic", ["openai", "anthropic"]],
+    ["provider: provider:openai", ["openai"]],
+    ["channel:discord channel:slack", ["openai", "anthropic", "google"]],
+    ["model:gpt model:claude", ["openai", "anthropic"]],
+    ["tool:read tool:write", ["openai", "anthropic", "google"]],
+    ["provider:openai provider:anthropic channel:discord", ["openai"]],
+    ["provider:openai provider:anthropic minTokens:90 has:errors has:tools", ["openai"]],
+    ["minTokens:50 minTokens:90", ["openai"]],
+    ["has:errors has:tools", ["openai", "google"]],
+  ];
+
+  for (const [query, keys] of cases) {
+    expect(filterSessionsByQuery(sessions, query).sessions.map((session) => session.key)).toEqual(
+      keys,
     );
-    expect(terms).toEqual([
-      { key: "agent", value: "main", raw: "agent:main" },
-      { key: "model", value: "gpt-5.2", raw: "model:gpt-5.2" },
-      { key: "label", value: "Team Planning", raw: 'label:"Team Planning"' },
-      { value: "free phrase", raw: '"free phrase"' },
-      { key: "has", value: "errors", raw: "has:errors" },
-    ]);
-  });
+  }
+});
 
-  it("matches quoted multi-word session labels", () => {
-    const session = { key: "planning", label: "Team Planning", usage: null };
+it("supports numeric filters like minTokens/maxTokens", () => {
+  const a = makeSession("a", { totalTokens: 1_000, totalCost: 20, messageCounts: { total: 30 } });
+  const b = makeSession("b", { totalTokens: 5, totalCost: 2, messageCounts: { total: 3 } });
+  const filters = [
+    "minTokens:10",
+    "minTokens:1k",
+    "minCost:10",
+    "minMessages:10",
+    "maxTokens:10",
+    "maxCost:10",
+    "maxMessages:10",
+  ];
 
-    expect(filterSessionsByQuery([session], 'label:"Team Planning"').sessions).toEqual([session]);
-    expect(filterSessionsByQuery([session], '"Team Planning"').sessions).toEqual([session]);
-  });
-
-  it("unions categorical values while intersecting categories and other constraints", () => {
-    const sessions = [
-      {
-        key: "openai",
-        channel: "discord",
-        modelProvider: "openai",
-        model: "gpt",
-        usage: {
-          totalTokens: 100,
-          messageCounts: { errors: 1 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "read" }] },
-        },
-      },
-      {
-        key: "anthropic",
-        channel: "slack",
-        modelProvider: "anthropic",
-        model: "claude",
-        usage: {
-          totalTokens: 80,
-          messageCounts: { errors: 0 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "write" }] },
-        },
-      },
-      {
-        key: "google",
-        channel: "discord",
-        modelProvider: "google",
-        model: "gemini",
-        usage: {
-          totalTokens: 60,
-          messageCounts: { errors: 1 },
-          toolUsage: { totalCalls: 1, tools: [{ name: "read" }] },
-        },
-      },
-    ];
-    const cases: Array<[query: string, keys: string[]]> = [
-      ["provider:openai provider:anthropic", ["openai", "anthropic"]],
-      ["provider: provider:openai", ["openai"]],
-      ["channel:discord channel:slack", ["openai", "anthropic", "google"]],
-      ["model:gpt model:claude", ["openai", "anthropic"]],
-      ["tool:read tool:write", ["openai", "anthropic", "google"]],
-      ["provider:openai provider:anthropic channel:discord", ["openai"]],
-      ["provider:openai provider:anthropic minTokens:90 has:errors has:tools", ["openai"]],
-      ["minTokens:50 minTokens:90", ["openai"]],
-      ["has:errors has:tools", ["openai", "google"]],
-    ];
-
-    for (const [query, keys] of cases) {
-      expect(filterSessionsByQuery(sessions, query).sessions.map((session) => session.key)).toEqual(
-        keys,
-      );
-    }
-  });
-
-  it("supports numeric filters like minTokens/maxTokens", () => {
-    const a = {
-      key: "a",
-      usage: { totalTokens: 1_000, totalCost: 20, messageCounts: { total: 30 } },
-    };
-    const b = {
-      key: "b",
-      usage: { totalTokens: 5, totalCost: 2, messageCounts: { total: 3 } },
-    };
-    const filters = [
-      "minTokens:10",
-      "minTokens:1k",
-      "minCost:10",
-      "minMessages:10",
-      "maxTokens:10",
-      "maxCost:10",
-      "maxMessages:10",
-    ];
-
-    for (const filter of filters.slice(0, 4)) {
-      const result = filterSessionsByQuery([a, b], filter);
-      expect(result.sessions).toEqual([a]);
-      expect(result.warnings).toEqual([]);
-    }
-    for (const filter of filters.slice(4)) {
-      const result = filterSessionsByQuery([a, b], filter);
-      expect(result.sessions).toEqual([b]);
-      expect(result.warnings).toEqual([]);
-    }
-  });
-
-  it("does not classify unknown usage as zero or as its known subtotal", () => {
-    const interrupted = {
-      key: "interrupted",
-      usage: {
-        usageReport: { state: "unavailable" as const },
-        totalTokens: 100,
-        totalCost: 0,
-        messageCounts: { total: 2 },
-      },
-    };
-    for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
-      expect(filterSessionsByQuery([interrupted], query).sessions).toEqual([]);
-    }
-    expect(filterSessionsByQuery([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
-  });
-
-  it("supports every has predicate and warns on unknown values", () => {
-    const populated = {
-      key: "populated",
-      hasContextWeight: true,
-      modelProvider: "openai",
-      model: "gpt-5.2",
-      usage: {
-        messageCounts: { errors: 1 },
-        toolUsage: { totalCalls: 1 },
-      },
-    };
-    const empty = { key: "empty", usage: null };
-
-    for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
-      const result = filterSessionsByQuery([populated, empty], `has:${value}`);
-      expect(result.sessions).toEqual([populated]);
-      expect(result.warnings).toEqual([]);
-    }
-    expect(filterSessionsByQuery([populated, empty], "has:__proto__")).toEqual({
-      sessions: [populated, empty],
-      warnings: ["Unknown has:__proto__"],
+  for (const [index, filter] of filters.entries()) {
+    expect(filterSessionsByQuery([a, b], filter)).toEqual({
+      sessions: [index < 4 ? a : b],
+      warnings: [],
     });
+  }
+});
+
+it("does not classify unknown usage as zero or as its known subtotal", () => {
+  const interrupted = makeSession("interrupted", {
+    usageReport: { state: "unavailable" },
+    totalTokens: 100,
+    totalCost: 0,
+    messageCounts: { total: 2 },
   });
+  for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
+    expect(filterSessionsByQuery([interrupted], query).sessions).toEqual([]);
+  }
+  expect(filterSessionsByQuery([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
+});
 
-  it("rejects non-decimal numeric filter values", () => {
-    const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
+it("supports every has predicate and warns on unknown values", () => {
+  const populated = populatedSessions()[0]!;
+  const empty = makeSession("empty", null);
 
-    expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
-    expect(filterSessionsByQuery([session], "minTokens:0x1000").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
-    expect(filterSessionsByQuery([session], "minTokens:9007199254740993").warnings).toEqual([
-      "Invalid number for minTokens",
-    ]);
-  });
-
-  it("warns on unknown keys and invalid numbers", () => {
-    const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
-    const res = filterSessionsByQuery([session], "__proto__:1 minTokens:wat");
-    expect(res.warnings).toEqual(["Unknown filter: __proto__", "Invalid number for minTokens"]);
-  });
-
-  it("parses tool summaries from compact session logs", () => {
-    const { toolInfo: res } = parseSessionLog({
-      timestamp: 0,
-      role: "assistant",
-      content: "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
+  for (const value of ["tools", "errors", "context", "usage", "model", "provider"]) {
+    expect(filterSessionsByQuery([populated, empty], `has:${value}`)).toEqual({
+      sessions: [populated],
+      warnings: [],
     });
-    expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
-    expect(res.cleanContent).toBe("");
-    expect(res.tools[0]).toEqual(["read", 2]);
+  }
+  expect(filterSessionsByQuery([populated, empty], "has:__proto__")).toEqual({
+    sessions: [populated, empty],
+    warnings: ["Unknown has:__proto__"],
   });
+});
+
+it("rejects non-decimal numbers and warns on unknown keys", () => {
+  const target = makeSession("a", { totalTokens: 10_000, totalCost: 0 });
+  for (const value of ["1e3", "0x1000", "9007199254740993", "wat"]) {
+    const unknown = value === "wat";
+    const query = `${unknown ? "__proto__:1 " : ""}minTokens:${value}`;
+    expect(filterSessionsByQuery([target], query).warnings).toEqual([
+      ...(unknown ? ["Unknown filter: __proto__"] : []),
+      "Invalid number for minTokens",
+    ]);
+  }
+});
+
+it("parses tool summaries from compact session logs", () => {
+  const { toolInfo: res } = parseSessionLog({
+    timestamp: 0,
+    role: "assistant",
+    content: "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
+  });
+  expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
+  expect(res.cleanContent).toBe("");
+  expect(res.tools[0]).toEqual(["read", 2]);
 });

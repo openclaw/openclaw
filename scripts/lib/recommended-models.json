@@ -20,13 +20,13 @@
   "gpt-6-luna",
   "kimi-k3",
   "claude-haiku-5.5",
-  "grok-4.6",
   "deepseek-v4-pro",
   "step-5-preview",
   "glm-5.3-flash",
   "qwen3.8-27b",
   "mistral-large-4",
   "minimax-m3",
+  "minimax-m3.1-flash",
   "nemotron-3-ultra-550b-a55b",
   "nemotron-3-super-120b-a12b"
 ]

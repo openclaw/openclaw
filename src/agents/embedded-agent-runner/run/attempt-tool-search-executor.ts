@@ -99,9 +99,7 @@ export function createSubscribedToolSearchExecutor(params: {
                 const target = manager.getSessionTarget();
                 const sessionId = manager.getSessionId();
                 const entryId = await manager.appendMessageAsync(message);
-                if (!params.isCurrent()) {
-                  return false;
-                }
+                // Committed activity still belongs to settlement after presentation loses authority.
                 const activity = params.nestedToolActivityState;
                 if (!terminal.isError) {
                   activity.successfulToolNames.add(toolParams.toolName);
@@ -115,7 +113,7 @@ export function createSubscribedToolSearchExecutor(params: {
                   };
                   activity.accepted.lastEntryId = entryId;
                 }
-                return true;
+                return params.isCurrent();
               }),
           );
           if (!accepted) {

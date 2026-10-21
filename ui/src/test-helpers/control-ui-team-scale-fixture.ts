@@ -23,6 +23,12 @@ import {
   createTeamScalePeople,
   TEAM_SCALE_SELF_INSTANCE_ID,
 } from "./control-ui-team-scale-people.ts";
+import {
+  dashboardMcpAppHtml,
+  dashboardPaintMarkerHtml,
+  dashboardWidgetHtml,
+  widgetHtml,
+} from "./control-ui-team-scale-widget-html.ts";
 
 export { TEAM_SCALE_SELF_INSTANCE_ID };
 
@@ -56,6 +62,7 @@ type FixtureAsset = {
   contentType: string;
   status?: number;
   delayMs?: number;
+  headers?: Record<string, string>;
 };
 type FixtureOptions = {
   baseUrl?: string;
@@ -67,23 +74,26 @@ type FixtureOptions = {
   sidebarListChurn?: boolean;
   sidebarLiveChurn?: boolean;
   sessionEventChurn?: boolean;
+  sessionEventDurationMs?: number;
+  sessionEventAncestorRefs?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
+  transcriptMessages?: number;
+  dashboardMcpApp?: { font: Buffer };
+  /** Opt into a scripted HTML dashboard with an independently fetched web font. */
+  dashboardWidgetFontUrl?: string;
+  historyStateReceipt?: boolean;
+  dashboardPaintMarker?: boolean;
 };
-
-function widgetHtml(index: number) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Team metric ${index + 1}</title>
-<style>:root{color-scheme:dark light;font-family:system-ui}body{margin:0;padding:20px}h2{font-size:18px}progress{width:100%}</style></head>
-<body><h2>Team metric ${index + 1}</h2><p>Synthetic completed work: ${60 + index}%</p>
-<progress value="${60 + index}" max="100"></progress><p>All fixture systems are available.</p></body></html>`;
-}
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const counts = {
     ...TEAM_SCALE_COUNTS,
-    transcriptMessages: options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages,
+    transcriptMessages:
+      options.transcriptMessages ??
+      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
   };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
@@ -176,16 +186,25 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     largeSnapshot: options.largeSnapshot,
     attachments: duplicateReads?.attachments,
   });
-  const largeHistory = options.largeSnapshot
-    ? {
-        messages: historyMessages,
-        sessionId: pinnedRows[0]!.sessionId,
-        sessionInfo: pinnedRows[0]!,
-        hasMore: false,
-        totalMessages: counts.transcriptMessages,
-        metadata: { models: [] },
-      }
-    : undefined;
+  const configuredHistory =
+    options.largeSnapshot || options.historyStateReceipt
+      ? {
+          messages: historyMessages,
+          sessionId: pinnedRows[0]!.sessionId,
+          sessionInfo: pinnedRows[0]!,
+          hasMore: false,
+          totalMessages: counts.transcriptMessages,
+          metadata: { commands: [], models: [] },
+          ...(options.historyStateReceipt
+            ? {
+                stateRevision: {
+                  sessionInfo: "fixture-session-v1",
+                  commands: "fixture-commands-v1",
+                },
+              }
+            : {}),
+        }
+      : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -274,8 +293,40 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     };
   });
   const boardPath = `/__openclaw__/board/${encodeURIComponent(selectedSessionKey)}/team-overview/index.html`;
-  assets.set(boardPath, { contentType: "text/html", body: widgetHtml(0) });
+  const dashboardHtml = (html: string) =>
+    options.dashboardPaintMarker ? dashboardPaintMarkerHtml(html) : html;
+  if (!options.dashboardMcpApp) {
+    assets.set(boardPath, {
+      contentType: "text/html",
+      body: dashboardHtml(
+        options.dashboardWidgetFontUrl
+          ? dashboardWidgetHtml(options.dashboardWidgetFontUrl)
+          : widgetHtml(0),
+      ),
+    });
+  }
   const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
+  const dashboardAssetPath = "/__openclaw__/fixture-dashboard";
+  const dashboardAssetOrigin = options.sandboxPort
+    ? `http://127.0.0.1:${options.sandboxPort}`
+    : new URL(baseUrl).origin;
+  const dashboardStylesheetUrl = new URL(
+    `${dashboardAssetPath}/dashboard.css`,
+    dashboardAssetOrigin,
+  ).href;
+  if (options.dashboardMcpApp) {
+    assets.set(`${dashboardAssetPath}/dashboard.css`, {
+      contentType: "text/css",
+      headers: { "access-control-allow-origin": "*" },
+      body: `@font-face{font-family:TeamMetric;src:url("${new URL(`${dashboardAssetPath}/metrics.woff2`, dashboardAssetOrigin).href}") format("woff2");font-display:block}
+:root{color-scheme:dark light;font-family:TeamMetric,system-ui}body{margin:0;padding:20px}h2{font-size:22px}main{display:grid;grid-template-columns:1fr 1fr;gap:20px}section{padding:16px;border:1px solid #8993a4;border-radius:8px}h3{margin:0 0 12px;font-size:16px}svg{display:block;width:100%;color:#3b9c8c}`,
+    });
+    assets.set(`${dashboardAssetPath}/metrics.woff2`, {
+      contentType: "font/woff2",
+      headers: { "access-control-allow-origin": "*" },
+      body: options.dashboardMcpApp.font,
+    });
+  }
   const board: BoardSnapshot = {
     sessionKey: selectedSessionKey,
     revision: 1,
@@ -285,17 +336,21 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         name: "team-overview",
         tabId: "main",
         title: "Team overview",
-        contentKind: "html",
         sizeW: 12,
         sizeH: 8,
         position: 0,
         grantState: "none",
         revision: 1,
-        frameUrl: new URL(`${boardPath}?bt=fixture-ticket`, baseUrl).href,
-        viewTicket: "fixture-ticket",
-        viewTicketTtlMs: 1_200_000,
-        viewGeneration: "0123456789abcdef0123456789abcdef",
-        ...sandbox,
+        ...(options.dashboardMcpApp
+          ? { contentKind: "mcp-app", instanceId: "team-overview-instance" }
+          : {
+              contentKind: "html",
+              frameUrl: new URL(`${boardPath}?bt=fixture-ticket`, baseUrl).href,
+              viewTicket: "fixture-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "0123456789abcdef0123456789abcdef",
+              ...sandbox,
+            }),
       },
     ],
   };
@@ -350,6 +405,8 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "progressCard.get",
       "cron.list",
       "cron.status",
+      ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
+      ...(options.dashboardWidgetFontUrl ? ["mcp.app.discover"] : []),
       ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
@@ -357,7 +414,10 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
-      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
+      ...(options.dashboardWidgetFontUrl ? { "mcp.app.discover": { servers: [] } } : {}),
+      ...(configuredHistory
+        ? { "chat.startup": configuredHistory, "chat.history": configuredHistory }
+        : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {
@@ -397,6 +457,23 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "plugins.controlUi.list": { revision: "team-scale-v1", diagnostics: [], plugins },
       "plugins.controlUi.report": { ok: true },
       "board.get": board,
+      ...(options.dashboardMcpApp
+        ? {
+            "board.widget.appView": {
+              viewId: "team-overview-view",
+              expiresAtMs: Date.now() + 3_600_000,
+            },
+            "mcp.app.view": {
+              ...sandbox,
+              html: dashboardHtml(dashboardMcpAppHtml(dashboardStylesheetUrl)),
+              csp: { resourceDomains: [dashboardAssetOrigin] },
+              toolInput: {},
+              toolResult: { content: [{ type: "text", text: "Synthetic dashboard ready" }] },
+              messageSupported: false,
+              updateModelContextSupported: false,
+            },
+          }
+        : {}),
       "canvas.document.view": {
         cases: Array.from({ length: counts.inlineWidgets }, (_, index) => ({
           match: { docId: `team-scale-chart-${index + 1}` },
@@ -591,10 +668,18 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     }
   }
   if (options.sessionEventChurn) {
-    liveEvents.splice(0, liveEvents.length, ...createTeamScaleSessionEvents(sessions, now));
+    liveEvents.splice(
+      0,
+      liveEvents.length,
+      ...createTeamScaleSessionEvents(sessions, now, {
+        durationMs: options.sessionEventDurationMs,
+        ancestorSessionKey: options.sessionEventAncestorRefs ? selectedSessionKey : undefined,
+      }),
+    );
   }
   return {
     scenario,
+    board,
     selectedSessionKey,
     pinnedKeys,
     sidebarEntries,

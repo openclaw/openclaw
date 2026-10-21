@@ -207,10 +207,15 @@ export async function prepareGatewayLifecycle(params: {
   watchNodeRequestHandler.current = watchNodeHttpRuntime.handleRequest;
   const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
     await import("./terminal/session-manager.js");
-  const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
+  const { TERMINAL_EVENT_DATA } = await import("./terminal/session-types.js");
   const terminalSessions = new TerminalSessionManager({
     withOpenAdmission: withAgentTerminalOpenAdmission,
-    ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
+    emit: (connId: string, event: string, payload: unknown) =>
+      broadcastToConnIds(event, payload, new Set([connId]), {
+        // PTY flow control is primary; dropping is the last-resort socket cap guard.
+        dropIfSlow: event === TERMINAL_EVENT_DATA,
+      }),
+    getBufferedAmount,
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
@@ -251,9 +256,11 @@ export async function prepareGatewayLifecycle(params: {
     markSidecarsReady: () => {
       startupState.sidecarsReady = true;
     },
-    unlockStartupMethods: () => {
+    unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-        unavailableGatewayMethods.delete(method);
+        if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
+          unavailableGatewayMethods.delete(method);
+        }
       }
     },
     publishMethodSurface: (methods: readonly string[]) => {
@@ -577,7 +584,6 @@ export async function prepareGatewayLifecycle(params: {
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
-              heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
               chatRunState,

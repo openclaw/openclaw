@@ -1,6 +1,7 @@
-import { createEffect, createMemo, createStore, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createStore, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   hasOperatorAdminAccess,
@@ -18,6 +19,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
@@ -40,7 +42,6 @@ import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
-import { observeSkillState } from "./observe-state.ts";
 import type { SkillDetailTab, SkillsPresentation } from "./view-types.ts";
 import { Skills } from "./view.tsx";
 
@@ -86,6 +87,14 @@ export type SkillsRouteData = {
 
 export type SkillsPageProps = { routeData?: SkillsRouteData; surface?: "discovery" | "settings" };
 
+export function createSkillsRenderer(surface: "discovery" | "settings") {
+  return (props: SolidRouteProps<SkillsRouteData>) => (
+    <Show when={Boolean(props.data)}>
+      <SkillsPage routeData={props.data} surface={surface} />
+    </Show>
+  );
+}
+
 export function SkillsPage(props: SkillsPageProps) {
   const context = useApplication();
   const surface = () => props.surface ?? "settings";
@@ -106,7 +115,7 @@ export function SkillsPage(props: SkillsPageProps) {
   let routeDataInitialized = false;
   let routeDataEnabled = true;
   let accessSignature = "";
-  const skills = observeSkillState<SkillsState>({
+  const skills = observeState<SkillsState>({
     ...createSkillsData(),
     get client() {
       return context.gateway.snapshot.client;
@@ -226,11 +235,13 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   );
   onSettled(() => {
+    // Roster receipts reconcile the request target before admitting missing skill reads.
     const stopAgents = agents.subscribe(() => {
       reconcileAgentState();
       ensureInitialData();
     });
     const selections = new Set([context.settingsAgentSelection, context.agentSelection]);
+    // Retained surfaces have separate selection owners; only the admitted owner retargets.
     const stopSelections = Array.from(selections, (selection) =>
       selection.subscribe(() => {
         if (selection === agentSelection()) {
@@ -260,21 +271,18 @@ export function SkillsPage(props: SkillsPageProps) {
         ],
       );
     };
+    // Icon reconciliation waits for result/detail publication to settle.
     const stopSkills = skills.subscribe(() => onSettled(syncIcons));
     syncSelection();
     syncIcons();
     return () => {
-      stopAgents();
-      stopSelections.forEach((stop) => stop());
-      stopSkills();
+      active = false;
+      [stopAgents, ...stopSelections, stopSkills].forEach((stop) => stop());
+      clearClawHubSearchTimer();
+      searchRequest.cancel();
+      skills.dispose();
+      clawhubIcons.reset();
     };
-  });
-  onCleanup(() => {
-    active = false;
-    clearClawHubSearchTimer();
-    searchRequest.cancel();
-    skills.dispose();
-    clawhubIcons.reset();
   });
 
   function syncSearch(scope: NonNullable<typeof lastSearchScope>, query: string) {

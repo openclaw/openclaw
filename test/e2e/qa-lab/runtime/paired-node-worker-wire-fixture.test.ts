@@ -47,9 +47,9 @@ const transport = vi.hoisted(() => {
   return { GatewayClient: TestGatewayClient, clients };
 });
 
-vi.mock("../../../../src/gateway/client.js", () => ({
+vi.mock("../../../../src/gateway/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../src/gateway/client.js")>()),
   ...transport,
-  prepareGatewayClientDeviceAuth: async () => {},
 }));
 vi.mock("../../../../src/infra/device-identity.js", () => ({
   loadOrCreateDeviceIdentity: () => ({ deviceId: "paired-fixture-node" }),

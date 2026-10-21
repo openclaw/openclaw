@@ -19,13 +19,11 @@ export function useReconcileTestRuntime() {
   return { observer, tempDirs };
 }
 
-export function rows(db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) {
-  return db.prepare(sql).all(...bindings);
-}
+export const rows = (db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) =>
+  db.prepare(sql).all(...bindings);
 
-export function row(db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) {
-  return db.prepare(sql).get(...bindings);
-}
+export const row = (db: SqlConnection, sql: string, ...bindings: SQLInputValue[]) =>
+  db.prepare(sql).get(...bindings);
 
 export function expectRows(
   db: SqlConnection,
@@ -36,17 +34,14 @@ export function expectRows(
   expect(rows(db, sql, ...bindings)).toEqual(expected);
 }
 
-export function rebuildState(db: SqlConnection) {
-  return row(db, "SELECT needs_rebuild FROM session_transcript_index_state");
-}
+export const rebuildState = (db: SqlConnection) =>
+  row(db, "SELECT needs_rebuild FROM session_transcript_index_state");
 
-export function expectReconciled(result: Promise<unknown>, reconciledSessions = 1) {
-  return expect(result).resolves.toEqual({ reconciledSessions });
-}
+export const expectReconciled = (result: Promise<unknown>, reconciledSessions = 1) =>
+  expect(result).resolves.toEqual({ reconciledSessions });
 
-export function projectionMessages(db: SqlConnection) {
-  return rows(db, "SELECT message_id, text FROM session_transcript_fts");
-}
+export const projectionMessages = (db: SqlConnection) =>
+  rows(db, "SELECT message_id, text FROM session_transcript_fts");
 
 export function projectionSnapshot(db: SqlConnection, sessionId: string) {
   const query = (sql: string) => rows(db, sql, sessionId);

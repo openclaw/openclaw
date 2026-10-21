@@ -24,6 +24,48 @@ function captureCardsList(store: WorkboardStore) {
 }
 
 describe("workboard card list revisions", () => {
+  it("shares board summaries across concurrent list shapes until a writer commits", async () => {
+    const { store, stores, dbPath } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "On the board", boardId: "ops" });
+    const metadataReads = vi.spyOn(stores.boards, "entries");
+    const aggregateReads = vi.spyOn(stores.cards, "listBoardAggregates");
+    const { api, invoke } = createGatewayMethodCapture();
+    registerWorkboardGatewayMethods({ api, store });
+    const listBoards = async () => {
+      const [success, result] = (await invoke("workboard.boards.list", {})).mock.calls[0]!;
+      expect(success).toBe(true);
+      return result;
+    };
+    const listCards = captureCardsList(store);
+    const [boards, ops, all, session] = await Promise.all([
+      listBoards(),
+      listCards({ boardId: "ops" }),
+      listCards(),
+      listCards({ sessionKey: "another-session" }),
+    ]);
+    expect(boards.boards).toContainEqual(expect.objectContaining({ id: "ops", total: 1 }));
+    for (const result of [ops, all, session, await listBoards()]) {
+      expect(result.boards).toEqual(boards.boards);
+    }
+    expect(metadataReads).toHaveBeenCalledOnce();
+    expect(aggregateReads).toHaveBeenCalledOnce();
+
+    const siblingStores = createStores(dbPath);
+    const writer = new WorkboardStore(siblingStores.cards, siblingStores);
+    try {
+      await writer.upsertBoard({ id: "ops", name: "Operations" });
+      await writer.update(card.id, { status: "done" });
+      const refreshed = await listBoards();
+      expect(refreshed.boards).toContainEqual(
+        expect.objectContaining({ id: "ops", name: "Operations", byStatus: { done: 1 } }),
+      );
+      expect((await listCards({ boardId: "ops" })).boards).toEqual(refreshed.boards);
+      expect(aggregateReads).toHaveBeenCalledTimes(2);
+    } finally {
+      await writer.close();
+    }
+  });
+
   it("bounds card pages and invalidates the first page after a committed update", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     for (let index = 0; index < 105; index++) {
@@ -124,7 +166,7 @@ describe("workboard card list revisions", () => {
     await store.claim(card.id, { ownerId: "worker", token: "test-claim-token" });
     const reads = vi.spyOn(stores.cards, "entries");
     const changes = vi.fn();
-    store.subscribeChanges(changes);
+    store.onChange = changes;
     const listCards = captureCardsList(store);
     const list = (boardId?: string, sinceRevision?: unknown) =>
       listCards({ boardId, sinceRevision });
@@ -202,6 +244,7 @@ describe("workboard card list revisions", () => {
     });
     const card = await store.create({ title: "Visible during settlement" });
     const cached = await store.listCards(undefined);
+    const cachedBoards = await store.listBoards();
     unsettled = true;
     const first = await store.listCards(undefined);
     const second = await store.listCards(undefined);
@@ -209,10 +252,18 @@ describe("workboard card list revisions", () => {
     expect(second.cards).toEqual(first.cards);
     expect(first).not.toBe(cached);
     expect(second).not.toBe(first);
+    const firstBoards = await store.listBoards();
+    const secondBoards = await store.listBoards();
+    expect(firstBoards).toEqual(cachedBoards);
+    expect(firstBoards).not.toBe(cachedBoards);
+    expect(secondBoards).toEqual(firstBoards);
+    expect(secondBoards).not.toBe(firstBoards);
     unsettled = false;
     const settled = await store.listCards(undefined);
     expect(settled.revision.revision).toBeGreaterThan(second.revision.revision);
     expect(await store.listCards(undefined)).toBe(settled);
+    const settledBoards = await store.listBoards();
+    expect(await store.listBoards()).toBe(settledBoards);
   });
 
   it("retries failed card snapshots and refuses cached reads after store close", async () => {
@@ -221,7 +272,14 @@ describe("workboard card list revisions", () => {
     vi.spyOn(stores.cards, "entries").mockRejectedValueOnce(new Error("read failed"));
     await listCards({}, false);
     await listCards();
+    await store.upsertBoard({ id: "ops" });
+    vi.spyOn(stores.cards, "listBoardAggregates").mockRejectedValueOnce(new Error("read failed"));
+    await expect(store.listBoards()).rejects.toThrow("read failed");
+    await expect(store.listBoards()).resolves.toMatchObject({
+      boards: expect.arrayContaining([expect.objectContaining({ id: "ops" })]),
+    });
     await store.close();
     expect((await listCards({}, false)).message).toContain("closed");
+    await expect(store.listBoards()).rejects.toThrow("closed");
   });
 });

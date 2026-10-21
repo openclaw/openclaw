@@ -128,23 +128,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-export function pickProbeHostForBind(
-  bindMode: string,
-  tailnetIPv4: string | undefined,
-  customBindHost?: string,
-) {
-  if (bindMode === "custom" && customBindHost?.trim()) {
-    return customBindHost.trim();
-  }
-  if (bindMode === "tailnet") {
-    return tailnetIPv4 ?? "127.0.0.1";
-  }
-  // Same as call.ts: self-connections should always target loopback.
-  // bind=lan controls which interfaces the server listens on (0.0.0.0),
-  // but co-located CLI probes should connect via 127.0.0.1.
-  return "127.0.0.1";
-}
-
 const SAFE_DAEMON_ENV_KEYS = [
   "OPENCLAW_PROFILE",
   "OPENCLAW_STATE_DIR",

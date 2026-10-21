@@ -1,20 +1,24 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
-import { For, Show, createMemo, onCleanup } from "solid-js";
-import { titleForRoute } from "../../app-navigation.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { For, Show, createMemo, createUniqueId, onCleanup, onSettled } from "solid-js";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
+import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { showToast } from "../../lib/toast.ts";
 import { createPortals, type PortalsModel, type PortalsPresentation } from "./portals-state.ts";
+import "../../styles/session-panel-rail.css";
 import "./portals.css";
 
 registerEnglishCatalog(registerPortalsEnglish);
 const PORTAL_FRAME_SANDBOX =
   "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts";
-export type PortalsPageProps = PortalsPresentation;
+export type PortalsPageProps = PortalsPresentation & { mobile?: boolean };
 
 type PortalsPageMethods = { handleToggleRequest(event: Event): void };
 type PortalsPageElement = SolidBridgeElement<PortalsPageProps, PortalsPageMethods>;
@@ -24,72 +28,120 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   const model = createPortals(useApplication(), () => host);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
+  return <PortalContent model={model} mobile={props.mobile} />;
+}
+
+function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
+  const state = () => props.model.state();
   return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: !props.embedded }}>
-      <PortalContent model={model} />
-    </ShellLayoutBoundary>
+    <Show
+      when={
+        props.model.presentation().embedded &&
+        state().loaded &&
+        state().portalListSupported &&
+        !state().error &&
+        (!state().connected || state().canReadPortalState) &&
+        (!props.mobile || !props.model.presentation().requestedPortalId)
+      }
+      fallback={
+        <section class="portals-empty" role="status" aria-live="polite">
+          <Show
+            when={state().connected && !state().canReadPortalState}
+            fallback={
+              <>
+                <Show
+                  when={!state().loaded && (state().loading || !state().connected)}
+                  fallback={
+                    <>
+                      <div class="portals-empty__title">
+                        {t(
+                          props.model.presentation().requestedPortalId
+                            ? "portalsPage.unavailable"
+                            : "portalsPage.emptyHint",
+                        )}
+                      </div>
+                      <Show when={!props.model.presentation().requestedPortalId}>
+                        <div class="portals-empty__prompts">
+                          <span>{t("portalsPage.promptShow")}</span>
+                          <span>{t("portalsPage.promptStart")}</span>
+                          <span>{t("portalsPage.promptMakeAvailable")}</span>
+                        </div>
+                      </Show>
+                    </>
+                  }
+                >
+                  <div class="portals-empty__title">{t("portalsPage.loading")}</div>
+                </Show>
+                <Show when={!state().portalListSupported}>
+                  <div class="portals-empty__note">{t("portalsPage.unsupported")}</div>
+                </Show>
+                <Show when={state().error}>
+                  <div class="callout danger">{state().error}</div>
+                </Show>
+              </>
+            }
+          >
+            <div class="portals-empty__note">
+              {t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
+            </div>
+          </Show>
+        </section>
+      }
+    >
+      <PanelEmptyState
+        presentation={props.mobile ? "mobile" : "desktop"}
+        icon={<Icon name="panelsTopLeft" />}
+        heading={t(
+          props.model.presentation().requestedPortalId
+            ? "portalsPage.embeddedUnavailableTitle"
+            : "portalsPage.embeddedEmptyTitle",
+        )}
+        description={t(
+          props.model.presentation().requestedPortalId
+            ? "portalsPage.embeddedUnavailableBody"
+            : "portalsPage.embeddedEmptyBody",
+        )}
+      />
+    </Show>
   );
 }
 
-function EmptyState(props: { model: PortalsModel }) {
+function PortalPreview(props: { model: PortalsModel; portal: PortalSummary; mobile?: boolean }) {
   const state = () => props.model.state();
-  return (
-    <section class="portals-empty" role="status" aria-live="polite">
-      <Show
-        when={state().connected && !state().canReadPortalState}
-        fallback={
-          <>
-            <Show
-              when={!state().loaded && (state().loading || !state().connected)}
-              fallback={
-                <>
-                  <div class="portals-empty__title">
-                    {t(
-                      props.model.presentation().requestedPortalId
-                        ? "portalsPage.unavailable"
-                        : "portalsPage.emptyHint",
-                    )}
-                  </div>
-                  <Show when={!props.model.presentation().requestedPortalId}>
-                    <div class="portals-empty__prompts">
-                      <span>{t("portalsPage.promptShow")}</span>
-                      <span>{t("portalsPage.promptStart")}</span>
-                      <span>{t("portalsPage.promptMakeAvailable")}</span>
-                    </div>
-                  </Show>
-                </>
-              }
-            >
-              <div class="portals-empty__title">{t("portalsPage.loading")}</div>
-            </Show>
-            <Show when={!state().portalListSupported}>
-              <div class="portals-empty__note">{t("portalsPage.unsupported")}</div>
-            </Show>
-            <Show when={state().error}>
-              <div class="callout danger">{state().error}</div>
-            </Show>
-          </>
-        }
-      >
-        <div class="portals-empty__note">
-          {t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
-        </div>
-      </Show>
-    </section>
-  );
-}
-
-function PortalPreview(props: { model: PortalsModel; portal: PortalSummary }) {
-  const state = () => props.model.state();
+  const embedded = () => props.model.presentation().embedded;
+  const desktop = () => embedded() && !props.mobile;
+  const menuId = createUniqueId();
+  const identityLabels: HTMLElement[] = [];
+  onSettled(() => {
+    if (identityLabels.length === 0) {
+      return undefined;
+    }
+    const update = () => {
+      for (const label of identityLabels) {
+        label.toggleAttribute("data-overflow", label.scrollWidth > label.clientWidth);
+      }
+    };
+    const observer = new ResizeObserver(update);
+    for (const label of identityLabels) {
+      observer.observe(label);
+      if (label.firstElementChild) {
+        observer.observe(label.firstElementChild);
+      }
+    }
+    update();
+    return () => observer.disconnect();
+  });
   const portalUrl = () => props.portal.url ?? "";
-  const displayUrl = createMemo(() => {
+  const origin = () => new URL(props.portal.publicUrl).origin;
+  const canLaunch = () => Boolean(props.portal.tokenQuery && portalUrl());
+  const displayUrl = () => {
     if (!portalUrl()) {
       return "";
     }
     const value = new URL(portalUrl());
     value.search = "";
     return value.href;
-  });
+  };
   const frameKey = () => `${props.portal.id}\u0000${portalUrl()}`;
   const probeStatus = () =>
     state().portalProbeState?.key === frameKey() ? state().portalProbeState!.status : "probing";
@@ -101,42 +153,150 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary }) {
         : "unreachable";
   const needsNotice = () =>
     ["unreachable", "ingress-required", "new-tab-required"].includes(probeStatus());
+  const embeddedNoticeKey = () =>
+    probeStatus() === "new-tab-required"
+      ? "embeddedNewTabRequired"
+      : probeStatus() === "ingress-required"
+        ? "embeddedIngressRequired"
+        : "embeddedUnreachable";
   return (
     <section class="portals-preview">
+      <Show when={embedded()}>
+        <header
+          class="session-panel-rail portals-embedded__header"
+          data-presentation={props.mobile ? "mobile" : "desktop"}
+        >
+          <span class="portals-embedded__mark">
+            <Icon name="panelsTopLeft" />
+          </span>
+          <div class="session-panel-rail__identity portals-embedded__identity">
+            <span
+              class="portals-embedded__name"
+              title={props.portal.title}
+              ref={(node) => identityLabels.push(node)}
+            >
+              <span>{props.portal.title}</span>
+            </span>
+            <span
+              class="portals-embedded__origin"
+              title={origin()}
+              ref={(node) => identityLabels.push(node)}
+            >
+              <span>{origin()}</span>
+            </span>
+          </div>
+          <div class="session-panel-rail__group">
+            <Show when={!props.mobile}>
+              <button
+                class="session-panel-rail__button portals-embedded__action"
+                type="button"
+                title={t("portalsPage.embeddedRefresh")}
+                aria-label={t("portalsPage.embeddedRefresh")}
+                disabled={!canLaunch() || probeStatus() === "probing"}
+                onClick={() => props.model.ensurePortalProbe(props.portal, true)}
+              >
+                <Icon name="refresh" />
+              </button>
+            </Show>
+            <Menu
+              id={`portal-${menuId}`}
+              label={t("portalsPage.embeddedOptions")}
+              trigger={<Icon name="moreHorizontal" />}
+              triggerClass="session-panel-rail__button portals-embedded__action"
+              placement="bottom-end"
+              items={[
+                ...(!props.mobile
+                  ? [
+                      {
+                        id: "copy",
+                        label: t("portalsPage.embeddedCopyLink"),
+                        icon: <Icon name="copy" class="portals-embedded__menu-icon" />,
+                      },
+                    ]
+                  : []),
+                {
+                  id: "open",
+                  label: t(
+                    props.mobile ? "portalsPage.embeddedOpenBrowser" : "portalsPage.embeddedOpen",
+                  ),
+                  icon: <Icon name="externalLink" class="portals-embedded__menu-icon" />,
+                  href: portalUrl(),
+                  attributes: { target: "_blank", rel: "noopener noreferrer" },
+                  disabled: !canLaunch(),
+                },
+                {
+                  id: "close",
+                  label: t("portalsPage.embeddedClose"),
+                  icon: <Icon name="x" class="portals-embedded__menu-icon" />,
+                  disabled: !state().canClosePortal || state().closingPortalId === props.portal.id,
+                },
+              ]}
+              onSelect={(item) => {
+                if (item.id === "close") {
+                  void props.model.closePortal(props.portal);
+                }
+                if (item.id === "copy") {
+                  void copyToClipboard(props.portal.publicUrl).then((copied) =>
+                    showToast({
+                      message: t(
+                        copied ? "portalsPage.embeddedCopied" : "portalsPage.embeddedCopyFailed",
+                      ),
+                    }),
+                  );
+                }
+              }}
+            />
+          </div>
+        </header>
+      </Show>
       <Show
         when={props.portal.tokenQuery && props.portal.url}
         fallback={
-          <div class="portals-preview__notice" role="status">
-            <div class="portals-preview__notice-title">
-              {t("portalsPage.writeAccessRequiredTitle")}
-            </div>
-            <p>{t("portalsPage.writeAccessRequiredBody")}</p>
-          </div>
+          <Show
+            when={desktop()}
+            fallback={
+              <div class="portals-preview__notice" role="status">
+                <div class="portals-preview__notice-title">
+                  {t("portalsPage.writeAccessRequiredTitle")}
+                </div>
+                <p>{t("portalsPage.writeAccessRequiredBody")}</p>
+              </div>
+            }
+          >
+            <PanelEmptyState
+              presentation="desktop"
+              icon={<Icon name="lock" />}
+              heading={t("portalsPage.writeAccessRequiredTitle")}
+              description={t("portalsPage.embeddedWriteAccessBody")}
+            />
+          </Show>
         }
       >
-        <header class="portals-preview__header">
-          <a
-            class="portals-preview__url"
-            href={portalUrl()}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={displayUrl()}
-          >
-            <span>{displayUrl()}</span>
-            <Icon name="externalLink" />
-            <span class="sr-only">{t("portalsPage.openNewTab")}</span>
-          </a>
-          <button
-            class="btn btn--icon btn--ghost portals-preview__close"
-            type="button"
-            title={t("portalsPage.closePortal", { title: props.portal.title })}
-            aria-label={t("portalsPage.closePortal", { title: props.portal.title })}
-            disabled={!state().canClosePortal || state().closingPortalId === props.portal.id}
-            onClick={() => void props.model.closePortal(props.portal)}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
+        <Show when={!embedded()}>
+          <header class="portals-preview__header">
+            <a
+              class="portals-preview__url"
+              href={portalUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={displayUrl()}
+            >
+              <span>{displayUrl()}</span>
+              <Icon name="externalLink" />
+              <span class="sr-only">{t("portalsPage.openNewTab")}</span>
+            </a>
+            <button
+              class="btn btn--icon btn--ghost portals-preview__close"
+              type="button"
+              title={t("portalsPage.closePortal", { title: props.portal.title })}
+              aria-label={t("portalsPage.closePortal", { title: props.portal.title })}
+              disabled={!state().canClosePortal || state().closingPortalId === props.portal.id}
+              onClick={() => void props.model.closePortal(props.portal)}
+            >
+              <Icon name="x" />
+            </button>
+          </header>
+        </Show>
         <Show when={state().error}>
           <div class="callout danger portals-preview__error" role="alert">
             {state().error}
@@ -161,27 +321,63 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary }) {
                 </Show>
               }
             >
-              <div class="portals-preview__notice" role="status">
-                <div class="portals-preview__notice-title">
-                  {t(`portalsPage.${noticeKey()}Title`)}
-                </div>
-                <p>{t(`portalsPage.${noticeKey()}Body`)}</p>
-                <a
-                  class="portals-preview__notice-url"
-                  href={portalUrl()}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  {displayUrl()}
-                </a>
-                <button
-                  class="btn"
-                  type="button"
-                  onClick={() => props.model.ensurePortalProbe(props.portal, true)}
-                >
-                  {t("portalsPage.retry")}
-                </button>
-              </div>
+              <Show
+                when={desktop()}
+                fallback={
+                  <div class="portals-preview__notice" role="status">
+                    <div class="portals-preview__notice-title">
+                      {t(`portalsPage.${noticeKey()}Title`)}
+                    </div>
+                    <p>{t(`portalsPage.${noticeKey()}Body`)}</p>
+                    <a
+                      class="portals-preview__notice-url"
+                      href={portalUrl()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      {displayUrl()}
+                    </a>
+                    <button
+                      class="btn"
+                      type="button"
+                      onClick={() => props.model.ensurePortalProbe(props.portal, true)}
+                    >
+                      {t("portalsPage.retry")}
+                    </button>
+                  </div>
+                }
+              >
+                <PanelEmptyState
+                  presentation="desktop"
+                  icon={<Icon name="panelsTopLeft" />}
+                  heading={t(`portalsPage.${embeddedNoticeKey()}Title`)}
+                  description={t(`portalsPage.${embeddedNoticeKey()}Body`)}
+                  action={
+                    <div
+                      class="portals-embedded__recovery"
+                      data-external-primary={probeStatus() === "new-tab-required" ? "" : undefined}
+                    >
+                      <button
+                        class={["btn", { primary: probeStatus() !== "new-tab-required" }]}
+                        type="button"
+                        onClick={() => props.model.ensurePortalProbe(props.portal, true)}
+                      >
+                        <Icon name="refresh" />
+                        {t("portalsPage.retry")}
+                      </button>
+                      <a
+                        class={["btn", { primary: probeStatus() === "new-tab-required" }]}
+                        href={portalUrl()}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Icon name="externalLink" />
+                        {t("portalsPage.openNewTab")}
+                      </a>
+                    </div>
+                  }
+                />
+              </Show>
             </Show>
           }
         >
@@ -194,7 +390,8 @@ function PortalPreview(props: { model: PortalsModel; portal: PortalSummary }) {
   );
 }
 
-function PortalContent(props: { model: PortalsModel }) {
+// The session host supplies mobile presentation; pane width is not a platform signal.
+export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) {
   const state = () => props.model.state();
   const environment = () =>
     state().pendingEnvironment?.id === state().pendingEnvironmentId
@@ -223,11 +420,11 @@ function PortalContent(props: { model: PortalsModel }) {
           when={props.model.presentation().embedded}
           fallback={
             <>
-              <section class="content-header content-header--page">
-                <div>
-                  <h1 class="page-title">{titleForRoute("portals")}</h1>
-                </div>
-              </section>
+              <HubPageHeader
+                active="portals"
+                wide
+                docsUrl="https://docs.openclaw.ai/gateway/portals"
+              />
               <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
                 <section class="portals-layout">
                   <aside class="portals-rail" aria-label={t("portalsPage.listLabel")}>
@@ -259,9 +456,15 @@ function PortalContent(props: { model: PortalsModel }) {
             </>
           }
         >
-          <div class="portals-embedded">
-            <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
-              <PortalPreview model={props.model} portal={selectedPortal()!} />
+          <div
+            class="portals-embedded portals-page--embedded"
+            data-mobile={props.mobile ? "" : undefined}
+          >
+            <Show
+              when={selectedPortal()}
+              fallback={<EmptyState model={props.model} mobile={props.mobile} />}
+            >
+              <PortalPreview model={props.model} portal={selectedPortal()!} mobile={props.mobile} />
             </Show>
           </div>
         </Show>
@@ -299,6 +502,7 @@ export const PortalsPage = defineSolidBridge<PortalsPageProps, PortalsPageMethod
   PortalsPageContent,
   {
     properties: {
+      mobile: { default: false, type: Boolean },
       embedded: { default: false, type: Boolean, reflect: true },
       presented: { default: true, type: Boolean },
       requestedPortalId: { default: null, attribute: false },

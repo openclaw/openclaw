@@ -1,6 +1,6 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sanitizeToolCallInputs,
   makeMissingToolResult,
@@ -36,6 +36,7 @@ const partialCall = (id: string, partialJson: string, args: Record<string, unkno
 });
 const signedRead = { allowedToolNames: ["read"], allowProviderOwnedThinkingReplay: true };
 const roles = (messages: AgentMessage[]) => messages.map(({ role }) => role);
+afterEach(() => vi.restoreAllMocks());
 
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
@@ -58,6 +59,7 @@ function getAssistantToolCallBlocks(
 
 describe("sanitizeToolUseResultPairing", () => {
   it("keeps matched parallel tool results and synthesizes only missing siblings", () => {
+    vi.spyOn(Date, "now").mockReturnValue(5_000);
     const input = castAgentMessages([
       sparseAssistant([
         { type: "text", text: "checking" },
@@ -74,6 +76,7 @@ describe("sanitizeToolUseResultPairing", () => {
     });
 
     expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.added.map((message) => message.timestamp)).toEqual([5_000, 5_000]);
     expect(roles(result.messages)).toEqual([
       "assistant",
       "toolResult",
@@ -94,6 +97,20 @@ describe("sanitizeToolUseResultPairing", () => {
       { toolCallId: "call_3" },
     ]);
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("keeps sparse legacy replay stable while preserving recorded synthetic creation times", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const source = castAgentMessages([sparseAssistant([toolCall("legacy")])]);
+    const first = sanitizeToolUseResultPairing(source);
+    clock.mockReturnValue(2_000);
+    expect(sanitizeToolUseResultPairing(source)).toEqual(first);
+    expect(first[1]).toMatchObject({ toolCallId: "legacy", timestamp: 0 });
+
+    const recorded = makeMissingToolResult({ toolCallId: "legacy", toolName: "read" });
+    expect(recorded.timestamp).toBe(2_000);
+    clock.mockReturnValue(3_000);
+    expect(sanitizeToolUseResultPairing([...source, recorded])[1]).toBe(recorded);
   });
 
   it("keeps parallel tool results when code-mode display turns arrive first", () => {
@@ -127,7 +144,6 @@ describe("sanitizeToolUseResultPairing", () => {
       { toolCallId: "call_search" },
       { toolCallId: "call_status" },
     ]);
-    expect(result.moved).toBe(true);
   });
 
   it("moves late real results ahead of newer assistant tool calls instead of synthesizing", () => {
@@ -145,7 +161,6 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages[1]).toMatchObject({ toolCallId: "call_read", isError: false });
     expect(result.messages[3]).toMatchObject({ toolCallId: "call_exec" });
     expect(JSON.stringify(result.messages)).not.toContain("missing tool result");
-    expect(result.moved).toBe(true);
   });
 
   it("drops orphan tool results that do not match any tool call", () => {
@@ -168,7 +183,6 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.droppedOrphanCount).toBe(0);
     expect(roles(result.messages)).toEqual(["assistant", "toolResult", "user"]);
     expect(result.added).toHaveLength(0);
   });
@@ -202,7 +216,6 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
 
     expect(result.messages).toBe(input);
     expect(result.added).toHaveLength(0);
-    expect(result.droppedDuplicateCount).toBe(0);
     expect(resultTexts(result.messages)).toEqual(["first", "second"]);
   });
 
@@ -224,7 +237,6 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
 
     expect(result.messages).toBe(input);
     expect(result.added).toHaveLength(0);
-    expect(result.droppedDuplicateCount).toBe(0);
     expect(resultTexts(result.messages)).toEqual(["first", "second"]);
   });
 
@@ -275,7 +287,6 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
     const result = repairToolUseResultPairing(input);
 
     expect(result.added).toHaveLength(1);
-    expect(result.droppedDuplicateCount).toBe(1);
     expect(resultTexts(result.messages)).toEqual([
       DEFAULT_MISSING_TOOL_RESULT_TEXT,
       "locally first",
@@ -295,7 +306,6 @@ describe("repairToolUseResultPairing repeated per-turn ids", () => {
       erroredAssistantResultPolicy: "drop",
     });
 
-    expect(result.droppedOrphanCount).toBe(1);
     expect(roles(result.messages)).toEqual(["assistant", "toolResult", "assistant", "toolResult"]);
     expect(resultTexts(result.messages)).toEqual([
       DEFAULT_MISSING_TOOL_RESULT_TEXT,
@@ -339,7 +349,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     return sparseAssistant([toolCall(toolCallId)]);
   }
 
-  it("returns discarded results in transcript order", () => {
+  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
       makeSyntheticResult("call_1"),
@@ -349,7 +359,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.discarded).toEqual([input[1], input[2]]);
+    expect(result.messages).toEqual([input[0], input[3]]);
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {
@@ -369,7 +379,6 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
       { toolCallId: "call_2", content: [{ text: "second output" }] },
     ]);
     expect(toolResults[0]?.isError).not.toBe(true);
-    expect(result.discarded).toEqual([input[1]]);
   });
 });
 

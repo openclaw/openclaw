@@ -93,7 +93,6 @@ async function readBrowserProxyUploadFiles(
   paths: string[],
   signal?: AbortSignal,
 ): Promise<BrowserProxyUploadFile[]> {
-  assertBrowserProxyFileCountWithinLimit(paths.length, "request");
   const files: BrowserProxyUploadFile[] = [];
   let totalBytes = 0;
   for (const filePath of paths) {

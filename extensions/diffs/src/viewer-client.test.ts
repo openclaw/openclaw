@@ -14,33 +14,19 @@ const VIEWER_CLIENT_SRC = readFileSync(
   "utf8",
 );
 
-const XSS_PATTERNS = ["onerror", "<script", "onclick", "javascript:", "onload"];
-
-const {
-  fileDiffHydrateMock,
-  fileDiffRerenderMock,
-  fileDiffSetOptionsMock,
-  preloadHighlighterMock,
-} = vi.hoisted(() => ({
+const { fileDiffHydrateMock, fileDiffRerenderMock, fileDiffSetOptionsMock } = vi.hoisted(() => ({
   fileDiffHydrateMock: vi.fn(),
   fileDiffRerenderMock: vi.fn(),
   fileDiffSetOptionsMock: vi.fn(),
-  preloadHighlighterMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("@pierre/diffs", () => ({
   FileDiff: class {
-    hydrate(params: unknown) {
-      return fileDiffHydrateMock(params);
-    }
-    rerender() {
-      return fileDiffRerenderMock();
-    }
-    setOptions(params: unknown) {
-      return fileDiffSetOptionsMock(params);
-    }
+    hydrate = fileDiffHydrateMock;
+    rerender = fileDiffRerenderMock;
+    setOptions = fileDiffSetOptionsMock;
   },
-  preloadHighlighter: preloadHighlighterMock,
+  preloadHighlighter: vi.fn(async () => undefined),
 }));
 
 const viewerPayload: DiffViewerPayload = {
@@ -61,22 +47,20 @@ const viewerPayload: DiffViewerPayload = {
   newFile: { name: "a.ts", lang: "text", contents: "new" },
 };
 
-function renderCard(overrides: Partial<DiffViewerPayload> = {}): void {
-  const payload = JSON.stringify({ ...viewerPayload, ...overrides });
+async function hydrateOptions() {
   document.body.insertAdjacentHTML(
     "beforeend",
-    `<section class="oc-diff-card">
-      <div data-openclaw-diff-host></div>
-      <script type="application/json" data-openclaw-diff-payload>${payload}</script>
-    </section>`,
+    `<section class="oc-diff-card"><div data-openclaw-diff-host></div>
+      <script type="application/json" data-openclaw-diff-payload>${JSON.stringify(viewerPayload)}</script></section>`,
   );
+  const { hydrateViewer } = await import("./viewer-client.js");
+  await hydrateViewer();
+  return fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
 }
 
 beforeEach(() => {
   vi.resetModules();
   document.body.innerHTML = "";
-  delete document.documentElement.dataset.openclawDiffsError;
-  delete document.documentElement.dataset.openclawDiffsReady;
   delete document.body.dataset.theme;
   vi.clearAllMocks();
 });
@@ -87,59 +71,42 @@ describe("createToolbarButton icon safety", () => {
   });
 
   it("SVG strings in toolbarIconSvg contain no XSS patterns", () => {
-    for (const pattern of XSS_PATTERNS) {
-      expect(VIEWER_CLIENT_SRC.includes(pattern), `source must not contain "${pattern}"`).toBe(
-        false,
-      );
+    for (const pattern of ["onerror", "<script", "onclick", "javascript:", "onload"]) {
+      expect(VIEWER_CLIENT_SRC, `source must not contain "${pattern}"`).not.toContain(pattern);
     }
   });
 });
 
-describe("toolbar button toggles", () => {
-  it.each([
-    ["layout", 0, "diffStyle", "unified", "split"],
-    ["theme", 3, "themeType", "dark", "light"],
-    ["wrap", 1, "overflow", "wrap", "scroll"],
-    ["background", 2, "disableBackground", false, true],
-  ] as const)("%s toggle updates viewer options", async (name, index, key, before, after) => {
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
+it.each([
+  ["layout", 0, "diffStyle", "unified", "split"],
+  ["theme", 3, "themeType", "dark", "light"],
+  ["wrap", 1, "overflow", "wrap", "scroll"],
+  ["background", 2, "disableBackground", false, true],
+] as const)("%s toggle updates viewer options", async (name, index, key, before, after) => {
+  const initial = await hydrateOptions();
+  expect(initial[key]).toBe(before);
+  const renderHeaderMetadata = initial.renderHeaderMetadata as () => HTMLElement;
+  const buttons = renderHeaderMetadata().querySelectorAll("button");
+  expectDefined(buttons[index], `${name} toggle`).click();
 
-    const initial = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(initial[key]).toBe(before);
-    const renderHeaderMetadata = initial.renderHeaderMetadata as () => HTMLElement;
-    const buttons = renderHeaderMetadata().querySelectorAll("button");
-    expectDefined(buttons[index], `${name} toggle`).click();
-
-    const updated = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(updated[key]).toBe(after);
-    if (name === "layout") {
-      expect(fileDiffRerenderMock).toHaveBeenCalled();
-    }
-    if (name === "theme") {
-      expect(document.body.dataset.theme).toBe("light");
-    }
-  });
+  const updated = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+  expect(updated[key]).toBe(after);
+  if (name === "layout") {
+    expect(fileDiffRerenderMock).toHaveBeenCalled();
+  }
+  if (name === "theme") {
+    expect(document.body.dataset.theme).toBe("light");
+  }
 });
 
 describe("header metadata", () => {
-  type HeaderMetadataCallback = () => HTMLElement | null;
-
-  async function hydrateAndGetHeaderCallback(): Promise<HeaderMetadataCallback> {
-    const { hydrateViewer } = await import("./viewer-client.js");
-    await hydrateViewer();
-    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    return opts.renderHeaderMetadata as HeaderMetadataCallback;
-  }
-
   it("drops the interactive toolbar in image render mode", async () => {
     document.body.insertAdjacentHTML(
       "beforeend",
       '<main class="oc-frame" data-render-mode="image"></main>',
     );
-    renderCard();
-    const renderHeaderMetadata = await hydrateAndGetHeaderCallback();
+    const options = await hydrateOptions();
+    const renderHeaderMetadata = options.renderHeaderMetadata as () => HTMLElement | null;
 
     expect(renderHeaderMetadata()).toBeNull();
   });
@@ -149,11 +116,7 @@ describe("header metadata", () => {
       "beforeend",
       '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
     );
-    renderCard();
-    const { hydrateViewer } = await import("./viewer-client.js");
-
-    await hydrateViewer();
-
+    await hydrateOptions();
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
   });
 });

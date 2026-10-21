@@ -11,7 +11,10 @@ import {
   buildMemoryEmbeddingCacheSchema,
   MEMORY_INDEX_CHUNKS_SCHEMA_SQL,
 } from "./memory-schema-base.js";
-import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
+import {
+  markInvalidImportedMemoryEmbeddings,
+  migrateMemoryIndexStorage,
+} from "./memory-schema-storage-migration.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -372,27 +375,66 @@ describe("memory storage migration", () => {
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
-  it("retains malformed-vector text and provenance while recording regeneration debt", () => {
+  it.each([false, true])(
+    "records malformed-vector debt with existing revision state: %s",
+    (revisionState) => {
+      const db = legacyDatabase();
+      if (revisionState) {
+        db.exec(`CREATE TABLE memory_index_state (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
+        INSERT INTO memory_index_state VALUES (1, 10)`);
+      }
+      db.exec(
+        "UPDATE memory_index_chunks SET embedding = '[1,null]'; UPDATE memory_embedding_cache SET embedding = 'invalid'",
+      );
+      migrateMemoryIndexStorage(db);
+      if (revisionState) {
+        expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
+          revision: 11,
+        });
+      }
+      expect(
+        db.prepare("SELECT text, length(embedding) AS bytes FROM memory_index_chunks").get(),
+      ).toEqual({ text: "saffronquasar", bytes: 0 });
+      expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
+      expect(
+        db
+          .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+          .get(),
+      ).toEqual({ value: "1" });
+      expect(
+        db.prepare("SELECT count(*) AS count FROM memory_index_chunk_provenance").get(),
+      ).toEqual({ count: 1 });
+      expect(
+        db.prepare("SELECT length(embedding) AS bytes FROM memory_embedding_cache").get(),
+      ).toBeUndefined();
+    },
+  );
+
+  it("publishes imported invalidation and revision together without an outer transaction", () => {
     const db = legacyDatabase();
-    db.exec(
-      "UPDATE memory_index_chunks SET embedding = '[1,null]'; UPDATE memory_embedding_cache SET embedding = 'invalid'",
-    );
     migrateMemoryIndexStorage(db);
-    expect(
-      db.prepare("SELECT text, length(embedding) AS bytes FROM memory_index_chunks").get(),
-    ).toEqual({ text: "saffronquasar", bytes: 0 });
-    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
+    db.exec(`
+      CREATE TABLE memory_index_state (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
+      INSERT INTO memory_index_state VALUES (1, 10);
+      UPDATE memory_index_chunks SET embedding = X'';
+      ATTACH DATABASE ':memory:' AS legacy;
+      CREATE TABLE legacy.chunks (id TEXT, embedding TEXT);
+      INSERT INTO legacy.chunks VALUES ('logical-id', 'invalid');
+      CREATE TRIGGER refuse_revision BEFORE UPDATE ON memory_index_state
+        BEGIN SELECT RAISE(ABORT, 'refuse revision'); END;
+    `);
+    expect(() => markInvalidImportedMemoryEmbeddings(db, "legacy")).toThrow("refuse revision");
+    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "h" });
+    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 10 });
     expect(
       db
         .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
         .get(),
-    ).toEqual({ value: "1" });
-    expect(db.prepare("SELECT count(*) AS count FROM memory_index_chunk_provenance").get()).toEqual(
-      { count: 1 },
-    );
-    expect(
-      db.prepare("SELECT length(embedding) AS bytes FROM memory_embedding_cache").get(),
     ).toBeUndefined();
+    db.exec("DROP TRIGGER refuse_revision");
+    markInvalidImportedMemoryEmbeddings(db, "legacy");
+    expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({ hash: "" });
+    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 11 });
   });
 
   it("rolls physical changes back with its enclosing admitted migration", () => {

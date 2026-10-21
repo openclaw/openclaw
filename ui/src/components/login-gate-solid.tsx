@@ -8,7 +8,7 @@ import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -24,7 +24,7 @@ import {
 } from "./login-gate-feedback.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -288,7 +288,7 @@ function StatusBody(
               type="button"
               class="btn primary login-gate__failure-refresh"
               disabled={props.refreshState === "pending"}
-              onClick={props.onRefresh}
+              onClick={() => props.onRefresh()}
             >
               {props.refreshState === "pending"
                 ? t("common.refreshing")
@@ -503,7 +503,7 @@ function LoginGateContent(
           ) : (
             <span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true">
               {branding().brandIcon !== "claw" && branding().brandIcon !== "mark" ? (
-                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+                <ThemeBrandIcon branding={branding()} aria-hidden="true" />
               ) : (
                 <Icon name="mark" />
               )}

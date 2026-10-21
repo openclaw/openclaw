@@ -1,6 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
 import {
   isBrowserDashboardAvailable,
@@ -14,9 +14,9 @@ import {
 import { BrowserPanelHost } from "../../../components/browser/browser-panel.ts";
 import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
 import { formatUiError } from "../../format-error.ts";
+import { projectGateway } from "../../reactive/application.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
 import { t } from "../../reactive/i18n.ts";
-import { projectSource } from "../../reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./browser.css";
@@ -28,22 +28,18 @@ function BrowserDashboardWidgetContent(
   host: SolidBridgeElement<BrowserWidgetProps>,
 ) {
   const context = useOptionalApplication();
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  const available = () => Boolean(context && isBrowserDashboardAvailable(gateway.read()!));
-  const sessionScoped = () => Boolean(context && !isBrowserPanelAvailable(gateway.read()!));
+  const gateway = context ? projectGateway(context.gateway) : undefined;
+  const available = () => Boolean(gateway && isBrowserDashboardAvailable(gateway.read().snapshot));
+  const sessionScoped = () => Boolean(gateway && !isBrowserPanelAvailable(gateway.read().snapshot));
   const scope = createMemo(
     () => ({
-      client: gateway.read()?.client,
+      client: gateway?.read().snapshot.client,
       key: JSON.stringify([
         props.session,
         props.widget?.instanceId,
         props.widget?.name,
         props.widget?.props,
-        gateway.read()?.hello?.auth,
+        gateway?.read().snapshot.hello?.auth,
       ]),
     }),
     { equals: (previous, next) => previous.client === next.client && previous.key === next.key },
@@ -126,8 +122,8 @@ function BrowserDashboardWidgetContent(
             }
           }
         }
-        onSettled(() =>
-          context?.gateway.subscribeEvents((event) => {
+        onSettled(() => {
+          const unsubscribe = context?.gateway.subscribeEvents((event) => {
             const payload = asNullableRecord(event.payload);
             if (
               event.event !== "plugin.browser.dashboard_changed" ||
@@ -140,10 +136,11 @@ function BrowserDashboardWidgetContent(
             if (props.active) {
               void request("inspect");
             }
-          }),
-        );
-        onCleanup(() => {
-          connected = false;
+          });
+          return () => {
+            connected = false;
+            unsubscribe?.();
+          };
         });
         const tab = () => {
           const value = state().dashboard;
@@ -190,7 +187,7 @@ function BrowserDashboardWidgetContent(
                     >
                       <BrowserPanelHost
                         embedded
-                        client={gateway.read()?.client ?? null}
+                        client={gateway?.read().snapshot.client ?? null}
                         available={available()}
                         remoteAvailable={available()}
                         presented={props.active}
@@ -204,7 +201,7 @@ function BrowserDashboardWidgetContent(
                         }}
                         resourceBasePath={context?.resourceBasePath ?? ""}
                         authToken={resolveControlUiAuthToken({
-                          hello: gateway.read()?.hello ?? null,
+                          hello: gateway?.read().snapshot.hello ?? null,
                           password: context?.gateway.connection.password ?? "",
                           settings: { token: context?.gateway.connection.token ?? "" },
                         })}

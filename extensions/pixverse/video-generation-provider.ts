@@ -63,7 +63,6 @@ type PixVerseEnvelope<T> = {
 
 type PixVerseUploadImageResponse = {
   img_id?: unknown;
-  img_url?: unknown;
 };
 
 type PixVerseVideoCreateResponse = {
@@ -71,7 +70,6 @@ type PixVerseVideoCreateResponse = {
 };
 
 type PixVerseVideoResultResponse = {
-  id?: unknown;
   status?: unknown;
   url?: unknown;
   outputWidth?: unknown;
@@ -181,56 +179,6 @@ function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
   const file = new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType });
   form.set("image", file);
   return form;
-}
-
-function buildVideoBody(
-  req: VideoGenerationRequest,
-  model: string,
-  imageId?: number,
-): Record<string, unknown> {
-  const options = req.providerOptions ?? {};
-  const body: Record<string, unknown> = {
-    duration: Math.min(
-      MAX_DURATION_SECONDS,
-      normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
-    ),
-    model,
-    prompt: req.prompt,
-    quality: resolvePixVerseQuality(req),
-  };
-  if (imageId !== undefined) {
-    body.img_id = imageId;
-    body.motion_mode =
-      normalizeOptionalString(options.motion_mode) ??
-      normalizeOptionalString(options.motionMode) ??
-      "normal";
-  } else {
-    body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
-  }
-  const negativePrompt =
-    normalizeOptionalString(options.negative_prompt) ??
-    normalizeOptionalString(options.negativePrompt);
-  if (negativePrompt) {
-    body.negative_prompt = negativePrompt;
-  }
-  const cameraMovement =
-    normalizeOptionalString(options.camera_movement) ??
-    normalizeOptionalString(options.cameraMovement);
-  if (cameraMovement) {
-    body.camera_movement = cameraMovement;
-  }
-  const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
-  if (templateId != null) {
-    body.template_id = templateId;
-  }
-  const seed = readPixVerseSeed(options.seed);
-  if (seed !== undefined) {
-    body.seed = seed;
-  }
-  if (req.audio !== undefined) {
-    body.generate_audio_switch = req.audio;
-  }
-  return body;
 }
 
 function readPixVerseFailureMessage(payload: PixVerseVideoResultResponse): string | undefined {
@@ -358,11 +306,54 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
         }
       }
 
+      const options = req.providerOptions ?? {};
+      const body: Record<string, unknown> = {
+        duration: Math.min(
+          MAX_DURATION_SECONDS,
+          normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
+        ),
+        model,
+        prompt: req.prompt,
+        quality: resolvePixVerseQuality(req),
+      };
+      if (imageId !== undefined) {
+        body.img_id = imageId;
+        body.motion_mode =
+          normalizeOptionalString(options.motion_mode) ??
+          normalizeOptionalString(options.motionMode) ??
+          "normal";
+      } else {
+        body.aspect_ratio = normalizeOptionalString(req.aspectRatio) ?? "16:9";
+      }
+      const negativePrompt =
+        normalizeOptionalString(options.negative_prompt) ??
+        normalizeOptionalString(options.negativePrompt);
+      if (negativePrompt) {
+        body.negative_prompt = negativePrompt;
+      }
+      const cameraMovement =
+        normalizeOptionalString(options.camera_movement) ??
+        normalizeOptionalString(options.cameraMovement);
+      if (cameraMovement) {
+        body.camera_movement = cameraMovement;
+      }
+      const templateId = asFiniteNumber(options.template_id) ?? asFiniteNumber(options.templateId);
+      if (templateId != null) {
+        body.template_id = templateId;
+      }
+      const seed = readPixVerseSeed(options.seed);
+      if (seed !== undefined) {
+        body.seed = seed;
+      }
+      if (req.audio !== undefined) {
+        body.generate_audio_switch = req.audio;
+      }
+
       const endpoint = imageId === undefined ? "/video/text/generate" : "/video/img/generate";
       const create = await postJsonRequest({
         url: `${baseUrl}${endpoint}`,
         headers: buildPixVerseHeaders(headers, "application/json"),
-        body: buildVideoBody(req, model, imageId),
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,

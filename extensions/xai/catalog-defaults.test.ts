@@ -14,10 +14,7 @@ beforeEach(() => {
   clearLiveCatalogCacheForTests();
   vi.stubEnv("XAI_API_KEY", "");
 });
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 const oauthProvider: ModelProviderConfig = {
   api: "openai-responses",
@@ -27,50 +24,27 @@ const oauthProvider: ModelProviderConfig = {
 };
 
 it("preserves the existing primary during OAuth setup", () => {
-  const original: OpenClawConfig = {
-    agents: {
-      defaults: { model: { primary: "openai/retained-model", fallbacks: ["xai/grok-4.3"] } },
-    },
-  };
-  const config = applyXaiOAuthConfig(original, oauthProvider);
-  expect(config.agents?.defaults?.model).toEqual({
+  const model = {
     primary: "openai/retained-model",
     fallbacks: ["xai/grok-4.3"],
-  });
+  };
+  const config = applyXaiOAuthConfig(
+    { agents: { defaults: { model: structuredClone(model) } } },
+    oauthProvider,
+  );
+  expect(config.agents?.defaults?.model).toEqual(model);
 });
 
+const proxyUrl = "https://cli-chat-proxy.grok.com/v1";
+const apiUrl = "https://api.x.ai/v1";
 it.each([
-  {
-    label: "OAuth",
-    mode: "oauth" as const,
-    baseUrl: undefined,
-    expectedUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedAuth: "oauth",
-  },
-  {
-    label: "subscription token",
-    mode: "token" as const,
-    baseUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedAuth: "token",
-  },
-  {
-    label: "API token",
-    mode: "token" as const,
-    baseUrl: "https://api.x.ai/v1",
-    expectedUrl: "https://api.x.ai/v1",
-    expectedAuth: undefined,
-  },
-  {
-    label: "API key",
-    mode: "api_key" as const,
-    baseUrl: undefined,
-    expectedUrl: "https://api.x.ai/v1",
-    expectedAuth: undefined,
-  },
-])(
-  "keeps the static catalog on the selected $label route",
-  async ({ mode, baseUrl, expectedUrl, expectedAuth }) => {
+  ["oauth", undefined, proxyUrl, "oauth"],
+  ["token", proxyUrl, proxyUrl, "token"],
+  ["token", apiUrl, apiUrl, undefined],
+  ["api_key", undefined, apiUrl, undefined],
+] as const)(
+  "keeps the static catalog on the selected %s route (%s)",
+  async (mode, baseUrl, expectedUrl, expectedAuth) => {
     const pluginProvider = await registerSingleProviderPlugin(plugin);
     const result = await pluginProvider.staticCatalog?.run({
       config: baseUrl ? { models: { providers: { xai: { baseUrl, models: [] } } } } : {},
@@ -102,17 +76,13 @@ it.each([
   if (!method?.runNonInteractive) {
     throw new Error("expected the registered non-interactive xAI API-key method");
   }
-  const config: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: {
-          ...(primary ? { primary } : {}),
-          fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
-        },
-        models: { "xai/grok-4.5": { alias: "Pinned", params: { temperature: 0.7 } } },
-      },
-    },
+  const fallbacks = ["xai/grok-4.3", "xai/grok-build-0.1"];
+  const pinned = { alias: "Pinned", params: { temperature: 0.7 } };
+  const defaults = {
+    model: { ...(primary ? { primary } : {}), fallbacks: [...fallbacks] },
+    models: { "xai/grok-4.5": structuredClone(pinned) },
   };
+  const config: OpenClawConfig = { agents: { defaults } };
   const result = await method.runNonInteractive({
     authChoice: "xai-api-key",
     config,
@@ -130,12 +100,6 @@ it.each([
       throw new Error("Existing profile must not be rewritten");
     },
   });
-  expect(result?.agents?.defaults?.model).toEqual({
-    primary: expected,
-    fallbacks: ["xai/grok-4.3", "xai/grok-build-0.1"],
-  });
-  expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual({
-    alias: "Pinned",
-    params: { temperature: 0.7 },
-  });
+  expect(result?.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
+  expect(result?.agents?.defaults?.models?.["xai/grok-4.5"]).toEqual(pinned);
 });

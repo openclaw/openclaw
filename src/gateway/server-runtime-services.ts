@@ -2,7 +2,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { onOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
+import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -22,6 +22,7 @@ import {
 import { getQueueSize } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDrainError,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -94,9 +95,11 @@ export function startGatewayCronWithLogging(params: {
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);
       }
-    }, "runtime:cron-start").catch((err: unknown) =>
-      params.logCron.error(`failed to enter start root: ${String(err)}`),
-    ),
+    }, "runtime:cron-start").catch((err: unknown) => {
+      if (!isGatewayRestartDrainError(err)) {
+        params.logCron.error(`failed to enter start root: ${String(err)}`);
+      }
+    }),
   );
 }
 
@@ -384,17 +387,17 @@ function startPendingOutboundDeliveryRecovery(params: {
       });
     }
   };
-  const unsubscribe = onOutboundDeliveryEnqueued((stateDir) => {
+  outboundDeliveryNotifications.onEnqueued = (stateDir) => {
     if (stateDir === recoveryContext.stateDir) {
       runInDetachedAsyncContext(schedule);
     }
-  });
+  };
   void (isGatewayWorkAdmissionClosed() ? schedule() : recover());
   return () => {
     if (stopPromise) {
       return stopPromise;
     }
-    unsubscribe();
+    outboundDeliveryNotifications.onEnqueued = () => {};
     const scheduled = scheduler.stop();
     const recovery = inFlight;
     if (!recovery) {
@@ -494,7 +497,7 @@ function startPendingSessionDeliveryRuntime(params: {
         const ownedCancellation =
           signal.aborted &&
           (err === signal.reason || (err instanceof Error && err.cause === signal.reason));
-        if (!ownedCancellation) {
+        if (!ownedCancellation && !isGatewayRestartDrainError(err)) {
           params.log.error(`Session delivery recovery failed: ${String(err)}`);
         }
       }),

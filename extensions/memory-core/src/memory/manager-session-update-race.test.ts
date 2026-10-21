@@ -33,7 +33,6 @@ import {
   memoryIndexFixtureWriter,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
-import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 const cacheHashes = (db: DatabaseSync) =>
   db.prepare("SELECT hash FROM memory_embedding_cache").all();
@@ -308,7 +307,6 @@ describe("memory session update sync", () => {
     const updatedMarker = "UPDATE DURING ACTIVE SYNC 811";
     const manager = await getFreshManager(sessionConfig(), "cli");
     const owner = manager as unknown as {
-      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
@@ -317,13 +315,6 @@ describe("memory session update sync", () => {
     };
     const activeSyncGate = createDeferred<void>();
     const activeSyncIndexed = createDeferred<void>();
-    const sessionSyncQueued = createDeferred<void>();
-    const enqueue = owner.sessionSyncQueue.enqueue.bind(owner.sessionSyncQueue);
-    const enqueueSpy = vi.spyOn(owner.sessionSyncQueue, "enqueue").mockImplementation((params) => {
-      const pending = enqueue(params);
-      sessionSyncQueued.resolve();
-      return pending;
-    });
     let sessionUpdateBatch: Promise<void> | undefined;
     let syncArchiveFilesSpy: { mockRestore: () => void } | undefined;
     try {
@@ -346,13 +337,9 @@ describe("memory session update sync", () => {
       await seed(sessionId, sessionKey, updatedMarker, "assistant", Date.now());
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
       sessionUpdateBatch = owner.processSessionUpdateBatch();
-      await sessionSyncQueued.promise;
-      const queuedSessionSync = owner.sessionSyncQueue.pending;
-      expect(queuedSessionSync).not.toBeNull();
 
       activeSyncGate.resolve();
       await activeSync;
-      await queuedSessionSync;
       await sessionUpdateBatch;
 
       using observer = openObserver();
@@ -366,7 +353,6 @@ describe("memory session update sync", () => {
       expect(manager.status().dirty).toBe(false);
     } finally {
       syncArchiveFilesSpy?.mockRestore();
-      enqueueSpy.mockRestore();
       activeSyncGate.resolve();
       await sessionUpdateBatch?.catch(() => undefined);
       await manager.close?.();
@@ -439,19 +425,8 @@ describe("memory session update sync", () => {
     const reads = vi.spyOn(memoryCpuWorkerRuntime, "runMemoryIndexRead");
     try {
       await manager.sync({ reason: "index-before-forget", force: true });
-      // Forget checks must not serialize the source's chunks and embeddings.
-      const sessionChecks = reads.mock.calls.flatMap(([, command]) =>
-        command.type === "session.current" ? [command.input] : [],
-      );
-      expect(sessionChecks).toEqual(
-        expect.arrayContaining([
-          { agentId: "main", sessionId },
-          { agentId: "main", sessionId: decoyId },
-        ]),
-      );
-      for (const input of sessionChecks) {
-        expect(input).toStrictEqual({ agentId: "main", sessionId: input.sessionId });
-      }
+      // Live publication enforces forget authority without one preflight request per session.
+      expect(reads.mock.calls.map(([, command]) => command.type)).not.toContain("session.current");
     } finally {
       reads.mockRestore();
     }

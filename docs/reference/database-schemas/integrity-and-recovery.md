@@ -75,10 +75,14 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the loaded SQLite version, source ID and compile options,
+Seal identity records the loaded SQLite version, source ID and compile options,
 the Node/Bun runtime versions, the database family's schema version and canonical
-SQL definitions, and the admission policy revision. Unknown SQLite identity disables
-seal reuse. Admitted facts identify agent
+SQL definitions, and the admission policy revision. Reuse compares the schema,
+policy, and compile features. Only `COMPILER=...` is excluded from compile options:
+it identifies the compiler, not a SQLite feature. Runtime versions and SQLite
+version/source IDs do not invalidate otherwise compatible proof. The existing
+native library safety and capability admission still runs. Unknown SQLite identity
+disables seal reuse. Admitted facts identify agent
 and shared-state databases, including databases at custom paths. A shared-state
 schema change does not invalidate an unchanged agent database's seal, or vice versa.
 Unclassified or mixed admission facts conservatively depend on both schemas.
@@ -106,8 +110,10 @@ same-version installer is represented in admission facts. A complete prior-build
 catalog retains seal reuse without validation SQL; adding requirements alone does
 not invalidate seals whose catalogs already satisfy them.
 
-Updating from an older application-version-bound seal requires one full validation;
-subsequent compatible builds reuse the new seal. Managed drain followed by an
+Legacy seals containing only a combined identity hash remain reusable when that
+hash matches the current runtime/library tuple. A mismatch requires one full
+validation. The next clean close writes decomposed identity components, so later
+runtime/library-only updates reuse the original full-verification timestamp. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
 
@@ -117,10 +123,9 @@ handles still hold leases even when no agent work is running. The final handle m
 release its lease after checkpoint and native close before certifying the seal.
 At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
-identity changes report `runtime-mismatch`, `sqlite-mismatch`, `schema-mismatch`,
-or `policy-mismatch`. Older seals lack component diagnostics and report
-`identity-mismatch` when their combined identity differs. Matching older seals
-remain reusable; the added diagnostic metadata does not change admission policy.
+incompatible identities report `feature-mismatch`, `schema-mismatch`, or
+`policy-mismatch`. A simultaneous runtime change cannot mask those mismatches.
+Legacy seals report `identity-mismatch` when their combined identity differs.
 
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
@@ -157,7 +162,8 @@ state and that seal is still correct.
 This optimization deliberately cannot detect silent corruption that preserves
 all compared metadata. SQLite may detect it during normal use; otherwise the
 next full verification catches it. The seven-day admission interval bounds
-reuse of old full-verification evidence. The checksum protects the small seal
+reuse of old full-verification evidence; a runtime or SQLite patch update does not
+add an early scan. The checksum protects the small seal
 against incomplete writes; it is not a hash of the database contents.
 
 Doctor migrations and repairs use the integrity policy below regardless of any
@@ -563,6 +569,14 @@ memory rebuilds use temporary shadow databases and publish their derived tables
 in one worker transaction. Read-only admission and bundled status reads use the
 retrieval worker without creating or migrating a missing database. The released
 synchronous status API retains a lazily opened diagnostic reader.
+
+Memory facts readers retain semantic-chunk presence and invalidated-source flags
+under the persisted `memory_index_state.revision`. Each read still obtains the
+revision, metadata, and vector rebuild marker in one statement; unchanged
+revisions skip the corpus scans on both SQLite and PostgreSQL. Corpus writers,
+including legacy embedding invalidation, advance the revision in the same
+transaction. Transactional reads bypass the cache so a rollback cannot publish
+speculative facts under a revision that a later commit reuses.
 
 If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
 
@@ -1237,6 +1251,34 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Client credential cutover rollback
+
+Before shared state schema 29, client private identities, cached tokens, and
+native socket material live in the shared database. An automatic rollback to
+that format restores the pre-upgrade shared database with those tables intact.
+The older app ignores `client/credentials.sqlite`; do not copy its newer rows
+back manually. Credentials issued between upgrade and rollback are lost and
+affected clients must pair again.
+
+On the next upgrade, Doctor checks the local migration receipt against the
+restored shared source and rebuilds stale local credentials from that source.
+A partial `copied` receipt never permits normal client access. Updated native
+clients refuse a replaced shared source until the matching Doctor repairs the
+binding. Older native clients refuse retired shared credential tables; update
+the app instead of lowering schema markers. PostgreSQL recovery also restores
+the local family captured by its engine-aware driver. Ordinary exported backups
+omit the native socket secret and initialize it again on restore.
+
+An independent native credential source is copied without changing its database,
+permissions, journals, or directory contents. It receives no retirement marker,
+so the old app can still read it after rollback. The local copy records the source
+identity and content hash: an unchanged source preserves refreshed local tokens,
+while a changed or restored source rebuilds the copy. Consumed legacy JSON claims
+survive that rebuild, preventing revoked credentials from being reimported.
+WAL-mode independent sources require the previous release's export or restore
+workflow; the importer refuses them before opening SQLite rather than changing
+their shared-memory files or ignoring committed WAL data.
 
 ### Example: state schema 21 to 20
 

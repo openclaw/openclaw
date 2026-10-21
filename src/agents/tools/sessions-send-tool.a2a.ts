@@ -21,52 +21,8 @@ import {
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
-import type { SessionDeliveryTarget } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
-
-async function deliverSourceReply(params: {
-  deliveryTarget: SessionDeliveryTarget;
-  callGateway: AgentToolGatewayRequestCaller;
-  message: string;
-  runId: string;
-  targetAgentId: string;
-  sessionGeneration: SessionDeliveryGeneration;
-}) {
-  // Gateway sends need the selected owner for text routing and media roots;
-  // carry the admitted target instead of relying on an implicit default.
-  const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(params.message.trim());
-  if (!message && !mediaUrls?.length) {
-    return;
-  }
-  try {
-    await params.callGateway({
-      method: "send",
-      params: bindInProcessSessionDeliveryGeneration(
-        {
-          to: params.deliveryTarget.to,
-          message,
-          ...(mediaUrls?.length ? { mediaUrls } : {}),
-          agentId: params.targetAgentId,
-          ...(audioAsVoice ? { asVoice: true } : {}),
-          channel: params.deliveryTarget.channel,
-          accountId: params.deliveryTarget.accountId,
-          threadId: params.deliveryTarget.threadId,
-          idempotencyKey: `sessions-send:${params.runId}`,
-        },
-        params.sessionGeneration,
-      ),
-      timeoutMs: 10_000,
-    });
-  } catch (err) {
-    log.warn("sessions_send source reply delivery failed", {
-      runId: params.runId,
-      channel: params.deliveryTarget.channel,
-      to: params.deliveryTarget.to,
-      error: formatErrorMessage(err),
-    });
-  }
-}
 
 export async function runSessionsSendA2AFlow(params: {
   callGateway?: AgentToolGatewayRequestCaller;
@@ -197,14 +153,39 @@ export async function runSessionsSendA2AFlow(params: {
           );
           return;
         }
-        await deliverSourceReply({
-          deliveryTarget,
-          callGateway: gatewayCall,
-          message: reply,
-          runId: params.runId,
-          targetAgentId: params.targetAgentId,
-          sessionGeneration: params.requesterDeliveryGeneration,
-        });
+        // Gateway sends need the selected owner for text routing and media roots;
+        // carry the admitted target instead of relying on an implicit default.
+        const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(reply.trim());
+        if (!message && !mediaUrls?.length) {
+          return;
+        }
+        try {
+          await gatewayCall({
+            method: "send",
+            params: bindInProcessSessionDeliveryGeneration(
+              {
+                to: deliveryTarget.to,
+                message,
+                ...(mediaUrls?.length ? { mediaUrls } : {}),
+                agentId: params.targetAgentId,
+                ...(audioAsVoice ? { asVoice: true } : {}),
+                channel: deliveryTarget.channel,
+                accountId: deliveryTarget.accountId,
+                threadId: deliveryTarget.threadId,
+                idempotencyKey: `sessions-send:${params.runId}`,
+              },
+              params.requesterDeliveryGeneration,
+            ),
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          log.warn("sessions_send source reply delivery failed", {
+            runId: params.runId,
+            channel: deliveryTarget.channel,
+            to: deliveryTarget.to,
+            error: formatErrorMessage(err),
+          });
+        }
       }
       return;
     }

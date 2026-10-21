@@ -20,7 +20,7 @@ import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 import "./viewer-facepile.ts";
-import "./theme-mode-toggle.ts";
+import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number };
@@ -34,6 +34,7 @@ type SidebarIdentityMenuParams = {
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
+  onThemeChange?: (mode: ThemeMode, element: HTMLElement) => void;
   triggerWidth: number;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
@@ -141,7 +142,6 @@ function renderIdentityGateways(
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JSX.Element {
   const controls = createMenuControls();
-  const position = params.position;
   const profileName = () =>
     params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -154,7 +154,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
     params.profileViewer?.email && params.profileViewer.email !== profileName()
       ? params.profileViewer.email
       : null;
-  const items = (): MenuEntry[] => {
+  const items = createMemo<MenuEntry[]>(() => {
     const help = renderSidebarHelpMenu();
     return [
       {
@@ -282,10 +282,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             closeOnSelect: false,
             render: (menuAttributes) => (
               <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle
-                  prop:mode={params.themeMode}
-                  prop:menuItem={true}
-                  prop:menuAttributes={menuAttributes}
+                <ThemeModeToggle
+                  mode={params.themeMode}
+                  menuAttributes={menuAttributes}
+                  onChange={params.onThemeChange}
                 />
               </span>
             ),
@@ -293,12 +293,12 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
         ],
       },
     ];
-  };
+  });
   return (
     <SidebarDropdown
       controls={controls}
       class="sidebar-customize-menu sidebar-identity-menu"
-      position={position}
+      position={params.position}
       anchor={params.anchor}
       tabFocusTarget={params.tabFocusTarget}
       label={t("profilePage.identity.menuLabel")}

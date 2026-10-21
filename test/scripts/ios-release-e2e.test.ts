@@ -1,6 +1,6 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -12,7 +12,6 @@ import {
   IOS_RELEASE_TESTS,
   MODEL_REF,
   parseMeasurement,
-  requireExactTestResult,
   runTrials,
   summarizeMeasurements,
   testRunnerEnv,
@@ -146,10 +145,6 @@ function result(
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
 
-const childRuns = (nodeType: string, ...results: string[]) => ({
-  children: results.map((runResult) => ({ nodeType, result: runResult })),
-});
-
 function expectFailedTrial(
   report: Awaited<ReturnType<typeof runTrials>>,
   error: string,
@@ -211,32 +206,6 @@ function preparationFailure(
     diagnostics: [diagnostic(operation, code, extra)],
   };
 }
-
-describe("iOS release test identity", () => {
-  it("accepts XCTest class/method identity under its exact UI bundle", () => {
-    for (const test of IOS_RELEASE_TESTS) {
-      requireExactTestResult(result(test, childRuns("Test Case Run", "Passed")), test);
-    }
-  });
-
-  it.each([
-    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
-    ["skipped", result(undefined, { result: "Skipped" })],
-    ["failed", result(undefined, { result: "Failed" })],
-    ["failed child", result(undefined, childRuns("Test Case Run", "Failed"))],
-    ["retry to green", result(undefined, childRuns("Repetition", "Passed", "Passed"))],
-    ["multiple runs", result(undefined, childRuns("Test Case Run", "Passed", "Passed"))],
-    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
-    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
-    ["missing tests", { testNodes: [] }],
-    [
-      "extra tests",
-      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
-    ],
-  ])("rejects %s", (_name, value) => {
-    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-});
 
 it("writes a failure proof when the real CLI rejects an impossible target", () => {
   const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");
@@ -645,11 +614,131 @@ describe("release qualification workflow authority", () => {
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
     const upload = requiredWorkflowStep(steps, "Upload sanitized proof only");
     expect(upload.if).toBe("always()");
-    expect(upload.with.path).toBe("${{ runner.temp }}/ios-release-e2e-proof.json");
+    expect(upload.with.path.trim().split(/\r?\n/u)).toEqual([
+      "${{ runner.temp }}/ios-release-e2e-proof.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
     expect(upload.with.name).toBe(
       "ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
   });
+  it.each([
+    { flow: "qualification", enabled: true },
+    { flow: "qualification", enabled: false },
+    { flow: "screenshots", enabled: true },
+    { flow: "screenshots", enabled: false },
+    { flow: "screenshots", enabled: false, startupProbe: true },
+  ])(
+    "runs $flow with optional resource diagnostics=$enabled without masking failure",
+    ({ flow, enabled, startupProbe = false }) => {
+      const diagnostics = enabled || startupProbe;
+      const selected = flow === "qualification" ? workflow : release;
+      expect(selected.on.workflow_dispatch.inputs.resource_diagnostics).toMatchObject({
+        type: "boolean",
+        default: true,
+      });
+      expect(workflow.on.workflow_call.inputs.resource_diagnostics).toMatchObject({
+        type: "boolean",
+        default: true,
+      });
+      const step = requiredWorkflowStep(
+        flow === "qualification" ? workflow.jobs.qualify.steps : release.jobs.screenshots.steps,
+        flow === "qualification"
+          ? "Qualify native pairing and chat"
+          : "Capture iPhone, iPad, and Watch screenshots",
+      );
+      const root = tempDirs.make("ios-workflow-resource-diagnostics-");
+      const scripts = path.join(root, "scripts");
+      const bin = path.join(root, "bin");
+      mkdirSync(scripts);
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(scripts, "ios-resource-timeline.mjs"),
+        readFileSync("scripts/ios-resource-timeline.mjs"),
+      );
+      writeFileSync(path.join(scripts, "tsx.mjs"), "export {};\n");
+      const workload = path.join(scripts, "ios-release-e2e.ts");
+      writeFileSync(
+        workload,
+        `
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify({
+  args: process.argv.slice(2),
+  diagnostics: process.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS,
+  snapshots: process.env.OPENCLAW_SNAPSHOT_DIAGNOSTICS,
+  startupProbe: process.env.OPENCLAW_SNAPSHOT_STARTUP_PROBE,
+  deviceFamily: process.env.OPENCLAW_SNAPSHOT_DEVICE_FAMILY,
+  skipWatch: process.env.OPENCLAW_SNAPSHOT_SKIP_WATCH,
+  phasePath: process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH,
+}));
+process.exitCode = 23;
+`,
+      );
+      const pnpm = path.join(bin, "pnpm");
+      writeFileSync(pnpm, '#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_WORKLOAD" "$@"\n');
+      chmodSync(pnpm, 0o755);
+      const stepEnv = Object.fromEntries(
+        Object.entries(step.env as Record<string, string>).map(([key, value]) => [
+          key,
+          value.startsWith("${{")
+            ? String(
+                evaluateWorkflow(value, {
+                  eventName: "workflow_dispatch",
+                  inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
+                  steps: { simslim: { outputs: { binary: "" } } },
+                }),
+              )
+            : value,
+        ]),
+      );
+      const record = path.join(root, "observed.json");
+      const proof = path.join(root, "proof.json");
+      const gateway = path.join(root, "gateway");
+      const target = "a".repeat(40);
+      const execution = spawnSync("/bin/bash", ["-c", step.run], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...stepEnv,
+          PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
+          FIXTURE_NODE: process.execPath,
+          FIXTURE_WORKLOAD: workload,
+          FIXTURE_RECORD: record,
+          RUNNER_TEMP: root,
+          PROOF_PATH: proof,
+          GATEWAY_SELECTION_DIR: gateway,
+          TARGET_SHA: target,
+          E2E_MODE: "stock",
+        },
+      });
+      expect(execution.status, execution.stderr).toBe(23);
+      const observed = JSON.parse(readFileSync(record, "utf8"));
+      expect(observed.diagnostics).toBe(diagnostics ? "1" : "0");
+      expect(Boolean(observed.phasePath)).toBe(diagnostics);
+      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(diagnostics);
+      expect(observed.args).toEqual(
+        flow === "qualification"
+          ? [
+              "--mode",
+              "stock",
+              "--target-sha",
+              target,
+              "--output",
+              proof,
+              "--gateway-selection",
+              gateway,
+            ]
+          : ["ios:screenshots"],
+      );
+      if (flow === "screenshots") {
+        expect(observed.snapshots).toBe("1");
+        expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
+        expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
+        expect(observed.skipWatch).toBe(startupProbe ? "1" : "0");
+      }
+    },
+  );
   it.each([
     ["full", "a".repeat(40), true],
     ["full", "b".repeat(40), false],

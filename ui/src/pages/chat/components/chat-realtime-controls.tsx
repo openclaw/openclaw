@@ -1,6 +1,9 @@
 import { For, Show } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function RealtimeTalkConversation(props: {
   assistantName: string;

@@ -28,6 +28,12 @@ import {
   sendApnsPluginApprovalResolvedWake,
   shouldClearStoredApnsRegistration,
 } from "./push-apns.js";
+import { mockApnsRelayFetch } from "./push-apns.relay.test-support.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
   namedCurve: "prime256v1",
@@ -84,7 +90,7 @@ function createRelayApnsSendFixture(params: {
 }) {
   const environment = params.environment ?? "production";
   return {
-    send: vi.fn().mockResolvedValue(params.sendResult),
+    send: mockApnsRelayFetch(params.sendResult),
     registration: {
       nodeId: params.nodeId,
       transport: "relay" as const,
@@ -100,10 +106,6 @@ function createRelayApnsSendFixture(params: {
     relayConfig: {
       baseUrl: "https://relay.openclaw.test",
       timeoutMs: 2_500,
-    },
-    gatewayIdentity: {
-      deviceId: "gateway-device-1",
-      privateKeyPem: testAuthPrivateKey,
     },
   };
 }
@@ -551,7 +553,7 @@ describe("push APNs send semantics", () => {
   });
 
   it("sends relay background pushes and falls back to the relay handle suffix", async () => {
-    const { send, registration, relayConfig, gatewayIdentity } = createRelayApnsSendFixture({
+    const { send, registration, relayConfig } = createRelayApnsSendFixture({
       nodeId: "ios-node-relay-wake",
       tokenDebugSuffix: undefined,
       sendResult: {
@@ -567,19 +569,21 @@ describe("push APNs send semantics", () => {
       nodeId: "ios-node-relay-wake",
       wakeReason: "queue.retry",
       relayConfig,
-      relayGatewayIdentity: gatewayIdentity,
-      relayRequestSender: send,
     });
 
     expect(send).toHaveBeenCalledTimes(1);
-    const sent = requireSendRequest(send);
-    expect(sent.relayConfig).toEqual(relayConfig);
+    expect(send.mock.calls[0]?.[0]).toBe(`${relayConfig.baseUrl}/v1/push/send`);
+    const request = send.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("authorization")).toBe("Bearer send-grant-123");
+    const body = request?.body;
+    if (typeof body !== "string") {
+      throw new Error("Expected relay JSON request body");
+    }
+    const sent = requireRecord(JSON.parse(body), "relay request");
     expect(sent).toMatchObject({
-      sendGrant: "send-grant-123",
       relayHandle: "relay-handle-12345678",
-      gatewayDeviceId: "gateway-device-1",
       pushType: "background",
-      priority: "5",
+      priority: 5,
     });
     const payload = requirePayload(sent);
     expect(payload.aps).toEqual({ "content-available": 1 });

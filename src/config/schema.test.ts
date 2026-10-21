@@ -21,6 +21,23 @@ const tupleSchema = {
 } as unknown as Parameters<typeof lookupConfigSchema>[0];
 
 describe("config schema", () => {
+  it("requires concrete Gateway policy identities and accepts an explicitly empty ceiling", () => {
+    expect(ToolsSchema.safeParse({ gatewayPolicy: { allow: [] } }).success).toBe(true);
+    expect(
+      ToolsSchema.safeParse({
+        gatewayPolicy: { allow: ["sessions"], actions: { sessions: ["list"] } },
+      }).success,
+    ).toBe(true);
+    for (const gatewayPolicy of [
+      {},
+      { allow: ["*"] },
+      { allow: ["group:plugins"] },
+      { allow: ["sessions"], actions: { sessions: ["*"] } },
+    ]) {
+      expect(ToolsSchema.safeParse({ gatewayPolicy }).success).toBe(false);
+    }
+  });
+
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
@@ -206,6 +223,36 @@ describe("config schema", () => {
       { url: mcpUrl, transport: "stdio", oauth },
     ]) {
       expect(OpenClawSchema.safeParse(mcpConfig({ auth: "oauth", ...server })).success).toBe(false);
+    }
+  });
+
+  it("requires explicit shared identity and pinned issuers for enterprise MCP", () => {
+    const enterprise = {
+      identity: "shared",
+      idpIssuer: "https://idp.example.com",
+      idpClientId: "client",
+      idpClientSecret: "${IDP_SECRET}",
+      resourceIssuer: "https://auth.example.com",
+      resourceClientId: "resource-client",
+      resourceClientSecret: "${RESOURCE_SECRET}",
+      scope: "mcp.read",
+      redirectUrl: "http://localhost:3097/callback",
+    };
+    const server = { url: mcpUrl, transport: "streamable-http", auth: "enterprise", enterprise };
+    expect(OpenClawSchema.safeParse(mcpConfig(server)).success).toBe(true);
+    for (const invalid of [
+      { ...server, enterprise: { ...enterprise, identity: undefined } },
+      { ...server, enterprise: { ...enterprise, identity: "per-requester" } },
+      { ...server, enterprise: { ...enterprise, resourceIssuer: "http://auth.example.com" } },
+      { ...server, enterprise: { ...enterprise, idpIssuer: "not-a-url" } },
+      { ...server, enterprise: { ...enterprise, resourceIssuer: "not-a-url" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "https://example.com/callback" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "localhost:3097/callback" } },
+      { ...server, enterprise: { ...enterprise, redirectUrl: "http://127.0.0.2/callback" } },
+      { ...server, oauth: { scope: "mcp.read" } },
+      { ...server, command: "other-mcp" },
+    ]) {
+      expect(OpenClawSchema.safeParse(mcpConfig(invalid)).success).toBe(false);
     }
   });
 

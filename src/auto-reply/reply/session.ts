@@ -996,7 +996,6 @@ async function initSessionStateAttemptLocked(
       // while this session is still active (see #57790).
       noteActiveSessionForShutdown({
         ...sessionTarget,
-        cfg,
         sessionId,
         sessionFile: sessionKey,
       });

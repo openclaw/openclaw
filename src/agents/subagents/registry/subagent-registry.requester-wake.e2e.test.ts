@@ -554,7 +554,10 @@ describe("requester settle wake product flow", () => {
       await activate();
       children.forEach((child, index) => {
         const row = registry.getSubagentRunByRunId(child.runId)!;
-        if (child !== first || first.name !== yieldedParent) {
+        if (child === first) {
+          // Ordinary delivered singletons release their source just like yielded batches.
+          expect(getGatewayContextResolver(row)).toBeUndefined();
+        } else {
           expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
         }
         expect(row.requesterTurnRunId).toBeUndefined();
@@ -566,7 +569,8 @@ describe("requester settle wake product flow", () => {
       await registry.testing.sweepOnceForTests();
       await vi.advanceTimersByTimeAsync(30_000);
       await flushOwnedWork();
-      expect(getRequesterWakeCalls()).toHaveLength(binding === "same" ? 1 : 0);
+      // Separately delivered singletons do not mint a redundant aggregate continuation.
+      expect(getRequesterWakeCalls()).toHaveLength(yieldedParent ? 1 : 0);
       for (const child of children) {
         const entry = registry.getSubagentRunByRunId(child.runId);
         expect(entry).toMatchObject({
@@ -949,7 +953,7 @@ describe("requester settle wake product flow", () => {
     },
   );
 
-  it("re-evaluates a waiting wave when a yielded cohort settles during that evaluation", async () => {
+  it("retires a delivered wave while a yielded cohort settles during its evaluation", async () => {
     vi.setSystemTime(100_000);
     const context = createGatewayContext();
     await registry.initSubagentRegistry();
@@ -969,16 +973,8 @@ describe("requester settle wake product flow", () => {
           },
         }),
       );
-    const wave = ["wave-a", "wave-b"].map((name) => ({
-      runId: `run-${name}`,
-      childSessionKey: `agent:main:subagent:${name}`,
-      expectsCompletionMessage: true,
-    }));
-    const cohort = {
-      runId: "run-cohort",
-      childSessionKey: "agent:main:subagent:cohort",
-      expectsCompletionMessage: true,
-    };
+    const wave = ["wave-a", "wave-b"].map(visibleChild);
+    const cohort = visibleChild("cohort");
     for (const child of wave) {
       await spawnVisibleChild({ ...child, requesterTurnRunId: "requester-wave" });
     }
@@ -989,15 +985,21 @@ describe("requester settle wake product flow", () => {
       {},
     );
     await settleTurn("requester-cohort", [cohort], true);
-    emitCompleted(wave[0]!.runId, wave[0]!.childSessionKey, "wave alpha findings");
-    await flushOwnedWork();
-    // Hold the wave's evaluation open after it has read the still-running cohort.
+    // Let both results reach the wave before either singleton can retire.
+    const alphaPending = createDeferred();
+    const releaseAlpha = createDeferred();
     const evaluated = createDeferred<boolean>();
     const release = createDeferred();
+    let heldAlpha = false;
     let held = false;
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation(async (params) => {
+      if (params.settledEntry.runId === wave[0]!.runId && !heldAlpha) {
+        heldAlpha = true;
+        alphaPending.resolve();
+        await releaseAlpha.promise;
+      }
       const woke = await wakeRequester(params);
-      if (params.settledEntry.runId === wave[1]!.runId && !held) {
+      if (wave.some((child) => child.runId === params.settledEntry.runId) && !held) {
         held = true;
         evaluated.resolve(woke);
         await release.promise;
@@ -1005,10 +1007,13 @@ describe("requester settle wake product flow", () => {
       return woke;
     });
     try {
+      emitCompleted(wave[0]!.runId, wave[0]!.childSessionKey, "wave alpha findings");
+      await alphaPending.promise;
+      // Hold the grouped evaluation after its delivered wave retires.
       emitCompleted(wave[1]!.runId, wave[1]!.childSessionKey, "wave beta findings");
-      await vi.waitFor(() => {
-        expect(held).toBe(true);
-      });
+      await waitForDeliveredCleanup(wave[1]!.runId, { allowPendingRequesterSettleWake: true });
+      // Members share one evaluation slot; either member may own the grouped read.
+      releaseAlpha.resolve();
       await expect(evaluated.promise).resolves.toBe(false);
       emitCompleted(cohort.runId, cohort.childSessionKey, "cohort findings");
       // The cohort's own wake settles while the wave's evaluation is still held.
@@ -1018,15 +1023,16 @@ describe("requester settle wake product flow", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
     } finally {
+      releaseAlpha.resolve();
       release.resolve();
     }
     await flushOwnedWork();
     expect(
       getRequesterWakeCalls().map((request) => request.params?.inputProvenance?.sourceSessionKey),
-    ).toEqual([cohort.childSessionKey, expect.any(String)]);
-    const waveWake = String(getRequesterWakeCalls()[1]?.params?.message);
-    expect(waveWake).toContain("wave alpha findings");
-    expect(waveWake).toContain("wave beta findings");
+    ).toEqual([cohort.childSessionKey]);
+    for (const child of wave) {
+      expect(registry.getSubagentRunByRunId(child.runId)?.requesterSettleWake).toBeUndefined();
+    }
   });
 
   registerRequesterWakeSettlementBoundaryTests({

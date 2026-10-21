@@ -138,18 +138,11 @@ describe("Codex Computer Use native service", () => {
     const { sourcePath, targetPath, install } = await setupService();
     const copyServiceApp = vi.fn(copyServiceFixture);
     const options = { copyServiceApp };
-    const first = await install(options);
-    expect(first.status).toBe("installed");
+    await install(options);
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
     await writeServiceFixture(sourcePath, UNEXPECTED_IDENTITY);
 
-    const second = await install(options);
-
-    expect(second).toMatchObject({
-      status: "refreshed",
-      changed: true,
-      previousBuild: "1000761",
-      sourceBuild: "1000900",
-    });
+    await install(options);
     expect(copyServiceApp).toHaveBeenCalledTimes(2);
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
@@ -176,10 +169,7 @@ describe("Codex Computer Use native service", () => {
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
 
-    await expect(install({ inspectServiceApp })).resolves.toMatchObject({
-      status: "already_current",
-      changed: false,
-    });
+    await install({ inspectServiceApp });
     expect(inspectServiceApp.mock.calls.length).toBeGreaterThan(inspectionsAfterFailure);
   });
 
@@ -193,7 +183,7 @@ describe("Codex Computer Use native service", () => {
       sourceAppCandidates: [path.join(root, "missing.app"), sourcePath],
     });
 
-    expect(result).toMatchObject({ status: "source_missing", changed: false });
+    expect(result).toBe("source_missing");
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
   });
 
@@ -210,8 +200,7 @@ describe("Codex Computer Use native service", () => {
     await copyStarted.promise;
     const second = install({ copyServiceApp });
     releaseCopy.resolve();
-    const results = await Promise.all([first, second]);
-    expect(results[0]).toMatchObject({ status: "installed", changed: true });
+    await Promise.all([first, second]);
     expect(copyServiceApp).toHaveBeenCalledOnce();
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
@@ -242,13 +231,12 @@ describe("Codex Computer Use native service", () => {
 
   it("does not provision the macOS service on other platforms", async () => {
     const inspectServiceApp = vi.fn();
-    const result = await ensureCodexComputerUseServiceApp({
+    await ensureCodexComputerUseServiceApp({
       codexHome: "/tmp/codex-home",
       platform: "linux",
       inspectServiceApp,
     });
 
-    expect(result).toEqual({ status: "unsupported", changed: false });
     expect(inspectServiceApp).not.toHaveBeenCalled();
   });
 

@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as gateway from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
-import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
+import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -25,7 +25,7 @@ it.each([false, true])(
         ],
       });
     }
-    const findings = await createModelReferenceCheck().detect({
+    const findings = await modelReferenceCheck.detect({
       mode: "lint",
       cfg: {},
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -58,7 +58,7 @@ it("does not execute Gateway secret providers without Doctor's allow-exec opt-in
     createdAt: "fixture",
   });
   const call = vi.spyOn(gateway, "callGateway").mockResolvedValue({ models: [] });
-  const findings = await createModelReferenceCheck().detect({
+  const findings = await modelReferenceCheck.detect({
     mode: "lint",
     env: {},
     cfg: {

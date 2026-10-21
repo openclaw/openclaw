@@ -59,6 +59,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { hasPendingFollowupQueueWork } from "./queue/state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
+import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 import {
   isSlackDirectRoutedThreadTurn,
   resolveRoutedDeliveryThreadId,
@@ -101,7 +102,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     sessionStore,
   } = params;
   const assertPreparationActive = composeSessionSourceAssertion(
-    [opts?.operatorAuthority?.assertCurrent, opts?.internalEventExecution?.assertCurrent],
+    [
+      opts?.operatorAuthority?.assertCurrent,
+      opts?.internalEventExecution?.assertCurrent,
+      opts?.scheduledAutomation?.assertCurrent,
+    ],
     (assertSourceCurrent) => {
       opts?.abortSignal?.throwIfAborted();
       opts?.replyOperation?.abortSignal.throwIfAborted();
@@ -387,7 +392,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   const rawActiveSessionIdForInterrupt =
     capturedNativeAttempt?.operation.sessionId ?? resolveSessionlessNativeAttachment()?.sessionId;
   const shouldPreemptHeartbeat =
-    !isRoomEvent && !context.isHeartbeat && rawActiveSessionIdForInterrupt !== undefined;
+    !isRoomEvent &&
+    resolveReplyTurnKind(opts) === "visible" &&
+    rawActiveSessionIdForInterrupt !== undefined;
   assertPreparationActive();
   const heartbeatPreemption =
     sourceInput || sessionKey
@@ -440,15 +447,20 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (prioritySource) {
       retireSessionControllerInput(prioritySource);
     }
-    typing.cleanup();
-    return {
-      kind: "reply",
-      reply: { text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT },
-    } as const;
+    return finishReplyPreparation(typing, () => ({ text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT }));
   }
   const visibleTurnPreemptsHeartbeat = heartbeatPreemption === "drained";
   const resolveRuntimeAuthProfile = async () => {
-    if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
+    const binding = opts?.scheduledAutomation?.job.inferenceBinding;
+    if (binding) {
+      return { authProfileId: binding.profileId, authProfileIdSource: binding.source };
+    }
+    if (
+      useFastReplyRuntime &&
+      !params.configuredProfileId &&
+      !modelState.operatorModelOverride &&
+      !opts?.scheduledAutomation
+    ) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
         authProfileIdSource: resolveCollapsedSessionAuthPinSource(
@@ -459,6 +471,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     const shouldUseEphemeralSession =
       params.autoFallbackPrimaryProbe !== undefined ||
       params.configuredProfileId !== undefined ||
+      opts?.scheduledAutomation !== undefined ||
       modelState.operatorModelOverride === true;
     const authSessionKey = shouldUseEphemeralSession ? (sessionKey ?? sessionIdFinal) : sessionKey;
     const authSessionEntry = preparedSessionState.sessionEntry

@@ -36,19 +36,16 @@ export type DiagnosticArgumentChurnObservationParams = {
 };
 
 function hasArgumentChurnContinuityExpired(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  activity: DiagnosticArgumentChurnActivity,
   now: number,
 ): boolean {
   const observationAt = activity.argumentChurnObservationAt;
-  const lastProgressAt = activity.lastProgressAt;
   const observationSequence = activity.argumentChurnObservationSequence;
   const lastProgressSequence = activity.lastProgressSequence;
   const progressFollowedObservation =
-    observationSequence !== undefined && lastProgressSequence !== undefined
-      ? lastProgressSequence > observationSequence
-      : lastProgressAt !== undefined &&
-        observationAt !== undefined &&
-        lastProgressAt > observationAt;
+    observationSequence !== undefined &&
+    lastProgressSequence !== undefined &&
+    lastProgressSequence > observationSequence;
   return (
     observationAt !== undefined &&
     progressFollowedObservation &&
@@ -87,7 +84,7 @@ export function resolveArgumentChurnProgress(
 }
 
 function recordArgumentChurnActivityObservation(
-  activity: DiagnosticArgumentChurnActivity & { lastProgressAt?: number },
+  activity: DiagnosticArgumentChurnActivity,
   params: {
     runId?: string;
     active: boolean;
@@ -194,22 +191,10 @@ export function mergeArgumentChurnActivity(
 ): void {
   const sourceObservationSequence = source.argumentChurnObservationSequence;
   const targetObservationSequence = target.argumentChurnObservationSequence;
-  const sourceClearsAtSameTime =
-    sourceObservationSequence === undefined &&
-    targetObservationSequence === undefined &&
-    source.argumentChurnObservationAt !== undefined &&
-    source.argumentChurnObservationAt === target.argumentChurnObservationAt &&
-    source.argumentChurnStartedAt === undefined &&
-    target.argumentChurnStartedAt !== undefined;
+  // Observations and clears always record their process-local sequence together.
   const sourceIsNewer =
-    sourceObservationSequence !== undefined
-      ? targetObservationSequence === undefined ||
-        sourceObservationSequence > targetObservationSequence
-      : targetObservationSequence === undefined &&
-        source.argumentChurnObservationAt !== undefined &&
-        (target.argumentChurnObservationAt === undefined ||
-          source.argumentChurnObservationAt > target.argumentChurnObservationAt ||
-          sourceClearsAtSameTime);
+    sourceObservationSequence !== undefined &&
+    sourceObservationSequence > (targetObservationSequence ?? 0);
 
   if (
     source.argumentChurnStartedAt !== undefined &&
@@ -220,12 +205,7 @@ export function mergeArgumentChurnActivity(
       target.argumentChurnStartedAt,
       source.argumentChurnStartedAt,
     );
-    if (
-      source.argumentChurnObservationAt !== undefined &&
-      (sourceIsNewer ||
-        (sourceObservationSequence === undefined &&
-          source.argumentChurnObservationAt >= (target.argumentChurnObservationAt ?? 0)))
-    ) {
+    if (sourceIsNewer) {
       target.argumentChurnObservationAt = source.argumentChurnObservationAt;
       target.argumentChurnObservationSequence = sourceObservationSequence;
     }

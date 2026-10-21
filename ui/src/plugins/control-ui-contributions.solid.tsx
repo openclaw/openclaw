@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
@@ -73,24 +73,24 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       {
         read: (binding) => binding.context?.plugins,
         subscribe: ({ context: current, kind }, notify) => {
+          // Retire hidden action authority before publishing the latest presentation.
           const changed = () => {
             retireHiddenActions();
             notify();
           };
-          const stops = [current?.plugins.subscribe(changed)];
-          if (kind === "navigation") {
-            stops.push(current?.router?.subscribe(changed));
-          }
-          if (kind === "header" || kind === "composer") {
-            stops.push(current?.sessions?.subscribe(changed));
-          }
+          const sources = [
+            current?.plugins,
+            ...(kind === "navigation" ? [current?.router] : []),
+            ...(kind === "header" || kind === "composer" ? [current?.sessions] : []),
+          ];
+          const stops = sources.map((owner) => owner?.subscribe(changed));
           return () => stops.forEach((stop) => stop?.());
         },
         equality: "revision",
       },
     ),
   );
-  onCleanup(() => {
+  onSettled(() => () => {
     lifetime.abort();
     actionLifetimes.clear();
   });

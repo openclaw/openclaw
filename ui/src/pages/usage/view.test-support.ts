@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
-import type { UsageFilterOptions } from "./query.ts";
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { UsageProps, UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const noop = vi.fn();
@@ -177,7 +177,7 @@ function filterValues(values: (string | undefined)[], limit = 12): string[] {
 export function buildUsageFilterOptions(
   sessions: readonly UsageSessionEntry[],
   aggregates?: UsageAggregates | null,
-): UsageFilterOptions {
+): SessionsUsageOverview["filterOptions"] {
   return {
     agent: filterValues(
       sessions.map((session) => session.agentId),

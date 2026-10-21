@@ -95,11 +95,8 @@ describe("plugin registration diagnostics", () => {
       throw new Error("invalid registration must not instantiate its factory");
     });
     alphaApi.registerReload({});
-    betaApi.registerTextTransforms({});
     // @ts-expect-error JavaScript plugins may omit the required supplement builder.
     alphaApi.registerMemoryPromptSupplement(undefined);
-    // @ts-expect-error JavaScript plugins may omit the required hosted-media resolver.
-    betaApi.registerHostedMediaResolver(undefined);
     // @ts-expect-error Unknown JavaScript hook names must produce a diagnostic.
     alphaApi.on("unknown-hook", () => {});
     betaApi.registerRuntimeLifecycle({ id: "" });
@@ -108,14 +105,7 @@ describe("plugin registration diagnostics", () => {
       ["error", "alpha", alphaSource, "service registration missing id"],
       ["error", "beta", betaSource, "context engine registration missing id"],
       ["warn", "alpha", alphaSource, "reload registration missing prefixes"],
-      [
-        "warn",
-        "beta",
-        betaSource,
-        "text transform registration has no input or output replacements",
-      ],
       ["error", "alpha", alphaSource, "memory prompt supplement registration missing builder"],
-      ["error", "beta", betaSource, "hosted media resolver registration missing resolver"],
       ["warn", "alpha", alphaSource, 'unknown typed hook "unknown-hook" ignored'],
       ["error", "beta", betaSource, "runtime lifecycle registration missing id"],
     ].map(([level, pluginId, source, message]) => ({ level, pluginId, source, message }));
@@ -123,9 +113,7 @@ describe("plugin registration diagnostics", () => {
     expect(registry.services).toEqual([]);
     expect(registry.contextEngines.size).toBe(0);
     expect(registry.reloads).toEqual([]);
-    expect(registry.textTransforms).toEqual([]);
     expect(registry.memoryPromptSupplements).toEqual([]);
-    expect(registry.hostedMediaResolvers).toEqual([]);
     expect(registry.typedHooks).toEqual([]);
     expect(registry.runtimeLifecycles).toEqual([]);
 

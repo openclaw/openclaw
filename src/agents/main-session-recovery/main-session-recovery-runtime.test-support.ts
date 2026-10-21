@@ -123,6 +123,7 @@ export function createRecoveryRuntimeFixture(params: {
       return (await params.callGateway({ method: "agent.wait", params: request, timeoutMs })) as T;
     },
     sendRecoveryNotice: params.sendRecoveryNotice,
+    resumeChatInput: vi.fn(),
   };
 }
 

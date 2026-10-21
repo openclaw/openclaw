@@ -8,6 +8,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import {
   configureExecutionIdentityAdmissionSink,
+  createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
@@ -16,12 +17,10 @@ import { processExecutionIdentityAdmissionWorkInDatabase } from "./execution-ide
 
 export function captureExecutionIdentityAdmissionEnvelope(
   admissionFacts: ExecutionIdentityAdmissionFacts,
-  options: {
-    now?: number;
-    contextId?: string;
-    executionId?: string;
-    runtimeInstanceId?: string;
-  } = {},
+  options: Pick<
+    Parameters<typeof enqueueExecutionIdentityContextAtAdmission>[1],
+    "now" | "contextId" | "executionId" | "runtimeInstanceId"
+  > = {},
 ): ExecutionIdentityAdmissionEnvelope {
   const { contextId, executionId, runtimeInstanceId, now } = options;
   let envelope: ExecutionIdentityAdmissionEnvelope | undefined;
@@ -34,10 +33,10 @@ export function captureExecutionIdentityAdmissionEnvelope(
   try {
     const result = enqueueExecutionIdentityContextAtAdmission(admissionFacts, {
       enabled: true,
-      ...(contextId !== undefined ? { contextId } : {}),
-      ...(executionId !== undefined ? { executionId } : {}),
-      ...(runtimeInstanceId !== undefined ? { runtimeInstanceId } : {}),
-      ...(now !== undefined ? { now } : {}),
+      contextId,
+      executionId,
+      runtimeInstanceId,
+      now,
     });
     if (!result || !envelope) {
       throw new Error("expected admission envelope");
@@ -50,8 +49,7 @@ export function captureExecutionIdentityAdmissionEnvelope(
 
 export function persistExecutionIdentityAdmissionEnvelope(
   envelope: ExecutionIdentityAdmissionEnvelope,
-  options: Omit<Parameters<typeof processExecutionIdentityAdmissionWorkInDatabase>[1], "database"> &
-    Pick<OpenClawStateDatabaseOptions, "database"> = {},
+  options: Partial<Parameters<typeof processExecutionIdentityAdmissionWorkInDatabase>[1]> = {},
 ) {
   return processExecutionIdentityAdmissionWorkInDatabase(
     { kind: "capture", envelope },
@@ -64,25 +62,17 @@ export function prepareExecutionIdentityContextAtAdmission(
   options: Parameters<typeof captureExecutionIdentityAdmissionEnvelope>[1] &
     Parameters<typeof persistExecutionIdentityAdmissionEnvelope>[1] = {},
 ) {
-  const { contextId, executionId, runtimeInstanceId, now, limits, ...database } = options;
-  const envelope = captureExecutionIdentityAdmissionEnvelope(admissionFacts, {
-    ...(contextId !== undefined ? { contextId } : {}),
-    ...(executionId !== undefined ? { executionId } : {}),
-    ...(runtimeInstanceId !== undefined ? { runtimeInstanceId } : {}),
-    ...(now !== undefined ? { now } : {}),
-  });
-  return persistExecutionIdentityAdmissionEnvelope(envelope, {
-    ...database,
-    ...(now !== undefined ? { now } : {}),
-    ...(limits !== undefined ? { limits } : {}),
-  });
+  return persistExecutionIdentityAdmissionEnvelope(
+    captureExecutionIdentityAdmissionEnvelope(admissionFacts, options),
+    options,
+  );
 }
 
 export async function recordDeniedApprovalForRun(
   runId: string,
   database: OpenClawStateDatabaseOptions,
-  id = "denied-approval",
-  binding?: { contextId: string; executionId: string },
+  id: string,
+  binding: { contextId: string; executionId: string },
 ): Promise<void> {
   await insertOperatorApproval({
     approval: {
@@ -97,17 +87,11 @@ export async function recordDeniedApprovalForRun(
       runtimeEpoch: "runtime-1",
       createdAtMs: 100,
       expiresAtMs: 1_000,
-      ...(binding
-        ? {
-            executionIdentityToken: {
-              tokenVersion: 1,
-              createdAt: 100,
-              runId,
-              contextId: binding.contextId,
-              executionId: binding.executionId,
-            },
-          }
-        : {}),
+      executionIdentityToken: createExecutionIdentityAdmissionToken(runId, {
+        contextId: binding.contextId,
+        executionId: binding.executionId,
+        now: 100,
+      }),
     },
     databaseOptions: database,
   });

@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import type { ChannelsState } from "../../lib/channels/index.ts";
+import type { ChannelCapability } from "../../lib/channels/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChannelsProps } from "./view.types.ts";
@@ -21,7 +21,7 @@ export function createChannelsViewProps(
   overrides: ChannelsViewTestOverrides = {},
 ): ChannelsProps {
   const { channels, config, presentation, wizardHost, ...props } = overrides;
-  const channelState: ChannelsState = {
+  const channelState: ChannelCapability["state"] = {
     client: null,
     connected: true,
     channelsLoading: false,
@@ -33,6 +33,7 @@ export function createChannelsViewProps(
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,

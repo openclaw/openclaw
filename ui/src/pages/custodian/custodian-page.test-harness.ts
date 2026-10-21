@@ -50,7 +50,9 @@ export function createContext(
     request: (method: string, ...args: unknown[]) =>
       method === "health"
         ? (options.healthRequest?.(method, ...args) ?? Promise.resolve(healthSnapshot))
-        : request(method, ...args),
+        : method === "openclaw.chat.history" && !methods.includes(method)
+          ? Promise.resolve({ turns: [] })
+          : request(method, ...args),
   } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
@@ -109,6 +111,7 @@ export function createContext(
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot: null,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,

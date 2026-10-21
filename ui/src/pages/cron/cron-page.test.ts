@@ -261,7 +261,6 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       id: job.id,
       runId: "cron:linked-job:1",
       query: undefined,
-      status: "all",
       statuses: undefined,
       deliveryStatuses: undefined,
     }),

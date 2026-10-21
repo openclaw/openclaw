@@ -103,10 +103,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     },
   } satisfies TalkCatalogResult;
   let catalogRequestIndex = 0;
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    if (method.startsWith("voicewake.") && options.voiceWakeRequest) {
-      return options.voiceWakeRequest(method, params);
-    }
+  const request = vi.fn(async (_method: string, _params: Record<string, unknown>) => {
     if (options.unavailable) {
       throw new Error("talk.catalog unavailable");
     }
@@ -114,7 +111,12 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     return await (options.catalogRequest?.(catalogRequestIndex, catalog) ?? catalog);
   });
   const snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
+    client: {
+      request: (method: string, params: Record<string, unknown>) =>
+        method.startsWith("voicewake.")
+          ? (options.voiceWakeRequest?.(method, params) ?? Promise.resolve({ triggers: [] }))
+          : request(method, params),
+    } as unknown as GatewayBrowserClient,
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
@@ -290,6 +292,78 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("Talk catalog boundaries", () => {
+  it("keeps the trigger editor mounted through catalog failure and focus recovery", async () => {
+    const initial = createDeferred<TalkCatalogResult>();
+    const refresh = createDeferred();
+    const { page, request } = createTalkMutationHarness({
+      voiceWakeRequest: async () => ({ triggers: ["openclaw"] }),
+      catalogRequest: (index, catalog) =>
+        index === 1 ? initial.promise : index === 2 ? catalog : refresh.promise.then(() => catalog),
+    });
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    const input = page.querySelector("textarea");
+    initial.reject(new Error("catalog temporarily unavailable"));
+    await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
+    expect(page.textContent).toContain("gpt-realtime-2.1");
+    expect(page.querySelector("textarea")).toBe(input);
+
+    window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(page.querySelector("openclaw-select-picker")).not.toBeNull());
+    expect(page.querySelector("textarea")).toBe(input);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const picker = page.querySelector("openclaw-select-picker");
+    window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(page.querySelector("openclaw-select-picker")).toBe(picker);
+    expect(page.querySelector("textarea")).toBe(input);
+    expect(page.textContent).not.toContain(t("common.loading"));
+    refresh.resolve();
+    await request.mock.results[2]?.value;
+  });
+
+  it("keeps a retired connection's catalog out of provider display and mutation policy", async () => {
+    const old = createDeferred();
+    const current = createDeferred();
+    const { page, request, runtimeConfig, setGatewayConnection } = createTalkMutationHarness({
+      defaultModel: "realtime-model",
+      transport: "provider-websocket",
+      catalogRequest: (index, catalog) =>
+        (index === 1 ? old.promise : current.promise).then<TalkCatalogResult>(() => ({
+          ...catalog,
+          realtime: {
+            ...catalog.realtime,
+            providers: catalog.realtime.providers.map((provider) =>
+              provider.id === "openai"
+                ? {
+                    ...provider,
+                    label: index === 1 ? "Old provider" : "Current provider",
+                    transports: index === 1 ? ["webrtc"] : ["provider-websocket"],
+                  }
+                : provider,
+            ),
+          },
+        })),
+    });
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    setGatewayConnection(true, "wss://replacement.example.test");
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    current.resolve();
+    await waitForSolid(() => expect(page.textContent).toContain("Current provider"));
+    old.resolve();
+    await request.mock.results[0]?.value;
+    flush();
+    expect(page.textContent).not.toContain("Old provider");
+    page.changeProvider("openai");
+    expect(runtimeConfig.removeFormValue).not.toHaveBeenCalledWith([
+      "talk",
+      "realtime",
+      "transport",
+    ]);
+  });
 });
 
 describe("Talk device and voice wake settings", () => {

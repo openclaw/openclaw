@@ -300,14 +300,14 @@ function AppSidebarContent(
       owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
+      frame = requestAnimationFrame(() => host.classList.add("sidebar-r"));
     });
     return () => {
       cancelAnimationFrame(frame);
       owner.sessionData.disconnect(owner.isConnected);
+      disconnectSidebarOwner(host);
     };
   });
-  onCleanup(() => disconnectSidebarOwner(host));
   return content;
 }
 

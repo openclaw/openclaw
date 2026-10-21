@@ -66,7 +66,7 @@ describe("A2A task store", () => {
     const task = store.create("ctx-alice");
     store.start(task.id);
 
-    await expect(store.wait(task.id, 0)).resolves.toMatchObject({
+    await expect(store.wait(task, 0)).resolves.toMatchObject({
       status: { state: "TASK_STATE_WORKING" },
     });
     expect(store.complete(task.id, "late reply")).toMatchObject({
@@ -79,12 +79,40 @@ describe("A2A task store", () => {
     const store = createTaskStore();
     const task = store.create("ctx-alice");
     store.start(task.id);
-    const waiting = store.wait(task.id, 120_000);
+    const waiting = store.wait(task, 120_000);
 
     store.stop();
 
     await expect(waiting).resolves.toMatchObject({ status: { state: "TASK_STATE_FAILED" } });
     expect(store.get(task.id)).toBeUndefined();
+  });
+
+  it("keeps a later observer waiting after a sibling times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createTaskStore();
+      const task = store.create("ctx-alice");
+      store.start(task.id);
+      const first = store.wait(task, 10);
+      await vi.advanceTimersByTimeAsync(5);
+      const second = store.wait(task, 20);
+      const secondSettled = vi.fn();
+      void second.then(secondSettled);
+
+      await vi.advanceTimersByTimeAsync(5);
+      const timedOut = await first;
+      expect(timedOut).toBe(task);
+      expect(timedOut?.status.state).toBe("TASK_STATE_WORKING");
+      expect(secondSettled).not.toHaveBeenCalled();
+
+      store.complete(task.id, "final reply");
+      await expect(second).resolves.toBe(task);
+      expect(timedOut?.status.state).toBe("TASK_STATE_COMPLETED");
+      expect(task.artifacts[0]?.parts).toEqual([{ text: "final reply" }]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("evicts the oldest completed tasks after the 500-entry retention cap", () => {

@@ -118,6 +118,50 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
+export type DreamingViewState = {
+  dreamIndex: number;
+  dreamLastSwap: number;
+  activeSubTab: "scene" | "diary" | "advanced";
+  activeDiarySubTab: "dreams" | "insights" | "wiki";
+  advancedWaitingSort: "recent" | "signals";
+  expandedInsightCards: Record<string, boolean>;
+  expandedWikiCards: Record<string, boolean>;
+  diaryPage: number;
+};
+
+export const DREAM_PHRASE_KEYS = [
+  "dreaming.phrases.consolidatingMemories",
+  "dreaming.phrases.tidyingKnowledgeGraph",
+  "dreaming.phrases.replayingConversations",
+  "dreaming.phrases.weavingShortTerm",
+  "dreaming.phrases.defragmentingMemoryLane",
+  "dreaming.phrases.filingLooseThoughts",
+  "dreaming.phrases.connectingDots",
+  "dreaming.phrases.compostingContext",
+  "dreaming.phrases.alphabetizingSubconscious",
+  "dreaming.phrases.promotingHunches",
+  "dreaming.phrases.forgettingNoise",
+  "dreaming.phrases.dreamingEmbeddings",
+  "dreaming.phrases.reorganizingAttic",
+  "dreaming.phrases.indexingDay",
+  "dreaming.phrases.nurturingInsights",
+  "dreaming.phrases.simmeringIdeas",
+  "dreaming.phrases.whisperingVectorStore",
+] as const;
+
+export function createDreamingViewState(): DreamingViewState {
+  return {
+    dreamIndex: Math.floor(Math.random() * DREAM_PHRASE_KEYS.length),
+    dreamLastSwap: 0,
+    activeSubTab: "scene",
+    activeDiarySubTab: "dreams",
+    advancedWaitingSort: "recent",
+    expandedInsightCards: {},
+    expandedWikiCards: {},
+    diaryPage: 0,
+  };
+}
+
 export type DreamingResourceKey =
   | "dreamingStatus"
   | "dreamDiary"

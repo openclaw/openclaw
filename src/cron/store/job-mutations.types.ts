@@ -9,6 +9,7 @@ import type { CronSchedulerSnapshot } from "./scheduler-actor.types.js";
 /** Only captured facts cross this boundary; callbacks and live authority stay on the host. */
 type CronJobMutationOptions = Pick<
   CronAddOptions,
+  | "streamSandbox"
   | "enabledExplicit"
   | "systemOwned"
   | "createdActor"

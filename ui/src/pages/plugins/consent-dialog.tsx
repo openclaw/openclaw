@@ -73,7 +73,7 @@ type ArtTileProps = {
 };
 
 export function PluginArtTile(props: ArtTileProps): JSX.Element {
-  const slug = createMemo(() => props.slug);
+  const slug = () => props.slug;
   onSettled(() => props.registerIcon?.(slug));
   type ImageState = { source: string | undefined; status: "loading" | "ready" | "failed" };
   const [packageImage, setPackageImage] = createSignal<ImageState>((previous) => {
@@ -92,7 +92,7 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = createMemo(() => pluginFallbackGradient(slug()));
+  const gradient = () => pluginFallbackGradient(slug());
   const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
@@ -480,7 +480,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
             <button
               type="button"
               class="btn btn--sm oc-action oc-action-secondary"
-              onClick={props.onRetry}
+              onClick={() => props.onRetry()}
             >
               {t("pluginsPage.tryAgain")}
             </button>

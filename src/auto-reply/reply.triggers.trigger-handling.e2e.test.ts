@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
@@ -24,11 +25,13 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { dispatchInboundMessage } from "./dispatch.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { createTestFollowupRun } from "./reply/agent-runner.test-fixtures.js";
+import { markCompleteReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import { createReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { createMockTypingController } from "./reply/test-helpers.js";
@@ -555,6 +558,163 @@ describe("trigger handling", () => {
           true,
         );
         expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+      } finally {
+        providerRelease.resolve();
+        await Promise.allSettled([activeRun]);
+      }
+    });
+  });
+
+  async function dispatchNativeTopicReset(params: {
+    home: string;
+    command: "/new" | "/reset";
+    beforeDispatch?: (fixture: {
+      cfg: ReturnType<typeof makeCfg>;
+      storePath: string;
+      targetSessionKey: string;
+    }) => Promise<void>;
+  }) {
+    const action = params.command.slice(1);
+    // Full runtime: the fast test bootstrap skips the real session rollover.
+    const cfg = markCompleteReplyConfig(makeStoredCfg(params.home, `native-${action}`), {
+      runtimeMode: "full",
+    });
+    setRuntimeConfigSnapshot(cfg);
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const storePath = requireSessionStorePath(cfg);
+    // Telegram group topics dispatch native commands on the topic session itself.
+    const targetSessionKey = "agent:main:telegram:group:-1001234567890:topic:42";
+    await seedTargetSession(storePath, targetSessionKey, { lifecycleRevision: "before-reset" });
+    const hookEvents: string[] = [];
+    const hook = (event: { type: string; action: string }) => {
+      hookEvents.push(`${event.type}:${event.action}`);
+    };
+    registerInternalHook(`command:${action}`, hook);
+    onTestFinished(() => unregisterInternalHook(`command:${action}`, hook));
+    await params.beforeDispatch?.({ cfg, storePath, targetSessionKey });
+    const replies: ReplyPayload[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        replies.push(payload);
+      },
+    });
+    const result = await dispatchInboundMessage({
+      ctx: {
+        ...makeNativeTelegramCommandMessage({
+          body: params.command,
+          slashSessionKey: targetSessionKey,
+          targetSessionKey,
+        }),
+        ChatType: "group",
+        To: "telegram:-1001234567890",
+        MessageThreadId: 42,
+      },
+      cfg,
+      dispatcher,
+    });
+    return {
+      result,
+      replies,
+      hookEvents,
+      entry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+    };
+  }
+
+  it.each([
+    { command: "/new", text: "✅ New session started." },
+    { command: "/reset", text: "✅ Session reset." },
+  ] as const)(
+    "commits native $command in an idle group topic and fires its command hook",
+    async ({ command, text }) => {
+      await withTempHome(async (home) => {
+        const { result, replies, hookEvents, entry } = await dispatchNativeTopicReset({
+          home,
+          command,
+        });
+
+        expect(result).toMatchObject({ queuedFinal: true });
+        expect(replies).toEqual([expect.objectContaining({ text })]);
+        expect(hookEvents).toEqual([`command:${command.slice(1)}`]);
+        expect(entry?.lifecycleRevision).toBeTruthy();
+        expect(entry?.lifecycleRevision).not.toBe("before-reset");
+      });
+    },
+  );
+
+  it("still preempts another active run when native /new resets its topic", async () => {
+    await withTempHome(async (home) => {
+      const providerStarted = Promise.withResolvers<AbortSignal>();
+      const providerRelease = Promise.withResolvers<void>();
+      let activeRun: Promise<unknown> | undefined;
+      try {
+        const { replies, hookEvents, entry } = await dispatchNativeTopicReset({
+          home,
+          command: "/new",
+          beforeDispatch: async ({ cfg, storePath, targetSessionKey }) => {
+            getRunEmbeddedAgentMock().mockImplementationOnce(
+              async (params: { abortSignal?: AbortSignal }) => {
+                if (!params.abortSignal) {
+                  throw new Error("Expected the active reply producer to receive an abort signal");
+                }
+                providerStarted.resolve(params.abortSignal);
+                await Promise.race([
+                  providerRelease.promise,
+                  once(params.abortSignal, "abort").catch(() => undefined),
+                ]);
+                params.abortSignal.throwIfAborted();
+                return { payloads: [], meta: { durationMs: 1 } };
+              },
+            );
+            const { runReplyAgent } = await vi.importActual<
+              typeof import("./reply/agent-runner-run.js")
+            >("./reply/agent-runner-run.js");
+            activeRun = runReplyAgent({
+              commandBody: "held producer",
+              followupRun: createTestFollowupRun({
+                agentId: "main",
+                config: cfg,
+                messageProvider: "telegram",
+                model: "claude-opus-4-7",
+                provider: "anthropic",
+                sessionFile: join(home, "active-session.jsonl"),
+                sessionId: "session-target",
+                sessionKey: targetSessionKey,
+                workspaceDir: join(home, "workspace"),
+              }),
+              queueKey: targetSessionKey,
+              resolvedQueue: { mode: "followup", debounceMs: 0 },
+              shouldSteer: false,
+              shouldFollowup: false,
+              isActive: false,
+              typing: createMockTypingController(),
+              sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+              sessionKey: targetSessionKey,
+              storePath,
+              sessionCtx: {
+                Provider: "telegram",
+                OriginatingChannel: "telegram",
+                OriginatingTo: "telegram:-1001234567890",
+                ChatType: "group",
+                SessionKey: targetSessionKey,
+              },
+              defaultModel: "anthropic/claude-opus-4-7",
+              resolvedVerboseLevel: "off",
+              isNewSession: false,
+              blockStreamingEnabled: false,
+              resolvedBlockStreamingBreak: "message_end",
+              shouldInjectGroupIntro: false,
+              typingMode: "never",
+            });
+            void activeRun.catch(() => undefined);
+            expect((await providerStarted.promise).aborted).toBe(false);
+          },
+        });
+
+        expect((await providerStarted.promise).aborted).toBe(true);
+        await activeRun?.catch(() => undefined);
+        expect(replies).toEqual([expect.objectContaining({ text: "✅ New session started." })]);
+        expect(hookEvents).toEqual(["command:new"]);
+        expect(entry?.lifecycleRevision).not.toBe("before-reset");
       } finally {
         providerRelease.resolve();
         await Promise.allSettled([activeRun]);

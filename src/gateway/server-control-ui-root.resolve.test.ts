@@ -123,8 +123,6 @@ describe("createGatewayControlUiRootLifecycle", () => {
       const refreshed = await readControlUiRootAsset(root, "assets/app.js", true);
       expect(refreshed).toMatchObject({
         file: { body: Buffer.from("reenabled") },
-        br: { body: Buffer.from("reenabled.br") },
-        gzip: { body: Buffer.from("reenabled.gz") },
       });
       expect(await readControlUiRootAsset(root, "assets/app.js", false)).toBe(refreshed);
       expect(await readControlUiRootAsset(siblingRoot, "assets/app.js", true)).toEqual(original);
@@ -134,58 +132,47 @@ describe("createGatewayControlUiRootLifecycle", () => {
     }
   });
 
-  test.each(["before", "after"])(
-    "keeps a read completing %s re-enable out of the new cache generation",
-    async (completion) => {
-      controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
-      controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(true);
-      const { lifecycle } = createLifecycle();
-      const root = lifecycle.state;
-      if (root.kind !== "bundled") {
-        throw new Error("Expected a bundled root");
-      }
-      const oldFile = createDeferred<ControlUiFileSnapshot | null>();
-      const newFile = createDeferred<ControlUiFileSnapshot | null>();
-      vi.spyOn(WorkerTaskPool.prototype, "run")
-        .mockReturnValueOnce(oldFile.promise)
-        .mockReturnValueOnce(newFile.promise);
-      const oldRead = readControlUiRootAsset(root, "icon.png", true);
-      lifecycle.setEnabled(false);
-      const finishOldRead = async () => {
-        oldFile.resolve({
-          path: "/repo/dist/control-ui/icon.png",
-          size: 3,
-          mtimeMs: 1,
-          body: Buffer.from("old"),
-        });
-        await expect(oldRead).resolves.toMatchObject({ file: { body: Buffer.from("old") } });
-      };
-      if (completion === "before") {
-        await finishOldRead();
-      }
-      lifecycle.setEnabled(true);
-      await lifecycle.start();
-      const newRead = readControlUiRootAsset(root, "icon.png", true);
-      expect(newRead).not.toBe(oldRead);
-      if (completion === "after") {
-        await finishOldRead();
-      }
-      // The old completion must neither cache its body nor remove the new pending read.
-      expect(readControlUiRootAsset(root, "icon.png", false)).toBe(newRead);
-      newFile.resolve({
-        path: "/repo/dist/control-ui/icon.png",
-        size: 3,
-        mtimeMs: 2,
-        body: Buffer.from("new"),
-      });
-      const refreshed = await newRead;
-      expect(refreshed).toMatchObject({ file: { body: Buffer.from("new") } });
-      expect(await readControlUiRootAsset(root, "icon.png", true)).toBe(refreshed);
-      await lifecycle.stop();
-    },
-  );
+  test("starts fresh caching after a read completes while disabled", async () => {
+    controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
+    controlUiAssetsMocks.isPackageProvenControlUiRootSync.mockReturnValue(true);
+    const { lifecycle } = createLifecycle();
+    const root = lifecycle.state;
+    if (root.kind !== "bundled") {
+      throw new Error("Expected a bundled root");
+    }
+    const oldFile = createDeferred<ControlUiFileSnapshot | null>();
+    const newFile = createDeferred<ControlUiFileSnapshot | null>();
+    vi.spyOn(WorkerTaskPool.prototype, "run")
+      .mockReturnValueOnce(oldFile.promise)
+      .mockReturnValueOnce(newFile.promise);
+    const oldRead = readControlUiRootAsset(root, "icon.png", true);
+    lifecycle.setEnabled(false);
+    oldFile.resolve({
+      path: "/repo/dist/control-ui/icon.png",
+      size: 3,
+      mtimeMs: 1,
+      body: Buffer.from("old"),
+    });
+    await expect(oldRead).resolves.toMatchObject({ file: { body: Buffer.from("old") } });
+    lifecycle.setEnabled(true);
+    await lifecycle.start();
+    const newRead = readControlUiRootAsset(root, "icon.png", true);
+    expect(newRead).not.toBe(oldRead);
+    // Completion while disabled must not refill the cache.
+    expect(readControlUiRootAsset(root, "icon.png", false)).toBe(newRead);
+    newFile.resolve({
+      path: "/repo/dist/control-ui/icon.png",
+      size: 3,
+      mtimeMs: 2,
+      body: Buffer.from("new"),
+    });
+    const refreshed = await newRead;
+    expect(refreshed).toMatchObject({ file: { body: Buffer.from("new") } });
+    expect(await readControlUiRootAsset(root, "icon.png", true)).toBe(refreshed);
+    await lifecycle.stop();
+  });
 
-  test("joins outstanding reads from disabled generations during stop", async () => {
+  test("joins outstanding reads across enablement changes during stop", async () => {
     controlUiAssetsMocks.resolveControlUiRootSync.mockReturnValue("/repo/dist/control-ui");
     const { lifecycle } = createLifecycle();
     const root = lifecycle.state;

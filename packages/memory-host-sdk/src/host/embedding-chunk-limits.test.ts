@@ -1,26 +1,13 @@
-// Memory Host SDK tests cover embedding chunk limits behavior.
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
 import type { EmbeddingProvider } from "./embeddings.types.js";
 
-function createProvider(maxInputTokens: number): EmbeddingProvider {
+function createProvider(maxInputTokens?: number, id = "mock"): EmbeddingProvider {
   return {
-    id: "mock",
+    id,
     model: "mock-embed",
     maxInputTokens,
-    embed: async () => [0],
-    embedBatch: async () => [[0]],
-  };
-}
-
-function createProviderWithoutMaxInputTokens(params: {
-  id: string;
-  model: string;
-}): EmbeddingProvider {
-  return {
-    id: params.id,
-    model: params.model,
     embed: async () => [0],
     embedBatch: async () => [[0]],
   };
@@ -29,54 +16,39 @@ function createProviderWithoutMaxInputTokens(params: {
 type EmbeddingChunks = ReturnType<typeof enforceEmbeddingMaxInputTokens>;
 
 function expectChunksWithinUtf8Bytes(chunks: EmbeddingChunks, maxBytes: number) {
-  const oversized: Array<{ index: number; bytes: number }> = [];
-  for (const [index, chunk] of chunks.entries()) {
-    const bytes = estimateUtf8Bytes(chunk.text);
-    if (bytes > maxBytes) {
-      oversized.push({ index, bytes });
-    }
+  for (const chunk of chunks) {
+    expect(estimateUtf8Bytes(chunk.text)).toBeLessThanOrEqual(maxBytes);
   }
-  expect(oversized).toStrictEqual([]);
 }
 
 function expectChunksLineRange(chunks: EmbeddingChunks, startLine: number, endLine: number) {
-  const unexpectedRanges: Array<{ index: number; startLine: number; endLine: number }> = [];
-  for (const [index, chunk] of chunks.entries()) {
-    if (chunk.startLine !== startLine || chunk.endLine !== endLine) {
-      unexpectedRanges.push({ index, startLine: chunk.startLine, endLine: chunk.endLine });
-    }
+  for (const chunk of chunks) {
+    expect(chunk).toMatchObject({ startLine, endLine });
   }
-  expect(unexpectedRanges).toStrictEqual([]);
 }
 
 function expectChunksHaveHashes(chunks: EmbeddingChunks) {
-  const invalidHashes: Array<{ index: number; hash: unknown }> = [];
-  for (const [index, chunk] of chunks.entries()) {
-    if (typeof chunk.hash !== "string" || chunk.hash.length === 0) {
-      invalidHashes.push({ index, hash: chunk.hash });
-    }
+  for (const chunk of chunks) {
+    expect(typeof chunk.hash).toBe("string");
+    expect(chunk.hash.length).toBeGreaterThan(0);
   }
-  expect(invalidHashes).toStrictEqual([]);
 }
 
 function joinedChunkText(chunks: EmbeddingChunks): string {
-  let text = "";
-  for (const chunk of chunks) {
-    text += chunk.text;
-  }
-  return text;
+  return chunks.map((chunk) => chunk.text).join("");
+}
+
+function makeChunk(text: string) {
+  return { startLine: 1, endLine: 1, text, hash: "ignored" };
 }
 
 describe("embedding chunk limits", () => {
   it("splits oversized chunks so each embedding input stays <= maxInputTokens bytes", () => {
     const provider = createProvider(8192);
     const input = {
-      startLine: 1,
-      endLine: 1,
+      ...makeChunk("x".repeat(9000)),
       entryStartLine: 1,
       entryEndLine: 4,
-      text: "x".repeat(9000),
-      hash: "ignored",
     };
 
     const out = enforceEmbeddingMaxInputTokens(provider, [input]);
@@ -93,9 +65,7 @@ describe("embedding chunk limits", () => {
     const emoji = "😀";
     const inputText = `${emoji.repeat(2100)}\n${emoji.repeat(2100)}`;
 
-    const out = enforceEmbeddingMaxInputTokens(provider, [
-      { startLine: 1, endLine: 2, text: inputText, hash: "ignored" },
-    ]);
+    const out = enforceEmbeddingMaxInputTokens(provider, [{ ...makeChunk(inputText), endLine: 2 }]);
 
     expect(out.length).toBeGreaterThan(1);
     expect(joinedChunkText(out)).toBe(inputText);
@@ -110,29 +80,15 @@ describe("embedding chunk limits", () => {
     { cap: 2, expected: ["😀", "ta", "il", "😀"] },
     { cap: 3, expected: ["😀", "tai", "l", "😀"] },
   ])("retains indivisible code points when the byte cap is $cap", ({ cap, expected }) => {
-    const out = enforceEmbeddingMaxInputTokens(
-      createProvider(8192),
-      [{ startLine: 1, endLine: 1, text: "😀tail😀", hash: "ignored" }],
-      cap,
-    );
+    const out = enforceEmbeddingMaxInputTokens(createProvider(8192), [makeChunk("😀tail😀")], cap);
 
     expect(out.map((chunk) => chunk.text)).toEqual(expected);
   });
 
   it("uses conservative fallback limits for local providers without declared maxInputTokens", () => {
-    const provider = createProviderWithoutMaxInputTokens({
-      id: "local",
-      model: "unknown-local-embedding",
-    });
+    const provider = createProvider(undefined, "local");
 
-    const out = enforceEmbeddingMaxInputTokens(provider, [
-      {
-        startLine: 1,
-        endLine: 1,
-        text: "x".repeat(3000),
-        hash: "ignored",
-      },
-    ]);
+    const out = enforceEmbeddingMaxInputTokens(provider, [makeChunk("x".repeat(3000))]);
 
     expect(out.length).toBeGreaterThan(1);
     expectChunksWithinUtf8Bytes(out, 2048);
@@ -140,18 +96,7 @@ describe("embedding chunk limits", () => {
 
   it("honors hard safety caps lower than provider maxInputTokens", () => {
     const provider = createProvider(8192);
-    const out = enforceEmbeddingMaxInputTokens(
-      provider,
-      [
-        {
-          startLine: 1,
-          endLine: 1,
-          text: "x".repeat(8100),
-          hash: "ignored",
-        },
-      ],
-      8000,
-    );
+    const out = enforceEmbeddingMaxInputTokens(provider, [makeChunk("x".repeat(8100))], 8000);
 
     expect(out.length).toBeGreaterThan(1);
     expectChunksWithinUtf8Bytes(out, 8000);

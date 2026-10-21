@@ -1,19 +1,25 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const fetchMock = vi.fn<typeof fetch>();
 
-vi.mock("../../packages/terminal-core/src/theme.js", () => ({
-  isRich: () => false,
-  theme: {
-    heading: (s: string) => s,
-    info: (s: string) => s,
-    muted: (s: string) => s,
-    command: (s: string) => s,
-  },
-}));
+vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
+  return {
+    ...actual,
+    isRich: vi.fn(() => false),
+    theme: {
+      ...actual.theme,
+      heading: (s: string) => s,
+      info: (s: string) => s,
+      muted: (s: string) => s,
+      command: (s: string) => s,
+    },
+  };
+});
 
 vi.mock("../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: (path: string, label: string) => `${label}${path}`,
@@ -28,6 +34,7 @@ const { docsSearchCommand } = await import("./docs.js");
 describe("docsSearchCommand", () => {
   beforeEach(() => {
     fetchMock.mockReset();
+    vi.mocked(isRich).mockReturnValue(false);
     vi.stubGlobal("fetch", fetchMock);
   });
 
@@ -51,6 +58,7 @@ describe("docsSearchCommand", () => {
     }
     expect(url.href).toBe("https://docs.openclaw.ai/api/search?q=plugin+allowlist");
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
+    expect(runtime.log.mock.calls).toEqual([["# Docs search: plugin allowlist\n\n_No results._"]]);
   });
 
   it("limits normalized search results before rendering", async () => {
@@ -115,15 +123,35 @@ describe("docsSearchCommand", () => {
     );
   });
 
-  it("renders successful results from the Cloudflare docs search API", async () => {
+  it.each([
+    {
+      rich: false,
+      output: [
+        [
+          "# Docs search: plugin \\[allowlist\\]\n\n- [Plugin \\[allowlist\\]](https://docs.openclaw.ai/plugins/allowlist) - How to \\(configure\\).",
+        ],
+      ],
+    },
+    {
+      rich: true,
+      output: [
+        ["Docs search: plugin [allowlist]"],
+        [
+          "- Plugin [allowlist] (docs.openclaw.ai/plugins/allowlisthttps://docs.openclaw.ai/plugins/allowlist)",
+        ],
+        ["  How to (configure)."],
+      ],
+    },
+  ])("renders search results with rich=$rich", async ({ rich, output }) => {
+    vi.mocked(isRich).mockReturnValue(rich);
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           results: [
             {
-              title: "Plugin allowlist",
+              title: "Plugin [allowlist]",
               link: "https://docs.openclaw.ai/plugins/allowlist",
-              snippet: "How to configure the allowlist.",
+              snippet: "How to (configure).",
             },
           ],
         }),
@@ -132,11 +160,11 @@ describe("docsSearchCommand", () => {
     );
     const runtime = createTestRuntime();
 
-    await docsSearchCommand(["plugin", "allowlist"], runtime);
+    await docsSearchCommand(["plugin", "[allowlist]"], runtime);
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalled();
+    expect(runtime.log.mock.calls).toEqual(output);
   });
 
   it("rejects oversized docs search responses", async () => {

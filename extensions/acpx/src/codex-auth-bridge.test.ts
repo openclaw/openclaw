@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import acpxPackage from "../package.json" with { type: "json" };
 import { GENERATED_ADAPTER_ORPHAN_SCENARIO } from "./adapter-wrapper-script.test-support.js";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { useAuthBridgeFixture } from "./codex-auth-bridge.test-support.js";
@@ -124,7 +125,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       path.join(packageDir, "package.json"),
       JSON.stringify({
         name: `@agentclientprotocol/${packageName}`,
-        version: "2.1.1",
+        version: acpxPackage.dependencies["@agentclientprotocol/codex-acp"],
         bin: { [packageName]: "index.cjs" },
       }),
     );

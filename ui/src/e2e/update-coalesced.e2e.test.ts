@@ -1,5 +1,7 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
@@ -302,6 +304,34 @@ suite.define(() => {
         );
         await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
         expect(pageErrors).toEqual([]);
+      } catch (error) {
+        await withTimeout(
+          page.evaluate(() => {
+            const modal = document.querySelector("openclaw-modal-dialog");
+            const buttons = [...(modal?.querySelectorAll("button") ?? [])];
+            const confirm = buttons.find(
+              (element) => element.textContent?.trim() === "Update Mac app and restart",
+            );
+            const retry = buttons.find((element) => element.textContent?.trim() === "Retry update");
+            return {
+              nativeUpdateDialogPresent: Boolean(modal),
+              nativeUpdateDialogOpen: modal?.querySelector("dialog")?.open ?? false,
+              nativeUpdateConfirmPresent: Boolean(confirm),
+              nativeUpdateConfirmDisabled: confirm?.disabled ?? null,
+              nativeUpdateRetryPresent: Boolean(retry),
+              nativeUpdateRetryDisabled: retry?.disabled ?? null,
+            };
+          }),
+          1_000,
+        )
+          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+          .catch(() => undefined);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: `native-update-${outcome}`,
+          pageErrors,
+        });
+        throw error;
       } finally {
         await context.close();
       }

@@ -51,11 +51,10 @@ function replaceCatalogs(agentDir: string, catalogs: Record<string, string>) {
 }
 
 function expectMigration(
-  [detected, migrated, ...warnings]: [number, number, ...string[]],
+  [migrated, ...warnings]: [number, ...string[]],
   options: Omit<Parameters<typeof migrateLegacyPluginModelCatalogs>[0], "agentDir"> = {},
 ) {
   expect(migrateLegacyPluginModelCatalogs({ agentDir, ...options })).toEqual({
-    detected,
     migrated,
     warnings: warnings.map((warning) => expect.stringContaining(warning)),
   });
@@ -465,7 +464,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     });
     writeLegacy(agentDir, contents);
     await withPermissions(pluginDir, 0o000, 0o700, () => {
-      expectMigration([0, 0, "Could not inspect legacy provider catalogs"]);
+      expectMigration([0, "Could not inspect legacy provider catalogs"]);
       withDatabase(
         agentDir,
         (verified) => {
@@ -550,7 +549,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     await replaceCatalogs(agentDir, { zai: regenerated, anthropic: unrelated });
     const sourcePath = writeLegacy(agentDir, released);
 
-    expectMigration([1, 1], { expectedContents: new Map([["zai", released]]) });
+    expectMigration([1], { expectedContents: new Map([["zai", released]]) });
     expectCatalogs(agentDir, { anthropic: unrelated, zai: released });
     expect(existsSync(sourcePath)).toBe(false);
   });
@@ -584,12 +583,10 @@ describe("SQLite-backed plugin model catalogs", () => {
     writeFileSync(sourcePath, contents, "utf8");
 
     expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
-      detected: 1,
       migrated: 1,
       warnings: [],
     });
     expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
-      detected: 0,
       migrated: 0,
       warnings: [],
     });
@@ -602,7 +599,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const contents = catalogContents("zai", "concurrently-migrated-provider-test-key");
     await replaceCatalogs(agentDir, { zai: contents });
 
-    expectMigration([0, 0], { expectedContents: new Map([["zai", contents]]) });
+    expectMigration([0], { expectedContents: new Map([["zai", contents]]) });
     expectCatalogs(agentDir, { zai: contents });
   });
 
@@ -619,7 +616,6 @@ describe("SQLite-backed plugin model catalogs", () => {
 
     try {
       expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
-        detected: 1,
         migrated: 0,
         warnings: [expect.stringContaining("Could not remove migrated legacy provider catalog")],
       });
@@ -653,11 +649,11 @@ describe("SQLite-backed plugin model catalogs", () => {
     const pluginDir = join(agentDir, "plugins", "zai");
     const sourcePath = writeLegacy(agentDir, original);
     await withPermissions(pluginDir, 0o500, 0o700, async () => {
-      expectMigration([1, 0, "Could not remove migrated legacy provider catalog"]);
+      expectMigration([0, "Could not remove migrated legacy provider catalog"]);
       await replaceCatalogs(agentDir, { zai: refreshed });
     });
 
-    expectMigration([1, 0, "Left superseded legacy provider catalog in place"]);
+    expectMigration([0, "Left superseded legacy provider catalog in place"]);
     expectCatalogs(agentDir, { zai: refreshed });
     expect(existsSync(sourcePath)).toBe(true);
   });
@@ -667,7 +663,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const refreshed = catalogContents("zai", "concurrently-refreshed-provider-test-key");
     const sourcePath = writeLegacy(agentDir, original);
 
-    expectMigration([1, 0, "Left changed legacy provider catalog in place"], {
+    expectMigration([0, "Left changed legacy provider catalog in place"], {
       beforeLegacyCatalogClaim: (pathname) => writeFileSync(pathname, refreshed, "utf8"),
     });
     expect(readFileSync(sourcePath, "utf8")).toBe(refreshed);
@@ -684,16 +680,13 @@ describe("SQLite-backed plugin model catalogs", () => {
     await replaceCatalogs(agentDir, { zai: original });
     await closeOpenClawAgentDatabasesAsync(agentDir);
 
-    expectMigration(
-      [1, 0, "Legacy provider catalog was claimed before its migration was committed"],
-      {
-        beforeLegacyCatalogClaim: (pathname) => {
-          // Doctor's claim hook is synchronous; model the other process's committed refresh.
-          withDatabase(agentDir, (database) => updateCatalog(database, refreshed));
-          unlinkSync(pathname);
-        },
+    expectMigration([0, "Legacy provider catalog was claimed before its migration was committed"], {
+      beforeLegacyCatalogClaim: (pathname) => {
+        // Doctor's claim hook is synchronous; model the other process's committed refresh.
+        withDatabase(agentDir, (database) => updateCatalog(database, refreshed));
+        unlinkSync(pathname);
       },
-    );
+    });
     expectCatalogs(agentDir, { zai: refreshed });
   });
 
@@ -702,10 +695,9 @@ describe("SQLite-backed plugin model catalogs", () => {
     const sourcePath = writeLegacy(agentDir, contents);
     const claimPath = `${sourcePath}.doctor-importing-concurrent-process`;
 
-    expectMigration(
-      [1, 0, "Legacy provider catalog was claimed before its migration was committed"],
-      { beforeLegacyCatalogClaim: (pathname) => renameSync(pathname, claimPath) },
-    );
+    expectMigration([0, "Legacy provider catalog was claimed before its migration was committed"], {
+      beforeLegacyCatalogClaim: (pathname) => renameSync(pathname, claimPath),
+    });
     expect(existsSync(claimPath)).toBe(true);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
@@ -723,7 +715,7 @@ describe("SQLite-backed plugin model catalogs", () => {
     const claimPath = writeLegacy(agentDir, retained, "zai", ".doctor-importing-previous-process");
     const sourcePath = writeLegacy(agentDir, refreshed);
     await withPermissions(claimPath, 0o000, 0o600, () => {
-      expectMigration([0, 0, "Could not read legacy provider catalog"]);
+      expectMigration([0, "Could not read legacy provider catalog"]);
       expect(existsSync(claimPath)).toBe(true);
       expect(existsSync(sourcePath)).toBe(true);
       expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
@@ -759,7 +751,6 @@ describe("SQLite-backed plugin model catalogs", () => {
     writeFileSync(sourcePath, refreshed, "utf8");
 
     expect(migrateLegacyPluginModelCatalogs({ agentDir })).toEqual({
-      detected: 2,
       migrated: 2,
       warnings: [],
     });
@@ -784,7 +775,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       ".doctor-importing-aaa",
     );
 
-    expectMigration([0, 0, "Conflicting retained legacy provider catalogs"]);
+    expectMigration([0, "Conflicting retained legacy provider catalogs"]);
     expect(existsSync(olderPath)).toBe(true);
     expect(existsSync(newerPath)).toBe(true);
     expect(existsSync(join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
@@ -801,7 +792,7 @@ describe("SQLite-backed plugin model catalogs", () => {
       catalogContents("zai", "unreadable-provider-test-key"),
     );
     await withPermissions(sourcePath, 0o000, 0o600, () => {
-      expectMigration([0, 0, "Could not read legacy provider catalog"]);
+      expectMigration([0, "Could not read legacy provider catalog"]);
       expectCatalogs(agentDir, { anthropic });
     });
   });

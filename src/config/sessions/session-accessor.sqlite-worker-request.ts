@@ -36,6 +36,13 @@ import {
   type SqliteMutationWorkerTransport,
 } from "./session-accessor.sqlite-worker-transport.js";
 
+/** The database owner closed this request; caller cancellation and completion stay distinct. */
+export class SqliteMutationWorkerRetiredError extends Error {
+  constructor() {
+    super("SQLite mutation Worker request was revoked");
+  }
+}
+
 /** Register before the first await and drain through the parent's retained claim release. */
 export function withSqliteMutationWorkerLifetime<T>(
   options: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
@@ -53,14 +60,18 @@ export function withSqliteMutationWorkerLifetime<T>(
   );
   const commitGate = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const controller = new AbortController();
-  const revoke = () => {
+  const revoke = (reason: unknown) => {
     revokeSqliteReclamationCommit(commitGate);
-    controller.abort(
+    controller.abort(reason);
+  };
+  const cancel = () =>
+    revoke(
       callerSignal?.aborted
         ? callerSignal.reason
         : new Error("SQLite mutation Worker request was revoked"),
     );
-  };
+  const retire = () =>
+    revoke(callerSignal?.aborted ? callerSignal.reason : new SqliteMutationWorkerRetiredError());
   const assertCurrent = () => {
     controller.signal.throwIfAborted();
     state.assertCurrent();
@@ -68,7 +79,7 @@ export function withSqliteMutationWorkerLifetime<T>(
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({
     agentId: options.agentId,
     path: options.path,
-    revoke,
+    revoke: retire,
     close: () => completion.promise,
   });
   let unregisterState: () => void;
@@ -76,7 +87,7 @@ export function withSqliteMutationWorkerLifetime<T>(
     unregisterState = registerOpenClawStateDatabaseAsyncResource({
       admission: state,
       close: async () => {
-        revoke();
+        retire();
         await completion.promise;
       },
     });
@@ -84,9 +95,9 @@ export function withSqliteMutationWorkerLifetime<T>(
     unregisterAgent();
     throw error;
   }
-  callerSignal?.addEventListener("abort", revoke, { once: true });
+  callerSignal?.addEventListener("abort", cancel, { once: true });
   if (callerSignal?.aborted) {
-    revoke();
+    cancel();
   }
   return Promise.resolve()
     .then(() => {
@@ -94,8 +105,8 @@ export function withSqliteMutationWorkerLifetime<T>(
       return run({ assertCurrent, commitGate, signal: controller.signal });
     })
     .finally(() => {
-      callerSignal?.removeEventListener("abort", revoke);
-      revoke();
+      callerSignal?.removeEventListener("abort", cancel);
+      cancel();
       completion.resolve();
       unregisterAgent();
       unregisterState();
@@ -430,7 +441,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
         admissionTasks.push(task);
       } else if (message.type === "admission-release") {
         if (admission) {
-          admission.diagnostics.releaseCause = "worker-release";
+          admission.diagnostics.releaseCause = "preliminary-release";
           admission.released.resolve();
           admission = undefined;
         }

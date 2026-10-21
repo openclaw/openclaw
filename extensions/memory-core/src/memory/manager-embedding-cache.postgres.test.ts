@@ -49,7 +49,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     write(() =>
       upsertMemoryEmbeddingCache({
         db: database,
-        cacheSize: countMemoryEmbeddingCache(database),
+        cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
         provider,
         providerKey: identity.providerKey,
         entries: () => rows,
@@ -79,7 +79,10 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
             embedding BYTEA NOT NULL, dims BIGINT, updated_at BIGINT NOT NULL,
             PRIMARY KEY (provider, model, provider_key, hash)
           ); CREATE INDEX idx_memory_embedding_cache_updated_at
-            ON memory_embedding_cache(updated_at);`,
+            ON memory_embedding_cache(updated_at);
+          CREATE TABLE memory_index_chunks (
+            id TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at BIGINT NOT NULL
+          );`,
         },
         input: { connection: connection!, schemaPrefix: "memory_cache_test" },
         openSqlite: () => {
@@ -93,7 +96,9 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       String(db().prepare("SELECT current_schema() AS name").get()?.name),
     );
   });
-  beforeEach(() => write(() => db().exec("DELETE FROM memory_embedding_cache")));
+  beforeEach(() =>
+    write(() => db().exec("DELETE FROM memory_embedding_cache; DELETE FROM memory_index_chunks")),
+  );
   afterAll(() => {
     withEngineStoreAdmission(() => {
       try {
@@ -138,7 +143,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() => {
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: countMemoryEmbeddingCache(database),
+          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
           provider,
           providerKey: identity.providerKey,
           entries: () => entries(129).map(({ hash }) => ({ hash, embedding: [-1, -1] })),
@@ -154,7 +159,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       write(() =>
         upsertMemoryEmbeddingCache({
           db: database,
-          cacheSize: countMemoryEmbeddingCache(database),
+          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
           provider: { id, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => [{ hash: "shared", embedding: [1, 2] }],
@@ -162,7 +167,10 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         }),
       );
     }
-    expect(write(() => pruneMemoryEmbeddingCache(database, 2, 1))).toBe(1);
+    expect(write(() => pruneMemoryEmbeddingCache(database, { size: 2, exact: true }, 1))).toEqual({
+      size: 1,
+      exact: true,
+    });
     withEngineStoreAdmission(() => {
       expect(db().prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
         { provider: "z", hash: "shared" },
@@ -176,8 +184,10 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.map(({ hash, embedding }) => [hash, embedding])),
     );
-    const retained = write(() => pruneMemoryEmbeddingCache(database, 401, 300));
-    expect(retained).toBe(301);
+    const retained = write(() =>
+      pruneMemoryEmbeddingCache(database, { size: 401, exact: true }, 300),
+    );
+    expect(retained).toEqual({ size: 301, exact: true });
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.slice(100).map(({ hash, embedding }) => [hash, embedding])),
     );
@@ -191,5 +201,104 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     );
     expect(write(() => clearMemoryEmbeddingCacheIdentities(database, [identity]))).toBe(3);
     expect(withEngineStoreAdmission(() => countMemoryEmbeddingCache(database))).toBe(0);
+  });
+
+  function seedEviction(
+    cache: Array<[provider: string, providerKey: string, hash: string, updatedAt: number]>,
+    chunks: Array<[hash: string, updatedAt: number]>,
+  ) {
+    for (const [id, providerKey, hash, now] of cache) {
+      write(() =>
+        upsertMemoryEmbeddingCache({
+          db: database,
+          cacheSize: { size: 0, exact: false },
+          provider: { id, model: "m" },
+          providerKey,
+          entries: () => [{ hash, embedding: [1, 2] }],
+          now,
+        }),
+      );
+    }
+    write(() => {
+      for (const [hash, updatedAt] of chunks) {
+        db()
+          .prepare("INSERT INTO memory_index_chunks (id, hash, updated_at) VALUES (?, ?, ?)")
+          .run(`chunk-${hash}`, hash, updatedAt);
+      }
+    });
+    return () =>
+      withEngineStoreAdmission(() =>
+        db()
+          .prepare("SELECT hash FROM memory_embedding_cache ORDER BY hash")
+          .all()
+          .map((row) => row.hash),
+      );
+  }
+
+  it("evicts preferred unreferenced rows before older live rows by the canonical key", () => {
+    // pending-at-fence is not older than the oldest published chunk.
+    const remaining = seedEviction(
+      [
+        ["openai", "k", "live", 1],
+        ["openai", "k", "live-session", 1],
+        ["openai", "k", "orphan-newer", 50],
+        ["openai", "k", "orphan-older", 40],
+        ["openai", "other-key", "orphan-other-key", 2],
+        ["local", "k", "orphan-other-provider", 3],
+        ["openai", "k", "pending-at-fence", 100],
+      ],
+      [
+        ["live", 100],
+        ["live-session", 150],
+      ],
+    );
+    const preference = { identities: [{ provider: "openai", model: "m", providerKey: "k" }] };
+    expect(
+      write(() => pruneMemoryEmbeddingCache(database, { size: 7, exact: true }, 6, preference)),
+    ).toEqual({ size: 6, exact: true });
+    expect(remaining()).not.toContain("orphan-older");
+    expect(
+      write(() => pruneMemoryEmbeddingCache(database, { size: 6, exact: true }, 4, preference)),
+    ).toEqual({ size: 4, exact: true });
+    expect(remaining()).toEqual([
+      "live-session",
+      "orphan-other-key",
+      "orphan-other-provider",
+      "pending-at-fence",
+    ]);
+  });
+
+  it("reserves insertion capacity from preferred rows and falls back to oldest-first", () => {
+    const a = { provider: "openai", model: "m", providerKey: "k" };
+    const b = { provider: "local", model: "m", providerKey: "k2" };
+    const remaining = seedEviction(
+      [
+        ["openai", "k", "live", 1],
+        ["openai", "k", "orphan-a", 5],
+        ["local", "k2", "orphan-b", 6],
+        ["openai", "k", "pending", 20],
+      ],
+      [["live", 10]],
+    );
+    const insert = (hash: string, identities: Array<typeof a>) =>
+      write(() =>
+        upsertMemoryEmbeddingCache({
+          db: database,
+          cacheSize: { size: 4, exact: true },
+          provider: { id: "openai", model: "m" },
+          providerKey: "k",
+          entries: () => [{ hash, embedding: [3, 4] }],
+          maxEntries: 4,
+          unreferencedFirst: { identities },
+          now: 30,
+        }),
+      );
+    // Both listed identities are preferred before the live row, oldest first.
+    insert("new-1", [a, b]);
+    insert("new-2", [a, b]);
+    expect(remaining()).toEqual(["live", "new-1", "new-2", "pending"]);
+    // Without preferred identities the reservation takes the oldest row.
+    insert("new-3", []);
+    expect(remaining()).toEqual(["new-1", "new-2", "new-3", "pending"]);
   });
 });

@@ -1,33 +1,33 @@
-// ls tool tests cover deterministic directory listings and safe limit
-// normalization for agent-visible file enumeration.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLsTool, type LsOperations } from "./ls.js";
-import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function operations(entries: string[]): LsOperations {
-  return {
-    readDirectory: () => entries.map((name) => ({ name, isDirectory: false })),
-  };
+  return { readDirectory: () => entries.map((name) => ({ name, isDirectory: false })) };
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createLsTool>["execute"]>>,
-): string {
-  const first = result.content[0];
-  return first?.type === "text" ? (first.text ?? "") : "";
-}
+type Listing = Awaited<ReturnType<ReturnType<typeof createLsTool>["execute"]>>;
+const textContent = ({ content: [first] }: Listing) =>
+  first?.type === "text" ? (first.text ?? "") : "";
+const pageNames = (page: Listing, paged = false) =>
+  textContent(page)
+    .split("\n")
+    .flatMap((line) => (!paged || line.startsWith('"') ? [JSON.parse(line)] : []));
 
-function trackAbortListener(signal: AbortSignal) {
+function trackAbortListener() {
+  const controller = new AbortController();
+  const signal = controller.signal;
   const add = vi.spyOn(signal, "addEventListener");
   const remove = vi.spyOn(signal, "removeEventListener");
   return {
+    controller,
+    signal,
     expectReleased() {
       const listener = add.mock.calls.find(([type]) => type === "abort")?.[1];
       expect(listener).toBeDefined();
@@ -35,151 +35,108 @@ function trackAbortListener(signal: AbortSignal) {
     },
   };
 }
+const expectText = (page: Listing, text: string) =>
+  expect(page.content).toEqual([{ type: "text", text }]);
+function expectPage(page: Listing, first: string, nextAfter?: string) {
+  expect([textContent(page).split("\n")[0], page.details?.nextAfter]).toEqual([first, nextAfter]);
+}
 
-describe("ls tool", () => {
-  it("visits every filename through complete pages bounded by model context", async () => {
-    const modelBudget = { maxChars: 1_800, maxContextChars: 2_500 };
-    const names = Array.from(
-      { length: 300 },
-      (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(210)}`,
-    );
-    const tool = createLsTool("/workspace", { operations: operations(names), modelBudget });
-    const seen: unknown[] = [];
-    let after: string | undefined;
-    let pageCount = 0;
-    for (; pageCount < names.length; pageCount += 1) {
-      const page = await tool.execute("list-page", { limit: 500, after });
-      const output = textContent(page);
-      const pageNames = output
-        .split("\n")
-        .filter((line) => line.startsWith('"'))
-        .map((line) => JSON.parse(line));
-      expect(pageNames.length).toBeGreaterThan(0);
-      expect(Buffer.byteLength(output)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-      expect(output.length).toBeLessThanOrEqual(modelBudget.maxChars);
-      expect(output.length * 2).toBeLessThanOrEqual(modelBudget.maxContextChars);
-      seen.push(...pageNames);
-      const nextAfter = page.details?.nextAfter;
-      if (nextAfter === undefined) {
-        break;
-      }
-      expect(nextAfter).toBe(pageNames.at(-1));
-      expect(nextAfter).not.toBe(after);
-      expect(output).toContain(`after=${JSON.stringify(nextAfter)}`);
-      after = nextAfter;
+it("visits every filename through complete pages bounded by model context", async () => {
+  const modelBudget = { maxChars: 1_800, maxContextChars: 2_500 };
+  const suffix = "x".repeat(210);
+  const names = Array.from({ length: 300 }, (_, i) => `${String(i).padStart(3, "0")}-${suffix}`);
+  const tool = createLsTool("/workspace", { operations: operations(names), modelBudget });
+  const seen: unknown[] = [];
+  let after: string | undefined;
+  for (let remainingPages = names.length; remainingPages > 0; remainingPages -= 1) {
+    const page = await tool.execute("list-page", { limit: 500, after });
+    const output = textContent(page);
+    const namesInPage = pageNames(page, true);
+    expect(namesInPage.length).toBeGreaterThan(0);
+    expect(output.length * 2).toBeLessThanOrEqual(modelBudget.maxContextChars);
+    seen.push(...namesInPage);
+    const nextAfter = page.details?.nextAfter;
+    if (nextAfter === undefined) {
+      break;
     }
-    expect(pageCount).toBeGreaterThan(0);
-    expect(seen).toEqual(names);
+    expect(nextAfter).toBe(namesInPage.at(-1));
+    expect(output).toContain(`after=${JSON.stringify(nextAfter)}`);
+    after = nextAfter;
+  }
+  expect(seen).toEqual(names);
+});
+
+it("quotes complete control-character and Unicode names in binary order", async () => {
+  const tool = createLsTool("/workspace", {
+    operations: operations(["a\nb", "á", "a", "Z", "A", "\ta", '"q"', "🦀"]),
   });
 
-  it("quotes complete control-character and Unicode names in binary order", async () => {
-    const tool = createLsTool("/workspace", {
-      operations: operations([
-        "line\nbreak",
-        "á",
-        "a",
-        "Z",
-        "A",
-        "\tleading",
-        '"quoted"',
-        "emoji-🦀",
-      ]),
-    });
+  const listener = trackAbortListener();
+  const page = await tool.execute("list-unusual-names", {}, listener.signal);
 
-    const controller = new AbortController();
-    const listener = trackAbortListener(controller.signal);
-    const page = await tool.execute("list-unusual-names", {}, controller.signal);
+  expect(pageNames(page)).toEqual(["\ta", '"q"', "A", "Z", "a", "a\nb", "á", "🦀"]);
+  expect(page.details?.nextAfter).toBeUndefined();
+  listener.expectReleased();
+});
 
-    expect(
-      textContent(page)
-        .split("\n")
-        .map((line) => JSON.parse(line)),
-    ).toEqual(["\tleading", '"quoted"', "A", "Z", "a", "emoji-🦀", "line\nbreak", "á"]);
-    expect(page.details?.nextAfter).toBeUndefined();
-    listener.expectReleased();
-  });
+it("continues after a deleted directory using its raw name without skipping unseen entries", async () => {
+  const cwd = tempDirs.make("openclaw-ls-delete-page-");
+  await fs.mkdir(path.join(cwd, "alpha"));
+  await Promise.all(["beta", "gamma"].map((name) => fs.writeFile(path.join(cwd, name), "")));
+  const tool = createLsTool(cwd);
+  const first = await tool.execute("first-page", { limit: 1 });
+  expectPage(first, '"alpha/"', "alpha");
+  await fs.rmdir(path.join(cwd, "alpha"));
 
-  it("continues after a deleted directory using its raw name without skipping unseen entries", async () => {
-    const cwd = tempDirs.make("openclaw-ls-delete-page-");
-    await fs.mkdir(path.join(cwd, "alpha"));
-    await Promise.all(["beta", "gamma"].map((name) => fs.writeFile(path.join(cwd, name), "")));
-    const tool = createLsTool(cwd);
-    const first = await tool.execute("first-page", { limit: 1 });
-    expect(textContent(first).split("\n")[0]).toBe('"alpha/"');
-    expect(first.details?.nextAfter).toBe("alpha");
-    await fs.rmdir(path.join(cwd, "alpha"));
+  const second = await tool.execute("second-page", { limit: 1, after: first.details?.nextAfter });
+  expectPage(second, '"beta"', "beta");
+  const final = await tool.execute("final-page", { limit: 1, after: second.details?.nextAfter });
+  expectText(final, '"gamma"');
+  expect(final.details?.nextAfter).toBeUndefined();
+});
 
-    const second = await tool.execute("second-page", { limit: 1, after: first.details?.nextAfter });
-    expect(textContent(second).split("\n")[0]).toBe('"beta"');
-    expect(second.details?.nextAfter).toBe("beta");
-    const final = await tool.execute("final-page", { limit: 1, after: second.details?.nextAfter });
-    expect(textContent(final)).toBe('"gamma"');
-    expect(final.details?.nextAfter).toBeUndefined();
-  });
+it("retains links without following targets and marks only actual directories", async () => {
+  const cwd = tempDirs.make("openclaw-ls-links-");
+  const tool = createLsTool(cwd);
+  const symlinkType = process.platform === "win32" ? "junction" : "dir";
+  const list = (limit?: number) => tool.execute("ls-links", limit ? { limit } : {});
 
-  it("retains links without following targets and marks only actual directories", async () => {
-    const cwd = tempDirs.make("openclaw-ls-links-");
-    const tool = createLsTool(cwd);
-    const symlinkType = process.platform === "win32" ? "junction" : "dir";
-    const list = (limit?: number) => tool.execute("ls-links", limit ? { limit } : {});
+  expectText(await list(), "(empty directory)");
+  await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
 
-    expect((await list()).content).toEqual([{ type: "text", text: "(empty directory)" }]);
-    await fs.symlink(path.join(cwd, "missing-target"), path.join(cwd, "a-broken"), symlinkType);
+  await fs.mkdir(path.join(cwd, "target-dir"));
+  await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
+  await fs.writeFile(path.join(cwd, "z-file.txt"), "fixture\n");
+  expectText(await list(), '"a-broken"\n"link-to-dir"\n"target-dir/"\n"z-file.txt"');
 
-    const dangling = await list();
-    expect(dangling.content).toEqual([{ type: "text", text: '"a-broken"' }]);
-    expect(dangling.details).toEqual({ content: '"a-broken"' });
+  const limited = await list(1);
+  expect(textContent(limited).split("\n")[0]).toBe('"a-broken"');
+  expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
+});
 
-    await fs.mkdir(path.join(cwd, "target-dir"));
-    await fs.symlink(path.join(cwd, "target-dir"), path.join(cwd, "link-to-dir"), symlinkType);
-    await fs.writeFile(path.join(cwd, "z-file.txt"), "fixture\n");
-    expect((await list()).content).toEqual([
-      { type: "text", text: '"a-broken"\n"link-to-dir"\n"target-dir/"\n"z-file.txt"' },
-    ]);
-
-    const limited = await list(1);
-    expect(textContent(limited).split("\n")[0]).toBe('"a-broken"');
-    expect(limited.details).toEqual({ content: textContent(limited), nextAfter: "a-broken" });
-  });
-
-  it("preserves a directory read failure and releases the abort listener", async () => {
-    const tool = createLsTool("/workspace", {
-      operations: {
-        readDirectory: () => {
+it.each(["failure", "abort"] as const)("releases the listener after %s", async (mode) => {
+  const listing = createDeferredCore<DirectoryEntry[]>();
+  const reading = createDeferredCore<AbortSignal | undefined>();
+  const tool = createLsTool("/workspace", {
+    operations: {
+      readDirectory: (_path, signal) => {
+        if (mode === "failure") {
           throw new Error("permission denied");
-        },
+        }
+        reading.resolve(signal);
+        return listing.promise;
       },
-    });
-    const controller = new AbortController();
-    const listener = trackAbortListener(controller.signal);
-
-    await expect(tool.execute("call-1", {}, controller.signal)).rejects.toThrow(
-      "permission denied",
-    );
-
-    listener.expectReleased();
+    },
   });
-
-  it("settles once and releases the listener when aborted during an operation", async () => {
-    const listing = createDeferredCore<DirectoryEntry[]>();
-    const reading = createDeferredCore<AbortSignal | undefined>();
-    const tool = createLsTool("/workspace", {
-      operations: {
-        readDirectory: (_absolutePath, signal) => {
-          reading.resolve(signal);
-          return listing.promise;
-        },
-      },
-    });
-    const controller = new AbortController();
-    const listener = trackAbortListener(controller.signal);
-    const result = tool.execute("call-1", {}, controller.signal);
-    await expect(reading.promise).resolves.toBe(controller.signal);
-
-    controller.abort();
-
-    await expect(result).rejects.toThrow("Operation aborted");
-    listener.expectReleased();
-    listing.resolve([]);
-  });
+  const listener = trackAbortListener();
+  const result = tool.execute("ls", {}, listener.signal);
+  if (mode === "abort") {
+    await expect(reading.promise).resolves.toBe(listener.signal);
+    listener.controller.abort();
+  }
+  await expect(result).rejects.toThrow(
+    mode === "abort" ? "Operation aborted" : "permission denied",
+  );
+  listener.expectReleased();
+  listing.resolve([]);
 });

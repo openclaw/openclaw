@@ -1,12 +1,14 @@
 import { createMemo, createSignal, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { projectNativeDeviceSettings } from "../../../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-function ChatPermissionCard(props: {
+registerEnglishCatalog(registerChatComposerEnglish);
+
+export function ChatPermissionCard(props: {
   request: NodePermissionRequest;
   onRetry?: (message: string) => void;
 }) {
@@ -106,69 +108,56 @@ function ChatPermissionCard(props: {
     }
   };
   return (
-    <section
-      class="chat-permission-card"
-      aria-label={t("chat.permissions.title", { permissions: names() })}
-    >
-      <div class="chat-permission-card__heading">
-        <Icon name="shieldCheck" />
-        <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
-      </div>
-      <p>
-        {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
-      </p>
-      <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
+    <openclaw-chat-permission-card>
+      <section
+        class="chat-permission-card"
+        aria-label={t("chat.permissions.title", { permissions: names() })}
+      >
+        <div class="chat-permission-card__heading">
+          <Icon name="shieldCheck" />
+          <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
+        </div>
         <p>
-          {t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${action().state}`)}
+          {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
         </p>
-        <Show when={following().length > 0}>
-          <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
-        </Show>
-        <Show
-          when={complete()}
-          fallback={
+        <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
+          <p>
+            {t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${action().state}`)}
+          </p>
+          <Show when={following().length > 0}>
+            <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
+          </Show>
+          <Show
+            when={complete()}
+            fallback={
+              <button
+                class="btn primary"
+                type="button"
+                disabled={busy()}
+                onClick={() => void grant()}
+              >
+                {t(`chat.permissions.actions.${action().state}`, {
+                  permissions: names(action().capabilities),
+                })}
+              </button>
+            }
+          >
             <button
               class="btn primary"
               type="button"
-              disabled={busy()}
-              onClick={() => void grant()}
+              disabled={!props.onRetry}
+              onClick={() =>
+                props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
+              }
             >
-              {t(`chat.permissions.actions.${action().state}`, {
-                permissions: names(action().capabilities),
-              })}
+              {t("chat.permissions.tryAgain")}
             </button>
-          }
-        >
-          <button
-            class="btn primary"
-            type="button"
-            disabled={!props.onRetry}
-            onClick={() =>
-              props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
-            }
-          >
-            {t("chat.permissions.tryAgain")}
-          </button>
+          </Show>
         </Show>
-      </Show>
-      <Show when={error()}>
-        <p role="alert">{error()}</p>
-      </Show>
-    </section>
+        <Show when={error()}>
+          <p role="alert">{error()}</p>
+        </Show>
+      </section>
+    </openclaw-chat-permission-card>
   );
 }
-
-defineSolidBridge<{ request: NodePermissionRequest | null; onRetry?: (message: string) => void }>(
-  "openclaw-chat-permission-card",
-  (props) => (
-    <Show when={props.request}>
-      {(request) => <ChatPermissionCard request={request()} onRetry={props.onRetry} />}
-    </Show>
-  ),
-  {
-    properties: {
-      request: { default: null, attribute: false },
-      onRetry: { default: undefined, attribute: false },
-    },
-  },
-);

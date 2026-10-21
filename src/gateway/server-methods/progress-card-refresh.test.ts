@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
+import { progressCardStore } from "../progress-card-store.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const { send } = vi.hoisted(() => ({ send: vi.fn<typeof handleTrustedInternalChatSend>() }));
@@ -16,7 +18,6 @@ const card: ProgressCard = {
 function fixture() {
   const get = vi.fn(async () => card as ProgressCard | null);
   const put = vi.fn();
-  const handlers = createProgressCardHandlers({ get, put });
   const respond = vi.fn<RespondFn>();
   const assertCurrent = vi.fn();
   const invocation = {
@@ -42,7 +43,13 @@ function fixture() {
     put,
     respond,
     invocation,
-    invoke: () => handlers["progressCard.refresh"]!(invocation),
+    invoke: async () => {
+      const getSpy = vi.spyOn(progressCardStore, "get").mockImplementation(get);
+      const putSpy = vi.spyOn(progressCardStore, "put").mockImplementation(put);
+      return await withRestoredMocks([getSpy, putSpy], () =>
+        progressCardHandlers["progressCard.refresh"]!(invocation),
+      );
+    },
   };
 }
 describe("progressCard.refresh", () => {

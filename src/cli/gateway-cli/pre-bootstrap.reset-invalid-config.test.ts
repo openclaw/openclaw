@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { pinRuntimePaths } from "../../config/paths.js";
 import * as runtimeSnapshot from "../../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -30,7 +29,7 @@ vi.mock("../../config/io.factory.js", () => ({
 }));
 
 let state: OpenClawTestState;
-const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 const opts = { dev: true, reset: true, allowUnconfigured: true };
 
 function invalidSnapshot(source: { sourceConfig?: null | string } = {}): InvalidSnapshot {
@@ -71,42 +70,33 @@ afterEach(async () => {
   pinConfigDir();
 });
 
-describe("dev reset admission for invalid config", () => {
-  it.each([
-    { name: "absent", source: {} },
-    { name: "null", source: { sourceConfig: null } },
-    { name: "non-object", source: { sourceConfig: "invalid" } },
-  ])("admits recovery when sourceConfig is $name", async ({ source }) => {
-    configReads.readSnapshot.mockResolvedValue(invalidSnapshot(source));
-
-    // Reset bypasses mutation-capable bootstrap and keeps its own guarded admission.
-    await expect(prepareGatewayRunBootstrap({ opts, runtime })).resolves.toBe(false);
-    const hash = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
-    await expect(recheckGatewayRunReset({ opts, runtime })).resolves.toBe(true);
+it.each<[string, { sourceConfig?: null | string }, "raw" | "path" | null]>([
+  ["absent", {}, null],
+  ["null", { sourceConfig: null }, null],
+  ["non-object", { sourceConfig: "invalid" }, null],
+  ["raw contents", {}, "raw"],
+  ["file target", {}, "path"],
+])("guards invalid-config dev reset: %s", async (_name, source, change) => {
+  const snapshot = invalidSnapshot(source);
+  const current = { ...snapshot };
+  if (change === "raw") {
+    current.raw = "{ a different invalid config";
+  }
+  if (change === "path") {
+    current.path = state.statePath("other.json");
+  }
+  configReads.readSnapshot.mockResolvedValueOnce(snapshot).mockResolvedValue(current);
+  await expect(prepareGatewayRunBootstrap({ opts, runtime })).resolves.toBe(false);
+  const hash = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
+  await expect(recheckGatewayRunReset({ opts, runtime })).resolves.toBe(change === null);
+  if (change) {
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("selected config or state target changed during startup"),
+    );
+  } else {
     expect(hash).not.toHaveBeenCalled();
-
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it.each(["raw contents", "file target"] as const)(
-    "refuses recovery when the invalid config changes its %s",
-    async (change) => {
-      const snapshot = invalidSnapshot();
-      configReads.readSnapshot.mockResolvedValueOnce(snapshot).mockResolvedValueOnce({
-        ...snapshot,
-        ...(change === "raw contents"
-          ? { raw: "{ a different invalid config" }
-          : { path: state.statePath("other.json") }),
-      });
-
-      await expect(prepareGatewayRunBootstrap({ opts, runtime })).resolves.toBe(false);
-      await expect(recheckGatewayRunReset({ opts, runtime })).resolves.toBe(false);
-
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("selected config or state target changed during startup"),
-      );
-    },
-  );
+  }
 });

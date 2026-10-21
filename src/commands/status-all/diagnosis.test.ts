@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
 import { createStatusHealth, createStatusScanResultFixture } from "../status.test-support.ts";
 import { createTestConfigSnapshot } from "../test-runtime-config-helpers.js";
 import { mocks, runStatusAllReport, setupStatusAllReportTest } from "./report-data.test-support.js";
@@ -467,6 +468,42 @@ describe("statusAllCommand diagnosis", () => {
     expect(output).not.toContain("Telemetry exporters: unavailable");
     expect(output).not.toContain("Retry: openclaw gateway stability");
   });
+
+  it.each(["ENOENT", "EACCES"])(
+    "distinguishes absent log tails from unavailable log reads (%s)",
+    async (code) => {
+      const logPaths = {
+        logDir: "/synthetic-status-logs",
+        stdoutPath: "/synthetic-status-logs/gateway.log",
+        stderrPath: "/synthetic-status-logs/gateway.err.log",
+      };
+      mocks.resolveGatewayLogPaths.mockReturnValue(logPaths);
+      mocks.resolveGatewaySupervisorLogPaths.mockReturnValue(logPaths);
+      const actualGateway = await vi.importActual<typeof import("./gateway.js")>("./gateway.js");
+      mocks.readFileTailLines.mockImplementation(actualGateway.readFileTailLines);
+      const open = vi.spyOn(fs, "open").mockRejectedValue(
+        Object.assign(new Error("synthetic filesystem failure token=synthetic-private"), {
+          code,
+        }),
+      );
+      try {
+        const output = (await runStatusAllReport()).join("\n");
+        if (code === "ENOENT") {
+          expect(output).not.toContain("Log unavailable");
+        } else {
+          expect(output).toContain("# stdout: /synthetic-status-logs/gateway.log");
+          expect(output).toContain(
+            "Log unavailable; check this file's path and permissions, then retry.",
+          );
+          expect(output).toContain("Gateway restart attempts (tail): /tmp/fixture-restart.log");
+        }
+        expect(output).not.toContain("synthetic-private");
+        expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
 
   it("does not read or display stale stderr tails on Darwin", async () => {
     const originalPlatform = process.platform;

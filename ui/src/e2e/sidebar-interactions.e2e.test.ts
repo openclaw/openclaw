@@ -75,7 +75,8 @@ suite.define(() => {
         sessionKey: `agent:${agentId}:main`,
         sessionGroups: [group],
         sessions: [
-          { key: `agent:${agentId}:main`, label: "Grouped conversation", category: group },
+          { key: `agent:${agentId}:main`, label: "Main" },
+          { key: `agent:${agentId}:client-ops`, label: "Grouped conversation", category: group },
           { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
         ],
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],

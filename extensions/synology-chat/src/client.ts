@@ -88,7 +88,7 @@ type ChatWebhookPayload = {
 };
 
 type SynologyHostedFileSendResult =
-  | { status: "accepted" }
+  | { status: "accepted"; messageId?: string }
   | { status: "not-dispatched" }
   | { status: "rejected" }
   | { status: "indeterminate" };
@@ -116,6 +116,15 @@ const ChatUserListResponseSchema = z.object({
     .optional(),
 });
 
+const ChatPostResponseSchema = z.object({
+  success: z.boolean(),
+  data: z
+    .object({ succ: z.object({ user_id_post_map: z.record(z.string(), z.unknown()) }) })
+    .optional()
+    // Malformed identity metadata must not hide an explicit rejection.
+    .catch(undefined),
+});
+
 // Cache user lists per bot endpoint to avoid cross-account bleed.
 const chatUserCache = new Map<string, ChatUserCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -123,13 +132,14 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 export async function sendMessage(
   incomingUrl: string,
   text: string,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
-): Promise<boolean> {
+): Promise<{ messageIds: string[] } | false> {
   const effect = captureEffectAuthority();
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
   const acceptedChunks: string[] = [];
+  const messageIds: string[] = [];
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
     let initiated = false;
     try {
@@ -143,7 +153,7 @@ export async function sendMessage(
           initiated = false;
           return effect.initiate(() => {
             initiated = true;
-            return doPost(incomingUrl, body, allowInsecureSsl);
+            return doPost(incomingUrl, body, allowInsecureSsl, userId);
           });
         },
         {
@@ -159,10 +169,13 @@ export async function sendMessage(
           },
         },
       );
-      if (result !== "accepted") {
-        throw new Error(`Failed to send message to Synology Chat (${result})`);
+      if (result.status !== "accepted") {
+        throw new Error(`Failed to send message to Synology Chat (${result.status})`);
       }
       acceptedChunks.push(chunk);
+      if (result.messageId) {
+        messageIds.push(result.messageId);
+      }
     } catch (error) {
       if (acceptedChunks.length > 0) {
         throw createChannelPartialDeliveryError(error, {
@@ -176,13 +189,14 @@ export async function sendMessage(
       return false;
     }
   }
-  return true;
+  // Every physical send needs an identity before the aggregate can be confirmed.
+  return { messageIds: messageIds.length === acceptedChunks.length ? messageIds : [] };
 }
 
 export async function sendHostedFileUrl(
   incomingUrl: string,
   fileUrl: SynologyHostedMediaUrl,
-  userId?: string | number,
+  userId?: string,
   allowInsecureSsl = false,
   onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
@@ -194,11 +208,10 @@ export async function sendHostedFileUrl(
 
   let initiated = false;
   try {
-    const status = await effect.initiate(() => {
+    return await effect.initiate(() => {
       initiated = true;
-      return doPost(incomingUrl, body, allowInsecureSsl);
+      return doPost(incomingUrl, body, allowInsecureSsl, userId);
     });
-    return { status };
   } catch (error) {
     if (!initiated) {
       throw error;
@@ -308,22 +321,12 @@ export async function resolveLegacyWebhookNameToChatUserId(params: {
   return users.find((user) => normalizeLowercaseStringOrEmpty(user.username) === lower)?.user_id;
 }
 
-function buildWebhookBody(payload: ChatWebhookPayload, userId?: string | number): string {
-  const numericId = parseNumericUserId(userId);
+function buildWebhookBody(payload: ChatWebhookPayload, userId?: string): string {
+  const numericId = parseStrictNonNegativeInteger(userId);
   if (numericId !== undefined) {
     payload.user_ids = [numericId];
   }
   return `payload=${encodeURIComponent(JSON.stringify(payload))}`;
-}
-
-function parseNumericUserId(userId?: string | number): number | undefined {
-  if (userId === undefined) {
-    return undefined;
-  }
-  if (typeof userId === "number") {
-    return Number.isSafeInteger(userId) ? userId : undefined;
-  }
-  return parseStrictNonNegativeInteger(userId);
 }
 
 type SynologyResponse = { statusCode?: number; data: Buffer };
@@ -421,18 +424,29 @@ async function doPost(
   url: string,
   body: string,
   allowInsecureSsl = false,
-): Promise<SynologyHostedFileSendResult["status"]> {
+  userId?: string,
+): Promise<SynologyHostedFileSendResult> {
   const response = await requestSynology(url, allowInsecureSsl, body);
   if (!response) {
-    return "not-dispatched";
+    return { status: "not-dispatched" };
   }
-  const result = safeParseJsonWithSchema(
-    ChatUserListResponseSchema.pick({ success: true }),
-    response.data.toString("utf8"),
-  );
+  const result = safeParseJsonWithSchema(ChatPostResponseSchema, response.data.toString("utf8"));
   if (response.statusCode === 200) {
-    return result?.success === false ? "rejected" : "accepted";
+    if (result?.success === false) {
+      return { status: "rejected" };
+    }
+    const recipient = parseStrictNonNegativeInteger(userId);
+    const postId =
+      recipient === undefined ? undefined : result?.data?.succ.user_id_post_map[String(recipient)];
+    const id = safeParseWithSchema(
+      z.union([
+        z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        z.string().regex(/^[1-9]\d*$/),
+      ]),
+      postId,
+    );
+    return { status: "accepted", ...(id == null ? {} : { messageId: String(id) }) };
   }
   // A proxy 5xx can follow acceptance, so it cannot prove rejection.
-  return (response.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected";
+  return { status: (response.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" };
 }

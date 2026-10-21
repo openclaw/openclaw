@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
@@ -55,12 +55,13 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const gatewayState = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const overlays = projectOwner(context.overlays, (source) => source.snapshot);
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  let publish: (() => void) | undefined;
+  const notify = () => publish?.();
   let installed: InstalledAgent[] | null = null;
   let listClient: GatewayBrowserClient | null | undefined;
   let listEpoch = -1;
-  let loadError: string | null = null;
+  let listRead: Promise<{ error: unknown } | null> | null = null;
+  let finishListRead: ((outcome: { error: unknown } | null) => void) | undefined;
   const currentList = () =>
     listClient !== null &&
     listClient !== undefined &&
@@ -72,11 +73,12 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       if (currentList()) {
         installed = result.agents;
       }
+      finishListRead?.(null);
+      finishListRead = undefined;
     },
     onError: (error) => {
-      if (currentList()) {
-        loadError = modelProviderErrorMessage(error);
-      }
+      finishListRead?.(currentList() ? { error } : null);
+      finishListRead = undefined;
     },
   });
   onCleanup(listRequest.cancel);
@@ -114,15 +116,15 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   const projection = projectSource(null, {
     read: () => ({
       agents: installed,
-      error: loadError,
+      read: listRead,
       loading: listRequest.pending,
       pending,
       messages,
       enablement,
     }),
     subscribe: (_, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      publish = listener;
+      return () => (publish = undefined);
     },
     equality: "revision",
   });
@@ -140,7 +142,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
 
   function cancel(): void {
     listRequest.cancel();
-    loadError = null;
+    // Retire the display even when the canceled transport never settles.
+    finishListRead?.(null);
+    finishListRead = undefined;
+    listRead = null;
   }
 
   async function load(
@@ -154,6 +159,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       notify();
       return;
     }
+    const completion = Promise.withResolvers<{ error: unknown } | null>();
+    listRead = completion.promise;
+    finishListRead = completion.resolve;
     await listRequest.run(client);
   }
 
@@ -434,6 +442,17 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         available: available(),
         blockedReason: blockedReason(),
       }));
+      const read = createMemo(() => ({ promise: view().read }), {
+        equals: (previous, next) => previous.promise === next.promise,
+      });
+      const outcome = createMemo(() =>
+        read().promise?.then((value) => {
+          if (value) {
+            throw value.error;
+          }
+          return null;
+        }),
+      );
       const checkLabel = () =>
         t(
           view().loading
@@ -471,24 +490,30 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 </openclaw-tooltip>
               }
             >
-              <Show when={view().error}>
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="settings-row__desc provider-usage-error" role="alert">
-                      {view().error}
-                    </span>
-                  </div>
-                  <div class="settings-row__control">
-                    <button
-                      class="btn btn--sm"
-                      disabled={view().loading}
-                      onClick={() => void load()}
-                    >
-                      {t("common.retry")}
-                    </button>
-                  </div>
-                </div>
-              </Show>
+              <Errored
+                fallback={(error) => (
+                  <Show when={!view().loading}>
+                    <div class="settings-row">
+                      <div class="settings-row__text">
+                        <span class="settings-row__desc provider-usage-error" role="alert">
+                          {modelProviderErrorMessage(error())}
+                        </span>
+                      </div>
+                      <div class="settings-row__control">
+                        <button
+                          class="btn btn--sm"
+                          disabled={view().loading}
+                          onClick={() => void load()}
+                        >
+                          {t("common.retry")}
+                        </button>
+                      </div>
+                    </div>
+                  </Show>
+                )}
+              >
+                <Loading on={read()}>{outcome()}</Loading>
+              </Errored>
               <Show when={view().agents !== null}>
                 <For
                   each={view().agents ?? []}
@@ -517,14 +542,14 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
     return <InstalledAgents />;
   }
   onCleanup(() => {
-    listeners.clear();
+    publish = undefined;
     enablement = null;
     listClient = undefined;
   });
   return {
     get initialized() {
       const snapshot = projection.read();
-      return !available() || snapshot.agents !== null || snapshot.error !== null;
+      return !available() || snapshot.agents !== null || (currentList() && !listRequest.pending);
     },
     synchronize,
     subscribe,

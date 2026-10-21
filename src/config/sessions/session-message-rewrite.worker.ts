@@ -627,7 +627,12 @@ export function commitSessionMessageRewrite(
 export function applySessionMessageRewrite<T>(
   input: SessionMessageRewriteInput,
   { writeTransaction }: AgentWorkerOperationContext,
-  publish: (database: OpenClawAgentDatabase, candidate: SessionMessageRewriteCommitted) => T,
+  publish: (
+    database: OpenClawAgentDatabase,
+    candidate: SessionMessageRewriteCommitted,
+    current: SessionMessageRewriteSnapshot | null,
+  ) => T,
+  options: { touchMutation?: boolean } = {},
 ) {
   return writeTransaction(
     "session.transcript.message-rewrite",
@@ -641,7 +646,7 @@ export function applySessionMessageRewrite<T>(
       assertMessageRewriteAllowed(input, database, facts);
       const current = "expected" in input ? input.expected : prepareMessageRewrite(input, database);
       if (!current) {
-        return publish(database, { kind: "session-message-rewrite", result: null });
+        return publish(database, { kind: "session-message-rewrite", result: null }, null);
       }
       const message =
         "message" in input
@@ -661,7 +666,7 @@ export function applySessionMessageRewrite<T>(
                 seq: current.seq,
               },
             ],
-            { projectionCurrent: facts !== undefined },
+            { projectionCurrent: facts !== undefined, touchMutation: options.touchMutation },
           );
         } catch (error) {
           if (error instanceof SqliteTranscriptMutationConflictError) {
@@ -690,7 +695,7 @@ export function applySessionMessageRewrite<T>(
               }
             : null,
       };
-      return publish(database, candidate);
+      return publish(database, candidate, current);
     },
   );
 }

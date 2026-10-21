@@ -1,5 +1,10 @@
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { ProviderHttpError, readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  ProviderHttpError,
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
   buildSearchCacheKey,
@@ -314,6 +319,7 @@ export async function executeExaWebSearchProviderTool(
   );
   const cacheKey = buildSearchCacheKey([
     "exa",
+    sha256Hex(apiKey),
     endpoint,
     type,
     query,
@@ -347,6 +353,12 @@ export async function executeExaWebSearchProviderTool(
     body.endPublishedDate = dateBefore;
   }
 
+  const headers = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+    "x-exa-integration": "openclaw",
+  };
   const results = await withTrustedWebSearchEndpoint(
     {
       url: endpoint,
@@ -354,21 +366,22 @@ export async function executeExaWebSearchProviderTool(
       signal,
       init: {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "x-exa-integration": "openclaw",
-        },
+        headers,
         body: JSON.stringify(body),
       },
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await readResponseTextLimited(res, EXA_ERROR_BODY_LIMIT_BYTES);
-        throw new ProviderHttpError(`Exa API error (${res.status}): ${detail || res.statusText}`, {
-          status: res.status,
-        });
+        const detail = await readProviderResponseErrorText(
+          res,
+          EXA_ERROR_BODY_LIMIT_BYTES,
+          headers,
+          signal,
+        );
+        throw new ProviderHttpError(
+          `Exa API error (${res.status}): ${detail || redactProviderResponseErrorText(res.statusText, headers)}`,
+          { status: res.status },
+        );
       }
       return (await readExaSearchResults(res)).slice(0, resolvedCount);
     },

@@ -57,9 +57,11 @@ export function renderComposerMenuOption(options: {
       class={["slash-menu-item", { "slash-menu-item--active": options.active }]}
       role="option"
       aria-selected={options.active ? "true" : "false"}
-      onMouseDown={
-        options.preserveFocus === false ? undefined : (event: MouseEvent) => event.preventDefault()
-      }
+      onMouseDown={(event: MouseEvent) => {
+        if (options.preserveFocus !== false) {
+          event.preventDefault();
+        }
+      }}
       onClick={() => options.select()}
       onPointerMove={(event: PointerEvent) => {
         if (!options.active && event.pointerType !== "touch") {

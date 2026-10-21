@@ -1,7 +1,8 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import net from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DIAL_BUNDLES,
@@ -39,16 +40,6 @@ const AUTH_DEADLINE_MS = 3_000;
 
 function helperHmac(ipcKey: string, message: string): string {
   return createHmac("sha256", ipcKey).update(message).digest("hex");
-}
-
-function secureStringsEqual(first: string, second: string): boolean {
-  const firstBuffer = Buffer.from(first);
-  const secondBuffer = Buffer.from(second);
-  return (
-    firstBuffer.length > 0 &&
-    firstBuffer.length === secondBuffer.length &&
-    timingSafeEqual(firstBuffer, secondBuffer)
-  );
 }
 
 type PendingRpc = {
@@ -373,7 +364,7 @@ export class FaceTimeHelperSocketServer {
       processId <= 0 ||
       processStartedAtMs <= 0 ||
       clientNonce.length < 32 ||
-      !secureStringsEqual(proof, expectedProof)
+      !safeEqualSecret(proof, expectedProof)
     ) {
       socket.destroy();
       return;
@@ -412,7 +403,7 @@ export class FaceTimeHelperSocketServer {
       !hasExactKeys(record, ["event", "connection_epoch", "proof"]) ||
       record.connection_epoch !== handshake.connectionEpoch ||
       typeof record.proof !== "string" ||
-      !secureStringsEqual(
+      !safeEqualSecret(
         record.proof,
         helperHmac(handshake.connectionKey, `client-finish\n${handshake.connectionEpoch}`),
       )
@@ -477,7 +468,7 @@ export class FaceTimeHelperSocketServer {
       session.connectionKey,
       `message\nhelper-to-server\n${session.connectionEpoch}\n${record.sequence}\n${record.payload_json}`,
     );
-    if (!secureStringsEqual(record.auth, expectedAuth)) {
+    if (!safeEqualSecret(record.auth, expectedAuth)) {
       return undefined;
     }
     let payload: unknown;

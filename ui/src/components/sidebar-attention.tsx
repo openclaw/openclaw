@@ -1,4 +1,4 @@
-import { createMemo, createSignal, flush, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -88,12 +88,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       });
     }
   }
-  panelDismissals.set(host, () => {
-    const wasOpen = !disposed && panelOpen();
-    closePanel(false);
-    return wasOpen;
-  });
-
   const syncOverflowCue = (element: HTMLElement) => {
     setOverflowAbove(element.scrollTop > 2);
     setOverflowBelow(element.scrollHeight - element.scrollTop - element.clientHeight > 2);
@@ -216,22 +210,33 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
-    flush();
-    if (disposed || generation !== panelGeneration || target.isConnected) {
-      return;
-    }
-    const remaining = panelFocus?.rows() ?? [];
-    remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+    onSettled(() => {
+      if (disposed || generation !== panelGeneration || target.isConnected) {
+        return;
+      }
+      const remaining = panelFocus?.rows() ?? [];
+      remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+    });
   }
 
-  onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));
-  onCleanup(listen(document, "keydown", handleOutsideInteraction, true));
-  onCleanup(listen(window, "blur", handleWindowBlur));
-  onCleanup(() => {
-    disposed = true;
-    panelGeneration += 1;
-    panelDismissals.delete(host);
-    panelLoad.dispose();
+  onSettled(() => {
+    panelDismissals.set(host, () => {
+      const wasOpen = !disposed && panelOpen();
+      closePanel(false);
+      return wasOpen;
+    });
+    const stopPointer = listen(document, "pointerdown", handleOutsideInteraction, true);
+    const stopKeydown = listen(document, "keydown", handleOutsideInteraction, true);
+    const stopBlur = listen(window, "blur", handleWindowBlur);
+    return () => {
+      stopPointer();
+      stopKeydown();
+      stopBlur();
+      disposed = true;
+      panelGeneration += 1;
+      panelDismissals.delete(host);
+      panelLoad.dispose();
+    };
   });
 
   return (

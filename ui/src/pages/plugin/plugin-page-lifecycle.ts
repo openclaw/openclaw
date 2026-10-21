@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import type { ControlUiPluginFrameGrantAck } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
   CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS,
@@ -9,31 +8,11 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  isStaleChunkImportError,
-  retryStaleChunkReloadWhenReachable,
-  scheduleStaleChunkReload,
-} from "../../app/stale-chunk-reload.ts";
 import { uiDevGatewayResourceUrl } from "../../dev-gateway.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
-import type { LogbookProps } from "./logbook-view.tsx";
 import { openPluginFrameSession } from "./plugin-frame-session-navigation.ts";
 import { pluginTabKey } from "./route.ts";
-
-/**
- * Views shipped with the Control UI use this adapter. Native plugin entries
- * mount through the contribution runtime; descriptor paths use sandboxed frames.
- */
-type BundledPluginTabView = {
-  render: (props: LogbookProps) => JSX.Element;
-};
-
-type BundledPluginTabViewState =
-  | { status: "idle" }
-  | { status: "loading"; id: string }
-  | { status: "error"; id: string; error: unknown }
-  | { status: "ready"; id: string; view: BundledPluginTabView };
 
 function pluginFrameGrantCoversTab(
   grant: ControlUiPluginFrameGrantAck,
@@ -57,14 +36,6 @@ function pluginFrameGrantCoversTab(
 const EXTERNAL_AUTH_REFRESH_TIMEOUT_MS = 10_000;
 const EXTERNAL_AUTH_PROBE_TIMEOUT_MS = 5_000;
 
-// Keyed by pluginId/tabId: tab ids are only unique within their plugin.
-export const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "logbook/logbook": async () => {
-    const { Logbook } = await import("./logbook-view.tsx");
-    return { render: Logbook };
-  },
-};
-
 export type PluginPageProps = {
   pluginId?: string;
   tabId?: string;
@@ -74,9 +45,7 @@ export type PluginPageProps = {
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
 // Solid observes the owner; its deferred signal writes never own these facts.
 export class PluginPageOwner {
-  private readonly listeners = new Set<() => void>();
   private disposed = false;
-  bundledViewState: BundledPluginTabViewState = { status: "idle" };
   externalAuthReadyKey: string | null = null;
   externalAuthUnavailableKey: string | null = null;
   pluginFrameGeneration: object = {};
@@ -87,20 +56,12 @@ export class PluginPageOwner {
     readonly props: PluginPageProps,
     readonly context: ApplicationContext,
     private readonly host: HTMLElement,
+    private readonly notify: () => void,
   ) {
     this.stopListeners = [
       listen(document, "visibilitychange", this.handleVisibilityChange),
       listen(window, "message", this.handlePluginSessionOpen),
     ];
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  private notify() {
-    this.listeners.forEach((listener) => listener());
   }
 
   bundledViewHost: object = {};
@@ -138,77 +99,27 @@ export class PluginPageOwner {
 
   dispose() {
     this.disposed = true;
-    this.listeners.clear();
     this.stopListeners.forEach((stop) => stop());
     this.syncPluginThemeFrame(null);
     this.clearExternalTabAuth();
-    this.stopBundledView();
   }
 
   tabKey(): string {
     return pluginTabKey({ pluginId: this.props.pluginId ?? "", id: this.props.tabId ?? "" });
   }
 
-  private loadBundledView(key: string): Promise<BundledPluginTabView> {
-    const load = BUNDLED_TAB_VIEWS[key];
-    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
+  hasBundledView(info = this.tabInfo()): boolean {
+    // Tab ids are only unique within their plugin.
+    return info?.pluginId === "logbook" && info.id === "logbook";
   }
-
-  private hasCurrentBundledDescriptor(key: string): boolean {
-    return this.tabKey() === key && this.tabInfo() !== undefined && key in BUNDLED_TAB_VIEWS;
-  }
-
-  private startBundledViewLoad(key: string) {
-    const loading = { status: "loading", id: key } as const;
-    this.bundledViewState = loading;
-    this.notify();
-    const settle = (nextState: BundledPluginTabViewState) => {
-      if (this.bundledViewState !== loading || !this.hasCurrentBundledDescriptor(key)) {
-        return;
-      }
-      this.bundledViewState = nextState;
-      this.notify();
-      if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
-        void scheduleStaleChunkReload();
-      }
-    };
-    void this.loadBundledView(key).then(
-      (view) => settle({ status: "ready", id: key, view }),
-      (error: unknown) => settle({ status: "error", id: key, error }),
-    );
-  }
-
-  readonly retryBundledView = () => {
-    const viewState = this.bundledViewState;
-    if (viewState.status !== "error" || !this.hasCurrentBundledDescriptor(viewState.id)) {
-      return;
-    }
-    if (isStaleChunkImportError(viewState.error)) {
-      void retryStaleChunkReloadWhenReachable();
-    } else {
-      this.startBundledViewLoad(viewState.id);
-    }
-  };
 
   readonly update = () => {
     this.updateGatewaySource(this.context.gateway);
     if (this.disposed) {
       return;
     }
-    const key = this.tabKey();
     const info = this.tabInfo();
-    const hasBundledDescriptor = info !== undefined && key in BUNDLED_TAB_VIEWS;
-    const viewState = this.bundledViewState;
-    // Switching between plugin tabs reuses this element; the previous bundled
-    // view must stop its background polling before the next one renders. A
-    // descriptor can also disappear in place after disablement or scope loss.
-    if (viewState.status !== "idle" && (viewState.id !== key || !hasBundledDescriptor)) {
-      this.stopBundledView();
-    }
-    if (this.bundledViewState.status === "idle" && hasBundledDescriptor) {
-      this.startBundledViewLoad(key);
-    }
-    this.syncExternalTabAuth(info, hasBundledDescriptor);
+    this.syncExternalTabAuth(info, this.hasBundledView(info));
     this.notify();
   };
 
@@ -536,16 +447,6 @@ export class PluginPageOwner {
     }
   }
 
-  private stopBundledView() {
-    this.replaceBundledViewHost();
-    this.bundledViewState = { status: "idle" };
-  }
-
-  private replaceBundledViewHost() {
-    // A new key retires the bundled view's owner and all of its pending work.
-    this.bundledViewHost = {};
-  }
-
   private updateGatewaySource(gateway: ApplicationContext["gateway"]) {
     const { client, hello } = gateway.snapshot;
     const connected = gateway.snapshot.phase === "connected";
@@ -559,7 +460,8 @@ export class PluginPageOwner {
       return;
     }
     const externalAuthTargetKey = this.externalAuthTargetKey;
-    this.replaceBundledViewHost();
+    // A new key retires the bundled view's owner and all of its pending work.
+    this.bundledViewHost = {};
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     this.gatewayHello = hello;

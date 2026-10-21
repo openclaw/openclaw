@@ -1,5 +1,5 @@
 import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import "../../components/openclaw-mascot.ts";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
@@ -51,9 +51,6 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
     return { open: false, entries: [], nextCursor: null, load: "idle", error: null, loaded: false };
   });
   let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   function refreshChannelInventory() {
     const state = context.channels.state;
     if (
@@ -76,13 +73,14 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       refreshChannelInventory();
     });
     store.replaceSource(host.store);
-    const subscriptions = [
-      store.subscribe(refreshChannelInventory),
-      channels.subscribe(refreshChannelInventory),
-    ];
+    // Setup and channel receipts admit missing onboarding inventory before another refresh.
+    const subscriptions = [store, channels].map((source) =>
+      source.subscribe(refreshChannelInventory),
+    );
     void host.store.refreshTranscriptIfIdle();
     refreshChannelInventory();
     return () => {
+      disposed = true;
       propertyReceipts.delete(host);
       subscriptions.forEach((stop) => stop());
     };

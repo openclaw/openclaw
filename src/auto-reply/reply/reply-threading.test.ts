@@ -1,5 +1,5 @@
-// Tests reply-to threading mode resolution across global and plugin config.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -12,17 +12,15 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 
-const emptyCfg = {} as OpenClawConfig;
+const emptyCfg: OpenClawConfig = {};
+const resetRegistry = () => setActivePluginRegistry(createTestRegistry());
+beforeEach(resetRegistry);
+afterEach(resetRegistry);
+function register(plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+}
 
 describe("resolveReplyToMode", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
   it("falls back to configured channel defaults when channel threading plugins are unavailable", () => {
     const configuredCfg = {
       channels: {
@@ -39,13 +37,7 @@ describe("resolveReplyToMode", () => {
         },
       },
     } as OpenClawConfig;
-    const topLevelFallbackCfg = {
-      channels: {
-        slack: {
-          replyToMode: "first",
-        },
-      },
-    } as OpenClawConfig;
+    const topLevelFallbackCfg: OpenClawConfig = { channels: { slack: { replyToMode: "first" } } };
     const cases: Array<{
       cfg: OpenClawConfig;
       channel?: "telegram" | "discord" | "slack";
@@ -74,46 +66,25 @@ describe("resolveReplyToMode", () => {
   });
 
   it("uses registered channel threading adapters for runtime reply-mode resolution", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "whatsapp",
-              label: "WhatsApp",
-              capabilities: { chatTypes: ["direct", "group"] },
-            }),
-            threading: {
-              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
-                accountId === "work" ? "first" : "all",
-            },
-          },
-        },
-      ]),
-    );
+    register({
+      ...createChannelTestPluginBase({
+        id: "whatsapp",
+      }),
+      threading: {
+        resolveReplyToMode: ({ accountId }) => (accountId === "work" ? "first" : "all"),
+      },
+    });
 
-    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "work", "group")).toBe("first");
-    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "default", "group")).toBe("all");
+    expect(resolveReplyToMode(emptyCfg, "whatsapp", "work", "group")).toBe("first");
+    expect(resolveReplyToMode(emptyCfg, "whatsapp", "default", "group")).toBe("all");
   });
 
   it("resolves the same listed default account used by routed delivery", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "whatsapp",
-          source: "test",
-          plugin: createChannelTestPluginBase({
-            id: "whatsapp",
-            label: "WhatsApp",
-            capabilities: { chatTypes: ["direct", "group"] },
-            config: {
-              listAccountIds: () => ["work"],
-            },
-          }),
-        },
-      ]),
+    register(
+      createChannelTestPluginBase({
+        id: "whatsapp",
+        config: { listAccountIds: () => ["work"] },
+      }),
     );
 
     expect(resolveReplyDeliveryAccountId(emptyCfg, "whatsapp")).toBe("work");
@@ -121,11 +92,7 @@ describe("resolveReplyToMode", () => {
   });
 
   it("applies canonical account policy before channel-wide threading defaults", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "irc", source: "test", plugin: createChannelTestPluginBase({ id: "irc" }) },
-      ]),
-    );
+    register(createChannelTestPluginBase({ id: "irc" }));
     const cfg: OpenClawConfig = {
       channels: {
         irc: {
@@ -147,24 +114,10 @@ describe("resolveReplyToMode", () => {
 });
 
 describe("createReplyToModeFilterForChannel", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry());
+  it("previews batched transport without consuming its single reply slot", () => {
+    const filter = createReplyToModeFilterForChannel("batched", "discord");
+    expect(filter.preview({ text: "discarded", replyToId: "parent" }).replyToId).toBe("parent");
+    expect(filter({ text: "actual", replyToId: "parent" }).replyToId).toBe("parent");
+    expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
   });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  it.each(["batched"] as const)(
-    "previews the %s transport without consuming its single reply slot",
-    (mode) => {
-      const filter = createReplyToModeFilterForChannel(mode, "discord");
-      const first = { text: "discarded", replyToId: "parent" };
-      const actual = { text: "actual", replyToId: "parent" };
-
-      expect(filter.preview(first).replyToId).toBe("parent");
-      expect(filter(actual).replyToId).toBe("parent");
-      expect(filter.preview({ text: "later", replyToId: "other" }).replyToId).toBeUndefined();
-    },
-  );
 });

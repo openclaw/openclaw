@@ -5,13 +5,16 @@ import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
+import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
+
+registerEnglishCatalog(registerLogbookEnglish);
 
 export type LogbookProps = {
   initialClient: GatewayBrowserClient | null;
@@ -314,14 +317,12 @@ export function Logbook(props: LogbookProps) {
     locale.locale();
     return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
   };
-  const model = createLogbook();
+  // PluginPage's keyed host keeps this client fixed until the model is disposed.
+  const initialClient = props.initialClient;
+  const model = createLogbook(initialClient);
   const state = () => model.state;
   // PluginPageOwner remounts this view when the connection changes.
-  onSettled(() => {
-    if (model.connect(props.initialClient)) {
-      void model.load();
-    }
-  });
+  onSettled(() => void model.load());
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">

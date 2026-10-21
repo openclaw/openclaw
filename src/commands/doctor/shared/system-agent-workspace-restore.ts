@@ -6,7 +6,7 @@ import {
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
   fileDiffersFromTemplate,
 } from "../../../agents/workspace.js";
-import { hasErrnoCode } from "../../../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../../../infra/errno.js";
 import { lstatIfExists } from "../../../infra/path-existence.js";
 
 export type WorkspaceRestorePlan = {
@@ -21,20 +21,9 @@ export type WorkspaceRestorePlan = {
 const TEMPLATED_FILES: ReadonlySet<string> = new Set(GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES);
 const RESTORED_DIRS = ["memory", "skills"] as const;
 
-async function readIfPresent(file: string): Promise<Buffer | undefined> {
-  try {
-    return await fs.readFile(file);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 async function planFile(from: string, to: string, rel: string, plan: WorkspaceRestorePlan) {
   const templated = TEMPLATED_FILES.has(rel);
-  const source = await readIfPresent(path.join(from, rel));
+  const source = await fs.readFile(path.join(from, rel)).catch(ignoreMissingPath);
   if (!source || (templated && !(await fileDiffersFromTemplate(from, rel)))) {
     return;
   }
@@ -44,7 +33,7 @@ async function planFile(from: string, to: string, rel: string, plan: WorkspaceRe
     plan.conflicts.push(rel);
     return;
   }
-  const target = await readIfPresent(targetPath);
+  const target = await fs.readFile(targetPath).catch(ignoreMissingPath);
   if (!target || (templated && !(await fileDiffersFromTemplate(to, rel)))) {
     plan.copies.push(rel);
   } else if (!target.equals(source)) {
@@ -78,10 +67,8 @@ async function planTree(from: string, to: string, rel: string, plan: WorkspaceRe
   try {
     entries = await fs.readdir(path.join(from, rel), { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return;
   }
   // A linked or non-directory target is kept whole: descending would write through it.
   const target = await lstatIfExists(path.join(to, rel), "ENOENT");

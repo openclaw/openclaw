@@ -1,18 +1,18 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, action, createMemo, createOptimistic, createSignal } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 
 export function PluginManager() {
   const context = useApplication();
-  const [reloading, setReloading] = createSignal(false);
+  const [reloading, setReloading] = createOptimistic(false);
   const [reloadError, setReloadError] = createSignal("");
-  const source = projectSource(context.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime.subscribe(notify),
-    equality: "revision",
+  const source = projectOwner(context.plugins, (runtime) => runtime);
+  const reload = action(function* () {
+    setReloading(true);
+    yield source.read().reload();
   });
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
@@ -39,19 +39,12 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() =>
-                      void (async () => {
-                        setReloading(true);
-                        setReloadError("");
-                        try {
-                          await source.read().reload();
-                        } catch (error) {
-                          setReloadError(error instanceof Error ? error.message : String(error));
-                        } finally {
-                          setReloading(false);
-                        }
-                      })()
-                    }
+                    onClick={() => {
+                      setReloadError("");
+                      void reload().catch((error: unknown) => {
+                        setReloadError(error instanceof Error ? error.message : String(error));
+                      });
+                    }}
                   >
                     {t("pluginUi.reload")}
                   </button>
@@ -115,7 +108,7 @@ export function PluginManager() {
               />
             )}
           </For>
-          <Show when={reloadError()}>
+          <Show when={!reloading() && reloadError()}>
             <SettingsRow title={reloadError()} role="alert" carapace />
           </Show>
         </SettingsSection>

@@ -1,6 +1,5 @@
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
@@ -20,7 +19,10 @@ import {
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
 } from "./subagent-registry-restart-recovery-helpers.js";
-import { loadSubagentRecoverySession } from "./subagent-registry-restart-recovery-session.js";
+import {
+  loadSubagentRecoverySession,
+  markSubagentRecoverySessionInterrupted,
+} from "./subagent-registry-restart-recovery-session.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
@@ -251,7 +253,7 @@ export async function recoverInterruptedSubagentRow(
     return { status: "ignored" };
   }
   try {
-    const session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
+    let session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
       (error: unknown) => {
         if (!replayTerminal) {
           throw error;
@@ -286,23 +288,10 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && session?.retained?.isCurrent()) {
       return { status: "handled", retained: session.retained };
     }
-    // Registry custody stores the physical locator; session configuration may
-    // still name its logical sessions.json alias. Let the store owner resolve it.
-    const physicalStorePath =
-      session && !replayTerminal && !entry.execution.restartRecovery
-        ? (
-            await prepareSqliteTargetFromSessionStorePath(session.storePath, {
-              agentId: session.agentId,
-            })
-          ).path
-        : undefined;
-    if (!isCurrent()) {
-      return { status: "deferred" };
-    }
-    const sessionEntry = session?.sessionEntry;
-    const sessionId = sessionEntry?.sessionId;
-    const lifecycleRevision = sessionEntry?.lifecycleRevision;
-    const lifecycleRunId = sessionEntry?.lifecycleRunId;
+    const physicalStorePath = session?.currentRead.source?.path;
+    const sessionId = session?.sessionEntry?.sessionId;
+    const lifecycleRevision = session?.sessionEntry?.lifecycleRevision;
+    const lifecycleRunId = session?.sessionEntry?.lifecycleRunId;
     const sessionAgentId = session?.agentId;
     const target = { sessionKey: childSessionKey, sessionId };
     // A requester can itself be a subagent. Its incoming continuation batch,
@@ -335,6 +324,17 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && hasPendingRequesterSettleWake()) {
       return { status: "handled" };
     }
+    if (session && !legacy && !replayTerminal) {
+      session = await markSubagentRecoverySessionInterrupted({
+        entry,
+        session,
+        isOwnerCurrent: () => isCurrent() && !hasPendingRequesterSettleWake(),
+      });
+      if (!session || !isCurrent()) {
+        return { status: "deferred" };
+      }
+    }
+    const sessionEntry = session?.sessionEntry;
     const currentRead = session?.currentRead;
     const storePath = session?.storePath;
     const matches = (current: SessionEntryCurrentFacts | undefined) =>

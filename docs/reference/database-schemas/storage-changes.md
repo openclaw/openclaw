@@ -95,8 +95,8 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported default. The experimental PostgreSQL adapter
-supports remote persistence for one Gateway;
+SQLite remains the default. PostgreSQL supports remote persistence for one
+Gateway on the [qualified runtime](/gateway/postgresql#support-matrix);
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
@@ -225,12 +225,15 @@ SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-main
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
-### Experimental PostgreSQL engine (workboard pilot)
+<a id="experimental-postgresql-engine-workboard-pilot" />
+
+### PostgreSQL engine
 
 `database.engine: "postgres"` selects PostgreSQL for every store with a registered
-PostgreSQL schema; workboard is currently the only supported store. Doctor
-reports each store's engine and warns about stores that remain on SQLite.
-See [Database engines (experimental)](/reference/database-engines) for SecretRef
+PostgreSQL schema: state, agent, Workboard, Logbook and Team Reports. Doctor
+reports configured and observed engines and warns about mismatches and missing
+capabilities. Local safety stores remain SQLite by design.
+See [Database engines](/reference/database-engines) for SecretRef
 configuration, isolation and durability, matched anchor/schema backups,
 limitations, and engine-boundary observation. Missing secrets, connection failures,
 and admission errors never fall back to SQLite. Existing SQLite workboard data
@@ -853,13 +856,6 @@ confirmed Stop, or lost database owner prevents a late write from replacing the
 current owner. Unknown writes are not replayed. Cleanup rechecks session ownership
 and retained cancellation claims before changing prepared resources. No separate
 Tasks record or managed flow participates in admission or settlement.
-
-Explicit promotion notice and claim annotations execute in the shared-state
-worker. The CLI awaits their best-effort completion before reporting results;
-storage failures still do not fail a promotion claim. Notice recording retains
-its read-only preflight and atomic sorted slug union, preserving the other feed
-fields. Empty notices leave absent databases absent, and already-recorded notices
-do not open a writer. Claim upserts, stored formats, and retention are unchanged.
 
 Update-check telemetry reads its cached response and retained session-creation
 count through the shared-state worker. Successful responses use the existing

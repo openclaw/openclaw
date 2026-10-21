@@ -39,6 +39,7 @@ import {
   releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
+  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 
@@ -202,7 +203,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
       !retainedImage &&
       typeof IntersectionObserver === "function"
     ) {
-      return present(renderImagePlaceholder(image));
+      return renderImagePlaceholder(image);
     }
     admitted = true;
     // A pane owns cancellation; this image alone owns its presentation updates.
@@ -258,23 +259,21 @@ function createMessageImagePresentation(props: MessageImageProps) {
           refreshImage();
         }
       };
-      return present(
-        renderImagePlaceholder(image, reason, {
-          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-          onAllow:
-            !decodeFailed && availability.status === "unavailable" && availability.canAllow
-              ? () => retryAvailability(true)
-              : undefined,
-          onRetry: decodeFailed
-            ? () => {
-                releaseRetainedImage();
-                refreshImage();
-              }
-            : availability.status === "unavailable" && availability.recoverable
-              ? () => retryAvailability()
-              : undefined,
-        }),
-      );
+      return renderImagePlaceholder(image, reason, {
+        path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+        onAllow:
+          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+            ? () => retryAvailability(true)
+            : undefined,
+        onRetry: decodeFailed
+          ? () => {
+              releaseRetainedImage();
+              refreshImage();
+            }
+          : availability.status === "unavailable" && availability.recoverable
+            ? () => retryAvailability()
+            : undefined,
+      });
     }
     if (!managed) {
       const retained = retainedImage;
@@ -287,21 +286,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(() => failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
-      return present(
-        renderImageElement(
-          image,
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(
-                source,
-                options?.resourceBasePath,
-                availability.mediaTicket,
-                options,
-                image.fileName,
-                "thumbnail",
-                previewWidth,
-              )
-            : displayUrl,
-        ),
+      return renderImageElement(
+        image,
+        availability.status === "available"
+          ? buildAssistantAttachmentUrl(
+              source,
+              options?.resourceBasePath,
+              availability.mediaTicket,
+              options,
+              image.fileName,
+              "thumbnail",
+              previewWidth,
+            )
+          : displayUrl,
       );
     }
     return renderManagedImage(image, subscriptionOptions, displayUrl);
@@ -325,14 +322,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     if (!subscriptionOptions?.onMediaChange && pending) {
       observeStandalonePreview(pending);
     }
-    return present(
-      resource.value
-        ? renderImageElement(image, resource.value)
-        : renderImagePlaceholder(
-            image,
-            resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
-          ),
-    );
+    return resource.value
+      ? renderImageElement(image, resource.value)
+      : renderImagePlaceholder(
+          image,
+          resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
+        );
   }
 
   function observeStandalonePreview(pending: Promise<unknown>) {
@@ -349,7 +344,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
-    return { image, previewUrl, managed };
+    return { image, previewUrl, managed, key: imageKey };
   }
 
   function renderPreviewElement(image: ImageBlock, url: string, title: string) {
@@ -420,6 +415,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     return {
       image,
       managed,
+      key: active ? imageKey : undefined,
       state: reason === undefined ? "loading" : "unavailable",
       reason,
       actions: {
@@ -468,10 +464,6 @@ function createMessageImagePresentation(props: MessageImageProps) {
     refreshImage();
   }
 
-  function present(value: ImagePresentation): ImagePresentation {
-    return { ...value, key: imageKey };
-  }
-
   const retireHandoff = () => {
     if (retainedImage?.status !== "retaining") {
       return;
@@ -496,10 +488,8 @@ function createMessageImagePresentation(props: MessageImageProps) {
     active = false;
     previewEvents?.stop();
     previewEvents = undefined;
-    if (previewElement) {
-      // Do not retain the removed row through the image's parent or listeners.
-      previewElement.remove();
-    }
+    // Do not retain the removed row through the image's parent or listeners.
+    previewElement?.remove();
     if (loadedElement && currentImage?.url) {
       retainAssistantImage(
         currentImage.url,
@@ -712,5 +702,44 @@ function ImageFrame(props: {
         <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
       </Show>
     </span>
+  );
+}
+
+/** Catalogs consume the same admitted image resource and viewer as transcript tiles. */
+type MessageImageActionProps = MessageImageProps & {
+  render: (action: () => MessageMediaAction) => JSX.Element;
+};
+export function MessageImageAction(props: MessageImageActionProps): JSX.Element {
+  // Match the transcript slot's retirement when its scope or policy changes.
+  const scope = () =>
+    JSON.stringify([
+      props.options.sessionKey,
+      props.options.agentId,
+      props.options.connectionEpoch,
+      props.options.resourceBasePath,
+      props.options.authToken,
+      props.options.policyKey,
+      props.options.canonicalMessageKey,
+    ]);
+  return (
+    <Show when={scope()} keyed>
+      {(_scope) => {
+        const presentation = createMessageImagePresentation(props);
+        const action = createMemo<MessageMediaAction>(() => {
+          const { actions, state, reason, previewUrl } = presentation.model();
+          return {
+            ...actions,
+            pending: state === "loading",
+            reason,
+            observeElement: presentation.observeFrame,
+            onFocus: state === "unavailable" ? undefined : presentation.admit,
+            onOpen: previewUrl
+              ? () => openMessageImage(props.image, previewUrl, props.options)
+              : undefined,
+          };
+        });
+        return props.render(action);
+      }}
+    </Show>
   );
 }

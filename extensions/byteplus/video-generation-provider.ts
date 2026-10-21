@@ -11,6 +11,7 @@ import {
   postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   asSafeIntegerInRange,
@@ -127,10 +128,11 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "BytePlus API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ??
-            BYTEPLUS_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.byteplus?.baseUrl,
           defaultBaseUrl: BYTEPLUS_BASE_URL,
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.byteplus?.request,
+          ),
           allowPrivateNetwork: false,
           provider: "byteplus",
           capability: "video",
@@ -224,6 +226,8 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         fetchFn,
         maxAttempts: MAX_POLL_ATTEMPTS,
+        ssrfPolicy: { allowPrivateNetwork },
+        dispatcherPolicy,
         pollIntervalMs: POLL_INTERVAL_MS,
         requestFailedMessage: "BytePlus video status request failed",
         timeoutMessage: `BytePlus video generation task ${taskId} did not finish in time`,

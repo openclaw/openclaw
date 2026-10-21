@@ -278,6 +278,7 @@ it("mounts only selected tool replacements and keeps their context, projection, 
   const plugins: ControlUiPluginCapability = {
     errors: [],
     hasPlugins: true,
+    revision: 0,
     registryStatus: "complete",
     canReload: false,
     isLoading: () => false,
@@ -539,6 +540,8 @@ describe("owned message controls", () => {
 });
 
 it("leaves timestamp attributes untouched when only message usage changes", () => {
+  const calendarFormat = vi.spyOn(Date.prototype, "toLocaleString");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(301_000);
   const answer = createMessageGroup(
     { role: "assistant", content: "Answer", timestamp: 1000, usage: { input: 100, output: 10 } },
     "assistant",
@@ -549,9 +552,12 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   ));
   const time = view.container.querySelector<HTMLTimeElement>(".chat-group-timestamp")!;
   const summary = view.container.querySelector<HTMLButtonElement>(".msg-meta__summary")!;
+  expect(time.textContent).toBe("5m ago");
   const observer = new MutationObserver(() => {});
   observer.observe(time, { attributes: true });
   observer.observe(summary, { attributes: true });
+  calendarFormat.mockClear();
+  clock.mockReturnValue(361_000);
   setGroup({
     ...answer,
     messages: [
@@ -569,6 +575,10 @@ it("leaves timestamp attributes untouched when only message usage changes", () =
   flush();
   expect(view.container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑200");
   expect(time.dateTime).toBe("1970-01-01T00:00:01.000Z");
+  expect(time.textContent).toBe("6m ago");
   expect(observer.takeRecords()).toEqual([]);
   observer.disconnect();
+  clock.mockRestore();
+  expect(calendarFormat).not.toHaveBeenCalled();
+  calendarFormat.mockRestore();
 });

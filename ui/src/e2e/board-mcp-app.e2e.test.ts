@@ -396,6 +396,10 @@ suite.define(() => {
     const inactiveIdentity = await readBoardIdentity(page);
 
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
+    // Reopening uses the split presentation selected before switching to Files.
+    await expectRetainedBoardPresentation(page, "split");
+    await expect.poll(() => note.inputValue()).toBe("Keep this unsaved dashboard note");
+    await focusChatSidePanel(page);
     await expectRetainedBoardPresentation(page, "expanded");
     await expect.poll(() => note.inputValue()).toBe("Keep this unsaved dashboard note");
     await selectChatLayoutAction(page, "Restore split");

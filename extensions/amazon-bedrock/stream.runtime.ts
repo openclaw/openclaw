@@ -786,7 +786,7 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
     return true;
   }
   const id = model.id.toLowerCase();
-  const name = model.name?.toLowerCase() ?? "";
+  const name = model.name.toLowerCase();
   return (
     id.includes("anthropic.claude") ||
     id.includes("anthropic/claude") ||

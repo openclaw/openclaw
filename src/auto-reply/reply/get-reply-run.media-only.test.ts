@@ -15,17 +15,9 @@ vi.mock("./reply-tool-authority.js", async (importOriginal) => ({
 }));
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
-import {
-  attachActiveEmbeddedRun,
-  detachActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -57,10 +49,7 @@ import {
   beginSessionEffect,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import {
-  reserveSessionControllerSource,
-  retireSessionControllerInput,
-} from "../../sessions/session-controller.mailbox.js";
+import { reserveSessionControllerSource } from "../../sessions/session-controller.mailbox.js";
 import * as sessionNativeRuntime from "../../sessions/session-controller.native-runtime.js";
 import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import * as sessionQueries from "../../sessions/session-controller.queries.js";
@@ -70,18 +59,21 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { hasControlCommand } from "../command-detection.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
   loadAgentRunnerRuntime,
   loadEmbeddedAgentRuntime,
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
+import { registerHeartbeatPreemptionCases } from "./get-reply-run.heartbeat-preemption.test-support.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
 import {
+  activatePreparedRun,
   baseParams,
+  cleanupPreparedReplyFixtures,
   createInboundBody,
   createInboundTurn,
   createSessionBody,
@@ -168,11 +160,12 @@ vi.mock("../../plugins/provider-thinking.js", () => ({
   resolveEffectiveThinkingProfile: () => undefined,
 }));
 
+// mock-isolation: ingress cases provide config policy without loading active channel or subagent state.
 vi.mock("../../agents/agent-tools.policy.js", () => ({
   resolveEffectiveToolPolicy: (params: {
-    config: { tools?: { allow?: string[]; deny?: string[] } };
+    config?: { tools?: { allow?: string[]; deny?: string[] } };
   }) => ({
-    globalPolicy: params.config.tools
+    globalPolicy: params.config?.tools
       ? { allow: params.config.tools.allow, deny: params.config.tools.deny }
       : undefined,
     globalProviderPolicy: undefined,
@@ -219,7 +212,8 @@ vi.mock("../../agents/harness/selection-decision.js", () => ({
   resolveAgentHarnessDeliveryDefaults: resolveAgentHarnessDeliveryDefaultsMock,
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
   buildModelAliasIndex: vi.fn(
     (params: { cfg: { agents?: { defaults?: { models?: unknown } } } }) => {
       if (params.cfg.agents?.defaults?.models) {
@@ -502,17 +496,6 @@ function getActiveReplyRunCount(): number {
   return listActiveReplyRunSessionKeys().length;
 }
 
-const activePreparedFixtures: ReturnType<typeof createReplyOperation>[] = [];
-function activatePreparedRun(sessionKey = "session-key") {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId: "active-session",
-    resetTriggered: false,
-  });
-  operation.setPhase("running");
-  activePreparedFixtures.push(operation);
-  return operation;
-}
 function preparedTarget(sessionId: string) {
   return captureSessionTarget({
     storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
@@ -994,10 +977,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   afterEach(async () => {
-    for (const operation of activePreparedFixtures.splice(0)) {
-      operation.complete();
-      await operation.ownerSettlement;
-    }
+    await cleanupPreparedReplyFixtures();
     vi.useRealTimers();
     resetSystemEventsForTest();
     expect(preparedReplyMockState.unexpectedCalls).toEqual([]);
@@ -1306,19 +1286,11 @@ describe("runPreparedReply media-only handling", () => {
       allowTextCommands: true,
     });
     params.command = { ...params.command, isAuthorizedSender: true };
-    const inbound = finalizeInboundContext(params.ctx);
-    const routed = resolveReplyDirectiveRouting({
-      commandText: inbound.commandText,
-      agentText: inbound.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      wasMentioned: false,
-      ctx: inbound,
+    const inbound = finalizeInboundContext({ ...params.ctx, CommandAuthorized: true });
+    const routed = await routeReplyDirectivesForTest(inbound, {
       cfg: params.cfg,
       agentId: params.agentId,
-      resetTriggered: false,
+      sessionKey: params.sessionKey,
     });
     params.directives = routed.directives;
     params.sessionCtx.agentText = routed.cleanedBody;
@@ -1699,92 +1671,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(sessionNativeRuntime.waitForSessionRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
-  it.for(["keyed", "reserved source"] as const)(
-    "drains a native heartbeat before running a visible Telegram turn (%s)",
-    async (admission, { signal }) => {
-      await useQueueMode("steer");
-      vi.useFakeTimers();
-      const sessionId = "session-embedded-heartbeat";
-      const target = preparedTarget(sessionId);
-      const heartbeat = createOperation(sessionId, { target, turnKind: "heartbeat" });
-      const preempted = createDeferred();
-      const cleanup = createDeferred();
-      const native = {
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
-        preemptByVisibleTurn: vi.fn(() => {
-          preempted.resolve();
-          return true;
-        }),
-        abort: vi.fn(),
-      };
-      const attachment = attachActiveEmbeddedRun(
-        sessionId,
-        native,
-        target.sessionKey,
-        undefined,
-        target.agentId,
-        heartbeat,
-      );
-      if (!attachment) {
-        throw new Error("Expected an admitted heartbeat attachment");
-      }
-      attachment.runCleanupSettlement = cleanup.promise;
-      // A visible ingress reserves an input; it cannot own a second operation beside the heartbeat.
-      const source =
-        admission === "reserved source"
-          ? reserveSessionControllerSource(target.sessionKey, { target, policy: { mode: "steer" } })
-          : undefined;
-      const running = runPrepared({
-        isNewSession: false,
-        sessionId,
-        opts: source ? bindReplySourceInput({}, source) : undefined,
-        ...turn("answer this now", {
-          ...createProviderSurface("telegram"),
-          ChatType: "direct",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "user:1",
-        }),
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            preempted.promise,
-            running,
-            "Visible turn bypassed the heartbeat",
-          ),
-          signal,
-        );
-        expect(runReplyAgent).not.toHaveBeenCalled();
-        detachActiveEmbeddedRun(sessionId, native, target.sessionKey);
-        heartbeat.complete();
-        await withinTest(heartbeat.ownerSettlement, signal);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(runReplyAgent).not.toHaveBeenCalled();
-
-        cleanup.resolve();
-        await expect(withinTest(running, signal)).resolves.toEqual({ text: "ok" });
-        expect(native.preemptByVisibleTurn).toHaveBeenCalledOnce();
-        expect(native.abort).not.toHaveBeenCalled();
-        expect(runReplyAgent).toHaveBeenCalledOnce();
-        expect(requireRunReplyAgentCall()).toMatchObject({
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-        });
-      } finally {
-        cleanup.resolve();
-        detachActiveEmbeddedRun(sessionId, native, target.sessionKey);
-        heartbeat.complete();
-        if (source) {
-          retireSessionControllerInput(source);
-        }
-        await running.catch(() => {});
-        vi.useRealTimers();
-      }
-    },
-  );
+  registerHeartbeatPreemptionCases({ runPrepared, requireRunReplyAgentCall });
   it("refreshes goal context after interrupt admission waits", async () => {
     const inboundMeta = await import("./inbound-meta.js");
     const activeEntry: SessionEntry = {

@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Repeat, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
 import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -27,23 +27,29 @@ const SKELETON_ROW_COUNT = 4;
 
 // Initial load renders shimmer rows instead of flashing the empty state
 // before the first sessions.list result arrives.
-function renderSkeletonRows(columnCount: number) {
-  return Array.from({ length: SKELETON_ROW_COUNT }, (_, rowIndex) => (
-    <tr class="session-skeleton-row" aria-hidden="true">
-      {Array.from({ length: columnCount }, (_cell, columnIndex) =>
-        columnIndex === 0 ? (
-          <td class="data-table-checkbox-col" />
-        ) : (
-          <td>
-            <span
-              class={["session-skeleton", { "session-skeleton--key": columnIndex === 1 }]}
-              style={{ "animation-delay": `${rowIndex * 120}ms` }}
-            />
-          </td>
-        ),
+function SkeletonRows(props: { columnCount: number }) {
+  return (
+    <Repeat count={SKELETON_ROW_COUNT}>
+      {(rowIndex) => (
+        <tr class="session-skeleton-row" aria-hidden="true">
+          <Repeat count={props.columnCount}>
+            {(columnIndex) =>
+              columnIndex === 0 ? (
+                <td class="data-table-checkbox-col" />
+              ) : (
+                <td>
+                  <span
+                    class={["session-skeleton", { "session-skeleton--key": columnIndex === 1 }]}
+                    style={{ "animation-delay": `${rowIndex * 120}ms` }}
+                  />
+                </td>
+              )
+            }
+          </Repeat>
+        </tr>
       )}
-    </tr>
-  ));
+    </Repeat>
+  );
 }
 
 function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
@@ -169,7 +175,7 @@ function SortHeader(
     extraClass?: string;
   },
 ) {
-  const active = createMemo(() => props.sortColumn === props.column);
+  const active = () => props.sortColumn === props.column;
   return (
     <th
       class={props.extraClass ?? ""}
@@ -208,7 +214,7 @@ function SessionsTable(props: SessionsProps) {
       return diff * sortDirection;
     });
   });
-  const totalRows = createMemo(() => sorted().length);
+  const totalRows = () => sorted().length;
   const totalPages = createMemo(() => Math.max(1, Math.ceil(totalRows() / props.pageSize)));
   const page = createMemo(() => Math.min(props.page, totalPages() - 1));
   const groups = createMemo(() =>
@@ -228,14 +234,12 @@ function SessionsTable(props: SessionsProps) {
     () => paginated().filter((row) => props.selectedKeys.has(row.key)).length,
   );
   const allSelected = () => selectedOnPage() === paginated().length;
-  const emptyBecauseFiltered = createMemo(
-    () =>
-      rawRows().length === 0 &&
-      (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
-        parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
-        !props.includeGlobal),
-  );
-  const emptyStateMessage = createMemo(() =>
+  const emptyBecauseFiltered = () =>
+    rawRows().length === 0 &&
+    (normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+      parseStrictPositiveInteger(props.activeMinutes) !== undefined ||
+      !props.includeGlobal);
+  const emptyStateMessage = () =>
     t(
       emptyBecauseFiltered()
         ? "sessionsView.noSessionsMatchFilters"
@@ -244,8 +248,7 @@ function SessionsTable(props: SessionsProps) {
           : props.statusFilter === "active"
             ? "sessionsView.noActiveSessions"
             : "sessionsView.noSessions",
-    ),
-  );
+    );
 
   const paginatedKeys = createMemo(() =>
     groups() ? new Set(paginated().map((row) => row.key)) : null,
@@ -255,14 +258,14 @@ function SessionsTable(props: SessionsProps) {
       {props.selectedKeys.size > 0 ? (
         <div class="data-table-bulk-bar">
           <span>{t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
-          <button class="btn btn--sm" onClick={props.onDeselectAll}>
+          <button class="btn btn--sm" onClick={() => props.onDeselectAll()}>
             {t("common.unselect")}
           </button>
           <button
             class="btn btn--sm danger"
             disabled={props.loading || Boolean(props.deleteSelectedDisabledReason)}
             title={props.deleteSelectedDisabledReason ?? undefined}
-            onClick={props.onDeleteSelected}
+            onClick={() => props.onDeleteSelected()}
           >
             <Icon name="trash" /> {t("sessionsView.deleteSelected")}
           </button>
@@ -305,7 +308,7 @@ function SessionsTable(props: SessionsProps) {
           </thead>
           <tbody>
             {props.loading && !props.result ? (
-              renderSkeletonRows(sessionsTableColumnCount(props))
+              <SkeletonRows columnCount={sessionsTableColumnCount(props)} />
             ) : paginated().length === 0 &&
               (props.loading || props.error || !props.result) ? undefined : paginated().length ===
               0 ? (
@@ -317,7 +320,7 @@ function SessionsTable(props: SessionsProps) {
                       <span>{emptyStateMessage()}</span>
                     </div>
                     {emptyBecauseFiltered() ? (
-                      <button class="btn btn--sm" onClick={props.onClearFilters}>
+                      <button class="btn btn--sm" onClick={() => props.onClearFilters()}>
                         {t("sessionsView.showAll")}
                       </button>
                     ) : undefined}
@@ -364,7 +367,7 @@ function SessionsTable(props: SessionsProps) {
               </For>
             </select>
             {props.result?.hasMore && props.result.nextOffset != null ? (
-              <button disabled={props.loading} onClick={props.onLoadMore}>
+              <button disabled={props.loading} onClick={() => props.onLoadMore()}>
                 {t("chat.selectors.loadMoreRosterSessions")}
               </button>
             ) : undefined}

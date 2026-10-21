@@ -16,7 +16,6 @@ const providerIdentity = { ok: true, appId: "cli_alpha", botOpenId: "bot_alpha",
 
 const alphaAccount: ResolvedFeishuAccount = {
   accountId: "alpha",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "cli_alpha",
@@ -204,7 +203,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
     expect(writeCachedFeishuBotIdentityMock).toHaveBeenCalledWith({
@@ -254,7 +252,6 @@ describe("Feishu monitor startup preflight", () => {
 
     await expect(fetchBotIdentityForMonitor(alphaAccount, { runtime })).resolves.toEqual({
       botOpenId: "bot_alpha",
-      botName: "Alpha",
       source: "provider",
     });
 

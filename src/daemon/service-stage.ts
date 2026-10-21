@@ -5,7 +5,7 @@ import { readRegularFile, sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
 // Numbers retain legacy provenance; only newly observed IDs become exact strings.
@@ -132,12 +132,9 @@ export async function publishServiceFile(params: {
 
 /** Read one regular file; publication owners compare it to retained write facts. */
 export async function readServiceFileState(file: string): Promise<GatewayServiceFileState | null> {
-  const before = await fs.lstat(file, { bigint: true }).catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const before = await fs
+    .lstat(file, { bigint: true })
+    .catch((error: unknown) => ignoreMissingPath(error) ?? null);
   if (!before) {
     return null;
   }

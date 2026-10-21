@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin, type ResolvedConfig } from "vite";
-import { resolvedLocaleConfigHintsModulePrefix } from "./control-ui-locales.ts";
+import {
+  resolvedLocaleConfigHintsModulePrefix,
+  resolvedLocaleNamespaceModulePrefix,
+} from "./control-ui-locales.ts";
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(configDir, "../..");
@@ -56,6 +59,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "node_modules/@solidjs/signals/dist/prod/core/action.js":
+    case "node_modules/@solidjs/signals/dist/dev/core/action.js":
+    case "node_modules/@solidjs/signals/dist/prod/core/verdict.js":
+    case "node_modules/@solidjs/signals/dist/prod/core/lanes.js":
+      // Solid's eager initializers must not pull the route boot groups into startup.
+      return "solid-actions-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
@@ -101,6 +110,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (normalized.startsWith(resolvedLocaleConfigHintsModulePrefix)) {
     return `${controlUiLocaleConfigHintsChunkPrefix}${normalized.slice(resolvedLocaleConfigHintsModulePrefix.length)}`;
+  }
+  if (normalized.startsWith(resolvedLocaleNamespaceModulePrefix)) {
+    return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
   if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {

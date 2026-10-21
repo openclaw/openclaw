@@ -41,14 +41,8 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "pluginMetadataPlugins" | "modelTarget"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -100,7 +94,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -237,7 +231,7 @@ function projectRelevantModelMap(params: {
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
@@ -402,38 +396,4 @@ export function sameSetupConfiguredRoute(
   const normalize = (route: DefaultInferenceRouteProjection["route"]) =>
     route ? { ...route, agentId: "<agent>", agentDir: "<agent-dir>" } : null;
   return isDeepStrictEqual(normalize(left), normalize(right));
-}
-
-export function assertSetupTarget(params: {
-  config: OpenClawConfig;
-  expectedAgentId?: string;
-  expectedAgentDir?: string;
-  expectedModelRef?: string;
-  resolveAgentDir: (config: OpenClawConfig, agentId: string) => string;
-  resolveDefaultAgentId: (config: OpenClawConfig) => string;
-  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig; agentId: string }) => {
-    provider: string;
-    model: string;
-  };
-}): void {
-  const agentId = params.resolveDefaultAgentId(params.config);
-  if (params.expectedAgentId && agentId !== params.expectedAgentId) {
-    throw new Error("The default agent changed while AI access was being tested. Try setup again.");
-  }
-  if (
-    params.expectedAgentDir &&
-    params.resolveAgentDir(params.config, agentId) !== params.expectedAgentDir
-  ) {
-    throw new Error(
-      "The agent credential location changed while AI access was being tested. Try setup again.",
-    );
-  }
-  if (params.expectedModelRef) {
-    const current = params.resolveDefaultModelForAgent({ cfg: params.config, agentId });
-    if (`${current.provider}/${current.model}` !== params.expectedModelRef) {
-      throw new Error(
-        "The default model changed while AI access was being tested. Try setup again.",
-      );
-    }
-  }
 }

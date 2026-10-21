@@ -92,7 +92,12 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
   const physicalLayoutOwner = SQLITE_PHYSICAL_LAYOUT_OWNERS.includes(file);
   const add = (match: DialectMatch, position: number, postgres = false, text = "") => {
     // Only these shared names have proven PostgreSQL callers; SQLite-only JSON stays debt.
-    if (postgres && /^(?:json_each|jsonb_set)\s*\(/iu.test(text.slice(match.index))) {
+    if (
+      postgres &&
+      /^(?:(?:json_each|jsonb_(?:set|typeof|each|array_elements))\s*\(|->>?)/iu.test(
+        text.slice(match.index),
+      )
+    ) {
       return;
     }
     // These engine owners define/call PostgreSQL functions, not SQLite connection UDFs.
@@ -110,10 +115,19 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     ) {
       return;
     }
+    // Native migration locks and private archive row order have no PostgreSQL SQL equivalent.
+    // Keep other constructs at these owners, and these constructs at callers, in the ratchet.
+    const nativeMaintenance =
+      (file === "src/infra/update-doctor-migration-attribution.ts" &&
+        (match.construct === "transaction-mode" ||
+          match.construct === "pragma" ||
+          match.construct === "schema-version")) ||
+      (file === "src/infra/sqlite-migration-scoped-snapshot.ts" && match.construct === "rowid");
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({
       ...match,
-      owner: match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
+      group: nativeMaintenance ? "engine-maintenance" : match.group,
+      owner: nativeMaintenance || match.owner || SQLITE_PRIMITIVE_OWNERS.includes(file),
       line: line + 1,
       column: character + 1,
     });
@@ -162,7 +176,13 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     let owner = inheritedOwner;
     let postgres = inheritedPostgres;
     if (ts.isFunctionLikeDeclaration(node)) {
-      postgres = false;
+      // These helpers only serve the PostgreSQL branches of the context reader.
+      postgres =
+        file === "src/config/sessions/session-model-context-projection.ts" &&
+        ts.isFunctionDeclaration(node) &&
+        /^(?:projectPostgresModelContextRowsSql|postgresModelEventSql|postgresNavigationObjectSql|postgresModelNavigationSql)$/u.test(
+          node.name?.text ?? "",
+        );
       owner =
         file === "src/infra/kysely-sync.ts" &&
         ts.isFunctionDeclaration(node) &&

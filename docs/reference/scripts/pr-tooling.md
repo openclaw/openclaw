@@ -31,6 +31,55 @@ intact until the command finishes. This setting applies at both dependency
 materialization handoffs; in-place wrappers keep their checkout's dependency
 context, and wrapper selection stays unchanged.
 
+## Keep the admitted workflow across commands
+
+The first locked operation for a PR retains its authenticated workflow source in
+`refs/openclaw/pr-workflow-bindings/<pr>`. Later operations use that source and
+its dependency manifest, even when main advances. The binding belongs to the
+canonical repository and PR; a caller cannot select an arbitrary revision or
+replace it with an environment variable. Malformed, foreign, or changed bindings
+fail closed. Developer-wrapper opt-in does not change landing authority.
+
+Security Review publisher sources have a separate owner: the protected-main tip
+captured by merge admission. For inherited-failure admin admission, the publisher
+must be a successful Security Review run on that main history, and its workflow
+and every declared checkout source must match that tip's Git blobs. The verified
+workflow supplies the checkout inventory; the bound wrapper's older files do not.
+Initial admission reads those owner blobs from GitHub at the captured main SHA,
+so it does not require a newly observed main to be materialized locally yet. The
+final local-only source check still follows main materialization.
+An older run remains eligible only while all publisher sources still match main.
+Foreign, malformed, or outdated sources refuse admission. This does not refresh
+or replace the retained workflow binding, select caller-provided source code, or
+waive exact-head security enforcement and current review authority.
+
+Workflow selection crosses supervision through a private held descriptor. This
+is separate from the descriptor that owns temporary wrapper cleanup. Reentry
+must verify the complete source inventory and manifest against the selected
+commit before using it. Keep the retained installation available until the PR
+operation completes; a workflow binding does not freeze installed package bytes.
+
+When `refs/remotes/origin/main` is absent, only the clean, HEAD-verified canonical
+wrapper can bootstrap. After acquiring the PR operation lock and checking
+temporary storage and GitHub authentication, it fetches canonical main into an
+operation-owned qualification ref. This extra acquisition does not update the
+shared tracking ref or `FETCH_HEAD`. A retained binding must belong to that main
+history, and the running wrapper must match the selected source exactly. A
+symbolic or unreadable tracking ref is not a cold-start fallback.
+
+Successful qualification removes only its captured ref value. Failed or
+interrupted qualification can retain its ref and operation lock; preserve the
+reported evidence and use native exact-owner recovery after all children join.
+If source comparison fails, use a qualified checkout of the reported source;
+do not erase the binding or substitute newer workflow code. Existing-worktree
+and completion-only commands do not provision a worktree for this acquisition.
+`prepare-push --resume-crabbox-run` requires the existing authenticated tracking
+anchor and refuses cold acquisition before any fetch.
+
+Only verified native merge completion retires the exact workflow binding.
+Failures and pending completion preserve it. Repeating completion reconciles
+the merge outcome without repeating publication, comments, or cleanup.
+
 ## Recover a retained dependency projection
 
 When a retained anchor's pinned package directory disappears, changing

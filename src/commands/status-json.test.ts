@@ -193,6 +193,29 @@ describe("statusJsonCommand", () => {
     expect(payload).not.toHaveProperty("securityAudit");
   });
 
+  it.each([
+    { engine: "postgres" },
+    { engine: "sqlite", families: { agent: { engine: "postgres" } } },
+  ])(
+    "reports supported PostgreSQL selections without the experimental flag: %j",
+    async (database) => {
+      const { runtime, logs } = createRuntimeCapture();
+      mocks.scanStatusJsonFast.mockResolvedValueOnce({
+        ...createScanResult(),
+        cfg: { database },
+      });
+
+      await statusJsonCommand({}, runtime);
+
+      const payload = JSON.parse(logs[0] ?? "{}");
+      expect(payload.databaseEngines.experimental).toBe(false);
+      expect(payload.databaseEngines.families).toContainEqual(
+        expect.objectContaining({ id: "agent", effective: "postgres" }),
+      );
+      expect(payload.databaseEngines.source).toBe("unavailable");
+    },
+  );
+
   it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const { runtime, logs } = createRuntimeCapture();
     const compatibilityNotice = {

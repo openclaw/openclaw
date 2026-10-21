@@ -26,6 +26,7 @@ import {
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 import {
   createHarness,
   flushObserver,
@@ -154,7 +155,6 @@ describe("utility completion with an unavailable implicit harness", () => {
       vi.useFakeTimers();
       const observer = createHarness({
         config,
-        utilityModelRef: "openai/gpt-5.4-mini",
         prepareModel: vi.fn(defaultPrepareModel),
         completeModel: vi.fn(defaultCompleteModel),
         readSession: vi.fn(() => ({
@@ -163,8 +163,8 @@ describe("utility completion with an unavailable implicit harness", () => {
           agentHarnessId: "openclaw",
         })),
       });
-      dispose = () => observer.observer.dispose();
-      startAndAddToolNotes(observer.observer);
+      dispose = () => observer.observer.disposeAsync();
+      await startAndAddToolNotes(observer.observer);
       await vi.advanceTimersByTimeAsync(12_000);
       await vi.dynamicImportSettled();
       await flushObserver();
@@ -212,12 +212,11 @@ describe("utility completion with an unavailable implicit harness", () => {
       });
       // Warm the fixture's database before timing utility completion.
       await prewarmSessionHistoryWorker({ agentId: scope.agentId, env: state.env });
-      const complete = vi.fn(defaultCompleteModel);
+      const complete = vi.spyOn(observerModel, "defaultCompleteModel");
       const recaps = createSessionActivitySummaries({
         scheduler: createTestGatewayScheduler(),
         getConfig: () => config,
         onChanged: vi.fn(),
-        completeModel: complete,
       });
       dispose = () => recaps.dispose();
       await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));

@@ -323,7 +323,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
                 class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
                 aria-label={t("common.reload")}
                 disabled={props.configBusy || props.configSchemaLoading}
-                onClick={props.onConfigReload}
+                onClick={() => props.onConfigReload()}
               >
                 <Icon name="refresh" />
               </button>
@@ -478,20 +478,20 @@ function PluginOverview(props: DetailProps): JSX.Element {
   );
   const catalog = createMemo(() => props.catalog ?? props.inspection?.catalog);
   const components = createMemo(() => props.inspection?.components);
-  const catalogIcon = createMemo(() => {
+  const catalogIcon = () => {
     const url = catalog()?.plugin.catalog.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
-  const authorIcon = createMemo(() => {
+  };
+  const authorIcon = () => {
     const url = catalog()?.detail.author?.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
+  };
   const skills = createMemo(() =>
     (components()?.skills ?? []).map((name) => ({
       name,

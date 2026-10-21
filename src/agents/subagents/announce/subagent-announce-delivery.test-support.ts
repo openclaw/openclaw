@@ -12,7 +12,7 @@ export const testing = {
 };
 
 type RunDescendantWake = typeof import("./subagent-announce-descendant-wake.js").runDescendantWake;
-type DescendantWakeDeps = Parameters<RunDescendantWake>[0]["deps"];
+type AnnounceRuntime = typeof import("./subagent-announce.runtime.js");
 
 export function registerDescendantWakeCurrencyTests({
   createRoleRestrictedInProcessGatewayMock,
@@ -21,10 +21,12 @@ export function registerDescendantWakeCurrencyTests({
 }: {
   runDescendantWake: RunDescendantWake;
   createRoleRestrictedInProcessGatewayMock: (response: Record<string, unknown>) => {
-    cfg: ReturnType<DescendantWakeDeps["getRuntimeConfig"]>;
-    dispatchGatewayMethodInProcess: DescendantWakeDeps["dispatchGatewayMethodInProcess"];
+    cfg: ReturnType<AnnounceRuntime["getRuntimeConfig"]>;
+    dispatchGatewayMethodInProcess: AnnounceRuntime["dispatchGatewayMethodInProcess"];
   };
-  createGatewayMock: (response?: Record<string, unknown>) => DescendantWakeDeps["callGateway"];
+  createGatewayMock: (
+    response?: Record<string, unknown>,
+  ) => AnnounceRuntime["callSubagentLifecycleGateway"];
 }) {
   it.each(["current", "changed", "unavailable"] as const)(
     "settles descendant wakes under restrictive gateway roles with %s currency",
@@ -48,6 +50,8 @@ export function registerDescendantWakeCurrencyTests({
         runIds: ["descendant-wake-run"],
       });
       testing.setDepsForTest({
+        callGateway,
+        dispatchGatewayMethodInProcess,
         getRuntimeConfig: () => cfg,
         loadSessionEntryByKey: async () => ({ sessionId: "nested-session", updatedAt: 1 }),
       });
@@ -67,12 +71,7 @@ export function registerDescendantWakeCurrencyTests({
         isChildSessionEffectsAllowed: () => true,
         resolveGatewayContext,
         signal,
-        deps: {
-          callGateway,
-          dispatchGatewayMethodInProcess,
-          getRuntimeConfig: () => cfg,
-          replaceSubagentRunAfterSteer,
-        },
+        replaceSubagentRunAfterSteer,
       });
 
       expect(woke).toBe(currency === "current");

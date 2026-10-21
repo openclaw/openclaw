@@ -1,6 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import type { SessionActorStorageWrites } from "../config/sessions/session-actor-storage-contract.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as sessionHistoryState from "./session-history-state.js";
 import {
@@ -66,75 +68,53 @@ export function registerMemorySessionHistoryTests(
         agentId: AGENT_ID,
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
       };
-      expect(memorySessionActorOwners.read(location)).toBeUndefined();
-      try {
-        const missing = await fetchSessionHistory(harness.port, sessionKey);
-        expect(missing.status).toBe(404);
-        expectErrorResponse(await missing.json(), {
+      const expectMissing = async () => {
+        const response = await fetchSessionHistory(harness.port, sessionKey);
+        expect(response.status).toBe(404);
+        expectErrorResponse(await response.json(), {
           type: "not_found",
           message: `Session not found: ${sessionKey}`,
         });
         expect(memorySessionActorOwners.read(location)).toBeUndefined();
+      };
+      expect(memorySessionActorOwners.read(location)).toBeUndefined();
+      try {
+        await expectMissing();
 
         const authority = { assertCurrent() {}, authorize() {} };
-        const created = await withSessionActorStorage(
+        const lifetime = { assertCurrent() {}, assertReadable() {} };
+        const input: SessionActorStorageWrites["session.entry.create"]["input"] = {
+          entry: { sessionId, updatedAt: Date.now(), incognito: true },
+          transcriptEvents: [
+            { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+            {
+              type: "message",
+              id: "memory-http-reply",
+              parentId: null,
+              message: makeTranscriptAssistantMessage({ text }),
+            },
+          ],
+        };
+        await withSessionActorStorage(
           { agentId: AGENT_ID, sessionKey, storePath: location.path },
-          {
-            create: true,
-            authority,
-            lifetime: { assertCurrent() {}, assertReadable() {} },
-          },
-          ({ actor }) =>
-            actor.storage.mutate(
-              {
-                type: "session.entry.create",
-                input: {
-                  entry: {
-                    sessionId,
-                    updatedAt: Date.now(),
-                    incognito: true,
-                    lifecycleRevision: "memory-http-lifecycle",
-                  },
-                  transcriptEvents: [
-                    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-                    {
-                      type: "message",
-                      id: "memory-http-reply",
-                      parentId: null,
-                      message: makeTranscriptAssistantMessage({ text }),
-                    },
-                  ],
-                },
-              },
-              authority,
-            ),
+          { create: true, authority, lifetime },
+          ({ actor }) => commitMemory(actor.storage, "session.entry.create", input, authority),
         );
-        expect(created?.kind).toBe("committed");
 
         const history = await readSessionHistoryBody(harness.port, sessionKey);
         expect(history.sessionKey).toBe(sessionKey);
         expect(history.messages?.map((message) => message.content?.[0]?.text)).toEqual([text]);
 
         const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
-        const snapshotSpy = vi
+        using snapshotSpy = vi
           .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
           .mockImplementationOnce(async (params) => {
             const snapshot = await readSnapshot(params);
             memorySessionActorOwners.closeDatabase(location);
             return snapshot;
           });
-        try {
-          const closed = await fetchSessionHistory(harness.port, sessionKey);
-          expect(closed.status).toBe(404);
-          expectErrorResponse(await closed.json(), {
-            type: "not_found",
-            message: `Session not found: ${sessionKey}`,
-          });
-          expect(snapshotSpy).toHaveBeenCalledOnce();
-          expect(memorySessionActorOwners.read(location)).toBeUndefined();
-        } finally {
-          snapshotSpy.mockRestore();
-        }
+        await expectMissing();
+        expect(snapshotSpy).toHaveBeenCalledOnce();
       } finally {
         memorySessionActorOwners.closeDatabase(location);
       }
