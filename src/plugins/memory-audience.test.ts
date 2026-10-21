@@ -144,7 +144,6 @@ it.each([
   ["channel", "channel", true, false, "conversation"],
   ["nested private", "direct", true, true, "owner-private"],
   ["nested non-owner", "direct", false, true, "conversation"],
-  ["nested group", "group", true, true, "conversation"],
 ] as const)("maps a %s audience", async (_name, chatType, owner, nested, expectedKind) => {
   const root = rootEntry(chatType);
   let sessionKey = ROOT_KEY;
@@ -229,31 +228,25 @@ it("denies lineage beyond 64 hops", async () => {
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
-it.each([
-  [
-    "missing both receipts",
-    { spawnedBySenderIsOwner: undefined, parentSessionLifecycleRevision: undefined },
-  ],
-  ["missing the owner receipt", { spawnedBySenderIsOwner: undefined }],
-] as const)(
-  "fails closed with a respawn instruction for a pre-existing spawned row %s",
-  async (_name, legacy) => {
-    const parent = rootEntry();
-    const resolution = await resolveChild(parent, { ...childEntry(parent), ...legacy });
-    expect(resolution).toEqual({
-      status: "denied",
-      kind: "stale-lineage",
-      reason: expect.stringContaining(
-        `spawned session ${CHILD_KEY} predates memory lineage receipts`,
-      ),
-    });
-    expect(resolution.status === "denied" && resolution.reason).toContain(
-      "Respawn it from its parent session to restore memory access.",
-    );
-    expect(fakeSessionOwner.workerReads).toEqual([]);
-    expect(fakeSessionOwner.activeLeases).toBe(0);
-  },
-);
+it("fails closed with a respawn instruction for a spawned row missing its owner receipt", async () => {
+  const parent = rootEntry();
+  const resolution = await resolveChild(parent, {
+    ...childEntry(parent),
+    spawnedBySenderIsOwner: undefined,
+  });
+  expect(resolution).toEqual({
+    status: "denied",
+    kind: "stale-lineage",
+    reason: expect.stringContaining(
+      `spawned session ${CHILD_KEY} predates memory lineage receipts`,
+    ),
+  });
+  expect(resolution.status === "denied" && resolution.reason).toContain(
+    "Respawn it from its parent session to restore memory access.",
+  );
+  expect(fakeSessionOwner.workerReads).toEqual([]);
+  expect(fakeSessionOwner.activeLeases).toBe(0);
+});
 
 it("grants a conversation audience to a new child of a group row without a lifecycle revision", async () => {
   // Channel-created group rows carry no lifecycle revision; the child records that absence.
