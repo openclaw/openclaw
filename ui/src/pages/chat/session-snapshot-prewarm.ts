@@ -4,7 +4,6 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
@@ -15,7 +14,6 @@ type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
-  snapshot?: Promise<ChatSessionSnapshot | null>;
 };
 
 let pending: PrewarmedSnapshot | undefined;

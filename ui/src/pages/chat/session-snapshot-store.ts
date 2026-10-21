@@ -46,6 +46,7 @@ const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
+const parsedPrewarms = new WeakMap<object, Promise<ChatSessionSnapshot | null>>();
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
@@ -193,6 +194,18 @@ async function readSnapshotRecord(
   return record?.snapshot ?? null;
 }
 
+function readSharedPrewarm(
+  entry: object,
+  read: () => Promise<ChatSessionSnapshot | null>,
+): Promise<ChatSessionSnapshot | null> {
+  let snapshot = parsedPrewarms.get(entry);
+  if (!snapshot) {
+    snapshot = read();
+    parsedPrewarms.set(entry, snapshot);
+  }
+  return snapshot;
+}
+
 export async function readPrewarmedChatSnapshot(
   cacheKey: string,
 ): Promise<ChatSessionSnapshot | null> {
@@ -200,10 +213,11 @@ export async function readPrewarmedChatSnapshot(
   if (entry?.cacheKey !== cacheKey) {
     return null;
   }
-  entry.snapshot ??= entry.promise.then((value) =>
-    readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+  const snapshot = await readSharedPrewarm(entry, () =>
+    entry.promise.then((value) =>
+      readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+    ),
   );
-  const snapshot = await entry.snapshot;
   return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
 }
 
@@ -537,7 +551,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
         readSnapshotRecord(sessionKey, value, isCurrent, onBoard),
       );
-    const snapshot = await (prewarm ? (prewarm.snapshot ??= read()) : read());
+    const snapshot = await (prewarm ? readSharedPrewarm(prewarm, read) : read());
     if (!snapshot || !isCurrent()) {
       return null;
     }
