@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { openFileBackedSessionManagerForTest } from "../../../test/helpers/session-manager-file-fixture.js";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -36,59 +36,49 @@ function writeV1File(entries: unknown[]) {
   return { file, sm: openFileBackedSessionManagerForTest(file, dir) };
 }
 
-describe("v1 session migration id assignment", () => {
-  it("assigns full entry ids while preserving parent linkage", () => {
-    const firstId = "deadbeef-0000-4000-8000-000000000000";
-    const secondId = "deadbeef-0000-4000-8000-000000000001";
-    uuidQueue.length = 0;
-    uuidQueue.push(firstId, secondId);
+it("assigns full v1 entry ids while preserving parent linkage", () => {
+  const firstId = "deadbeef-0000-4000-8000-000000000000";
+  const secondId = "deadbeef-0000-4000-8000-000000000001";
+  uuidQueue.length = 0;
+  uuidQueue.push(firstId, secondId);
 
-    const { sm } = writeV1File([message("first"), message("second", "assistant", 2)]);
+  const { sm } = writeV1File([message("first"), message("second", "assistant", 2)]);
 
-    const messages = sm
-      .getEntries()
-      .filter((e) => e.type === "message")
-      .map((e) => ({
-        id: e.id,
-        parentId: e.parentId,
-      }));
+  const messages = sm
+    .getEntries()
+    .filter((e) => e.type === "message")
+    .map(({ id, parentId }) => ({ id, parentId }));
 
-    expect(messages).toEqual([
-      { id: firstId, parentId: null },
-      { id: secondId, parentId: firstId },
-    ]);
-  });
+  expect(messages).toEqual([
+    { id: firstId, parentId: null },
+    { id: secondId, parentId: firstId },
+  ]);
+});
 
-  it("preserves compaction indexes across opaque rows", () => {
-    const { file, sm } = writeV1File([
-      message("prelude"),
-      null,
-      message("kept", "user", 2),
-      {
-        type: "compaction",
-        timestamp: "2026-01-01T00:00:03.000Z",
-        summary: "summary",
-        firstKeptEntryIndex: 3,
-        tokensBefore: 200,
-      },
-    ]);
-    const kept = sm
-      .getEntries()
-      .find(
-        (entry) =>
-          entry.type === "message" &&
-          entry.message.role === "user" &&
-          entry.message.content === "kept",
-      );
-    const compaction = sm.getEntries().find((entry) => entry.type === "compaction");
+it("preserves v1 compaction indexes across opaque rows", () => {
+  const { file, sm } = writeV1File([
+    message("prelude"),
+    null,
+    message("kept", "user", 2),
+    {
+      type: "compaction",
+      timestamp: "2026-01-01T00:00:03.000Z",
+      summary: "summary",
+      firstKeptEntryIndex: 3,
+      tokensBefore: 200,
+    },
+  ]);
+  const kept = sm
+    .getEntries()
+    .find(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "user" &&
+        entry.message.content === "kept",
+    );
+  const compaction = sm.getEntries().find((entry) => entry.type === "compaction");
 
-    expect(kept).toBeDefined();
-    expect(compaction).toMatchObject({ firstKeptEntryId: kept?.id });
-    expect(
-      readFileSync(file, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as unknown),
-    ).toContain(null);
-  });
+  expect(kept).toBeDefined();
+  expect(compaction).toMatchObject({ firstKeptEntryId: kept?.id });
+  expect(readFileSync(file, "utf8").split("\n")).toContain("null");
 });

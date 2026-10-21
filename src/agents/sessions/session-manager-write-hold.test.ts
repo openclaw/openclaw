@@ -70,45 +70,40 @@ it.each(["assistant", "toolResult"] as const)(
       if (!codec) {
         throw new Error("Writer preparation proof requires native zstd support");
       }
-      const compress = codec.compress;
-      const redact = transcriptRedact.sanitizeTranscriptMessage;
-      const stringify = JSON.stringify;
-      const parse = JSON.parse;
-      const spies = [
-        vi.spyOn(codec, "compress").mockImplementation((...args) => {
-          compressionHeld.push(db.isTransaction);
-          return compress(...args);
-        }),
-        vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation((...args) => {
-          redactionHeld.push(db.isTransaction);
-          return redact(...args);
-        }),
-        vi.spyOn(JSON, "stringify").mockImplementation((...args: Parameters<typeof stringify>) => {
-          const result = stringify(...args);
-          if (result && result.length > 100_000) {
-            largeJsonHeld.push(db.isTransaction);
+      function track<Args extends unknown[], Result>(
+        fn: (...args: Args) => Result,
+        held: boolean[],
+        payload?: (result: Result, ...args: Args) => string | undefined,
+      ) {
+        return (...args: Args) => {
+          const locked = db.isTransaction;
+          const result = fn(...args);
+          if (!payload || (payload(result, ...args)?.length ?? 0) > 100_000) {
+            held.push(locked);
           }
           return result;
-        }),
-        vi.spyOn(JSON, "parse").mockImplementation((...args: Parameters<typeof parse>) => {
-          if (args[0].length > 100_000) {
-            largeJsonHeld.push(db.isTransaction);
-          }
-          return parse(...args);
-        }),
-      ];
+        };
+      }
+      vi.spyOn(codec, "compress").mockImplementation(track(codec.compress, compressionHeld));
+      vi.spyOn(transcriptRedact, "sanitizeTranscriptMessage").mockImplementation(
+        track(transcriptRedact.sanitizeTranscriptMessage, redactionHeld),
+      );
+      vi.spyOn(JSON, "stringify").mockImplementation(
+        track(JSON.stringify, largeJsonHeld, (result) => result),
+      );
+      vi.spyOn(JSON, "parse").mockImplementation(
+        track(JSON.parse, largeJsonHeld, (_, json) => json),
+      );
       let entryId: string;
       try {
         entryId = manager.appendMessage(message);
       } finally {
-        for (const spy of spies) {
-          spy.mockRestore();
-        }
+        vi.restoreAllMocks();
       }
       expect(redactionHeld).toEqual([false]);
+      expect(compressionHeld).toEqual([false]);
       expect(largeJsonHeld.length).toBeGreaterThan(0);
       expect(largeJsonHeld).not.toContain(true);
-      expect(compressionHeld).toEqual([false]);
       const entry = manager.getEntry(entryId);
       expect(entry).toMatchObject({
         parentId,
@@ -146,10 +141,7 @@ it("rejects a stale generation and stores prepared messages under the rebased de
     const prepared = prepareTranscriptMessageAppend({ message });
     expect(prepared?.persistedMessage).toEqual(message);
     const expectedMutationAt = readTranscriptMutationAtSync(scope);
-    const descendant = manager.appendMessage({
-      ...message,
-      content: [{ type: "text", text: "intervening assistant" }],
-    });
+    const descendant = manager.appendMessage(assistantMessage("intervening assistant"));
     const before = loadTranscriptEventsSync(scope);
     const options = {
       message,
@@ -167,17 +159,13 @@ it("rejects a stale generation and stores prepared messages under the rebased de
       ok: true,
       value: { result: { appended: true, effectiveParentId: descendant } },
     });
-    const stored = loadTranscriptEventsSync(scope);
-    expect(stored.slice(0, -1)).toEqual(before);
-    expect(stored.at(-1)).toMatchObject({
-      id: "prepared-response",
-      parentId: descendant,
-      message,
-    });
+    expect(loadTranscriptEventsSync(scope)).toEqual([
+      ...before,
+      expect.objectContaining({ id: "prepared-response", parentId: descendant, message }),
+    ]);
     const row = db
       .prepare("SELECT navigation_json FROM transcript_events ORDER BY seq DESC LIMIT 1")
       .get();
-    expect(typeof row?.navigation_json).toBe("string");
     if (typeof row?.navigation_json !== "string") {
       throw new Error("Expected compressed rebased transcript metadata");
     }
