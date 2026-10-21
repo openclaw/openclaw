@@ -262,17 +262,19 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     deliveryContext: deliveryContext ?? sessionDelivery.deliveryContext,
     threadId: threadId ?? sessionDelivery.threadId,
     message: note ?? null,
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint: restartRequirement.requiresRestart ? formatDoctorNonInteractiveHint() : null,
     stats: {
       mode: params.mode,
       root: params.configPath,
       requiresRestart: restartRequirement.requiresRestart,
     },
   };
-  const sentinelPersisted = await writeRestartSentinel(payload).then(
-    () => true,
-    () => false,
-  );
+  const sentinelPersisted = restartRequirement.requiresRestart
+    ? await writeRestartSentinel(payload).then(
+        () => true,
+        () => false,
+      )
+    : false;
   const restart = restartRequirement.scheduleDirectRestart
     ? scheduleGatewayRestart({
         delayMs: restartDelayMs,
