@@ -1977,8 +1977,8 @@ totals. Counting runs separately from allocation/timing capture. The profile
 includes objects collected by both minor and major GC. These measurements cover
 the owner in the driver's isolate, excluding worker transport and the Gateway;
 use the Gateway `chat.send --allocations` workload for main-isolate turn cost.
-Pass the same future `--start-at` to each side of a concurrent pair and swap CPU
-halves between pairs.
+Compare baseline and candidate serially in interleaved ABAB order, with at least
+five samples per revision.
 
 Use the same owned Gateway driver with `--allocations` and a named `--scenario`:
 
