@@ -400,19 +400,21 @@ it("rejects malformed extension batch parallelism", () => {
   }
 });
 
-it("preserves positional Vitest args after the extension batch separator", () => {
-  expect(
-    parseExtensionIds([
-      "telegram",
-      "--coverage",
-      "--",
-      "extensions/telegram/src/index.test.ts",
-      "--run",
-    ]),
-  ).toEqual({
+it.each([
+  {
+    name: "preserves positional Vitest args after the extension batch separator",
+    input: ["telegram", "--coverage", "--", "extensions/telegram/src/index.test.ts", "--run"],
     extensionIds: ["telegram"],
     passthroughArgs: ["--coverage", "extensions/telegram/src/index.test.ts", "--run"],
-  });
+  },
+  {
+    name: "accepts pnpm's leading argument separator before extension ids",
+    input: ["--", "telegram,slack", "--run"],
+    extensionIds: ["telegram", "slack"],
+    passthroughArgs: ["--run"],
+  },
+])("$name", ({ input, extensionIds, passthroughArgs }) => {
+  expect(parseExtensionIds(input)).toEqual({ extensionIds, passthroughArgs });
 });
 
 it.each([
@@ -851,13 +853,6 @@ it("detects exact Vitest excludes in extension batch args", () => {
     ]),
   ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
   expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
-});
-
-it("accepts pnpm's leading argument separator before extension ids", () => {
-  expect(parseExtensionIds(["--", "telegram,slack", "--run"])).toEqual({
-    extensionIds: ["telegram", "slack"],
-    passthroughArgs: ["--run"],
-  });
 });
 
 it("reports single-plugin preparation rejection as infrastructure failure", () => {
