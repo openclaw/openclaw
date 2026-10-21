@@ -3,7 +3,7 @@ import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runne
 import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions.js";
 import {
-  loadSessionEntry as loadAccessorSessionEntry,
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
@@ -20,10 +20,6 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 const initial = { compactionCount: 2, totalTokens: 120, totalTokensFresh: true };
 const committed = { label: "Edited during summary", compactionCount: 4, totalTokens: 80 };
 
-function loadSessionEntry(scope: Parameters<typeof loadAccessorSessionEntry>[0]) {
-  return loadAccessorSessionEntry({ ...scope, readConsistency: "latest" });
-}
-
 test.each([55, undefined])(
   "sessions.compact corrects a committed token estimate to %s without counting the boundary twice",
   async (tokensAfter) => {
@@ -34,6 +30,7 @@ test.each([55, undefined])(
       sessionKey: "agent:main:main",
       storePath,
     };
+    const readEntry = () => loadSessionEntry({ ...scope, readConsistency: "latest" });
     await upsertSessionEntryCore(scope, sessionStoreEntry(scope.sessionId, initial));
     await seedLinearSessionTranscript({
       ...scope,
@@ -48,7 +45,7 @@ test.each([55, undefined])(
           throw new Error("expected prepared Gateway compaction persistence");
         }
         await upsertSessionEntryCore(scope, {
-          ...loadSessionEntry(scope),
+          ...readEntry(),
           sessionId: scope.sessionId,
           label: "Edited during summary",
           compactionCount: 3,
@@ -59,7 +56,7 @@ test.each([55, undefined])(
           host.withCompactionPersistenceAsync,
           () => manager.appendCompactionAsync(...boundary),
         );
-        expect(loadSessionEntry(scope)).toMatchObject(committed);
+        expect(readEntry()).toMatchObject(committed);
         return {
           ok: true,
           compacted: true,
@@ -76,7 +73,7 @@ test.each([55, undefined])(
         ok: true,
         payload: { key: "agent:main:main", compacted: true },
       });
-      const entry = loadSessionEntry(scope);
+      const entry = readEntry();
       expect(entry).toMatchObject({
         ...committed,
         totalTokens: tokensAfter ?? 80,

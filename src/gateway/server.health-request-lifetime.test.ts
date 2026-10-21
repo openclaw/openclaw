@@ -6,7 +6,6 @@ import { expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { resolveStateDir } from "../config/paths.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { HealthSummary } from "./health/types.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import {
@@ -18,8 +17,6 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-
 it("joins coalesced post-connect health before concurrent closes restore fixture selectors", async ({
   signal,
 }) => {
@@ -30,7 +27,7 @@ it("joins coalesced post-connect health before concurrent closes restore fixture
   const initialRoot = path.join(os.tmpdir(), "gateway-health-lifetime", "fixture");
   const selection = { OPENCLAW_STATE_DIR: initialRoot };
   const selectedRoots: string[] = [];
-  const collections: Promise<HealthSummary>[] = [];
+  const collections: ReturnType<typeof collect>[] = [];
   let healthSignal: AbortSignal | undefined;
   const expectHeldWork = await observeHeldGatewayWorkDrain(() => healthSignal);
   collect.mockClear();
@@ -43,10 +40,9 @@ it("joins coalesced post-connect health before concurrent closes restore fixture
     collections.push(collection);
     return collection;
   });
-  let gateway: GatewayHarness | undefined;
+  let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
   const clients: WebSocket[] = [];
   const closing: Promise<void>[] = [];
-  const finishedAtClose: number[] = [];
   const unblock = collectionGate.release;
   signal.addEventListener("abort", unblock, { once: true });
   try {
@@ -69,25 +65,22 @@ it("joins coalesced post-connect health before concurrent closes restore fixture
     expect(selectedRoots).toEqual([]);
 
     const second = expectDefined(clients[1], "second health client");
-    const shutdown = onceMessage<{ type: string; event: string; payload: { reason: string } }>(
+    const shutdown = onceMessage(
       second,
       (frame) => frame.type === "event" && frame.event === "shutdown",
     );
     for (let index = 0; index < 2; index++) {
       closing.push(
         gateway.server.close({ reason: "health lifetime proof" }).then(() => {
-          finishedAtClose.push(selectedRoots.length);
           selection.OPENCLAW_STATE_DIR = path.join(initialRoot, "restored");
           unblock();
         }),
       );
     }
-    expect((await shutdown).payload.reason).toBe("health lifetime proof");
+    expect(await shutdown).toMatchObject({ payload: { reason: "health lifetime proof" } });
     await expectHeldWork(Promise.all(closing));
     unblock();
-    await Promise.all(closing);
-    await Promise.all(collections);
-    expect(finishedAtClose).toEqual([1, 1]);
+    await Promise.all([...closing, ...collections]);
     expect(selectedRoots).toEqual([initialRoot]);
   } finally {
     unblock();

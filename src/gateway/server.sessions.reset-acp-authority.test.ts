@@ -4,18 +4,17 @@ import { createAcpMeta } from "../acp/runtime/session-meta-lifecycle.test-suppor
 // oxfmt-ignore
 import {
   acpRuntimeMocks,
-  sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import assert from "node:assert/strict";
 import { afterEach, expect, test, vi } from "vitest";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createRequestGate } from "./server-methods.request-gate.test-support.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
-import { writeSessionStore } from "./test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const { seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(async () => {
   await disposeSessionReadContexts();
@@ -27,9 +26,8 @@ test.each(["already retired", "caller retired"] as const)(
   async (reason) => {
     const acpEntryWriter = await import("../acp/runtime/session-meta-entry.js");
     const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
-    const { storePath } = await createSessionStoreDir();
+    const { storePath } = await seedActiveMainSession();
     const sessionKey = "agent:main:main";
-    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
     seedCanonicalAcpSessionMeta({
       sessionKey,
       meta: createAcpMeta({
@@ -57,7 +55,7 @@ test.each(["already retired", "caller retired"] as const)(
     const before = structuredClone(readState());
     const mutation = createRequestGate();
     const originalWrite = acpEntryWriter.updateAcpSessionStoreEntry;
-    const intercepted = vi
+    using intercepted = vi
       .spyOn(acpEntryWriter, "updateAcpSessionStoreEntry")
       .mockImplementation(async (input) => {
         if (input.mutation.kind === "touch") {
@@ -71,11 +69,7 @@ test.each(["already retired", "caller retired"] as const)(
       agentId: "main",
       sessionKey,
       reason: "session-reset",
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("reset caller retired");
-        }
-      },
+      assertCurrent: () => assert(current, "reset caller retired"),
     });
     const outcome = expect(resetting).rejects.toThrow("reset caller retired");
     try {
@@ -97,7 +91,6 @@ test.each(["already retired", "caller retired"] as const)(
     } finally {
       mutation.release();
       await outcome;
-      intercepted.mockRestore();
     }
   },
 );

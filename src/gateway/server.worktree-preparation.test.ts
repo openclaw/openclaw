@@ -60,13 +60,10 @@ it.each([
       onPromptReady: prompt.pause,
     });
     try {
-      expect(
-        await Promise.race([
-          preparing.then(() => "prepared"),
-          prompt.entered.then(() => "early prompt"),
-        ]),
-      ).toBe("prepared");
-      const prepared = await preparing;
+      const prepared = await Promise.race([
+        preparing,
+        prompt.entered.then(() => assert.fail("Prompt exposed before checkout completed")),
+      ]);
       assert(prepared.ok, JSON.stringify(prepared));
       const { worktree, spawnedCwd } = prepared.value;
       assert(worktree && spawnedCwd, "Expected a published worktree");
