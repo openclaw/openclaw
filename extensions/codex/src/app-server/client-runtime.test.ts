@@ -68,10 +68,18 @@ function createHarness() {
   return harness;
 }
 
-function createRuntimeHarness() {
+function createRuntimeHarness(
+  context: Parameters<typeof ensureCodexAppServerClientRuntime>[1] = { agentDir: "/tmp/agent" },
+) {
   const harness = createHarness();
-  ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+  ensureCodexAppServerClientRuntime(harness.client, context);
   return harness;
+}
+
+async function fillIdleThreads(client: CodexAppServerClient) {
+  for (let index = 1; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index++) {
+    await retainCodexAppServerLiveThread(client, `thread-${index}`);
+  }
 }
 
 async function claimThread(
@@ -137,9 +145,7 @@ it("keeps native creation instructions and latest turn settings only for the liv
 it("retains ephemeral policy and history beyond persistent idle and capacity limits", async () => {
   vi.useFakeTimers();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  const { client } = createClientHarness();
-  clients.push(client);
-  ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
+  const { client } = createRuntimeHarness();
   const release = vi.fn(async (_threadId: string) => undefined);
   const ephemeralPolicy = { developerInstructions: "" };
   await retainCodexAppServerLiveThread(
@@ -213,8 +219,7 @@ it("installs shared handlers once per physical client", async () => {
 });
 
 it("rejects ChatGPT refresh on a prepared API-key client", async () => {
-  const { client, send, writes } = createHarness();
-  ensureCodexAppServerClientRuntime(client, {
+  const { send, writes } = createRuntimeHarness({
     agentDir: "/tmp/agent",
     authMode: "prepared-api-key",
   });
@@ -238,9 +243,8 @@ it("rejects ChatGPT refresh on a prepared API-key client", async () => {
 it("requests retirement when its auth owner rejects a workspace change", async () => {
   vi.useFakeTimers();
   mocks.refreshAuth.mockRejectedValueOnce(new Error("ChatGPT workspace changed"));
-  const { client, send, writes } = createHarness();
   const onAuthRefreshFailure = vi.fn();
-  ensureCodexAppServerClientRuntime(client, {
+  const { send, writes } = createRuntimeHarness({
     agentDir: "/tmp/agent",
     authProfileId: "openai:default",
     onAuthRefreshFailure,
@@ -501,9 +505,7 @@ it("rolls back the new owner when capacity eviction cannot release its oldest th
     ownership: overflow,
   } = await claimThread("thread-overflow", overflowRelease);
   await retainCodexAppServerLiveThread(client, "thread-oldest", failingRelease);
-  for (let index = 1; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index += 1) {
-    await retainCodexAppServerLiveThread(client, `thread-${index}`);
-  }
+  await fillIdleThreads(client);
 
   await expect(thread.retain(overflow?.release)).resolves.toBe(false);
   expect(failingRelease).toHaveBeenCalledOnce();
@@ -533,9 +535,7 @@ it.each(["eviction", "release"])(
       async () => pendingRelease.promise,
     );
     if (mode === "eviction") {
-      for (let index = 1; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index += 1) {
-        await retainCodexAppServerLiveThread(client, `thread-${index}`);
-      }
+      await fillIdleThreads(client);
     }
     const releasing = mode === "release" ? thread.release() : undefined;
     const retaining = thread.retain();
@@ -637,9 +637,7 @@ it("keeps a failed unpin eviction owned until its original subscription can be r
   const thread = liveThread(client, "thread-parent");
   const release = failFirstRelease("temporary unpin unsubscribe failure");
   await retainCodexAppServerLiveThread(client, "thread-oldest", release);
-  for (let index = 1; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index += 1) {
-    await retainCodexAppServerLiveThread(client, `thread-sibling-${index}`);
-  }
+  await fillIdleThreads(client);
   const unprotect = thread.protect();
   await thread.retain();
 
@@ -651,9 +649,7 @@ it("keeps a failed unpin eviction owned until its original subscription can be r
   });
   expect(release).toHaveBeenCalledTimes(2);
   await expect(thread.consume()).resolves.toEqual(liveOwnership);
-  await expect(consumeCodexAppServerLiveThread(client, "thread-sibling-1")).resolves.toEqual(
-    liveOwnership,
-  );
+  await expect(consumeCodexAppServerLiveThread(client, "thread-1")).resolves.toEqual(liveOwnership);
 });
 
 it("discards only the exact thread after thread/closed", async () => {

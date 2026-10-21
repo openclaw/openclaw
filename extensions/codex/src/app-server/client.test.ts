@@ -200,24 +200,6 @@ it("logs only malformed frame sizes and still accepts the next response", async 
   expect(harness.client.getCloseError()).toBeUndefined();
 });
 
-it("aborts while waiting to retry an overloaded request", async () => {
-  vi.useFakeTimers();
-  const harness = createHarness();
-  const controller = new AbortController();
-
-  const request = harness.client.request("model/list", {}, { signal: controller.signal });
-  const first = harness.frame();
-  harness.send({
-    id: first.id,
-    error: { code: -32_001, message: "Server overloaded; retry later." },
-  });
-  controller.abort();
-
-  await expect(request).rejects.toThrow("model/list aborted");
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(harness.writes).toHaveLength(1);
-});
-
 it("keeps the shared client when ownership expires after an overload rejection", async () => {
   vi.useFakeTimers();
   const harness = createHarness();

@@ -387,7 +387,7 @@ export function useSideQuestionTestSetup() {
   });
 }
 
-function fakeTool(name: string, description: string) {
+export function fakeTool(name: string, description: string) {
   return {
     name,
     description,
