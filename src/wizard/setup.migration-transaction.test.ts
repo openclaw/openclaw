@@ -78,10 +78,6 @@ function prompter(): WizardPrompter {
   return createWizardPrompter({ confirm: vi.fn(async () => true) }, { defaultSelect: "claude" });
 }
 
-function memoryPath(root: string) {
-  return path.join(root, "workspace", "MEMORY.md");
-}
-
 function importedCredential(database: string) {
   return loadPersistedAuthProfileStoreAtDatabasePath(database, "agent")?.profiles[
     "openai:imported"
@@ -152,6 +148,7 @@ function provider(params: {
     },
     async apply(ctx, plan): Promise<MigrationApplyResult> {
       assert(plan, "missing plan");
+      expect(plan.target).toBe(ctx.config.agents?.defaults?.workspace);
       const items = plan.items.map((item) => ({ ...item }));
       for (const item of items) {
         if (item.status === "planned" && item.id === "workspace:memory") {
@@ -179,14 +176,19 @@ function provider(params: {
 
 async function createImportFixture() {
   const root = await fs.realpath(tempRoots.make("openclaw-migration-transaction-"));
+  const stateDir = path.join(root, "openclaw-state");
+  // Real imports also exercise longest-prefix routing when the workspace is under state.
+  const workspace = path.join(stateDir, "workspace");
+  const memoryFile = path.join(workspace, "MEMORY.md");
   const source = path.join(root, "source-memory.md");
   await fs.writeFile(source, "remember this\n", "utf8");
   const currentConfig: { value: OpenClawConfig } = { value: {} };
-  process.env.OPENCLAW_STATE_DIR = path.join(root, "openclaw-state");
+  process.env.OPENCLAW_STATE_DIR = stateDir;
   mocks.provider = provider({ source });
   return {
     root,
     source,
+    workspace,
     currentConfig,
     install: (options: Omit<Parameters<typeof provider>[0], "source"> = {}) =>
       (mocks.provider = provider({ source, ...options })),
@@ -194,7 +196,7 @@ async function createImportFixture() {
       runSetupMigrationImport({
         opts: {
           importSource: source,
-          workspace: path.join(root, "workspace"),
+          workspace,
           ...(interactivePrompter ? {} : { importFrom: "claude", nonInteractive: true }),
         },
         baseConfig: {},
@@ -207,14 +209,13 @@ async function createImportFixture() {
         continueOnboarding: true,
       }),
     unpromoted: async () => {
-      await expect(fs.access(memoryPath(root))).rejects.toThrow();
+      await expect(fs.access(memoryFile)).rejects.toThrow();
       expect(currentConfig.value).toEqual({});
     },
-    memory: () => fs.readFile(memoryPath(root), "utf8"),
+    memory: () => fs.readFile(memoryFile, "utf8"),
     cleaned: async () => {
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith(".openclaw-migration-")),
-      ).toEqual([]);
+      const entries = (await Promise.all([root, stateDir].map((dir) => fs.readdir(dir)))).flat();
+      expect(entries.filter((name) => name.startsWith(".openclaw-migration-"))).toEqual([]);
     },
   };
 }
@@ -377,7 +378,7 @@ it.each([true, false])(
 it.each(["source", "target"] as const)(
   "aborts promotion when the %s changes during apply",
   async (changed) => {
-    const externalFile = path.join(fixture.root, "workspace", "external.txt");
+    const externalFile = path.join(fixture.workspace, "external.txt");
     fixture.install({
       mutateDuringApply: async () => {
         if (changed === "source") {

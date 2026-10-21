@@ -331,31 +331,17 @@ describe("runSetupWizard default-agent ownership", () => {
       { agents: { defaults: { workspace: "/tmp/global-workspace" } } },
       expect.any(Object),
     ]);
-    const target = {
-      agentId: "ops",
-      workspaceDir: "/tmp/ops-workspace",
-    };
-    expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      target.workspaceDir,
-      runtime,
-      expect.objectContaining({ agentId: target.agentId }),
-    );
-    expect(mocks.setupSkills).toHaveBeenCalledWith(
-      expect.any(Object),
-      target.workspaceDir,
-      runtime,
-      prompter,
-      expect.any(Object),
-    );
+    const workspaceDir = "/tmp/ops-workspace";
+    expect(mocks.ensureWorkspaceAndSessions.mock.lastCall?.[0]).toBe(workspaceDir);
+    expect(mocks.ensureWorkspaceAndSessions.mock.lastCall?.[2]).toMatchObject({ agentId: "ops" });
+    expect(mocks.setupSkills.mock.lastCall?.[1]).toBe(workspaceDir);
     for (const effect of [
       mocks.setupOfficialPlugins,
       mocks.setupRecommendations,
       mocks.setupPluginConfig,
       mocks.finalizeSetup,
     ]) {
-      expect(effect).toHaveBeenCalledWith(
-        expect.objectContaining({ workspaceDir: target.workspaceDir }),
-      );
+      expect(effect.mock.lastCall?.[0]).toMatchObject({ workspaceDir });
     }
   });
 });

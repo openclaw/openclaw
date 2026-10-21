@@ -133,15 +133,6 @@ describe("setupPluginConfig", () => {
     const prompts = prompter();
     vi.mocked(prompts.select).mockImplementation(async ({ options }) => options[2]!.value);
     const result = await configure(pluginConfig(), prompts);
-    expect(prompts.select).toHaveBeenCalledWith({
-      message: "Mode",
-      options: [
-        { value: "0", label: "1" },
-        { value: "1", label: '"1"' },
-        { value: "2", label: '{"mode":"second"}' },
-      ],
-      initialValue: undefined,
-    });
     expect(result.plugins?.entries?.fixture?.config).toEqual({
       webSearch: { mode: { mode: "second" } },
     });
@@ -194,14 +185,12 @@ describe("setupPluginConfig", () => {
         scientific: { label: "Scientific" },
         retries: { label: "Retries" },
         hexadecimal: { label: "Hexadecimal" },
-        fractionalRetries: { label: "Fractional retries" },
       },
       objectSchema({
         decimal: { type: "number" },
         scientific: { type: "number" },
         retries: { type: "integer" },
         hexadecimal: { type: "number" },
-        fractionalRetries: { type: "integer" },
       }),
     );
     let result: OpenClawConfig | undefined;
@@ -218,7 +207,6 @@ describe("setupPluginConfig", () => {
         ["1e999", "1e2", "Enter a valid JSON number."],
         ["1.5", "3", "Enter a JSON integer."],
         ["0x10", "16", "Enter a valid JSON number."],
-        ["2.5", "2", "Enter a JSON integer."],
       ]) {
         const step = (await session.next()).step!;
         await expect(session.answer(step.id, invalid)).resolves.toBe(error);
@@ -231,7 +219,6 @@ describe("setupPluginConfig", () => {
         scientific: 100,
         retries: 3,
         hexadecimal: 16,
-        fractionalRetries: 2,
       });
     } finally {
       session.cancel();

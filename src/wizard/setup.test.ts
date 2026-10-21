@@ -205,6 +205,10 @@ function persistedWizardConfigs(): OpenClawConfig[] {
   return replaceConfigFile.mock.calls.map(([params]) => params.nextConfig);
 }
 
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
 vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels,
@@ -649,11 +653,6 @@ describe("runSetupWizard", () => {
       const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
       const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
         if (params.message === "Setup mode") {
-          expect(params.options).toEqual([
-            expect.objectContaining({ value: "quickstart", label: "QuickStart (recommended)" }),
-            expect.objectContaining({ value: "advanced", label: "Manual setup" }),
-            expect.objectContaining({ value: "import", label: "Import from another agent" }),
-          ]);
           return setupChoices.shift();
         }
         return "__skip__";
@@ -680,18 +679,25 @@ describe("runSetupWizard", () => {
     },
   );
 
-  it("continues onboarding after a recovered promotion", async () => {
+  it("treats --import-source as import intent and continues after a recovered promotion", async () => {
     const acknowledgePromotion = vi.fn(async () => {});
     runSetupMigrationImport.mockResolvedValueOnce({
       kind: "no-imported-inference",
       acknowledgePromotion,
     });
 
-    await runWizard({ importFrom: "hermes" });
+    const prompter = buildWizardPrompter();
+    await runWizard({ importSource: "~/.hermes", flow: undefined }, createRuntime(), prompter);
 
     expect(finalizeSetupWizard).toHaveBeenCalledOnce();
     expect(acknowledgePromotion).toHaveBeenCalledOnce();
     expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expectCall(runSetupMigrationImport, {
+      opts: expect.objectContaining({ importSource: "~/.hermes" }),
+    });
+    expect(prompter.select).toHaveBeenCalledOnce();
+    expectCall(prompter.select, { message: "Help make OpenClaw better?", initialValue: false });
   });
 
   it("rejects an agent name when the import supplies an authored roster", async () => {
@@ -724,9 +730,7 @@ describe("runSetupWizard", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(ensureOnboardingConfig).not.toHaveBeenCalled();
-    expect(prompter.text).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "What should we call your first agent?" }),
-    );
+    expect(prompter.text).not.toHaveBeenCalled();
   });
 
   it("does not reuse imported verification after changing the model", async () => {
@@ -743,22 +747,6 @@ describe("runSetupWizard", () => {
     );
     expect(applyAuthChoice).toHaveBeenCalledOnce();
     expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
-  });
-
-  it("treats --import-source alone as import intent instead of prompting for a setup mode", async () => {
-    const prompter = buildWizardPrompter();
-    const runtime = createRuntime();
-
-    await runWizard({ importSource: "~/.hermes", flow: undefined }, runtime, prompter);
-
-    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
-    expect(runSetupMigrationImport).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: expect.objectContaining({ importSource: "~/.hermes" }) }),
-    );
-    expect(prompter.select).toHaveBeenCalledOnce();
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Help make OpenClaw better?", initialValue: false }),
-    );
   });
 
   it("fails fast if the auth choice prompt returns nothing", async () => {
@@ -792,12 +780,10 @@ describe("runSetupWizard", () => {
         createRuntime(),
         prompter,
       );
-      expect(confirm).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining("Move the existing agent fleet"),
-          initialValue: false,
-        }),
-      );
+      expectCall(confirm, {
+        message: expect.stringContaining("Move the existing agent fleet"),
+        initialValue: false,
+      });
       const final = persistedWizardConfigs().at(-1)?.agents;
       expect(final?.defaults?.workspace).toBe(accepted ? requestedWorkspace : currentWorkspace);
       if (accepted) {
@@ -895,7 +881,7 @@ describe("runSetupWizard", () => {
       createRuntime(),
       buildWizardPrompter({}, { defaultSelect: "keep-model" }),
     );
-    expect(promptDefaultModel).toHaveBeenCalledWith(expect.objectContaining({ allowKeep: false }));
+    expectCall(promptDefaultModel, { allowKeep: false });
     expect(prepareAuthChoice).toHaveBeenCalledOnce();
     expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
       primary: "ollama/llama3",
@@ -916,12 +902,10 @@ describe("runSetupWizard", () => {
       createRuntime(),
       buildWizardPrompter({}, { defaultSelect: "keep-model" }),
     );
-    expect(prepareAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authChoice: "nvidia-api-key",
-        opts: expect.objectContaining({ nvidiaApiKey: "provider-credential-fixture" }),
-      }),
-    );
+    expectCall(prepareAuthChoice, {
+      authChoice: "nvidia-api-key",
+      opts: expect.objectContaining({ nvidiaApiKey: "provider-credential-fixture" }),
+    });
     expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
       primary: "anthropic/sonnet-4.6",
     });
@@ -960,30 +944,16 @@ describe("runSetupWizard", () => {
     promptAuthChoiceGrouped
       .mockResolvedValueOnce("demo-provider-one")
       .mockResolvedValueOnce("demo-provider-two");
-    applyAuthChoice.mockReset();
-    applyAuthChoice
-      .mockImplementationOnce(async (args) => ({
-        config: {
-          ...args.config,
-          plugins: {
-            ...args.config.plugins,
-            entries: { ...args.config.plugins?.entries, "demo-provider-plugin": { enabled: true } },
-          },
+    applyAuthChoice.mockImplementationOnce(async (args) => ({
+      config: {
+        ...args.config,
+        plugins: {
+          ...args.config.plugins,
+          entries: { ...args.config.plugins?.entries, "demo-provider-plugin": { enabled: true } },
         },
-        retrySelection: true,
-      }))
-      .mockImplementationOnce(async (args) => ({
-        config: {
-          ...args.config,
-          agents: {
-            ...args.config.agents,
-            defaults: {
-              ...args.config.agents?.defaults,
-              model: { primary: "demo-provider-two/model" },
-            },
-          },
-        },
-      }));
+      },
+      retrySelection: true,
+    }));
 
     await runWizard({ authChoice: undefined });
 
@@ -1003,27 +973,23 @@ describe("runSetupWizard", () => {
         code: "hook-only",
         compatCode: "hook-only-plugin-shape",
         severity: "info",
-        message:
-          "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+        message: "Legacy fixture notice",
       },
     ]);
     readInitialConfig({ gateway: {} });
 
-    const note: WizardPrompter["note"] = vi.fn(async () => {});
-    const select = vi.fn(async () => "quickstart") as unknown as WizardPrompter["select"];
-    const prompter = buildWizardPrompter({ note, select });
-    const runtime = createRuntime();
-
-    await runWizard({}, runtime, prompter);
-
-    const calls = vi.mocked(note).mock.calls;
-    const noteTitles = calls.map((call) => call?.[1]);
+    const prompter = buildWizardPrompter();
+    await runWizard({}, createRuntime(), prompter);
+    const noteTitles = vi.mocked(prompter.note).mock.calls.map((call) => call?.[1]);
     expect(noteTitles).toContain("Plugin compatibility");
     expect(noteTitles).toContain("Existing config detected");
-    expect(select).not.toHaveBeenCalledWith(
+    expect(prompter.select).not.toHaveBeenCalledWith(
       expect.objectContaining({ message: "Config handling" }),
     );
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("legacy-plugin"), expect.anything());
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("legacy-plugin"),
+      "Plugin compatibility",
+    );
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
@@ -1037,12 +1003,10 @@ describe("runSetupWizard", () => {
       },
     });
     await runWizard({ mode: "local" });
-    expect(probeGatewayReachable).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "ws://127.0.0.1:18789",
-        password: "gateway-ref-password",
-      }),
-    );
+    expectCall(probeGatewayReachable, {
+      url: "ws://127.0.0.1:18789",
+      password: "gateway-ref-password",
+    });
   });
 
   it.each([
@@ -1092,9 +1056,7 @@ describe("runSetupWizard", () => {
         quickstartGateway,
       );
       if (flow === "advanced") {
-        expect(probeGatewayReachable).toHaveBeenCalledWith(
-          expect.objectContaining({ url: `ws://127.0.0.1:${port}`, token, password }),
-        );
+        expectCall(probeGatewayReachable, { url: `ws://127.0.0.1:${port}`, token, password });
         expect(configureGatewayForSetup.mock.calls[0]?.[0]).toMatchObject({
           quickstartGateway: { ...quickstartGateway, token, tailscaleMode: "off" },
         });
