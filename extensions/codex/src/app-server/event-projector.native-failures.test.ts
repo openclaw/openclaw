@@ -64,14 +64,12 @@ describe("CodexAppServerEventProjector native tool failure recovery", () => {
     "records the native $status outcome without treating running as success",
     async ({ status, outcome }) => {
       const recordEvent = vi.fn();
-      const projector = await createProjector(undefined, {
+      const projector = await h.createProjector(undefined, {
         trajectoryRecorder: { recordEvent, flush: vi.fn() },
       });
-      const item = { ...nativeCommand, id: "command-outcome", status, durationMs: 1 };
-      await notify(projector, "item/started", {
-        item: { ...item, status: "inProgress" },
-      });
-      await notify(projector, "item/completed", { item });
+      const item = createNativeCommandItem({ id: "command-outcome", status, durationMs: 1 });
+      await notify(projector, { ...item, status: "inProgress" });
+      await notify(projector, item);
 
       const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
       expect(results).toHaveLength(1);
