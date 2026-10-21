@@ -3,8 +3,10 @@ import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js"
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+// mock-isolation: Capture validation diagnostics without writing to the CLI runtime.
 vi.mock("../runtime.js", () => ({ defaultRuntime: { log: vi.fn(), error: vi.fn() } }));
 
+// mock-isolation: Validate the synthetic provider catalog, not installed operator plugins.
 vi.mock("../plugins/manifest-registry.js", () => {
   const providers = Object.entries({ brave: "brave", gemini: "google" });
   const configSchema = {

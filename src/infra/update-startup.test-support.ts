@@ -36,6 +36,7 @@ const {
   versionMock: { value: "1.0.0" },
 }));
 
+// mock-isolation: Use fixture configuration without reading operator state.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: getRuntimeConfigMock }));
 
 vi.mock("./update-triage.js", () => ({ runUpdateFailureTriage: runUpdateFailureTriageMock }));
@@ -60,13 +61,14 @@ vi.mock("./supervisor-markers.js", async (original) => ({
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
+// mock-isolation: Observe startup telemetry without making network requests.
 vi.mock("./telemetry.js", () => ({ checkTelemetryUpdate: checkTelemetryUpdateMock }));
 
 vi.mock("./update-check.js", async (original) => {
-  const { compareSemverStrings } = await original<typeof import("./update-check.js")>();
+  const actual = await original<typeof import("./update-check.js")>();
   return {
+    ...actual,
     checkUpdateStatus: vi.fn(),
-    compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
   };
 });
@@ -77,6 +79,7 @@ vi.mock("../version.js", () => ({
   },
 }));
 
+// mock-isolation: Startup fixtures must not execute updater commands.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
 
 vi.mock("./update-managed-service-handoff.js", async () => ({

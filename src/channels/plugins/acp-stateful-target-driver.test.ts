@@ -15,12 +15,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../acp/persistent-bindings.lifecycle.js", () => ({
   ensureConfiguredAcpBindingSession: vi.fn(),
 }));
+// mock-isolation: Reset results are fixtures; never reset real Gateway sessions.
 vi.mock("../../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: mocks.performGatewaySessionReset,
 }));
+// mock-isolation: Read synthetic ACP metadata without opening session storage.
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntryAsync: mocks.readAcpSessionEntryAsync,
 }));
+// mock-isolation: Do not discover configured bindings outside the driver fixture.
 vi.mock("../../acp/persistent-bindings.resolve.js", () => ({
   resolveConfiguredAcpBindingSpecBySessionKey: vi.fn(() => null),
 }));

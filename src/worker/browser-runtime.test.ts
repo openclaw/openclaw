@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({ execFile: vi.fn(), loadRuntime: vi.fn() }));
 
 vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
 
+// mock-isolation: Attach to a synthetic browser runtime without loading live plugins.
 vi.mock("../plugin-sdk/facade-loader.js", () => ({
   loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadRuntime,
 }));

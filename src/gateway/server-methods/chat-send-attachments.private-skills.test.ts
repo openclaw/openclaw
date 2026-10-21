@@ -12,8 +12,11 @@ const { sandbox, media, skills } = vi.hoisted(() => ({
   media: { SANDBOX_MEDIA_MAX_BYTES: 20 * 1024 * 1024, stageSandboxMedia: vi.fn() },
   skills: { resolveReusableWorkspaceSkillSnapshot: vi.fn() },
 }));
+// mock-isolation: Observe sandbox identity selection without provisioning a real sandbox.
 vi.mock("../../agents/sandbox/context.js", () => sandbox);
+// mock-isolation: Record the pre-ACK media context without copying real sandbox files.
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => media);
+// mock-isolation: Supply private skill selections without querying the operator skill store.
 vi.mock("../../skills/runtime/session-snapshot.js", () => skills);
 
 it.each(["existing", "admitted new"] as const)(
