@@ -1,14 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createApiRegistry,
-  createAssistantMessageEventStream,
-  createLlmRuntime,
-  type Model,
-} from "./index.js";
+import { createApiRegistry, createAssistantMessageEventStream, createLlmRuntime } from "./index.js";
 import {
   defaultApiRegistry,
   streamSimple as streamSimpleDefault,
 } from "./internal/default-runtime.js";
+import { anthropicModel } from "./provider-transport-parity.test-support.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";
 const emptyStream = () => createAssistantMessageEventStream();
@@ -18,18 +14,7 @@ const makeProvider = (api = "test-api", streamSimple = emptyStream) => ({
   streamSimple,
 });
 
-const model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "test-api",
-  provider: "test-provider",
-  baseUrl: "https://example.invalid",
-  input: ["text"],
-  reasoning: false,
-  contextWindow: 1000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} satisfies Model;
+const model = { ...anthropicModel, api: "test-api" };
 
 describe("LLM API registry", () => {
   afterEach(() => {

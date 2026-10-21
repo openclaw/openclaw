@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { capturePaths } from "./anthropic-parity.test-support.js";
 import {
   anthropicEvents,
   captureAnthropicRequest,
@@ -14,6 +15,7 @@ const clearingEdit = (trigger = 60_000, clearAtLeast = 12_500, exclude_tools: st
   exclude_tools,
   clear_tool_inputs: false,
 });
+const contextBeta = "context-management-2025-06-27";
 
 describe("Anthropic server context management parity", () => {
   registerParityHostLifecycle();
@@ -22,44 +24,40 @@ describe("Anthropic server context management parity", () => {
     { name: "default endpoint", model: { baseUrl: undefined }, enabled: true },
     { name: "OAuth", apiKey: "sk-ant-oat01-synthetic", enabled: false },
     { name: "Foundry", model: { provider: "microsoft-foundry" }, enabled: false },
-  ])("gates tool clearing for $name in both request paths", async ({ enabled, ...options }) => {
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        ...options,
-        cacheTtlPruning: {},
-      });
-      expect(payload.context_management).toEqual(enabled ? { edits: [clearingEdit()] } : undefined);
-      expect(
-        headers.get("anthropic-beta")?.includes("context-management-2025-06-27") ?? false,
-      ).toBe(enabled);
-    }
-  });
-
-  it("keeps clearing enabled after simple dispatch selects the Anthropic transport alias", async () => {
-    const { payload, headers } = await captureAnthropicRequest("transport", {
+    { name: "environment proxy", env: true, model: { baseUrl: undefined }, enabled: false },
+    {
+      name: "small window without thinking",
+      model: { contextWindow: 100_000 },
+      reasoning: "off" as const,
+      trigger: 50_000,
+      enabled: true,
+    },
+    {
+      name: "transport alias",
+      transportOnly: true,
       transportApi: "openclaw-anthropic-messages-transport",
-      cacheTtlPruning: {},
-    });
-    expect(payload.context_management).toEqual({
-      edits: [expect.objectContaining({ type: "clear_tool_uses_20250919" })],
-    });
-    expect(headers.get("anthropic-beta")).toContain("context-management-2025-06-27");
-  });
-
-  it("clamps small-window thresholds and enables clearing without thinking", async () => {
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        model: { contextWindow: 100_000 },
-        reasoning: "off",
-        cacheTtlPruning: {},
-      });
-      expect(payload.context_management).toEqual({
-        edits: [expect.objectContaining(clearingEdit(50_000))],
-      });
-      expect(headers.get("anthropic-beta")).toContain("context-management-2025-06-27");
-      expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
-    }
-  });
+      enabled: true,
+    },
+  ])(
+    "gates tool clearing for $name",
+    async ({ enabled, env, transportOnly, trigger = 60_000, ...options }) => {
+      if (env) {
+        vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example/v1");
+      }
+      for await (const { payload, headers } of capturePaths(
+        { ...options, cacheTtlPruning: {} },
+        transportOnly,
+      )) {
+        expect(payload.context_management).toEqual(
+          enabled ? { edits: [clearingEdit(trigger)] } : undefined,
+        );
+        expect(headers.get("anthropic-beta")?.includes(contextBeta) ?? false).toBe(enabled);
+        if (options.reasoning === "off") {
+          expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
+        }
+      }
+    },
+  );
 
   it("derives thresholds, tool exclusions, and clearing-before-compaction order", async () => {
     const tools = context.tools.flatMap((tool) =>
@@ -67,20 +65,19 @@ describe("Anthropic server context management parity", () => {
         Object.assign({}, tool, { name }),
       ),
     );
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        model: { contextWindow: 1_000_000 },
-        context: { ...context, tools },
-        cacheTtlPruning: {
-          tools: {
-            allow: ["READ", "look*", "write", "special+*"],
-            deny: ["write", "ex*", "retired_tool"],
-          },
+    for await (const { payload, headers } of capturePaths({
+      model: { contextWindow: 1_000_000 },
+      context: { ...context, tools },
+      cacheTtlPruning: {
+        tools: {
+          allow: ["READ", "look*", "write", "special+*"],
+          deny: ["write", "ex*", "retired_tool"],
         },
-        anthropicServerCompaction: true,
-        anthropicCompactThreshold: 650_000,
-        headers: { "Anthropic-Beta": "synthetic-beta" },
-      });
+      },
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: 650_000,
+      headers: { "Anthropic-Beta": "synthetic-beta" },
+    })) {
       expect(payload.context_management).toEqual({
         edits: [
           clearingEdit(300_000, 50_000, ["exec", "retired_tool", "search", "write"]),
@@ -92,32 +89,19 @@ describe("Anthropic server context management parity", () => {
         ],
       });
       expect(headers.get("anthropic-beta")).toContain("synthetic-beta");
-      expect(headers.get("anthropic-beta")).toContain("context-management-2025-06-27");
-    }
-  });
-
-  it("respects the effective environment endpoint", async () => {
-    vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example/v1");
-    for (const implementation of ["provider", "transport"] as const) {
-      const { payload, headers } = await captureAnthropicRequest(implementation, {
-        model: { baseUrl: undefined },
-        cacheTtlPruning: {},
-      });
-      expect(payload.context_management).toBeUndefined();
-      expect(headers.get("anthropic-beta") ?? "").not.toContain("context-management-2025-06-27");
+      expect(headers.get("anthropic-beta")).toContain(contextBeta);
     }
   });
 
   it("logs bounded aggregate clearing counts from the final message delta", async () => {
+    const cleared = (cleared_tool_uses: number, cleared_input_tokens: number) => ({
+      type: "clear_tool_uses_20250919",
+      cleared_tool_uses,
+      cleared_input_tokens,
+    });
     const applied_edits = [
-      ...[
-        [8, 50_000],
-        [2, 5_000],
-      ].map(([cleared_tool_uses, cleared_input_tokens]) => ({
-        type: "clear_tool_uses_20250919",
-        cleared_tool_uses,
-        cleared_input_tokens,
-      })),
+      cleared(8, 50_000),
+      cleared(2, 5_000),
       { type: "future", content: "must not log" },
     ];
     const events = anthropicEvents.map((event) =>
@@ -125,8 +109,7 @@ describe("Anthropic server context management parity", () => {
         ? Object.assign({}, event, { context_management: { applied_edits } })
         : event,
     );
-    for (const implementation of ["provider", "transport"] as const) {
-      const { info } = await captureAnthropicRequest(implementation, { events });
+    for await (const { info, implementation } of capturePaths({ events })) {
       expect(info).toEqual([
         "server-side context edit: cleared 10 tool results (55000 input tokens)",
       ]);
