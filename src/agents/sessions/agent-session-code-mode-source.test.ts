@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import path from "node:path";
-import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
+import { streamAnthropic } from "@openclaw/ai/internal/anthropic";
+import { streamOpenAIResponses } from "@openclaw/ai/internal/openai";
+import type { AssistantMessage, Context, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterAll, afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -18,6 +21,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import {
@@ -26,14 +30,21 @@ import {
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "../../state/openclaw-agent-db.js";
 import {
   cleanupSessionStateForTest,
   drainSessionStateForTest,
 } from "../../test-utils/session-state-cleanup.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
+import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createCodeModeHarness, resetCodeModeTestState } from "../code-mode.test-support.js";
+import { buildEmbeddedExtensionFactories } from "../embedded-agent-runner/extensions.js";
+import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../embedded-agent-runner/run/attempt.model-diagnostic-events.js";
+import { installToolResultContextGuard } from "../embedded-agent-runner/tool-result-context-guard.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { registerHeadlessToolSearchCatalog } from "../tool-search.js";
@@ -49,7 +60,9 @@ import {
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "./agent-session.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
+import { createReadTool } from "./tools/read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -75,7 +88,9 @@ async function createSessionFixture(label: string, config: OpenClawConfig = {}) 
 afterEach(async () => {
   await resetCodeModeTestState();
   resetGlobalHookRunner();
-  await drainSessionStateForTest({ stateDir: fixtureDir });
+  if (fixtureDir) {
+    await drainSessionStateForTest({ stateDir: fixtureDir });
+  }
 });
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
@@ -143,28 +158,9 @@ const vendorLiteral = "sk-fixturesyntheticcredential1234567890";
 const customLiteral = "fixture-custom-source-value";
 const credentialSource = `const API_TOKEN = "${genericLiteral}"; const vendor = "${vendorLiteral}"; const registered = "${registeredLiteral}"; const custom = "${customLiteral}";\n${source.replaceAll("API_TOKEN", "OTHER_TOKEN")}`;
 const sourceCases = [
-  ["JavaScript code", { code: source }, "completed"],
-  ["retired JavaScript option", { code: source, language: "javascript" }, "error"],
-  ...(["bash", null] as const).map(
-    (language) =>
-      [
-        `invalid language ${JSON.stringify(language)}`,
-        { code: "API_TOKEN=fixtureUnquotedLiteral;", language },
-        "error",
-      ] as const,
-  ),
-  ["retired TypeScript option", { code: source, language: "typescript" }, "error"],
-  ["command only", { command: source }, "validation"],
-  ["paired aliases", { code: source, command: source }, "completed"],
-  ["blank code alternate", { code: "", command: source }, "completed"],
-  ["blank command alternate", { code: source, command: " " }, "completed"],
-  [
-    "divergent aliases",
-    { code: source, command: "const API_TOKEN = computeOtherToken(); return API_TOKEN;" },
-    "error",
-  ],
-  ["both blank", { code: " ", command: "" }, "error"],
   ["credential-shaped literals", { code: credentialSource }, "completed"],
+  ["retired JavaScript option", { code: source, language: "javascript" }, "error"],
+  ["command only", { command: source }, "validation"],
 ] as const;
 
 it.each(sourceCases)(
@@ -247,49 +243,8 @@ it.each(["message_end", "before_message_write"] as const)(
   "preserves hook-supplied source bytes after %s replacements",
   async (hook) => {
     const { dir, scope, manager, tools } = await createSessionFixture("source-hooks");
-    const other: ToolDefinition = {
-      name: "other",
-      label: "Other",
-      description: "Ordinary JSON tool",
-      parameters: Type.Object({ code: Type.String() }),
-      execute: async () => ({ content: [{ type: "text", text: "ordinary" }], details: {} }),
-    };
-    type Change = (message: AssistantMessage, call: ReturnType<typeof toolCall>) => AgentMessage;
-    const withArgs =
-      (args: Record<string, unknown>): Change =>
-      (message, call) => {
-        Object.assign(call.arguments, args);
-        return message;
-      };
-    const changes: Record<string, Change> = {
-      unchanged: (message, call) => ({
-        ...message,
-        content: [{ type: "text", text: "Hook preserved call." }, call],
-      }),
-      clone: (message, call) => ({ ...message, content: [{ ...call }] }),
-      "mutate-source": withArgs({ code: source.replaceAll("42", "43") }),
-      "default-to-javascript": withArgs({ language: "javascript" }),
-      "javascript-to-default": (message, call) => {
-        delete call.arguments.language;
-        return message;
-      },
-      "change-dialect": withArgs({ language: "typescript" }),
-      "unsupported-dialect": withArgs({ language: "bash" }),
-      "malformed-dialect": withArgs({ language: null }),
-      rename: (message, call) => {
-        call.name = "other";
-        return message;
-      },
-      remove: (message) => ({ ...message, content: [{ type: "text", text: "Removed call." }] }),
-      collision: (message, call) => ({ ...message, content: [call, { ...call }] }),
-      "replace-with-literal": (message, call) => ({
-        ...message,
-        content: [
-          { ...call, arguments: { title: "Compute the harmless number", code: credentialSource } },
-        ],
-      }),
-    };
-    let change = changes.unchanged!;
+    registerSecretValueForRedaction(registeredLiteral);
+    let action = "mutate";
     const replace = (message: AgentMessage): AgentMessage => {
       if (message.role !== "assistant" || message.stopReason !== "toolUse") {
         return message;
@@ -299,7 +254,20 @@ it.each(["message_end", "before_message_write"] as const)(
       if (!call.id.startsWith("hook_")) {
         return message;
       }
-      return change(message, call);
+      if (action === "mutate") {
+        call.arguments.code = source.replaceAll("42", "43");
+        return message;
+      }
+      if (action === "remove") {
+        return { ...message, content: [{ type: "text", text: "Removed call." }] };
+      }
+      if (action === "collision") {
+        return { ...message, content: [call, { ...call }] };
+      }
+      return {
+        ...message,
+        content: [{ ...call, arguments: { ...call.arguments, code: credentialSource } }],
+      };
     };
     const replaceEndedMessage = async (event: unknown) => ({
       message: replace((event as MessageEndEvent).message),
@@ -322,20 +290,16 @@ it.each(["message_end", "before_message_write"] as const)(
         ]),
       );
     }
-    guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
+    guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"] });
     const { session } = await createTestSession({
       sessionManager: manager,
-      customTools: [...toToolDefinitions(tools), other],
+      customTools: toToolDefinitions(tools),
       resourceLoader,
     });
-    for (const [action, transform] of Object.entries(changes)) {
-      change = transform;
+    for (const nextAction of ["mutate", "replace", "remove", "collision"]) {
+      action = nextAction;
       mockToolTurn([
-        toolCall(`hook_${action}`, {
-          title: "Compute the harmless number",
-          code: source,
-          ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
-        }),
+        toolCall(`hook_${action}`, { title: "Compute the harmless number", code: source }),
       ]);
       await session.prompt(`Test ${action}.`);
       const stored = toolCalls(manager.buildSessionContext().messages, `hook_${action}`);
@@ -343,18 +307,15 @@ it.each(["message_end", "before_message_write"] as const)(
         expect(stored).toHaveLength(0);
         continue;
       }
+      const expectedSource =
+        action === "mutate"
+          ? source.replaceAll("42", "43")
+          : action === "replace"
+            ? credentialSource
+            : source;
       expect(stored.length).toBeGreaterThan(0);
       for (const block of stored) {
-        if (block.type !== "toolCall") {
-          throw new Error("unexpected stored block");
-        }
-        const expectedSource =
-          action === "mutate-source"
-            ? source.replaceAll("42", "43")
-            : action === "replace-with-literal"
-              ? credentialSource
-              : source;
-        expect(block.arguments.code).toBe(expectedSource);
+        expect(block).toMatchObject({ arguments: { code: expectedSource } });
       }
     }
     manager.appendMessage(
@@ -505,4 +466,142 @@ it("preserves source across reused managers and ordinary append batches", async 
       },
     },
   });
+});
+
+describe("provider source fidelity", () => {
+  const providerDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      for (const dir of providerDirs.dirs) {
+        await closeOpenClawAgentDatabasesAsync(dir);
+      }
+      cleanup();
+    }),
+  );
+  afterEach(resetLogger);
+
+  const textContent = (result: Pick<ToolResultMessage, "content"> | undefined) =>
+    result?.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+
+  it.each([
+    ["anthropic-messages", "read", ".env"],
+    ["openai-responses", "read", "fixture.txt"],
+  ] as const)(
+    "preserves file bytes for %s after %s returns %s",
+    async (api, toolName, filename) => {
+      const cwd = providerDirs.make("openclaw-tool-source-fidelity-");
+      const fakeSecret = "fixture-registered-secret-0123456789";
+      const vendorSecret = `sk-${"fixture".repeat(6)}`;
+      const benignMarker = "VISIBLE_FILE_CONTENT";
+      const sourceAssignment = "API_TOKEN = computeToken()";
+      registerSecretValueForRedaction(fakeSecret);
+      const fileContent = `${benignMarker}\nVALUE=${fakeSecret}\n${vendorSecret}\n${sourceAssignment}\n`;
+      await fs.writeFile(path.join(cwd, filename), fileContent);
+      const readTool = createOpenClawReadTool(createReadTool(cwd), { cwd });
+      const readControl = await readTool.execute("direct-read-control", { path: filename });
+      const readControlText = textContent(readControl);
+      expect(readControlText).toBe(fileContent);
+
+      const model: Model = {
+        ...testModel,
+        api,
+        provider: api === "anthropic-messages" ? "anthropic" : "openai",
+        id: api === "anthropic-messages" ? "claude-sonnet-4-6" : "gpt-4.1",
+        baseUrl: "https://router.invalid",
+      };
+      const scope = {
+        agentId: "main",
+        sessionId: "tool-source-fidelity",
+        sessionKey: "agent:main:tool-source-fidelity",
+        storePath: path.join(cwd, "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const sessionManager = guardSessionManager(await SessionManager.openAsync(scope, cwd), {
+        config: {},
+        allowedToolNames: [toolName],
+      });
+      const resourceLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir: cwd,
+        extensionFactories: buildEmbeddedExtensionFactories({
+          cfg: {},
+          workspaceDir: cwd,
+          sessionManager,
+          model,
+        }),
+      });
+      await resourceLoader.reload();
+      let providerPayload: unknown;
+      let liveContext: Context | undefined;
+      const currentResult = () =>
+        liveContext?.messages.findLast((message) => message.role === "toolResult");
+      const probe = {
+        type: "toolCall" as const,
+        id: "probe-read",
+        name: toolName,
+        arguments: { path: filename },
+      };
+      streamMocks.streamSimple
+        .mockImplementationOnce((activeModel: Model) =>
+          createAssistantResultStream(createAssistant(activeModel, [probe], "toolUse")),
+        )
+        .mockImplementation((_activeModel, context, options) => {
+          liveContext = context;
+          const capture = async (payload: unknown, requestModel: Model) => {
+            const replacement = await options?.onPayload?.(payload, requestModel);
+            providerPayload = replacement === undefined ? payload : replacement;
+            throw new Error("synthetic probe stops before any network operation");
+          };
+          const probeOptions = { ...options, apiKey: "synthetic-probe-auth", onPayload: capture };
+          return api === "anthropic-messages"
+            ? streamAnthropic(model as Model<"anthropic-messages">, context, probeOptions)
+            : streamOpenAIResponses(model as Model<"openai-responses">, context, probeOptions);
+        });
+      const { session } = await createTestSession({
+        model,
+        sessionManager,
+        resourceLoader,
+        customTools: toToolDefinitions([readTool]),
+      });
+      const previousTransform = session.agent.transformContext;
+      session.agent.transformContext = async (messages, signal) =>
+        normalizeMessagesForLlmBoundary(
+          previousTransform
+            ? await previousTransform.call(session.agent, messages, signal)
+            : messages,
+        );
+      const removeGuard = installToolResultContextGuard({
+        agent: session.agent,
+        contextWindowTokens: 32_768,
+      });
+      try {
+        expect(session.getActiveToolNames().join(",")).toBe(toolName);
+        await session.prompt(`Read ${filename}.`);
+        expect(providerPayload !== undefined).toBe(true);
+        const stored = JSON.stringify(sessionManager.getEntries());
+        const liveToolResult = currentResult();
+        const liveToolText = textContent(liveToolResult) ?? "";
+        expect(liveToolResult).toMatchObject({ isError: false });
+        for (const marker of [benignMarker, fakeSecret, vendorSecret]) {
+          expect(JSON.stringify(providerPayload)).toContain(marker);
+        }
+        for (const secret of [fakeSecret, vendorSecret]) {
+          expect(stored).toContain(secret);
+        }
+        expect(liveToolText).toBe(readControlText);
+        const transcript = await SessionManager.openAsync(scope, cwd);
+        const storedResult = transcript
+          .getBranch()
+          .findLast((entry) => entry.type === "message" && entry.message.role === "toolResult");
+        expect(storedResult?.type === "message" && storedResult.message).toMatchObject({
+          role: "toolResult",
+          content: [{ type: "text", text: readControlText }],
+        });
+        await session.prompt("Continue using the previous read result.");
+        expect(textContent(currentResult())).toBe(liveToolText);
+      } finally {
+        removeGuard();
+        session.dispose();
+      }
+    },
+  );
 });

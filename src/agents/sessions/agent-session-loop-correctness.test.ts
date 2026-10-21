@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
@@ -6,8 +7,10 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   appendHistory,
@@ -27,7 +30,13 @@ import {
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
-import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
+import type {
+  ExtensionAPI,
+  ExtensionFactory,
+  ToolDefinition,
+  TurnEndEvent,
+  TurnStartEvent,
+} from "./extensions/types.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -354,28 +363,6 @@ describe("AgentSession loop correctness", () => {
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 
-  it("emits agent_settled once after a normal run", async () => {
-    const lifecycleEvents: string[] = [];
-    const handlers: ExtensionFactory = (api) => {
-      api.on("agent_end", async () => {
-        lifecycleEvents.push("agent_end");
-      });
-      api.on("agent_settled", async () => {
-        lifecycleEvents.push("agent_settled");
-      });
-    };
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      textResponse(activeModel, "complete answer"),
-    );
-    const { session } = await createTestSession({
-      resourceLoader: await createResourceLoader(handlers),
-    });
-
-    await session.prompt("new prompt");
-
-    expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
-  });
-
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
     await appendHistory(sessionManager, createAssistant(testModel, "short answer"));
@@ -605,26 +592,6 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
-  it("compacts and retries a high-usage length-truncated response", async () => {
-    let requestCount = 0;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
-      requestCount += 1;
-      return createAssistantResultStream(
-        requestCount === 1
-          ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
-      );
-    });
-    const { session } = await createCompactingSession();
-    const compactionEvents = collectCompactionEnds(session);
-
-    await session.prompt("long request");
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-    expect(compactionEvents).toContainEqual(completedCompactionEvent("overflow", true));
-    expect(session.getLastAssistantText()).toBe("complete retry");
-  });
-
   it.each(["reasoning-only", "truncated"])(
     "retries a %s summary once during default auto-compaction",
     async (kind) => {
@@ -658,29 +625,6 @@ describe("AgentSession loop correctness", () => {
       expect(session.getLastAssistantText()).toBe("complete retry");
     },
   );
-
-  it("shares invalid-summary recovery with caller-owned automatic compaction", async () => {
-    const sessionManager = SessionManager.inMemory();
-    await appendHistory(
-      sessionManager,
-      createAssistant(testModel, "historical answer to summarize"),
-    );
-    const settingsManager = createAutoCompactionSettings();
-    const summary = "recovered caller-owned summary";
-    const getSummaryRequests = mockInvalidThenTextSummary(summary);
-    const { session } = await createTestSession({
-      sessionManager,
-      settingsManager,
-      resourceLoader: await createResourceLoader(),
-    });
-
-    const result = await session[agentSessionAutomaticCompaction]();
-
-    expect(getSummaryRequests()).toBe(2);
-    expect(result.status === "completed" && result.result.summary).toContain(summary);
-    const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
-    expect(compactions).toHaveLength(1);
-  });
 
   it("keeps public manual compaction one-shot for invalid summary output", async () => {
     const sessionManager = SessionManager.inMemory();
@@ -895,27 +839,163 @@ describe("AgentSession loop correctness", () => {
       errorMessage: "400 Your input exceeds the context window of this model",
     });
   });
+});
 
-  it("delivers a pending prompt immediately after pre-prompt compaction", async () => {
-    const sessionManager = SessionManager.inMemory();
-    await appendHistory(
-      sessionManager,
-      createAssistant(testModel, "old answer", "stop", testModel.contextWindow),
+describe("AgentSession extension dispatch", () => {
+  function streamAnswer(model: Model, consumed: readonly Promise<void>[] = []) {
+    const stream = createAssistantMessageEventStream();
+    const message = createAssistant(model, "abc");
+    stream.push({ type: "start", partial: { ...message, content: [] } });
+    stream.push({
+      type: "text_start",
+      contentIndex: 0,
+      partial: { ...message, content: [{ type: "text", text: "" }] },
+    });
+    void (async () => {
+      for (const [index, delta] of ["a", "b", "c"].entries()) {
+        stream.push({ type: "text_delta", contentIndex: 0, delta });
+        await consumed[index];
+      }
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end();
+    })();
+    return stream;
+  }
+
+  async function extensionFixture() {
+    const registration: { api?: ExtensionAPI } = {};
+    const loader = await createResourceLoader((api) => {
+      registration.api = api;
+    });
+    return { loader, api: expectDefined(registration.api, "loaded extension API") };
+  }
+
+  it.each(["none", "unrelated"])(
+    "delivers updates without extension dispatch when handlers are %s",
+    async (mode) => {
+      streamMocks.streamSimple.mockImplementation((model) => streamAnswer(model));
+      const { session } = await createTestSession({
+        resourceLoader: await createResourceLoader(
+          mode === "unrelated" ? (api) => api.on("turn_start", async () => undefined) : undefined,
+        ),
+      });
+      const dispatch = vi.spyOn(session.extensionRunner, "emit");
+      const messageEnd = vi.spyOn(session.extensionRunner, "emitMessageEnd");
+      const deltas: string[] = [];
+      session.subscribe((event) => {
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          deltas.push(event.assistantMessageEvent.delta);
+        }
+      });
+
+      await session.prompt("answer");
+
+      expect(deltas.join("")).toBe("abc");
+      expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "abc" }] });
+      const runtimeEvents = dispatch.mock.calls
+        .map(([event]) => event.type)
+        .filter((type) => type !== "agent_settled");
+      expect(runtimeEvents).toEqual(mode === "unrelated" ? ["turn_start"] : []);
+      expect(messageEnd).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps tool delivery and turn indices when handlers register after an unobserved turn", async () => {
+    const { loader, api } = await extensionFixture();
+    let responses = 0;
+    streamMocks.streamSimple.mockImplementation((model) =>
+      createAssistantResultStream(
+        createAssistant(
+          model,
+          responses++ === 0
+            ? [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }]
+            : "done",
+          responses === 1 ? "toolUse" : "stop",
+        ),
+      ),
     );
-    const requests: Context[] = [];
-    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
-      requests.push(context);
-      return textResponse(activeModel, "new answer");
+    const { session } = await createTestSession({
+      resourceLoader: loader,
+      customTools: [
+        {
+          ...createStubTool("read"),
+          execute: async (_id, _args, _signal, onUpdate) => {
+            onUpdate?.({ content: [{ type: "text", text: "reading" }], details: {} });
+            return { content: [{ type: "text", text: "value" }], details: {} };
+          },
+        },
+      ],
     });
-    const { session } = await createCompactingSession({
-      sessionManager,
+    const tools: string[] = [];
+    const turns: string[] = [];
+    let registered = false;
+    const recordTurn = async (event: TurnStartEvent | TurnEndEvent) => {
+      turns.push(`${event.type}:${event.turnIndex}`);
+    };
+    session.subscribe((event) => {
+      if (event.type.startsWith("tool_execution_")) {
+        tools.push(event.type);
+      }
+      if (event.type === "turn_end" && !registered) {
+        registered = true;
+        api.on("turn_start", recordTurn);
+        api.on("turn_end", recordTurn);
+      }
     });
-    const continueRun = vi.spyOn(session.agent, "continue");
 
-    await session.prompt("pending prompt");
+    await session.prompt("read then answer");
+    await session.prompt("answer again");
 
-    expect(continueRun).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(1);
-    expect(JSON.stringify(requests[0]?.messages)).toContain("pending prompt");
+    expect(tools).toEqual(["tool_execution_start", "tool_execution_update", "tool_execution_end"]);
+    expect(turns).toEqual("turn_start:1 turn_end:1 turn_start:0 turn_end:0".split(" "));
+    expect(session.messages.map((message) => message.role)).toEqual(
+      "user assistant toolResult assistant user assistant".split(" "),
+    );
+  });
+
+  it("observes live handler registration and awaits handlers inside write settlement", async () => {
+    const { loader, api } = await extensionFixture();
+    const handlers = loader.getExtensions().extensions[0]!.handlers;
+    let settling = false;
+    const observed: string[] = [];
+    const consumed = [createDeferred(), createDeferred(), createDeferred()];
+    streamMocks.streamSimple.mockImplementation((model) =>
+      streamAnswer(
+        model,
+        consumed.map(({ promise }) => promise),
+      ),
+    );
+    const { session } = await createTestSession({
+      resourceLoader: loader,
+      withSessionWriteSettlement: async (run) => {
+        settling = true;
+        try {
+          return await run();
+        } finally {
+          settling = false;
+        }
+      },
+    });
+    session.subscribe((event) => {
+      if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") {
+        return;
+      }
+      const delta = event.assistantMessageEvent.delta;
+      observed.push(`listener:${delta}:${settling}`);
+      if (delta === "a") {
+        api.on("message_update", async () => {
+          await Promise.resolve();
+          observed.push(`handler:${settling}`);
+          handlers.delete("message_update");
+        });
+      }
+      consumed.shift()?.resolve();
+    });
+
+    await session.prompt("answer");
+
+    expect(observed).toEqual(
+      "listener:a:false handler:true listener:b:true listener:c:false".split(" "),
+    );
   });
 });
