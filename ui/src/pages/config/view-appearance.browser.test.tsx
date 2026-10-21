@@ -586,7 +586,10 @@ describe("config appearance preferences", () => {
   it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const { container, props } = renderAppearance({
       hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
-      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
+      hiddenSessionCatalogLabels: {
+        read: () => new Map([["claude", "Claude Code"]]),
+        scope: null,
+      },
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(

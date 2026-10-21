@@ -91,6 +91,26 @@ describe("session GitHub publication protocol", () => {
       ].map(withOverrides(inspect)),
     );
   });
+  it("admits an explicit own-PR inspection URL without publication or authority fields", () => {
+    const inspection = {
+      ...request("inspect_pr"),
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    };
+    action.accepts(inspection);
+    action.rejects(
+      ...[
+        { pullRequestUrl: undefined },
+        { pullRequestUrl: "" },
+        { publishingSessionKey: "child" },
+        { expectedHeadCommit: head },
+        { requestId },
+        { title: "Write" },
+        { token: "synthetic" },
+        { profileId: "other" },
+        { mergeMethod: "merge" },
+      ].map(withOverrides(inspection)),
+    );
+  });
   it("accepts typed unavailability rather than arbitrary diagnostics", () => {
     options.accepts(
       ...["unavailable", "changed", "rate_limited", "unverified", "unsupported_workspace"].map(

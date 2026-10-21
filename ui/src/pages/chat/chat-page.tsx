@@ -1,4 +1,4 @@
-import { createComponent, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerSessionSplitHost } from "../../lib/sessions/session-menu-navigation.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
@@ -23,16 +23,14 @@ defineSolidBridge<ChatPageProps>(
       get: state.sessionSplitAvailable,
     });
     onSettled(() => registerSessionSplitHost(host, state.sessionSplitAvailable));
-    return createComponent(ChatPageBody, {
-      context: application,
-      get snapshot() {
-        return state.snapshot();
-      },
-      get indicator() {
-        return props.data?.creation?.admitted === false ? null : state.sessionDrop.indicator();
-      },
-      containerRef: state.sessionDrop.containerRef,
-    });
+    return (
+      <ChatPageBody
+        context={application}
+        snapshot={state.snapshot()}
+        indicator={props.data?.creation?.admitted === false ? null : state.sessionDrop.indicator()}
+        containerRef={state.sessionDrop.containerRef}
+      />
+    );
   },
   {
     properties: {

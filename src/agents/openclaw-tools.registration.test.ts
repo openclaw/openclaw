@@ -602,6 +602,7 @@ describe("gateway client capability tool filtering", () => {
       } else if (!actions) {
         expect(tool.parameters).toHaveProperty("properties", {
           action: expect.any(Object),
+          pullRequestUrl: expect.any(Object),
           draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),

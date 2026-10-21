@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -12,6 +14,7 @@ import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { capturePlacementReplicaRead } from "./placement-turn-authority.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -28,6 +31,48 @@ const roots = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("worker placement read cache", () => {
+  it("keeps the syncing owner when a read captured during commit returns its older snapshot", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-pending-replica-"));
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const identity = { sessionId: "dispatch", agentId: "main", sessionKey: "agent:main:dispatch" };
+    const requested = await store.startDispatch(identity);
+    const provisioning = await store.transition({
+      sessionId: identity.sessionId,
+      from: "requested",
+      to: "provisioning",
+      expectedGeneration: requested.generation,
+      patch: { environmentId: "dispatch-environment" },
+    });
+    const snapshot = await store.readProjection([identity.sessionId], { current: true });
+    const databaseIdentity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+    let publishRead: ReturnType<typeof capturePlacementReplicaRead> | undefined;
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          admit(request, () => {
+            if (request.stage === "commit") {
+              // The publication has reserved its sequence, but SQLite has not committed yet.
+              publishRead = capturePlacementReplicaRead(databaseIdentity);
+            }
+            return grant();
+          });
+        }, attachment),
+    );
+    const syncing = await store.transition({
+      sessionId: identity.sessionId,
+      from: "provisioning",
+      to: "syncing",
+      expectedGeneration: provisioning.generation,
+      patch: { workerBundleHash: "a".repeat(64) },
+    });
+    expect(store.get(identity.sessionId)).toEqual(syncing);
+    expect(publishRead).toBeTypeOf("function");
+    publishRead!(snapshot.placements.values(), [identity.sessionId]);
+    expect(store.get(identity.sessionId)).toEqual(syncing);
+  });
+
   it("reuses empty recovery candidates and sees committed work across stores", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-recovery-cache-"));
     const database = openOpenClawStateDatabase();

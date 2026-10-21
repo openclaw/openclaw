@@ -162,21 +162,6 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
-  const missing = [
-    scenario.openclawTokens > 0
-      ? undefined
-      : `${scenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
-    scenario.codexTokens > 0
-      ? undefined
-      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => Boolean(entry));
-  if (missing.length === 0) {
-    return undefined;
-  }
-  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
-}
-
 function requiredCoverageStatus(
   scenario: QaRuntimeParitySuiteScenario | undefined,
 ): "pass" | "fail" | "skip" | "missing" {
@@ -497,13 +482,21 @@ export function buildQaRuntimeParityReport(params: {
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
       );
     }
-    const usageFailure =
-      requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required"
-        ? describeLiveUsageFailure(scenario.name, reportScenario)
-        : undefined;
-    if (usageFailure) {
-      failures.push(usageFailure);
-      return { ...reportScenario, status: "fail" };
+    if (requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required") {
+      const missing = [
+        reportScenario.openclawTokens > 0
+          ? undefined
+          : `${reportScenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
+        reportScenario.codexTokens > 0
+          ? undefined
+          : `${reportScenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+      ].filter((entry): entry is string => Boolean(entry));
+      if (missing.length > 0) {
+        failures.push(
+          `${scenario.name} missing live assistant-message usage (${missing.join(", ")}).`,
+        );
+        return { ...reportScenario, status: "fail" };
+      }
     }
     return reportScenario;
   });
