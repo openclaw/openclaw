@@ -2010,7 +2010,6 @@
 ["src/agents/embedded-agent-runner/run/terminal-resolution.auth.test.ts","./auth-profile-success.js","67aeef995ef76519134b0987618d6e5f39dbea45725059c01a9adbe219a50f24",1]
 ["src/agents/embedded-agent-runner/run/terminal-resolution.test.ts","./auth-profile-success.js","67aeef995ef76519134b0987618d6e5f39dbea45725059c01a9adbe219a50f24",1]
 ["src/agents/embedded-agent-runner/run/terminal-resolution.tool-use-without-call.test.ts","./auth-profile-success.js","67aeef995ef76519134b0987618d6e5f39dbea45725059c01a9adbe219a50f24",1]
-["src/agents/embedded-agent-runner/run/tool-loop-recovery.test.ts","../../runtime/internal-hooks.js","f0fed4fa691608d78af3ac07d1cdeb56aa092b3427bd165697e2423755973ef4",1]
 ["src/agents/embedded-agent-runner/run/tool-loop-recovery.test.ts","../../tool-loop-admission.js","ecc14b418edc981edf5dd77605053f08130c339e52cef8ed4fd40138e75bc4f9",1]
 ["src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts","../../plugins/provider-hook-runtime.js","04beee0fed1670c8df730b755ae27fa94675861b167bc39b13d319cc805adea8",1]
 ["src/agents/embedded-agent-runner/sanitize-session-history.tool-result-details.test.ts","../../plugins/provider-runtime.js","2fe203b5ebc8cdd85c8b874d5acb97297773160d9ed919f01cb4f9f83f4e5988",1]

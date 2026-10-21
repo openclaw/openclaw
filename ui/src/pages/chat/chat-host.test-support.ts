@@ -14,8 +14,8 @@ import {
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
-import { createChatState } from "./chat-state-controller.ts";
 import type { ChatComposerMemoryFallback } from "./chat-state-host.ts";
+import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type RequestHandlers = Record<string, unknown>;
 
@@ -212,7 +212,51 @@ export function makeChatHost(
   const { requestHandlers, ...hostOverrides } = overrides ?? {};
   const request = requestHandlers ? makeRequestMock(requestHandlers) : undefined;
   const settings = { lastActiveSessionKey: "", ...hostOverrides.settings };
-  const controller = createChatState({ awaitDomCommit: async () => true });
+  let disposed = false;
+  const pendingEffects = new Set<() => void>();
+  const renderLifecycle: Pick<RenderLifecycle, "afterCommit"> = {
+    afterCommit: (effect, onCancel) => {
+      if (disposed) {
+        onCancel?.();
+        return () => undefined;
+      }
+      let cleanup = onCancel;
+      const complete = () => {
+        cleanup = undefined;
+        pendingEffects.delete(cancel);
+      };
+      const cancel = () => {
+        if (pendingEffects.delete(cancel)) {
+          const release = cleanup;
+          cleanup = undefined;
+          release?.();
+        }
+      };
+      pendingEffects.add(cancel);
+      queueMicrotask(() => {
+        if (!pendingEffects.has(cancel)) {
+          return;
+        }
+        cleanup = undefined;
+        try {
+          const nextCleanup = effect(complete);
+          if (typeof nextCleanup === "function") {
+            if (pendingEffects.has(cancel)) {
+              cleanup = nextCleanup;
+            } else {
+              nextCleanup();
+            }
+          } else {
+            complete();
+          }
+        } catch (error) {
+          complete();
+          throw error;
+        }
+      });
+      return cancel;
+    },
+  };
   const host = {
     ...composerDefaults(),
     chatSubmissions: createChatSubmissions(),
@@ -243,7 +287,7 @@ export function makeChatHost(
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    renderLifecycle: controller.createRenderLifecycle(),
+    renderLifecycle,
     querySelector: () => null,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -293,6 +337,11 @@ export function makeChatHost(
   for (const sessionKey of Object.keys(pendingSettingsPatches ?? {})) {
     void patchChatSessionSettings(resolvedHost, sessionKey, {}).catch(() => undefined);
   }
-  onTestFinished(controller.dispose);
+  onTestFinished(() => {
+    disposed = true;
+    for (const cancel of pendingEffects) {
+      cancel();
+    }
+  });
   return request ? Object.assign(resolvedHost, { request }) : resolvedHost;
 }
