@@ -3,6 +3,7 @@ import path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { parseReleaseVersion } from "./release-version.mjs";
+import { isStandaloneSessionTranscriptChunk } from "./runtime-process-core-build-entries.mts";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
@@ -179,6 +180,7 @@ export function recordUpdateCompatibilityRelease(params: {
   for (const file of moduleFiles(distDir)) {
     const source = fs.readFileSync(file, "utf8");
     if (
+      isStandaloneSessionTranscriptChunk(source) ||
       !source.includes("import(") ||
       ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
         ([, owner]) => owner !== undefined && POST_SWAP_OWNER.test(owner),
@@ -472,6 +474,7 @@ export function writeUpdateCompatibilityChunks(params: {
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||
+      isStandaloneSessionTranscriptChunk(source) ||
       ![...source.matchAll(/^\/\/#region (.+)$/gm)].some(
         ([, owner]) => owner !== undefined && ownerModules.has(owner),
       )

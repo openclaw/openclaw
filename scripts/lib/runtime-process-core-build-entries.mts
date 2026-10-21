@@ -46,6 +46,16 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.serviceChildGroupAnchor,
 ]);
 
+export const SESSION_TRANSCRIPT_RUNTIME_CHUNK_HEADER =
+  "// OpenClaw standalone session-transcript runtime graph.";
+
+export function isStandaloneSessionTranscriptChunk(source: string): boolean {
+  return (
+    source.startsWith(`${SESSION_TRANSCRIPT_RUNTIME_CHUNK_HEADER}\n`) ||
+    source.startsWith(`${SESSION_TRANSCRIPT_RUNTIME_CHUNK_HEADER}\r\n`)
+  );
+}
+
 export function standaloneRuntimeProcessBuildOutputOptions(
   name: string,
   source: string,
@@ -59,6 +69,8 @@ export function standaloneRuntimeProcessBuildOutputOptions(
   }
   const workerSource = path.resolve(source);
   return {
+    // Its copies of runtime bindings do not belong to the updater's main graph.
+    banner: SESSION_TRANSCRIPT_RUNTIME_CHUNK_HEADER,
     // Root-level private chunks preserve metadata lookup depth and avoid sharing
     // this worker's runtime modules with Gateway/SDK output graphs.
     chunkFileNames: "session-transcript-[name]-[hash].mjs",
