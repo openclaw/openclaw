@@ -395,13 +395,14 @@ describe("gateway-hosted exec approvals", () => {
         },
         { extraEnvKeys: [oldName, newName], configReload: true },
       );
-      // An empty wake text fails validation after authentication, so probing never enqueues.
-      const wake = async (bearer: string, text = "hook token e2e") =>
+      // An empty wake text fails validation after authentication (400) while a rejected
+      // bearer stops at 401, so the probe checks ingress auth without enqueueing a wake.
+      const wake = async (bearer: string) =>
         (
           await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${bearer}` },
-            body: JSON.stringify({ text, mode: "next-heartbeat" }),
+            body: JSON.stringify({ text: "", mode: "next-heartbeat" }),
           })
         ).status;
 
@@ -457,7 +458,10 @@ describe("gateway-hosted exec approvals", () => {
       };
 
       // Startup: hook ingress accepts the referenced value; exec children never see it.
-      expect(await wake(oldValue)).toBe(200);
+      await vi.waitFor(async () => expect(await wake(oldValue)).toBe(400), {
+        timeout: 15_000,
+        interval: 500,
+      });
       expect(await wake(newValue)).toBe(401);
       expect(await approve(await queue("hook-token-startup"))).toEqual([newName]);
 
@@ -469,7 +473,7 @@ describe("gateway-hosted exec approvals", () => {
         `${JSON.stringify({ ...config, hooks: { enabled: true, token: `\${${newName}}` } }, null, 2)}\n`,
         "utf8",
       );
-      await vi.waitFor(async () => expect(await wake(newValue, "")).toBe(400), {
+      await vi.waitFor(async () => expect(await wake(newValue)).toBe(400), {
         timeout: 15_000,
         interval: 500,
       });
@@ -477,7 +481,7 @@ describe("gateway-hosted exec approvals", () => {
 
       // After reload: ingress follows the new name and only that name is withheld.
       expect(await approve(await queue("hook-token-after-reload"))).toEqual([oldName]);
-      expect(await wake(newValue)).toBe(200);
+      expect(await wake(newValue)).toBe(400);
       expect(await wake(oldValue)).toBe(401);
       // The reload fenced the pending approval wait, so the queued command never launched.
       await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
