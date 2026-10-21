@@ -180,14 +180,12 @@ function makeAttemptForFault(
   fault: ProviderFault,
   ref: { provider: string; model: string },
 ): EmbeddedRunAttemptResult {
+  const assistant = (fields: Parameters<typeof buildEmbeddedRunnerAssistant>[0]) =>
+    buildEmbeddedRunnerAssistant({ provider: ref.provider, model: ref.model, ...fields });
   if (fault.status === 200) {
     return makeEmbeddedRunnerAttempt({
       assistantTexts: [fault.text],
-      lastAssistant: buildEmbeddedRunnerAssistant({
-        provider: ref.provider,
-        model: ref.model,
-        content: [{ type: "text", text: fault.text }],
-      }),
+      lastAssistant: assistant({ content: [{ type: "text", text: fault.text }] }),
     });
   }
   if (fault.status === 429 && fault.window === "header-floor") {
@@ -195,9 +193,7 @@ function makeAttemptForFault(
     return makeEmbeddedRunnerAttempt({
       providerRetryMaxRetries: 3,
       providerRetryMaxDelayMs: fault.maxRetryDelayMs,
-      lastAssistant: buildEmbeddedRunnerAssistant({
-        provider: ref.provider,
-        model: ref.model,
+      lastAssistant: assistant({
         stopReason: "error",
         errorMessage:
           "This request would exceed your account's rate limit. Please try again later.",
@@ -239,12 +235,7 @@ function makeAttemptForFault(
               : "429 Too Many Requests: subscription usage limit reached"
             : "Prompt is too long for this model's context window";
   return makeEmbeddedRunnerAttempt({
-    lastAssistant: buildEmbeddedRunnerAssistant({
-      provider: ref.provider,
-      model: ref.model,
-      stopReason: "error",
-      errorMessage,
-    }),
+    lastAssistant: assistant({ stopReason: "error", errorMessage }),
   });
 }
 
@@ -481,10 +472,9 @@ it("recovers four short rate limits with the default budget without rotating pro
     const { observations, usageStats } = context;
     const outcome = expectResult(context.outcome);
 
-    expect(observations).toHaveLength(faults.length);
-    expect(
-      observations.map(({ provider, model, profileId }) => ({ provider, model, profileId })),
-    ).toEqual(faults.map(() => ({ provider: "openai", model: "mock-1", profileId: "openai:p1" })));
+    expect(attemptRoutes(observations)).toEqual(
+      faults.map(() => ["openai", "mock-1", "openai:p1"]),
+    );
     expect(retryDelays()).toEqual([1_000, 2_000, 4_000, 8_000]);
     expect(outcome).toMatchObject({ provider: "openai", model: "mock-1", attempts: [] });
     expect(outcome.result.payloads?.[0]?.text).toContain("fifth attempt ok");
@@ -747,18 +737,15 @@ it("compacts a provider overflow after settled writes and continues their record
     );
 
     expect(compact).toHaveBeenCalledOnce();
-    expect(runEmbeddedAttemptMock.mock.calls.map(([params]) => params)).toEqual([
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "mock-1",
-        authProfileId: "openai:p1",
-      }),
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "mock-1",
-        authProfileId: "openai:p1",
-      }),
-    ]);
+    expect(runEmbeddedAttemptMock.mock.calls.map(([params]) => params)).toEqual(
+      Array.from({ length: 2 }, () =>
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "mock-1",
+          authProfileId: "openai:p1",
+        }),
+      ),
+    );
     expect(outcome.attempts).toEqual([]);
     expect(outcome.result.meta.error).toBeUndefined();
     expect(outcome.result.payloads).toEqual([
