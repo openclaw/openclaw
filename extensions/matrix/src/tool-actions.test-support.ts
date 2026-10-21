@@ -55,13 +55,11 @@ vi.mock("./matrix/actions/verification.js", () => ({
   listMatrixVerifications: mocks.listMatrixVerifications,
 }));
 
-vi.mock("./matrix/send.js", async (importOriginal) => {
-  return {
-    ...(await importOriginal<typeof import("./matrix/send.js")>()),
-    reactMatrixMessage: mocks.reactMatrixMessage,
-    sendMessageMatrix: mocks.sendMatrixMessage,
-  };
-});
+vi.mock("./matrix/send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/send.js")>()),
+  reactMatrixMessage: mocks.reactMatrixMessage,
+  sendMessageMatrix: mocks.sendMatrixMessage,
+}));
 
 vi.mock("./profile-update.js", () => ({
   applyMatrixProfileUpdate: (...args: unknown[]) => mocks.applyMatrixProfileUpdate(...args),
@@ -81,10 +79,7 @@ export function resetMatrixActionMocks() {
       roomId: string;
       run: (target: { client: unknown; roomId: string }) => Promise<unknown>;
     }) =>
-      await params.run({
-        client: mocks.matrixClient,
-        roomId: params.roomId.replace(/^room:/, ""),
-      }),
+      await params.run({ client: mocks.matrixClient, roomId: params.roomId.replace(/^room:/, "") }),
   );
   mocks.voteMatrixPoll.mockResolvedValue({
     eventId: "evt-poll-vote",
@@ -98,22 +93,10 @@ export function resetMatrixActionMocks() {
   mocks.listMatrixEmojis.mockResolvedValue([
     { name: "party", identifier: "party", url: "mxc://example.org/party" },
   ]);
-  mocks.listMatrixPins.mockResolvedValue({ pinned: ["$pin"], events: [] });
   mocks.pinMatrixMessage.mockResolvedValue({ pinned: ["$existing", "$pin"] });
   mocks.unpinMatrixMessage.mockResolvedValue({ pinned: ["$existing"] });
   mocks.removeMatrixReactions.mockResolvedValue({ removed: 1 });
   mocks.listMatrixVerifications.mockResolvedValue([]);
-  mocks.readMatrixMessages.mockResolvedValue({
-    messages: [{ eventId: "$message" }],
-    nextBatch: "next",
-  });
-  mocks.sendMatrixMessage.mockResolvedValue({
-    messageId: "$sent",
-    roomId: "!room:example",
-  });
-  mocks.editMatrixMessage.mockResolvedValue({ eventId: "$edited" });
-  mocks.getMatrixMemberInfo.mockResolvedValue({ userId: "@u:example" });
-  mocks.getMatrixRoomInfo.mockResolvedValue({ roomId: "!room:example" });
   mocks.applyMatrixProfileUpdate.mockResolvedValue({
     accountId: "ops",
     displayName: "Ops Bot",
