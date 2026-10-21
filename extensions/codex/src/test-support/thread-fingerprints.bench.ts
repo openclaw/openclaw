@@ -1,4 +1,4 @@
-/** Owner-only: node --expose-gc --import ./scripts/tsx.mjs extensions/codex/src/app-server/thread-fingerprints.bench.ts */
+/** Owner-only: node --expose-gc --import ./scripts/tsx.mjs extensions/codex/src/test-support/thread-fingerprints.bench.ts */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -9,12 +9,12 @@ import {
   flattenCodexDynamicToolFunctions,
   type CodexDynamicToolSpec,
   type JsonValue,
-} from "./protocol.js";
+} from "../app-server/protocol.js";
 import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
   stabilizeJsonValue,
-} from "./thread-fingerprints.js";
+} from "../app-server/thread-fingerprints.js";
 
 // Frozen pre-optimization algorithm; the complete canonical JSON is a persisted contract.
 function baseline(tools: readonly JsonValue[]) {
