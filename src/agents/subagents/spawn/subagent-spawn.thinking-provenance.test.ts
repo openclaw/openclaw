@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import {
@@ -55,57 +55,50 @@ const thinkingCases: readonly ThinkingProvenanceCase[] = [
   ["inherits configured effort", {}, undefined, "high", undefined, "high"],
 ];
 
-describe("subagent thinking provenance", () => {
-  beforeAll(async () => {
-    ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-      ...hoisted,
-      getRuntimeConfig: () => configOverride,
-      resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
-      sessionStorePath: "/tmp/subagent-thinking-provenance-session-store.json",
-    }));
-  });
+beforeAll(async () => {
+  ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+    ...hoisted,
+    getRuntimeConfig: () => configOverride,
+    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
+    sessionStorePath: "/tmp/subagent-thinking-provenance-session-store.json",
+  }));
+});
 
-  beforeEach(async () => {
-    await resetSubagentRegistryForTests();
-    for (const mock of Object.values(hoisted)) {
-      mock.mockReset();
-    }
-    hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
-    hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
-    hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
-    configOverride = createConfigOverride();
-    installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    hoisted.loadSessionStoreMock.mockReturnValue({});
-  });
+beforeEach(async () => {
+  await resetSubagentRegistryForTests();
+  for (const mock of Object.values(hoisted)) {
+    mock.mockReset();
+  }
+  hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
+  hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
+  hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
+  installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+});
 
-  it.each(thinkingCases)(
-    "%s",
-    async (name, context, saved, expected, thinking, thinkingDefault) => {
-      configOverride = createConfigOverride({
-        agents: {
-          defaults: {
-            workspace: os.tmpdir(),
-            ...(thinkingDefault ? { thinkingDefault } : {}),
-          },
-          entries: { main: { workspace: "/tmp/workspace-main" } },
-        },
-      });
-      hoisted.loadSessionStoreMock.mockReturnValue({
-        "agent:main:main": saved === undefined ? {} : { thinkingLevel: saved },
-      });
-      let captured: Record<string, Record<string, unknown>> = {};
-      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
-        onStore: (store) => {
-          captured = store;
-        },
-      });
-      const result = await spawnSubagentDirect(
-        { task: `provenance: ${name}`, thinking },
-        { agentSessionKey: "agent:main:main", ...context },
-      );
-
-      expect(result.status).toBe("accepted");
-      expect(captured[result.childSessionKey!]?.thinkingLevel).toBe(expected);
+it.each(thinkingCases)("%s", async (name, context, saved, expected, thinking, thinkingDefault) => {
+  configOverride = createConfigOverride({
+    agents: {
+      defaults: {
+        workspace: os.tmpdir(),
+        ...(thinkingDefault ? { thinkingDefault } : {}),
+      },
+      entries: { main: { workspace: "/tmp/workspace-main" } },
     },
+  });
+  hoisted.loadSessionStoreMock.mockReturnValue({
+    "agent:main:main": saved === undefined ? {} : { thinkingLevel: saved },
+  });
+  let captured: Record<string, Record<string, unknown>> = {};
+  installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+    onStore: (store) => {
+      captured = store;
+    },
+  });
+  const result = await spawnSubagentDirect(
+    { task: `provenance: ${name}`, thinking },
+    { agentSessionKey: "agent:main:main", ...context },
   );
+
+  expect(result.status).toBe("accepted");
+  expect(captured[result.childSessionKey!]?.thinkingLevel).toBe(expected);
 });
