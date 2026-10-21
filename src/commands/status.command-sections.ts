@@ -25,17 +25,9 @@ import type { StatusSummary } from "../status/summary.js";
 import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
-import type { AgentLocalStatus } from "./status.agent-local.js";
 import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 import { shortenText } from "./text-format.js";
-
-type AgentStatusLike = {
-  defaultId?: string | null;
-  bootstrapPendingCount: number;
-  totalSessions: number;
-  agents: AgentLocalStatus[];
-};
 
 type SummaryLike = Pick<StatusSummary, "heartbeat" | "sessions">;
 type MemoryLike = MemoryStatusSnapshot | null;
@@ -53,17 +45,6 @@ export const statusHealthColumns: TableColumn[] = [
   { key: "Status", header: "Status", minWidth: 8 },
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
-
-export function buildStatusAgentsValue(params: { agentStatus: AgentStatusLike }) {
-  const pending =
-    params.agentStatus.bootstrapPendingCount > 0
-      ? `${params.agentStatus.bootstrapPendingCount} bootstrap file${params.agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
-      : "no workspaces bootstrapping";
-  const def = params.agentStatus.agents.find((a) => a.id === params.agentStatus.defaultId);
-  const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
-  const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
-  return `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
-}
 
 export function buildStatusHeartbeatValue(params: { summary: Pick<SummaryLike, "heartbeat"> }) {
   const parts = params.summary.heartbeat.agents.map((agent) => {

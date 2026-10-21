@@ -10,24 +10,16 @@ import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { BackupRunFreshness } from "../state/backup-run-records.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
+import { formatTokenCount } from "../utils/token-format.js";
 import { VERSION } from "../version.js";
 import { buildBackupStatusValue } from "./backup-health.js";
 import type { HealthSummary } from "./health.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import { buildStatusDatabaseStoreRows } from "./status-database-engines.js";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
-import {
-  buildStatusAllAgentsValue,
-  buildStatusEventsValue,
-  buildStatusPluginCompatibilityValue,
-  buildStatusProbesValue,
-  buildStatusSecretsValue,
-  buildStatusSessionsOverviewValue,
-  formatHostDesktopStatus,
-} from "./status-overview-values.ts";
+import { countActiveStatusAgents, formatHostDesktopStatus } from "./status-overview-values.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
-  buildStatusAgentsValue,
   buildStatusHeartbeatValue,
   buildStatusLastHeartbeatValue,
   buildStatusMemoryValue,
@@ -126,15 +118,21 @@ export function buildStatusCommandOverviewRows(params: {
   updateValue?: string;
   updateRows?: Array<{ Item: string; Value: string }>;
 }) {
-  const agentsValue = buildStatusAgentsValue({
-    agentStatus: params.agentStatus,
-  });
-  const eventsValue = buildStatusEventsValue({
-    queuedSystemEvents: params.summary.queuedSystemEvents,
-  });
-  const probesValue = buildStatusProbesValue({
-    health: params.health,
-  });
+  const pending =
+    params.agentStatus.bootstrapPendingCount > 0
+      ? `${params.agentStatus.bootstrapPendingCount} bootstrap file${params.agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
+      : "no workspaces bootstrapping";
+  const def = params.agentStatus.agents.find((a) => a.id === params.agentStatus.defaultId);
+  const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
+  const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
+  const agentsValue = `${params.agentStatus.agents.length} · ${pending} · sessions ${params.agentStatus.totalSessions}${defSuffix}`;
+  const eventsValue =
+    params.summary.queuedSystemEvents.length > 0
+      ? `${params.summary.queuedSystemEvents.length} queued`
+      : "none";
+  const probesValue = params.health
+    ? theme.success("enabled")
+    : theme.muted("skipped (use --deep)");
   const heartbeatValue = buildStatusHeartbeatValue({ summary: params.summary });
   const lastHeartbeatValue = buildStatusLastHeartbeatValue({
     deep: params.opts.deep,
@@ -147,9 +145,15 @@ export function buildStatusCommandOverviewRows(params: {
     memoryPlugin: params.memoryPlugin,
     memoryUnavailableLabel: "not checked",
   });
-  const pluginCompatibilityValue = buildStatusPluginCompatibilityValue({
-    notices: params.pluginCompatibility,
-  });
+  let pluginCompatibilityValue: string;
+  if (params.pluginCompatibility.length === 0) {
+    pluginCompatibilityValue = theme.success("none");
+  } else {
+    const pluginCount = new Set(params.pluginCompatibility.map((notice) => notice.pluginId)).size;
+    pluginCompatibilityValue = theme.warn(
+      `${params.pluginCompatibility.length} notice${params.pluginCompatibility.length === 1 ? "" : "s"} · ${pluginCount} plugin${pluginCount === 1 ? "" : "s"}`,
+    );
+  }
   const updatesDisabled =
     params.surface.cfg.update?.checkOnStart === false ||
     isTruthyEnvValue(params.env.OPENCLAW_NO_AUTO_UPDATE) ||
@@ -163,6 +167,14 @@ export function buildStatusCommandOverviewRows(params: {
         ? theme.success("enabled · anonymous feature stats")
         : theme.muted("disabled · update checks only");
   const hostDesktopValue = formatHostDesktopStatus(params.summary.hostDesktop);
+  const { sessions } = params.summary;
+  const defaultCtx = sessions.defaults.contextTokens
+    ? ` (${formatTokenCount(sessions.defaults.contextTokens)} ctx)`
+    : "";
+  const storeLabel =
+    sessions.paths.length > 1
+      ? `${sessions.paths.length} stores`
+      : (sessions.paths[0] ?? "unknown");
   return buildStatusOverviewSurfaceRows({
     ...params.surface,
     decorateOk: theme.success,
@@ -224,9 +236,7 @@ export function buildStatusCommandOverviewRows(params: {
       ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
       {
         Item: "Sessions",
-        Value: buildStatusSessionsOverviewValue({
-          sessions: params.summary.sessions,
-        }),
+        Value: `${sessions.count} stored · default ${sessions.defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,
       },
     ],
     gatewayAuthWarningValue: params.surface.gatewayProbeAuthWarning
@@ -266,7 +276,7 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],
-    agentsValue: buildStatusAllAgentsValue(params.agentStatus),
+    agentsValue: `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${countActiveStatusAgents({ agentStatus: params.agentStatus })} active · ${params.agentStatus.totalSessions} sessions`,
     suffixRows: [
       ...(params.surface.databaseEngines?.source !== "unavailable"
         ? [
@@ -282,7 +292,10 @@ export function buildStatusAllOverviewRows(params: {
       ...buildStatusDatabaseStoreRows(params.surface.databaseEngines),
       {
         Item: "Secrets",
-        Value: buildStatusSecretsValue(params.secretDiagnosticsCount),
+        Value:
+          params.secretDiagnosticsCount > 0
+            ? `${params.secretDiagnosticsCount} diagnostic${params.secretDiagnosticsCount === 1 ? "" : "s"}`
+            : "none",
       },
     ],
     gatewaySelfFallbackValue: "unknown",
