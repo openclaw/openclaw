@@ -55,10 +55,12 @@ vi.mock("./agent.shared.js", async (importOriginal) => ({
   requirePwAi: vi.fn(async () => pwMocks),
   withRouteTabContext: vi.fn(
     async (params: {
+      req: { signal?: AbortSignal };
       run: (ctx: {
         profileCtx: typeof profileContext;
         tab: { targetId: string; url: string; wsUrl: string; wsLookup: typeof tabLookup };
         cdpUrl: string;
+        signal: AbortSignal;
       }) => Promise<void>;
     }) =>
       await params.run({
@@ -70,19 +72,25 @@ vi.mock("./agent.shared.js", async (importOriginal) => ({
           wsLookup: tabLookup,
         },
         cdpUrl: "http://127.0.0.1:18800",
+        signal: params.req.signal ?? new AbortController().signal,
       }),
   ),
 }));
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-async function screenshot(body: Record<string, unknown> = {}) {
+function getScreenshotHandler() {
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
     state: () => ({ resolved: { extraArgs: [] }, profiles: browserRuntime.profiles }),
   } as never);
   const handler = postHandlers.get("/screenshot");
   expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+async function screenshot(body: Record<string, unknown> = {}) {
+  const handler = getScreenshotHandler();
   const response = createBrowserRouteResponse();
   await handler?.({ params: {}, query: {}, body: { type: "png", ...body } }, response.res);
   return response;
@@ -95,6 +103,47 @@ describe("browser agent snapshot timeout routing", () => {
     browserRuntime.profiles.clear();
     pwMocks.connected = false;
     pwMocks.takeScreenshotViaPlaywright.mockClear();
+  });
+
+  it("caps screenshot timeoutMs before dispatching to CDP", async () => {
+    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", timeoutMs: 3_000_000_000 } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lookup: tabLookup,
+        timeoutMs: 2_147_483_647,
+      }),
+    );
+  });
+
+  it("forwards request cancellation to direct CDP screenshot capture", async () => {
+    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+    const controller = new AbortController();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { type: "png" },
+        signal: controller.signal,
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it("uses the existing Playwright viewport owner even when the tab has a CDP URL", async () => {
