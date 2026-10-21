@@ -74,6 +74,8 @@ it("recovers background views when a session is replaced during cold target prep
   withMentionInbox(async (f) => {
     await f.post();
     await f.items();
+    const delayed = f.push.mock.calls[0]![0];
+    expect(delayed.isCurrent()).toBe(true);
     const resolve = sessionSharing.resolveSessionSharingTargetAsync;
     vi.spyOn(sessionSharing, "resolveSessionSharingTargetAsync").mockImplementationOnce(
       async (...args) => {
@@ -84,8 +86,11 @@ it("recovers background views when a session is replaced during cold target prep
     );
     await f.inbox.invalidateAsync();
     expect(await f.items()).toEqual([]);
+    expect(delayed.isCurrent()).toBe(false);
     await f.setSession({ sessionId: SESSION_ID });
     expect(await f.items()).toHaveLength(1);
+    await f.inbox.dispose();
+    expect(delayed.isCurrent()).toBe(false);
   }));
 
 it.each(["activity summary", "runtime settlement", "automation", "sharing revocation"] as const)(

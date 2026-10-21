@@ -59,52 +59,48 @@ it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
         const [success, payload, error] = respond.mock.calls[0]!;
         return { success, payload, error };
       }
+      const expectItems = async (
+        items: unknown[],
+        method = "mentions.list",
+        params: Record<string, unknown> = {},
+        client: GatewayClient = connected,
+      ) => {
+        expect(await request(method, params, client)).toMatchObject({
+          success: true,
+          payload: { items },
+          error: undefined,
+        });
+      };
+      const expectError = async (
+        code: string,
+        method = "mentions.list",
+        params: Record<string, unknown> = {},
+      ) => {
+        expect(await request(method, params)).toMatchObject({
+          success: false,
+          payload: undefined,
+          error: { code },
+        });
+      };
 
       await f.post();
       expect(peer.frames).toMatchObject([
         { event: "mentions.changed", payload: { gatewayInstanceId: "mention-gateway" } },
       ]);
       expect(f.push.mock.calls[0]?.[0].recipientProfileId).toBe(f.bob.id);
-      const listed = await request("mentions.list");
-      expect(listed).toMatchObject({
-        success: true,
-        payload: {
-          items: [
-            {
-              sessionKey: SESSION_KEY,
-              messageId: "message-source-one",
-              senderProfileId: f.alice.id,
-            },
-          ],
+      await expectItems([
+        {
+          sessionKey: SESSION_KEY,
+          messageId: "message-source-one",
+          senderProfileId: f.alice.id,
         },
-        error: undefined,
-      });
+      ]);
       const item = (await f.items(connected))[0]!;
-      expect(await request("mentions.list", {}, f.carolClient)).toMatchObject({
-        success: true,
-        payload: { items: [] },
-        error: undefined,
-      });
-      expect(await request("mentions.dismiss", { ids: [item.id] }, f.carolClient)).toMatchObject({
-        success: true,
-        payload: { items: [] },
-        error: undefined,
-      });
-      expect(await request("mentions.list", { profileId: f.carol.id })).toMatchObject({
-        success: false,
-        payload: undefined,
-        error: { code: "INVALID_REQUEST" },
-      });
-      expect(await request("mentions.list", {}, f.bobSecond)).toMatchObject({
-        success: true,
-        payload: { items: [item] },
-        error: undefined,
-      });
-      expect(await request("mentions.dismiss", { ids: [item.id] })).toMatchObject({
-        success: true,
-        payload: { items: [] },
-        error: undefined,
-      });
+      await expectItems([], "mentions.list", {}, f.carolClient);
+      await expectItems([], "mentions.dismiss", { ids: [item.id] }, f.carolClient);
+      await expectError("INVALID_REQUEST", "mentions.list", { profileId: f.carol.id });
+      await expectItems([item], "mentions.list", {}, f.bobSecond);
+      await expectItems([], "mentions.dismiss", { ids: [item.id] });
       expect(await f.items(f.bobSecond)).toEqual([]);
       await f.post();
       expect(await f.items()).toEqual([]);
@@ -115,35 +111,16 @@ it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
       const retained = (await f.items(connected))[0]!;
       await f.setSession({ visibility: "draft" });
       await f.inbox.invalidateAsync();
-      expect(await request("mentions.list")).toMatchObject({
-        success: true,
-        payload: { items: [] },
-        error: undefined,
-      });
-      expect(await request("mentions.dismiss", { ids: [retained.id] })).toMatchObject({
-        success: true,
-        payload: { items: [] },
-        error: undefined,
-      });
+      await expectItems([]);
+      await expectItems([], "mentions.dismiss", { ids: [retained.id] });
       expect(delayed?.isCurrent()).toBe(false);
       await f.setSession({ visibility: "shared" });
-      expect(await request("mentions.list")).toMatchObject({
-        success: true,
-        payload: { items: [retained] },
-        error: undefined,
-      });
+      await expectItems([retained]);
+      expect(delayed?.isCurrent()).toBe(true);
       setUserProfileRole(f.bob.id, "denied");
       invalidateOperatorRolePolicy(f.bob.id);
-      expect(await request("mentions.list")).toMatchObject({
-        success: false,
-        payload: undefined,
-        error: { code: "FORBIDDEN" },
-      });
-      expect(await request("mentions.dismiss", { ids: [item.id] })).toMatchObject({
-        success: false,
-        payload: undefined,
-        error: { code: "FORBIDDEN" },
-      });
+      await expectError("FORBIDDEN");
+      await expectError("FORBIDDEN", "mentions.dismiss", { ids: [item.id] });
       expect(delayed?.isCurrent()).toBe(false);
     }, cfg);
   },

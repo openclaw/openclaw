@@ -38,6 +38,11 @@ import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.
 afterEach(() => vi.restoreAllMocks());
 
 const storedSnapshot = () => readMentionStoreSnapshot(-1, openOpenClawStateDatabase().db);
+type Fixture = Parameters<Parameters<typeof withInbox>[0]>[0];
+const messageIds = async (f: Fixture, client = f.bobClient, inbox = f.inbox) =>
+  (await f.items(client, inbox)).map((item) => item.messageId);
+const pushCurrency = (f: Fixture) =>
+  f.push.mock.calls.map(([notification]) => notification.isCurrent());
 
 function pauseOperation<Args extends unknown[], Result>(
   operation: (...args: Args) => Promise<Result>,
@@ -111,10 +116,7 @@ it("merges a foreign dismissal between snapshot and mutation while keeping queue
       expect((await dismiss(peer, f.bobClient, [original.id])).ok).toBe(true);
       held.release();
       await Promise.all([first, second]);
-      expect((await f.items()).map((item) => item.messageId)).toEqual([
-        "message-queued-second",
-        "message-queued-first",
-      ]);
+      expect(await messageIds(f)).toEqual(["message-queued-second", "message-queued-first"]);
       await f.push.mock.calls[0]![0].prepare();
       expect(f.push.mock.calls[0]![0].isCurrent()).toBe(false);
     } finally {
@@ -176,10 +178,7 @@ it.each([false, true])(
         await pending;
         expect(f.push).toHaveBeenCalledTimes(lost ? 0 : 1);
         const snapshots = vi.spyOn(mentionWorker, "readMentionSnapshot");
-        expect((await f.items()).map((item) => item.messageId)).toEqual([
-          "message-awaiting-receipt",
-          "message-original",
-        ]);
+        expect(await messageIds(f)).toEqual(["message-awaiting-receipt", "message-original"]);
         if (lost) {
           expect(snapshots.mock.calls[0]?.[1]).toBe(-1);
         }
@@ -245,7 +244,7 @@ it("drains accepted committed input during disposal while refusing new input", (
     await f.post("refused-after-dispose");
     await Promise.all([accepted, disposal]);
     const restarted = f.openInbox("after-disposal");
-    expect((await f.items(f.bobClient, restarted)).map((item) => item.messageId)).toEqual([
+    expect(await messageIds(f, f.bobClient, restarted)).toEqual([
       "message-accepted-before-dispose",
     ]);
     expect(f.push).toHaveBeenCalledOnce();
@@ -678,10 +677,7 @@ it("keeps recipients independent when they share a committed message", () =>
         dismissal,
         "Dismissal did not reach its committed receipt",
       );
-      expect(f.push.mock.calls.map(([notification]) => notification.isCurrent())).toEqual([
-        true,
-        true,
-      ]);
+      expect(pushCurrency(f)).toEqual([true, true]);
       held.release();
       expect((await dismissal).ok).toBe(true);
     } finally {
@@ -691,10 +687,7 @@ it("keeps recipients independent when they share a committed message", () =>
     }
     expect(await f.items()).toEqual([]);
     expect(await f.items(f.carolClient)).toEqual([carol]);
-    expect(f.push.mock.calls.map(([notification]) => notification.isCurrent())).toEqual([
-      false,
-      true,
-    ]);
+    expect(pushCurrency(f)).toEqual([false, true]);
     await f.post("shared-source", { recipientProfileIds: [f.bob.id, f.carol.id] });
     expect(f.push).toHaveBeenCalledTimes(2);
   }));
@@ -714,27 +707,6 @@ it.each([
     expect((await f.call("users.mentionable", { sessionKey: SESSION_KEY }, client)).ok).toBe(
       visible,
     );
-  }, cfg);
-});
-
-it("fences delayed push preparation on role revocation, session replacement, and disposal", async () => {
-  const cfg = mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } });
-  await withInbox(async (f) => {
-    await f.post();
-    const delayed = f.push.mock.calls[0]?.[0];
-    expect(delayed?.isCurrent()).toBe(true);
-    setUserProfileRole(f.bob.id, "denied");
-    invalidateOperatorRolePolicy(f.bob.id);
-    await Promise.resolve();
-    expect(delayed?.isCurrent()).toBe(false);
-    expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
-    setUserProfileRole(f.bob.id, "reader");
-    invalidateOperatorRolePolicy(f.bob.id);
-    await f.replaceSessionIdentity();
-    expect(await f.items()).toEqual([]);
-    expect(delayed?.isCurrent()).toBe(false);
-    await f.inbox.dispose();
-    expect(delayed?.isCurrent()).toBe(false);
   }, cfg);
 });
 
@@ -778,24 +750,16 @@ it("enforces the global bound and keeps evicted sources consumed", () =>
         writeMentionStoreChanges(db, { ...stored.head, nextSequence: 1_000 }, sources),
       );
       const firstRecipient = identifiedClient(profiles[0]!);
-      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
-        true,
-      );
+      expect(await messageIds(f, firstRecipient)).toContain("message-0");
       await post(1_000);
       const retained = await Promise.all(profiles.map((id) => read(f.inbox, identifiedClient(id))));
       expect(retained.reduce((sum, snapshot) => sum + snapshot.items.length, 0)).toBe(10_000);
       expect(
-        retained
-          .flatMap((snapshot) => snapshot.items)
-          .some((item) => item.messageId === "message-1000"),
-      ).toBe(true);
-      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
-        false,
-      );
+        retained.flatMap((snapshot) => snapshot.items.map((item) => item.messageId)),
+      ).toContain("message-1000");
+      expect(await messageIds(f, firstRecipient)).not.toContain("message-0");
       await post(0);
-      expect((await f.items(firstRecipient)).some((item) => item.messageId === "message-0")).toBe(
-        false,
-      );
+      expect(await messageIds(f, firstRecipient)).not.toContain("message-0");
     },
     {},
     { notifications: false },
