@@ -22,6 +22,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
+import type { PreparedModelRuntimeLease } from "../agents/prepared-model-runtime.types.js";
 import {
   containsEnvVarReference,
   type EnvSubstitutionWarning,
@@ -390,17 +391,18 @@ function validateModelRefSyntax(
   return resolved ? undefined : "Invalid model reference or configured model alias target";
 }
 
-async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> {
+async function createRuntimeModelRefResolver(
+  config: OpenClawConfig,
+  refs: readonly TouchedModelRef[],
+): Promise<ConfigModelRefResolver & AsyncDisposable> {
   const modelSelection = await import("../agents/model-selection.js");
-  const loadModelModules = () =>
-    Promise.all([
-      import("../agents/embedded-agent-runner/model.js"),
-      import("../agents/prepared-model-runtime.js"),
-    ]);
-  let modelModules: ReturnType<typeof loadModelModules> | undefined;
-
-  return async ({ config, ref }) => {
-    let resolvedRef = resolveCanonicalModelRef(config, ref);
+  const canonicalRef = resolveCanonicalModelRef;
+  const targetAgentIdForRef = (ref: TouchedModelRef) =>
+    ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config);
+  const leases = new Map<string, PreparedModelRuntimeLease>();
+  const leaseStack = new AsyncDisposableStack();
+  const resolveModelRef: ConfigModelRefResolver & AsyncDisposable = async ({ ref }) => {
+    let resolvedRef = canonicalRef(config, ref);
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
@@ -408,32 +410,51 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     if (modelSelection.isCliProvider(resolvedRef.provider, config)) {
       return undefined;
     }
-    const targetAgentId =
-      ref.agentId ?? tryResolveLegacyCompatibilityAgentId(config) ?? resolveDefaultAgentId(config);
+    const targetAgentId = targetAgentIdForRef(ref);
     const agentDir = resolveAgentDir(config, targetAgentId);
     const workspaceDir = resolveAgentWorkspaceDir(config, targetAgentId);
-    const [modelRuntime, preparedRuntime] = await (modelModules ??= loadModelModules());
+    const modelRuntime = await import("../agents/embedded-agent-runner/model.js");
+    const preparedRuntime = await import("../agents/prepared-model-runtime.js");
 
-    // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
-    await using lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-      {
-        agentId: targetAgentId,
-        agentDir,
-        config,
-        workspaceDir,
-        loadRuntimePlugins: true,
-      },
-      {
-        deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
-          resolvedRef = resolveCanonicalModelRef(admittedConfig, ref, metadataSnapshot);
-          if (!resolvedRef) {
-            return [];
-          }
-          const { provider, model } = resolvedRef;
-          return [{ provider, modelId: model, agentId: targetAgentId }];
-        },
-      },
-    );
+    let lease = leases.get(targetAgentId);
+    if (!lease) {
+      lease = leaseStack.use(
+        await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+          {
+            agentId: targetAgentId,
+            agentDir,
+            config,
+            workspaceDir,
+            loadRuntimePlugins: true,
+          },
+          {
+            deriveRuntimePluginSelections: ({ config: admittedConfig, metadataSnapshot }) => {
+              const selections: Array<{ provider: string; modelId: string; agentId: string }> = [];
+              for (const agentRef of refs) {
+                if (targetAgentIdForRef(agentRef) !== targetAgentId) {
+                  continue;
+                }
+                const candidate = canonicalRef(admittedConfig, agentRef, metadataSnapshot);
+                if (
+                  !candidate ||
+                  modelSelection.isCliProvider(candidate.provider, admittedConfig)
+                ) {
+                  continue;
+                }
+                selections.push({
+                  provider: candidate.provider,
+                  modelId: candidate.model,
+                  agentId: targetAgentId,
+                });
+              }
+              return selections;
+            },
+          },
+        ),
+      );
+      leases.set(targetAgentId, lease);
+    }
+    resolvedRef = canonicalRef(config, ref, lease.pluginGeneration.pluginMetadataSnapshot);
     if (!resolvedRef) {
       return `Unknown model: ${ref.value}`;
     }
@@ -452,6 +473,10 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
       ? undefined
       : (resolution.error ?? `Unknown model: ${provider}/${model}`);
   };
+  resolveModelRef[Symbol.asyncDispose] = async () => {
+    await leaseStack.disposeAsync();
+  };
+  return resolveModelRef;
 }
 
 function formatModelRefError(
@@ -554,6 +579,8 @@ export async function checkTouchedTextModelRefs(params: {
       { suppressDetail: modelEnvWasExpanded || redactDependency },
     );
   };
+  const formatFailure = (ref: TouchedModelRef, cause: unknown) =>
+    formatError(ref, `Unable to validate model reference: ${coerceErrorMessage(cause)}`);
   const validationRosterConfig = materializeValidationRoster(validationConfig);
   const validationPreviousRosterConfig = validationPreviousConfig
     ? materializeValidationRoster(validationPreviousConfig)
@@ -643,9 +670,15 @@ export async function checkTouchedTextModelRefs(params: {
     return { refsChecked: syntaxFailures.length, refsTotal: refs.length, errors };
   }
   let resolveModelRef = params.resolveModelRef;
+  let ownedRuntimeResolver: (ConfigModelRefResolver & AsyncDisposable) | undefined;
   if (!resolveModelRef) {
     try {
-      resolveModelRef = await (params.createModelRefResolver ?? createRuntimeModelRefResolver)();
+      if (params.createModelRefResolver) {
+        resolveModelRef = await params.createModelRefResolver();
+      } else {
+        ownedRuntimeResolver = await createRuntimeModelRefResolver(validationConfig, refsToResolve);
+        resolveModelRef = ownedRuntimeResolver;
+      }
     } catch (cause) {
       const detail =
         modelEnvWasExpanded ||
@@ -663,20 +696,27 @@ export async function checkTouchedTextModelRefs(params: {
     }
   }
   let refsChecked = syntaxFailures.length;
-  for (const ref of refsToResolve) {
-    let error: string | undefined;
+  try {
+    for (const ref of refsToResolve) {
+      let error: string | undefined;
+      try {
+        error = await resolveModelRef({ config: validationConfig, ref });
+        refsChecked += 1;
+      } catch (cause) {
+        errors.push(formatFailure(ref, cause));
+        continue;
+      }
+      if (!error) {
+        continue;
+      }
+      errors.push(formatError(ref, error));
+    }
+  } finally {
     try {
-      error = await resolveModelRef({ config: validationConfig, ref });
-      refsChecked += 1;
+      await ownedRuntimeResolver?.[Symbol.asyncDispose]();
     } catch (cause) {
-      const detail = coerceErrorMessage(cause);
-      errors.push(formatError(ref, `Unable to validate model reference: ${detail}`));
-      continue;
+      errors.push(formatFailure(refsToResolve[0]!, cause));
     }
-    if (!error) {
-      continue;
-    }
-    errors.push(formatError(ref, error));
   }
   return { refsChecked, refsTotal: refs.length, errors };
 }
