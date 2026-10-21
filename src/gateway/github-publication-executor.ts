@@ -227,6 +227,10 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       } catch (error) {
         // A journaled commit may already be on the PR beneath a later author push. Only a
         // confirmed observation of that commit settles the request; otherwise the refusal stands.
+        // Accepted edge case: GitHub reads report an absent commit and an unavailable one alike,
+        // so a transient read failure here also refuses. Waiting instead would leave a journaled
+        // commit that never reached GitHub pending forever; the refusal keeps local work, and a
+        // refresh of the PR integrates the moved head.
         if (
           error instanceof GitHubPublicationBranchChangedError &&
           row.head_commit &&
