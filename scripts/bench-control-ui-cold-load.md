@@ -56,6 +56,15 @@ then collect separate traced runs for the storyboard and attribution.
 `--large-snapshot` expands the transcript to 1,100 synthetic messages (about 3 MB),
 including tool results and replay metadata. Combine it with `--warm-reload` to
 exercise a large live history with the current bounded IndexedDB restore. `snapshotSave` reports the persisted row count.
+`--transcript-messages 400` selects a specific positive message count instead.
+
+`--session-switch` clicks the first recent session after the other measured phases.
+It opens another 400-message transcript when paired with `--transcript-messages 400`,
+using the same synthetic history and native sidebar navigation. The phase ends once
+the target pane and inline preview are visible and pending wire work has been quiet
+for 750 ms. It records task/script/layout/style CPU and interval RPCs in `sessionSwitch`,
+plus a separate source-mapped `session-switch` profile with `--cpu-profile`.
+This measures a first switch to that session in the current document, not a warm return.
 
 The dashboard fixture includes reaction pickers, widget actions, context usage,
 and viewers. Use `--warm-reload` to measure its cached restore. Transaction labels
@@ -157,6 +166,25 @@ Mapped filesystem paths are repository-relative, independent of the build output
 Use the same fixture, phases, sampling and machine for both captures.
 Profiling inflates timing: use these tables to prove the hot path runs, then
 measure improvements in separate unprofiled, interleaved runs.
+
+For streaming comparisons, keep both production builds and run complete alternating
+cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
+--streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
+restores each build's warm state before each run. Streaming comparisons do not
+require the separate `--warm-reload` diagnostics or external probe scripts.
+
+Use `--streaming-burst-size 5` to enqueue five snapshots every 166.7 ms
+while retaining the average 30 deltas/s. The mock transport still applies
+`--frame-gap-ms`; set it to zero to remove intentional spacing, and inspect
+delivery timestamps before treating a group as one-frame delivery.
+Streaming reports count synchronous
+stream assignments, frame publications, pane render calls/time, forced rail
+observations, and row ResizeObserver deliveries. These are separate boundaries:
+publication is not a rendered commit, and pane render time excludes subsequent
+Solid and Markdown work. The source-mapped CPU profile covers that later work;
+the task/microtask and next-rAF timings do not measure presentation to the screen.
+After timing, each run also checks that the real transcript grew and remains
+within two pixels of its native scroll bottom, without manually requesting a render.
 
 ## Initial baseline
 

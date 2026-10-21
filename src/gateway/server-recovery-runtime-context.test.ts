@@ -22,6 +22,9 @@ function createRecoveryRuntime(result: string) {
   );
   const runtime: GatewayRecoveryRuntime = {
     prepareRestartRecovery: () => undefined,
+    resumeChatInput: async () => {
+      throw new Error("Unexpected chat input recovery");
+    },
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: async <T = unknown>(
       params: AgentRunRequest,

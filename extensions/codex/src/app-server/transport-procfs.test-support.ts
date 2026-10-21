@@ -16,6 +16,13 @@ export function createProcfsCommandFixture(
     if (file !== process.execPath || evalIndex < 0) {
       return original.execFile(file, args, options, callback);
     }
+    const runFixture = (injected: string, input: string | undefined) => {
+      const injectedArgs = args.slice();
+      injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
+      const child = original.execFile(file, injectedArgs, options, callback);
+      child.stdin?.end(input);
+      return child;
+    };
     if (args.at(-2) === "snapshot") {
       const pids = readPids?.();
       if (!pids) {
@@ -41,11 +48,7 @@ Object.assign(fixtureFs, (${createProcfsSyncFixture.toString()})(fixtureFs, file
 }));
 fixtureFs.readdirSync = () => ${JSON.stringify(pids)};
 `;
-      const injectedArgs = args.slice();
-      injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
-      const child = original.execFile(file, injectedArgs, options, callback);
-      child.stdin?.end(JSON.stringify(files));
-      return child;
+      return runFixture(injected, JSON.stringify(files));
     }
     const commandPath = `/proc/${args.at(-2)}/cmdline`;
     let data: string | undefined;
@@ -71,11 +74,7 @@ fixtureFs.openSync = (file, ...args) => {
   return 0;
 };
 `;
-    const injectedArgs = args.slice();
-    injectedArgs[evalIndex + 1] = injected + injectedArgs[evalIndex + 1];
-    const child = original.execFile(file, injectedArgs, options, callback);
-    child.stdin?.end(data);
-    return child;
+    return runFixture(injected, data);
   };
 }
 

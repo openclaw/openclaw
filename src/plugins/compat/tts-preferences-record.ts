@@ -4,7 +4,6 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
   code: "tts-preferences-sync-resolution",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
   removeAfter: "2026-12-31",
@@ -19,11 +18,4 @@ export const TTS_PREFERENCES_COMPAT_RECORD = {
   diagnostics: [
     "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
   ],
-  tests: [
-    "test/type-contracts/tts-preferences-compat.ts",
-    "src/tts/tts-preferences.worker.test.ts",
-    "src/plugins/compat/registry.test.ts",
-  ],
-  releaseNote:
-    "Host TTS dispatch reuses worker-prepared preference paths while released plugin calls retain synchronous preference resolution. Preference-file reads, stored data, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

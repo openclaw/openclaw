@@ -10,101 +10,64 @@ import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group ownership", () => {
-  it(
-    "kills same-group descendants after the leader exits spontaneously",
-    { timeout: 10_000 },
-    async ({ signal }) => {
-      const root = tempDirs.make("mcp-stdio-descendant-");
-      const serverPath = path.join(root, "leader.mjs");
-      const exitMarkerPath = path.join(root, "exit.marker");
-      await fs.writeFile(
-        serverPath,
-        `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); process.stdout.write(JSON.stringify({jsonrpc:"2.0",method:"fixture/descendant",params:{pid:child.pid}})+"\\n"); const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitMarkerPath)})){clearInterval(timer);process.exit(1)}},10);`,
-        "utf8",
-      );
-      const transport = new OpenClawStdioClientTransport({
-        command: process.execPath,
-        args: [serverPath],
-        stderr: "ignore",
-      });
-      const closed = new Promise<void>((resolve) => {
-        // MCP transports expose callback properties rather than EventTarget listeners.
-        // oxlint-disable-next-line unicorn/prefer-add-event-listener
-        transport.onclose = resolve;
-      });
-      const descendant = createDeferred<number>();
-      // MCP transports expose callback properties rather than EventTarget listeners.
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener
-      transport.onmessage = (message) => {
-        if ("method" in message && message.method === "fixture/descendant") {
-          const pid = message.params?.pid;
-          if (typeof pid === "number") {
-            descendant.resolve(pid);
-          }
-        }
-      };
-      let descendantPid = 0;
-      try {
-        await transport.start();
-        descendantPid = await withinTest(descendant.promise, signal);
-        expect(isPidAlive(descendantPid)).toBe(true);
-        await fs.writeFile(exitMarkerPath, "exit", "utf8");
-        await withinTest(closed, signal);
-        // The transport reaps the group on its own here; its cleanup promise is private, so
-        // observe the effect without calling close(), which would start that cleanup itself.
-        while (isPidAlive(descendantPid)) {
-          await delay(10, undefined, { signal });
-        }
-
-        await transport.close();
-        expect(isPidAlive(descendantPid)).toBe(false);
-      } finally {
-        await transport.forceClose();
-        killPidIfAlive(descendantPid || undefined);
-      }
-    },
+async function fixture(spontaneous: boolean) {
+  const root = tempDirs.make("mcp-stdio-descendant-");
+  const serverPath = path.join(root, "leader.mjs");
+  const marker = path.join(root, "exit.marker");
+  const shutdown = spontaneous
+    ? `const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(marker)})){clearInterval(timer);process.exit(1)}},10);`
+    : 'process.stdin.resume(); process.stdin.on("end",()=>process.exit(0));';
+  await fs.writeFile(
+    serverPath,
+    `import {spawn} from "node:child_process"; import fs from "node:fs"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); process.stdout.write(JSON.stringify({jsonrpc:"2.0",method:"fixture/descendant",params:{pid:child.pid}})+"\\n"); ${shutdown}`,
+    "utf8",
   );
+  const transport = new OpenClawStdioClientTransport({
+    command: process.execPath,
+    args: [serverPath],
+    stderr: "ignore",
+  });
+  const closed = createDeferred();
+  const descendant = createDeferred<number>();
+  // MCP transports expose callback properties rather than EventTarget listeners.
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  transport.onclose = () => closed.resolve();
+  // oxlint-disable-next-line unicorn/prefer-add-event-listener
+  transport.onmessage = (message) => {
+    if ("method" in message && message.method === "fixture/descendant") {
+      const pid = message.params?.pid;
+      if (typeof pid === "number") {
+        descendant.resolve(pid);
+      }
+    }
+  };
+  return { transport, marker, closed: closed.promise, descendant: descendant.promise };
+}
 
-  it(
-    "kills same-group descendants after a graceful leader shutdown",
+describe.skipIf(process.platform === "win32")("OpenClaw stdio process-group ownership", () => {
+  it.for(["spontaneous", "graceful"])(
+    "kills same-group descendants after %s leader exit",
     { timeout: 10_000 },
-    async ({ signal }) => {
-      const root = tempDirs.make("mcp-stdio-graceful-descendant-");
-      const serverPath = path.join(root, "leader.mjs");
-      await fs.writeFile(
-        serverPath,
-        `import {spawn} from "node:child_process"; const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); process.stdout.write(JSON.stringify({jsonrpc:"2.0",method:"fixture/descendant",params:{pid:child.pid}})+"\\n"); process.stdin.resume(); process.stdin.on("end",()=>process.exit(0));`,
-        "utf8",
-      );
-      const transport = new OpenClawStdioClientTransport({
-        command: process.execPath,
-        args: [serverPath],
-        stderr: "ignore",
-      });
-      const descendant = createDeferred<number>();
-      // MCP transports expose callback properties rather than EventTarget listeners.
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener
-      transport.onmessage = (message) => {
-        if ("method" in message && message.method === "fixture/descendant") {
-          const pid = message.params?.pid;
-          if (typeof pid === "number") {
-            descendant.resolve(pid);
-          }
-        }
-      };
-      let descendantPid = 0;
+    async (mode, { signal }) => {
+      const { transport, marker, closed, descendant } = await fixture(mode === "spontaneous");
+      let pid = 0;
       try {
         await transport.start();
-        descendantPid = await withinTest(descendant.promise, signal);
-        expect(isPidAlive(descendantPid)).toBe(true);
-
+        pid = await withinTest(descendant, signal);
+        expect(isPidAlive(pid)).toBe(true);
+        if (mode === "spontaneous") {
+          await fs.writeFile(marker, "exit", "utf8");
+          await withinTest(closed, signal);
+          // Observe automatic group cleanup before close() could initiate it itself.
+          while (isPidAlive(pid)) {
+            await delay(10, undefined, { signal });
+          }
+        }
         await transport.close();
-
-        expect(isPidAlive(descendantPid)).toBe(false);
+        expect(isPidAlive(pid)).toBe(false);
       } finally {
         await transport.forceClose();
-        killPidIfAlive(descendantPid || undefined);
+        killPidIfAlive(pid || undefined);
       }
     },
   );

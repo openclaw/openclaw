@@ -107,7 +107,6 @@ describe("projectBoundedCodexThreadHistory", () => {
   it("uses one inclusive completed-turn prefix for transcript and Responses API projection", () => {
     const projection = project(thread, "turn-b", "native-provider");
 
-    expect(projection).toMatchObject({ importedMessages: 4, omittedMessages: 0 });
     expect(projection.transcriptMessages.map(messageContent)).toEqual([
       "First question",
       [{ type: "text", text: "First answer" }],
@@ -240,8 +239,8 @@ describe("projectBoundedCodexThreadHistory", () => {
       }),
     );
     const projection = project(turns);
-    expect(projection.importedMessages).toBeGreaterThan(0);
-    expect(projection.omittedMessages).toBeGreaterThan(0);
+    expect(projection.transcriptMessages.length).toBeGreaterThan(0);
+    expect(projection.transcriptMessages.length).toBeLessThan(turns.length);
     expect(Buffer.byteLength(JSON.stringify(projection.transcriptMessages), "utf8")).toBeLessThan(
       512 * 1024,
     );
@@ -262,7 +261,7 @@ describe("projectBoundedCodexThreadHistory", () => {
       return typeof content === "string" ? content : "";
     });
 
-    expect(projection).toMatchObject({ importedMessages: 8, omittedMessages: 1 });
+    expect(texts).toHaveLength(8);
     expect(texts[0]).toMatch(/^1:prefix-/u);
     for (const text of texts) {
       expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(64 * 1024);
@@ -282,8 +281,6 @@ describe("projectBoundedCodexThreadHistory", () => {
       "Codex history boundary turn not found: turn-missing",
     );
     expect(project(thread, null)).toEqual({
-      importedMessages: 0,
-      omittedMessages: 0,
       responseItems: [],
       transcriptMessages: [],
     });

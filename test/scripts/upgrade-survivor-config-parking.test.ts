@@ -222,7 +222,7 @@ openclaw_e2e_wait_gateway_ready() {
   return "$PROBE_READY_STATUS"
 }
 check_gateway_status() { printf 'authenticated\\n' >>"$PROBE_EVENTS"; }
-${noops("prepare_restart_inference", "install_update_restart_systemctl_shim")}
+${noops("prepare_restart_inference", "prepare_restart_plugin_release_selectors", "install_update_restart_systemctl_shim")}
 prepare_restart_fixture() {
   restart_fixture_package="$RUNTIME_ROOT/future.tgz"
   restart_fixture_version="2100.1.0"
@@ -316,6 +316,7 @@ exit "$probe_status"
             : [
                 "stop-recovery-service",
                 "prepare-restart-inference",
+                "prepare-restart-plugin-selectors",
                 "prepare-restart-fixture",
                 "prepare-restart-manager",
               ],
@@ -335,7 +336,7 @@ update_repair_required=0
 candidate_version=2026.9.3
 baseline_version=2026.9.2
 OPENCLAW_CLAWHUB_URL=fixture
-${noops("stop_update_restart_probe_gateway", "prepare_restart_inference", "install_update_restart_systemctl_shim", "run_update_restart_probe_gateway", "check_gateway_status", "update_candidate", "assert_managed_membership_warning")}
+${noops("stop_update_restart_probe_gateway", "prepare_restart_inference", "prepare_restart_plugin_release_selectors", "install_update_restart_systemctl_shim", "run_update_restart_probe_gateway", "check_gateway_status", "update_candidate", "assert_managed_membership_warning")}
 prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
 node() { if [ "$#" -ge 2 ] && [ "$2" = assert-restart-serving-turn ]; then return 47; fi; }
 read_installed_version() { printf '2026.9.3'; }

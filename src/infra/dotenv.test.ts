@@ -99,7 +99,7 @@ async function expectBlockedWorkspaceEnv(directory: string, lines: readonly stri
   const keys = lines.map((line) => line.split("=")[0] ?? "");
   await writeEnvFile(path.join(directory, ".env"), lines.join("\n"));
   clearEnv(keys);
-  loadWorkspaceDotEnvFile(path.join(directory, ".env"), { quiet: true });
+  loadWorkspaceDotEnvFile(path.join(directory, ".env"));
   expectEnvUndefined(keys);
 }
 
@@ -113,7 +113,7 @@ describe("loadDotEnv", () => {
     if (source === "shell") {
       process.env.FOO = "from-shell";
     }
-    loadDotEnv({ quiet: true });
+    loadDotEnv();
     expect(process.env).toMatchObject({ FOO: expected, BAR: "1" });
   });
 
@@ -126,7 +126,6 @@ describe("loadDotEnv", () => {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       stateEnvPath,
       overrideKeys: ["MANAGED_API_KEY"],
-      quiet: true,
     });
 
     expect(process.env.MANAGED_API_KEY).toBe("from-state");
@@ -139,7 +138,7 @@ describe("loadDotEnv", () => {
     vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("ENOENT: uv_cwd");
     });
-    loadDotEnv({ quiet: true });
+    loadDotEnv();
 
     expect(process.env.FOO).toBe("from-global");
   });
@@ -156,7 +155,7 @@ describe("loadDotEnv", () => {
 
     loggerMocks.warn.mockClear();
 
-    loadDotEnv({ quiet: true });
+    loadDotEnv();
 
     expect(process.env.FOO).toBe("from-global");
     expect(process.env.BAR).toBe("from-gateway");
@@ -212,7 +211,7 @@ describe("loadDotEnv", () => {
     };
     await writeEnvFile(path.join(stateDir, ".env"), envContents(trusted));
     clearEnv(Object.keys(trusted));
-    loadDotEnv({ quiet: true });
+    loadDotEnv();
     expect(process.env).toMatchObject(trusted);
   });
 });
@@ -223,7 +222,7 @@ describe("loadCliDotEnv", () => {
 
     // Exercise the blocklist rather than the already-set skip.
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
 
     expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
   });
@@ -232,7 +231,7 @@ describe("loadCliDotEnv", () => {
     await writeEnvFile(path.join(cwdDir, ".env"), [...BUNDLED_TRUST_ROOT_ENV_LINES].join("\n"));
 
     clearEnv(BUNDLED_TRUST_ROOT_ENV_KEYS);
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
 
     expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
   });
@@ -257,7 +256,7 @@ describe("loadCliDotEnv", () => {
     await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
     clearEnv(["SAFE_KEY", "BAR", ...Object.keys(blocked)]);
 
-    loadCliDotEnv({ quiet: true });
+    loadCliDotEnv();
 
     expect(process.env).toMatchObject({
       SAFE_KEY: "from-cwd",

@@ -129,9 +129,10 @@ or connections without a durable profile stay browser-local rather than writing
 another person’s layout or shared Gateway configuration.
 
 New session previews the first prompt immediately while the Gateway accepts it.
-A temporary selected row appears in the sidebar immediately, at the top of the
-session list or under its agent in the agent roster, clearing the previous chat’s
-highlight without changing the saved session until creation is accepted.
+A temporary selected row appears at the top of the sidebar session list
+immediately, clearing the previous chat’s highlight without changing the saved
+session until creation is accepted. The agent roster (**Show all**) lists agents
+rather than sessions, so it shows no temporary row.
 The temporary row has no session actions; a failed creation restores the draft.
 Sessions created by another client or an agent appear through the sidebar's batched
 refresh, normally within five seconds. A busy Gateway can extend the refresh interval
@@ -227,6 +228,12 @@ allowed, New session selects **New worktree** before submission. **Current check
 stays visible but disabled with an explanation. Allowed saved choices stay selected;
 an unavailable saved choice is corrected without clearing your prompt, model, or
 effort. The Gateway checks access again when the session is created.
+
+When failed Git discovery blocks a selected or restored **New worktree** choice,
+New session keeps that choice. A permission denial names the required access when
+the Gateway provides it and directs you to the person who manages OpenClaw;
+retrying alone cannot grant it. Other discovery failures retain the retry guidance.
+Your unsent draft stays available.
 
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's

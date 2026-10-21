@@ -310,6 +310,7 @@ export function installSpawnAuthorityFixture() {
         dispatchAgent: unexpectedRecovery,
         dispatchSessionMethod: unexpectedRecovery,
         sendRecoveryNotice: unexpectedRecovery,
+        resumeChatInput: unexpectedRecovery,
       } satisfies GatewayRecoveryRuntime,
     });
     const admission = runContext.prepareSystemAgentRunAdmission(

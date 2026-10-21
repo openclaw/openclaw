@@ -84,7 +84,6 @@ export function createFaceTimeCallControl(params: {
             feedDevice: FACETIME_FEED_DEVICE_NAME,
             microphoneDevice: FACETIME_MIC_DEVICE_NAME,
             processInputVerified: false,
-            processOutputSuppressed: false,
           };
           call.lastRoutingError = undefined;
         })();
@@ -124,7 +123,6 @@ export function createFaceTimeCallControl(params: {
     call.markCarrierActive(generation);
     if (call.audioTransport) {
       call.audioTransport.processInputVerified = true;
-      call.audioTransport.processOutputSuppressed = call.talk?.processOutputSuppressed() === true;
     }
   };
   const closeCall = async (call: ActiveFaceTimeCall, reason: string) => {
@@ -178,7 +176,7 @@ export function createFaceTimeCallControl(params: {
             return undefined;
           }
           try {
-            return projectCompleteFaceTimeAbsence(error.result).topologyGeneration;
+            return projectCompleteFaceTimeAbsence(error.result);
           } catch {
             return undefined;
           }
@@ -217,10 +215,7 @@ export function createFaceTimeCallControl(params: {
           const first = projectCompleteFaceTimeAbsence(await inspect());
           await sleepWithAbort(100, undefined, { ref: false });
           const second = projectCompleteFaceTimeAbsence(await inspect());
-          return (
-            first.topologyGeneration === second.topologyGeneration &&
-            params.getHelperTopologyVersion() === topologyVersion
-          );
+          return first === second && params.getHelperTopologyVersion() === topologyVersion;
         } catch {
           return false;
         }
@@ -348,9 +343,6 @@ export function createFaceTimeCallControl(params: {
           return;
         }
         call.talk = talk;
-        if (call.audioTransport) {
-          call.audioTransport.processOutputSuppressed = true;
-        }
         params.logger.info("[facetime] realtime talk suppression ready");
       })();
     }

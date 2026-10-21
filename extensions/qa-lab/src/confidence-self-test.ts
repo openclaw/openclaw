@@ -2,8 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { evaluateJsonlReplaySummary, type QaConfidenceVerdict } from "./confidence-report.js";
 import {
-  buildHarnessParityCell,
-  buildHarnessParityResult,
+  classifyHarnessParityDrift,
   type HarnessParityDrift,
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
@@ -121,22 +120,11 @@ function detectHarnessDrift(
   changes: Parameters<typeof syntheticPromptReport>[0],
   expectedDrift: HarnessParityDrift,
 ): boolean {
-  const left = buildHarnessParityCell({
-    variant: { id: "left", label: "Left" },
-    cell: syntheticRuntimeCell("openclaw", { systemPromptReport: syntheticPromptReport() }),
-    tokenUsageSource: "mock-estimate",
-  });
-  const right = buildHarnessParityCell({
-    variant: { id: "right", label: "Right" },
-    cell: syntheticRuntimeCell("codex", { systemPromptReport: syntheticPromptReport(changes) }),
-    tokenUsageSource: "mock-estimate",
-  });
   return (
-    buildHarnessParityResult({
-      scenarioId: "confidence-self-test",
-      left,
-      right,
-    }).drift === expectedDrift
+    classifyHarnessParityDrift({
+      left: syntheticRuntimeCell("openclaw", { systemPromptReport: syntheticPromptReport() }),
+      right: syntheticRuntimeCell("codex", { systemPromptReport: syntheticPromptReport(changes) }),
+    }) === expectedDrift
   );
 }
 

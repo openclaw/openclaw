@@ -42,8 +42,9 @@ function captureActions(tool: NonNullable<ReturnType<typeof createTranscriptsToo
   };
 }
 function captureTools(stateDir: string, options: Parameters<typeof createTranscriptsTool>[0]) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   return {
-    ...captureActions(createTranscriptsTool({ ...options, stateDir })),
+    ...captureActions(createTranscriptsTool(options)),
     store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     }),
@@ -88,6 +89,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 

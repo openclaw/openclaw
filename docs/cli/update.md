@@ -260,6 +260,12 @@ recorded rollback outcome. Failed steps use stable identifiers such as
 `candidate-state-snapshot`, `candidate-doctor-lint`, and `post-install-verify` in
 the report body and issue title; command arguments and private paths remain redacted.
 Snapshot errors identify the active database, execution approvals, or plugin phase.
+Snapshot watchdog failures also retain the last progress event, its age, and the
+last database's page count, copied bytes, and copy time in saved stderr and
+`openclaw update status`. The watchdog's byte estimate describes the total snapshot
+input, including plugins; it is not the size of the database active at timeout.
+Phase-only progress, such as plugin inventory after the shared database copy,
+replaces the active phase without losing the last database's copy counters.
 Schema inspection failures put recognized worker error codes and causes before private
 source context, including causes after warning lines, so they survive redaction. Saved
 diagnostic lines omit a path and its trailing text, including quoted paths whose filenames
@@ -834,6 +840,12 @@ their own bounds. An explicit `--timeout <seconds>` supplies one overall budget 
 through activation, readiness, and recovery, including native service commands.
 Expiry reports `update-activation-timeout` or pending recovery; it does not start
 another recovery phase. Outstanding writers retain ownership until they settle.
+
+Candidate checks compute an automatic allowance from the copied SQLite and
+plugin state. A shorter update deadline limits that allowance; the update report
+and history warn with both values because checks may time out early. Increase
+`--timeout` to allow more time. This warning comes from the installed updater and
+protects subsequent updates after installation.
 
 The same deadline cancels runtime-retention inventory, its file-hashing workers,
 and materialization before activation. Retention makes one attempt and stops if

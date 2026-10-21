@@ -11,12 +11,6 @@ import {
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 import kbdStyles from "./components/kbd.css?inline";
 
-type ViteImportMeta = ImportMeta & {
-  readonly env?: {
-    readonly PROD?: boolean;
-  };
-};
-
 if (!unsupportedControlUiBrowser) {
   const themeColors: HTMLMetaElement[] = [];
   for (const id of ["openclaw-theme-color-light", "openclaw-theme-color-dark"]) {
@@ -42,11 +36,11 @@ if (!unsupportedControlUiBrowser) {
   }
   bindControlUiDocumentHead({ themeColors, favicons });
 
-  const root = document.querySelector<HTMLElement>("openclaw-app");
-  if (root) {
+  const root = document.getElementsByTagName("openclaw-app").item(0);
+  if (root instanceof HTMLElement) {
     mountOpenClawApp(root);
   }
-  const isProd = (import.meta as ViteImportMeta).env?.PROD === true;
+  const isProd = import.meta.env.PROD;
   const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;
 
   // Share the exact keyboard-hint rules with shadow roots without making renderers
@@ -78,6 +72,7 @@ if (!unsupportedControlUiBrowser) {
         .catch((error: unknown) => {
           console.warn("OpenClaw service worker refresh failed.", error);
         });
+    // Non-DOM platform listener: document lifetime owns it; no removal is needed.
     navigator.serviceWorker.addEventListener("message", (event) => {
       if (
         event.source === navigator.serviceWorker.controller &&
@@ -90,6 +85,7 @@ if (!unsupportedControlUiBrowser) {
         event.ports[0]?.postMessage({ version: currentControlUiBuildId });
       }
     });
+    // Non-DOM platform listener: document lifetime owns it; no removal is needed.
     navigator.serviceWorker.addEventListener("controllerchange", () => void refresh());
     void navigator.serviceWorker
       .register(swUrl, { updateViaCache: "none" })

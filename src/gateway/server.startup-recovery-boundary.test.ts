@@ -3,7 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
@@ -25,6 +29,7 @@ import {
 } from "../sessions/session-controller.rpc-sources.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import * as agentContent from "./agent-turn/agent-content-phase.js";
 import * as chatRestartRecovery from "./server-methods/chat-restart-recovery.js";
 import * as chatAdmission from "./server-methods/chat-send-admission.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
@@ -442,18 +447,43 @@ async function interruptWinsOverOwedResend(fixture: Fixture) {
   expect(resendTurns(owed)).toHaveLength(0);
 }
 
-async function interruptCancelsWaitingResend(fixture: Fixture) {
+async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSignal) {
   const sessionKey = "agent:main:boundary-interrupt-waiting";
   const sessionId = "boundary-interrupt-waiting-session";
   const owed = "Waiting-interrupt case: owed interrupted task.";
   const user = "Waiting-interrupt case: newest message.";
   await seedInterruptedSession(fixture, { sessionKey, sessionId, message: owed });
   const releaseLane = holdRecoveryLane(sessionKey);
+  const preparing = createDeferred();
+  const releasePreparation = createDeferred();
+  const prepare = agentContent.prepareAgentContentPhase;
+  // Interrupt after source registration, before the later admission revalidator
+  // can publish cancellation on behalf of unfinished preparation.
+  const held = vi
+    .spyOn(agentContent, "prepareAgentContentPhase")
+    .mockImplementationOnce(async (params) => {
+      const content = await prepare(params);
+      preparing.resolve();
+      await releasePreparation.promise;
+      return content;
+    });
   const recovery = runStartupRecovery(fixture);
   let resendRunId: string;
   const runId = "boundary-interrupt-waiting-user";
   try {
-    ({ runId: resendRunId } = await waitForResendSource(fixture, sessionKey));
+    await withinTest(
+      awaitGateBeforeSettlement(
+        preparing.promise,
+        recovery,
+        "Restart resend ended before content preparation",
+      ),
+      signal,
+    );
+    resendRunId = expectDefined(
+      readEntry(fixture, sessionKey)?.restartRecoveryDeliveryRunId,
+      "prepared restart resend",
+    );
+    const source = expectDefined(getRpcSource(resendRunId), "registered restart resend");
     expect(resendTurns(owed)).toHaveLength(0);
     await expect(
       fixture.client.request("chat.send", {
@@ -465,7 +495,10 @@ async function interruptCancelsWaitingResend(fixture: Fixture) {
         idempotencyKey: runId,
       }),
     ).resolves.toMatchObject({ runId, interruptedActiveRun: true });
+    expect(source.input.abortSignal.aborted).toBe(true);
   } finally {
+    releasePreparation.resolve();
+    held.mockRestore();
     releaseLane();
   }
   // The dispatcher reports the stopped resend as settled, not as a failed attempt.
@@ -673,7 +706,7 @@ async function resetRestoresMainAfterRecoveryArchival(fixture: Fixture) {
 }
 
 // The test runtime resets plugin state after each test, so one test owns the Gateway.
-it("orders, joins, and cancels restart resends through the session mailbox", async () => {
+it("orders, joins, and cancels restart resends through the session mailbox", async ({ signal }) => {
   const token = "startup-recovery-boundary-token";
   const state = await createOpenClawTestState({
     label: "startup-recovery-boundary",
@@ -783,7 +816,7 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
     await sameIdRetryJoinsPreparedResend(fixture);
     await stopCancelsWaitingResend(fixture);
     await interruptWinsOverOwedResend(fixture);
-    await interruptCancelsWaitingResend(fixture);
+    await interruptCancelsWaitingResend(fixture, signal);
     await interruptEndsRunningResend(fixture);
     await interruptSurvivesInterruptedTurnCleanup(fixture);
     await steerQueuesBehindRestartSafeResend(fixture);

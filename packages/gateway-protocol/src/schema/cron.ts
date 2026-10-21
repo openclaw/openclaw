@@ -466,6 +466,9 @@ export const CronJobSchema = closedObject({
   displayName: Type.Optional(CronDisplayNameSchema),
   owner: Type.Optional(CronOwnerSchema),
   scheduledToolPolicy: Type.Optional(CronScheduledToolPolicySchema),
+  streamExecutionHost: Type.Optional(
+    Type.Union([Type.Literal("gateway"), Type.Literal("sandbox")]),
+  ),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   name: NonEmptyString,

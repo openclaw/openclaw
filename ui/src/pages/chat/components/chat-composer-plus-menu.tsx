@@ -1,7 +1,12 @@
 import { createEffect, createMemo, createSignal, createUniqueId, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { countSessionToolOverrides } from "../../../lib/sessions/tool-overrides.ts";
@@ -18,6 +23,7 @@ type ContentState =
   | { kind: "error"; error: unknown };
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
+  const controls = createMenuControls();
   let handle!: MenuHandle;
   let host!: HTMLDivElement;
   const id = createUniqueId();
@@ -133,7 +139,14 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           {
             kind: "content",
             id: "plus-menu-error",
-            content: <LazyViewError error={current.error} onRetry={loadContent} inline />,
+            content: (
+              <LazyViewError
+                error={current.error}
+                onRetry={loadContent}
+                retryRef={controls.ref()}
+                inline
+              />
+            ),
           },
         ] satisfies MenuEntry[];
       }
@@ -173,6 +186,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         triggerAttributes={{ title: t("chat.composer.addAttachment") }}
         trigger={<Icon name="plus" />}
         items={items()}
+        controls={controls}
         ref={(next) => {
           handle = next;
           releaseAnchor();

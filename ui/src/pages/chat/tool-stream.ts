@@ -551,7 +551,6 @@ export function handleAgentEvent(
       entry = {
         toolCallId,
         runId: payload.runId,
-        sessionKey,
         name: item.name ?? item.title,
         startedAt: item.startedAt ?? payload.ts,
         receivedAt: Date.now(),
@@ -629,7 +628,6 @@ export function handleAgentEvent(
     entry = {
       toolCallId,
       runId: payload.runId,
-      sessionKey,
       name,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,

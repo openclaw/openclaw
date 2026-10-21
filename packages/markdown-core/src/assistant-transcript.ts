@@ -302,14 +302,6 @@ function removeLinksContainingAssistantTranscriptRoles(tokens: Token[]): Token[]
   return result;
 }
 
-function annotateHtmlBlock(TokenType: StateCore["Token"], token: Token): Token[] {
-  const spans = findAssistantTranscriptRoleHeaderSpans(
-    token.content,
-    findRawCodeContainerRanges(token.content),
-  );
-  return splitVisibleToken(TokenType, token, spans);
-}
-
 /** Adds semantic transcript-role tokens to assistant-authored Markdown only. */
 export function markdownItAssistantTranscriptRoles(
   md: MarkdownIt,
@@ -333,7 +325,11 @@ export function markdownItAssistantTranscriptRoles(
         continue;
       }
       if (token.type === "html_block") {
-        tokens.push(...annotateHtmlBlock(state.Token, token));
+        const spans = findAssistantTranscriptRoleHeaderSpans(
+          token.content,
+          findRawCodeContainerRanges(token.content),
+        );
+        tokens.push(...splitVisibleToken(state.Token, token, spans));
         continue;
       }
       tokens.push(token);

@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
@@ -16,12 +16,13 @@ import { readBackupEngine } from "../../snapshot/database-backup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import {
-  resolveClientCredentialStorePath,
-  runClientCredentialOperation,
-} from "../client-credential-store.js";
+import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
+import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { runClientCredentialOperation } from "../client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../device-identity-material.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { runLegacyStateMigrationSteps } from "../state-migrations.steps.js";
 import { UpdateCandidatePluginPlanSchema } from "../update-candidate-plugins.js";
 import {
@@ -40,6 +41,7 @@ import {
 import { assertUpdateDatabaseEngineContexts } from "../update-database-engine-admission.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { captureUpdateRecoveryBaseline } from "../update-recovery-baseline-capture.js";
+import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { installDatabaseEngineSelection } from "./context.js";
@@ -51,6 +53,22 @@ import {
   createTeamReportsPortFixture,
   updatePostgresFamilies as families,
 } from "./update-preflight.conformance.test-support.js";
+
+// mock-isolation: Retain native workers and task transport while selecting their prepared artifacts.
+vi.mock("../worker-task-pool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../worker-task-pool.js")>();
+  const { resolveBackupNativeWorkerTestOptions } =
+    await import("./backup-native-worker.test-support.js");
+  return {
+    ...actual,
+    WorkerTaskPool: new Proxy(actual.WorkerTaskPool, {
+      construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
+        return new Target(resolveBackupNativeWorkerTestOptions(args[0]));
+      },
+    }),
+  };
+});
+
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 // The suite owns shared inputs so a failed case drain prevents their later removal.
@@ -164,18 +182,23 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       }
       createAnchor(shared, storeId, namespace);
       anchorCreated = true;
-      for (const key of [
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      ]) {
-        vi.stubEnv(key, env[key]);
-      }
       resetDatabaseEngineSelectionForTest();
       installDatabaseEngineSelection(await resolveDatabaseEngineSelection(config, env));
     }),
   );
+
+  beforeEach(() => {
+    // Vitest resets environment stubs before each case, including those set during fixture setup.
+    for (const key of [
+      "HOME",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    ]) {
+      vi.stubEnv(key, env[key]);
+    }
+  });
 
   // A timeout rejects Vitest's wrapper before the original body releases its owner.
   afterEach(() => suiteLifetime.verifyCleanup(() => caseLifetime.cleanup()));
@@ -232,7 +255,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       const plan = UpdateCandidatePluginPlanSchema.parse(
         JSON.parse(await fs.readFile(path.join(targetStateDir, inventory.pluginPlan), "utf8")),
       );
-      expect(plan.bindings).toContainEqual(expect.objectContaining({ source: plugin }));
+      expect(Object.keys(plan.pluginPaths)).toContain(plugin);
       const discovery = parseUpdateStateInspectionWorker(
         await inspect("discover"),
         UpdateStateSchemaInspectionPlanSchema,
@@ -354,6 +377,11 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         await client.query(
           `INSERT INTO "${namespace}".agent_databases (agent_id, path, schema_version, last_seen_at) VALUES ('registered', $1, $2, 1)`,
           [agent, OPENCLAW_AGENT_SCHEMA_VERSION],
+        );
+        await activateUpdatePostgresPluginFixtures(
+          config,
+          env,
+          fileURLToPath(new URL("../../../extensions", import.meta.url)),
         );
         const pluginRoots: string[] = [];
         // Descriptor loading precedes publishing the complete plugin fixture config.
@@ -486,11 +514,29 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       "captures a retained PostgreSQL agent and restores local credentials after candidate failure while preserving current update history",
       () =>
         caseLifetime.run(async () => {
+          withEngineStoreAdmission(() => {
+            using anchor = openNodeSqliteDatabase(shared);
+            const identity = anchor.prepare("SELECT store_id FROM openclaw_engine_anchor").get()!;
+            const database = new PostgresSyncConnection(
+              connection!,
+              namespace,
+              anchor,
+              String(identity.store_id),
+            );
+            try {
+              database.runTransaction(() =>
+                bindFreshClientCredentialStore(database, { path: shared, env }),
+              );
+            } finally {
+              database.close();
+            }
+          });
+          const generated = generateStoredDeviceIdentity(11);
           const identity = {
             identity_key: "node",
-            device_id: "synthetic-local-device",
-            public_key_pem: "synthetic-public-key",
-            private_key_pem: "synthetic-private-key",
+            device_id: generated.deviceId,
+            public_key_pem: generated.publicKeyPem,
+            private_key_pem: generated.privateKeyPem,
             created_at_ms: 11,
             updated_at_ms: 12,
           };
@@ -519,7 +565,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
             token,
             expectedToken: null,
           });
-          runClientCredentialOperation(env, { kind: "socket.create", socket });
+          runClientCredentialOperation(env, { kind: "socket.ensure", fallback: socket });
           const owner = await acquireGatewayLock({
             env,
             role: "sqlite-maintenance",
@@ -611,13 +657,13 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
                       expectedToken: token.token,
                     });
                     runClientCredentialOperation(env, {
-                      kind: "socket.replace",
-                      socket: {
+                      kind: "socket.ensure",
+                      fallback: {
                         ...socket,
                         socket_token: "synthetic-candidate-socket-token",
                         updated_at_ms: 22,
                       },
-                      expectedToken: socket.socket_token,
+                      requested: { token: "synthetic-candidate-socket-token" },
                     });
                     throw new Error("candidate migration failed after committed data write");
                   },

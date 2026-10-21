@@ -13,6 +13,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { CreationComposer } from "../new-session/creation-composer-render.tsx";
 import { NewSessionBody } from "../new-session/draft-body.solid.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { ChatPaneHeader, type ChatPaneHeaderProps } from "./components/chat-pane-header.tsx";
@@ -202,29 +203,24 @@ function PendingSessionCreateContent(
       },
     };
   });
+  const questions = createComposerQuestions(composerId, () => view().composer);
   return (
     <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
-          <Show when={view()?.header}>{(header) => <ChatPaneHeader {...header()} />}</Show>
+          <ChatPaneHeader {...view().header} />
         </div>
-        <section class="chat" data-region="main" aria-busy={view()?.submitting ? "true" : "false"}>
+        <section class="chat" data-region="main" aria-busy={view().submitting ? "true" : "false"}>
           <div class="chat-main__conversation-frame">
             <div class="chat-main__conversation">
-              <Show when={view()?.body}>{(body) => <NewSessionBody {...body()} />}</Show>
+              <NewSessionBody {...view().body} />
               <div class="chat-footer">
-                <Show when={view()}>
-                  {(current) => (
-                    <Show
-                      when={current().creationComposer}
-                      keyed
-                      fallback={<ChatComposer {...current().composer} />}
-                    >
-                      {(composer) => (
-                        <CreationComposer composer={composer} onOpenImage={openImage} />
-                      )}
-                    </Show>
-                  )}
+                <Show
+                  when={view().creationComposer}
+                  keyed
+                  fallback={<ChatComposer {...view().composer} questions={questions} />}
+                >
+                  {(composer) => <CreationComposer composer={composer} onOpenImage={openImage} />}
                 </Show>
               </div>
             </div>

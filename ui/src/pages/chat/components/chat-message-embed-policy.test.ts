@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { groupMessages } from "../chat-thread-grouping.ts";
@@ -88,18 +88,18 @@ describe("assistant message embed policy", () => {
         const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
         preview.render(text, options);
         await vi.dynamicImportSettled();
-        const card = host.querySelector("openclaw-youtube-video");
+        const card = host.querySelector<HTMLElement>("openclaw-youtube-video");
         expect(card).not.toBeNull();
-        await card!.updateComplete;
+        flush();
         return card!;
       };
-      const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
+      const play = async (card: HTMLElement) => {
         const button = card.querySelector<HTMLButtonElement>(
           'button[aria-label="Play Synthetic video"]',
         );
         expect(button).not.toBeNull();
         button!.click();
-        await card.updateComplete;
+        flush();
         const frame = card.querySelector("iframe");
         expect(frame).toBeInstanceOf(HTMLIFrameElement);
         return frame!;

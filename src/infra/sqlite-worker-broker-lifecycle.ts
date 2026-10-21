@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
@@ -14,6 +15,7 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "./sqlite-lifecycle-errors.js";
+import { SQLITE_WORKER_ADMISSION_TIMEOUT_MS } from "./sqlite-worker-broker-admission.js";
 import {
   receiveSqliteWorkerReply,
   type SqliteWorkerReplyOwner,
@@ -139,7 +141,7 @@ export function createSqliteWorkerLifecycle({
       if (idle.length === 0) {
         // Join the first completing carrier's FIFO even if its next job has started.
         // Requiring an idle window could starve opens behind a steady command stream.
-        selected = await racePromiseWithAbortSignal(
+        selected = await raceWithTimeout(
           Promise.race(
             available.map((slot) =>
               slot.current!.result.then(
@@ -148,8 +150,16 @@ export function createSqliteWorkerLifecycle({
               ),
             ),
           ),
-          options.signal,
-          (signal) => signal.reason,
+          SQLITE_WORKER_ADMISSION_TIMEOUT_MS,
+          () => {
+            throw new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded");
+          },
+          {
+            signal: options.signal,
+            onAbort: (signal) => {
+              throw signal.reason;
+            },
+          },
         );
         options.signal?.throwIfAborted();
         options.assertCurrent?.();

@@ -1,7 +1,8 @@
 // Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onOutboundDeliveryEnqueued } from "../infra/delivery-queue-cache.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { outboundDeliveryNotifications } from "../infra/delivery-queue-cache.js";
 import {
   captureDeliveryQueueStateContext,
   resolveDeliveryQueueStateEnv,
@@ -21,6 +22,7 @@ import {
 import { getQueueSize } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
+  isGatewayRestartDrainError,
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -93,9 +95,11 @@ export function startGatewayCronWithLogging(params: {
         // admission fence; restart and suspension cannot race past this point.
         params.onStartError?.(err);
       }
-    }, "runtime:cron-start").catch((err: unknown) =>
-      params.logCron.error(`failed to enter start root: ${String(err)}`),
-    ),
+    }, "runtime:cron-start").catch((err: unknown) => {
+      if (!isGatewayRestartDrainError(err)) {
+        params.logCron.error(`failed to enter start root: ${String(err)}`);
+      }
+    }),
   );
 }
 
@@ -383,17 +387,17 @@ function startPendingOutboundDeliveryRecovery(params: {
       });
     }
   };
-  const unsubscribe = onOutboundDeliveryEnqueued((stateDir) => {
+  outboundDeliveryNotifications.onEnqueued = (stateDir) => {
     if (stateDir === recoveryContext.stateDir) {
       runInDetachedAsyncContext(schedule);
     }
-  });
+  };
   void (isGatewayWorkAdmissionClosed() ? schedule() : recover());
   return () => {
     if (stopPromise) {
       return stopPromise;
     }
-    unsubscribe();
+    outboundDeliveryNotifications.onEnqueued = () => {};
     const scheduled = scheduler.stop();
     const recovery = inFlight;
     if (!recovery) {
@@ -421,6 +425,7 @@ function startPendingSessionDeliveryRuntime(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
+  sessionRecoveryReady?: Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
 }): () => Promise<void> {
   const queueContext = captureOpenClawStateWorkerContext();
@@ -439,6 +444,11 @@ function startPendingSessionDeliveryRuntime(params: {
     run: () =>
       runWithGatewayIndependentRootWorkAdmission(
         async () => {
+          // Early session events can invoke main recovery themselves. Join the same
+          // restored sources as the main scan before they can reject an interrupted turn.
+          if (params.sessionRecoveryReady) {
+            await racePromiseWithAbortSignal(params.sessionRecoveryReady, signal);
+          }
           const {
             deliverQueuedSessionDelivery,
             recoverPendingRestartContinuationDeliveries,
@@ -487,7 +497,7 @@ function startPendingSessionDeliveryRuntime(params: {
         const ownedCancellation =
           signal.aborted &&
           (err === signal.reason || (err instanceof Error && err.cause === signal.reason));
-        if (!ownedCancellation) {
+        if (!ownedCancellation && !isGatewayRestartDrainError(err)) {
           params.log.error(`Session delivery recovery failed: ${String(err)}`);
         }
       }),
@@ -506,6 +516,7 @@ export function activateGatewayScheduledServices(params: {
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
+  sessionRecoveryReady?: Promise<void>;
   cronEnabled: boolean;
   log: GatewayRuntimeServiceLogger;
   resolveGatewayContext?: GatewayContextResolver;
@@ -562,6 +573,7 @@ export function activateGatewayScheduledServices(params: {
     deps: params.deps,
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
+    sessionRecoveryReady: params.sessionRecoveryReady,
     ...(params.resolveGatewayContext
       ? { resolveGatewayContext: params.resolveGatewayContext }
       : {}),

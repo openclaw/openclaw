@@ -40,7 +40,9 @@ type StatusDegradationSummary = Pick<
   | "degradedPlugins"
   | "startupMigrationWarning"
   | "startupRecoveryWarning"
+  | "modelReasoningWarning"
   | "installationReplacementWarning"
+  | "utilityModelWarnings"
   | "childRuntime"
   | "secretEgressProxy"
   | "pluginReload"
@@ -58,11 +60,15 @@ function buildStatusDegradationRows(
   };
   addWarning("Startup migrations", summary.startupMigrationWarning);
   addWarning("Session recovery", summary.startupRecoveryWarning);
+  addWarning("Model reasoning", summary.modelReasoningWarning);
   addWarning(
     "Gateway runtime",
     summary.childRuntime ? formatMissingChildRuntimeWarning(summary.childRuntime) : undefined,
   );
   addWarning("Installation replaced", summary.installationReplacementWarning);
+  for (const warning of summary.utilityModelWarnings ?? []) {
+    addWarning("Utility model", `${warning.path}: ${warning.message}`);
+  }
   if (summary.secretEgressProxy) {
     const status = summary.secretEgressProxy;
     rows.push({
@@ -260,9 +266,7 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
       ...buildStatusDegradationRows(params.summary),
     ],
-    agentsValue: buildStatusAllAgentsValue({
-      agentStatus: params.agentStatus,
-    }),
+    agentsValue: buildStatusAllAgentsValue(params.agentStatus),
     suffixRows: [
       ...(params.surface.databaseEngines?.source !== "unavailable"
         ? [

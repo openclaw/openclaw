@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { fetchHealthUrl, type FetchLike } from "../../../docker-runtime.js";
+import { fetchHealthUrl } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
   "ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0";
@@ -22,7 +22,7 @@ export type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-export function buildVersionsUrl(baseUrl: string) {
+function buildVersionsUrl(baseUrl: string) {
   return `${baseUrl}_matrix/client/versions`;
 }
 
@@ -31,18 +31,13 @@ export async function isMatrixVersionsReachable(
   timeoutSignal = AbortSignal.timeout(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS),
   signal?: AbortSignal,
 ) {
-  let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchHealthUrl(buildVersionsUrl(baseUrl), {
+    const response = await fetchHealthUrl(buildVersionsUrl(baseUrl), {
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
     return response.ok;
   } catch {
     return false;
-  } finally {
-    try {
-      await response?.body?.cancel?.();
-    } catch {}
   }
 }
 

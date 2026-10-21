@@ -32,6 +32,7 @@ export async function cancelGatewayWorkerSessionWork(
     abortOrigin: "rpc",
     stopReason: "rpc",
     stopSource: "operator-revocation",
+    assertCurrent: request.assertCurrent,
     onCancellationStarted: request.onCancellationStarted,
   });
   if (aborted.unauthorized) {

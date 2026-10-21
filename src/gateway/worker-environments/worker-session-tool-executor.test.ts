@@ -109,16 +109,16 @@ describe("worker session tool topology", () => {
     async ({ allow, deny, promptAllow, expected }) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const config = { tools: { allow, deny } };
-      const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
+      const additionalInheritedToolNamesRef: string[] = [];
       const runtime = getFixture().createToolRuntime({
-        inheritedPublicationToolRef,
+        additionalInheritedToolNamesRef,
         prepareTools: (adapters) =>
           createOpenClawCodingToolsInternal(
             {
               config,
               sessionKey: SOURCE.sessionKey,
               githubPublicationAvailable: false,
-              inheritedPublicationToolRef,
+              additionalInheritedToolNamesRef,
               wrapBeforeToolCallHook: false,
               toolConstructionPlan: {
                 includeBaseCodingTools: false,
@@ -150,7 +150,7 @@ describe("worker session tool topology", () => {
       ).toEqual(policy.allow);
       expect(placements.isWorkerTurnToolAuthorized(sourceClaim, "github_publish")).toBe(false);
       await runtime.close();
-      expect(() => runtime.getInheritedPublicationToolName()).toThrow("Worker tool surface closed");
+      expect(() => runtime.getAdditionalInheritedToolNames()).toThrow("Worker tool surface closed");
     },
   );
 

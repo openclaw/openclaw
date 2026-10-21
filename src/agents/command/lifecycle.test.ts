@@ -30,7 +30,6 @@ function createLifecycle(runId: string) {
     lifecycleGeneration: () => "test-generation",
     startedAt: 100,
     state: {
-      currentTurnUserMessagePersisted: true,
       lifecycleFinishing: false,
       lifecycleEnded: false,
     },
@@ -43,7 +42,6 @@ describe("createAgentCommandLifecycle", () => {
     async (outcome) => {
       emitAgentEvent.mockClear();
       const state: AgentAttemptLifecycleState = {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       };
@@ -102,7 +100,6 @@ describe("createAgentCommandLifecycle", () => {
       }
       callbacks.onAttemptTerminalReplaced();
       lifecycle.emitEnd(terminal);
-      expect(state.currentTurnUserMessagePersisted).toBe(true);
       expect(state.lifecycleEnded).toBe(true);
       expect(emitAgentEvent).toHaveBeenCalledOnce();
       const event = emitAgentEvent.mock.calls[0]?.[0];
@@ -127,7 +124,6 @@ describe("createAgentCommandLifecycle", () => {
       startedAt: 100,
       abortSignal: controller.signal,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },
@@ -172,7 +168,6 @@ describe("createAgentCommandLifecycle", () => {
       lifecycleGeneration: () => "test-generation",
       startedAt: 100,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },
@@ -221,6 +216,7 @@ describe("createAgentCommandLifecycle", () => {
         livenessState: "blocked",
         yielded: true,
         replayInvalid: true,
+        suppressErrorNotice: phase === "finishing",
         error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
         terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "sent",
@@ -271,6 +267,7 @@ describe("createAgentCommandLifecycle", () => {
             livenessState: "blocked",
             yielded: true,
             replayInvalid: true,
+            suppressErrorNotice: phase === "finishing",
             error: "Request timed out before a response was generated.",
             ...(phase !== "finishing" ? { executionSettled: true } : {}),
           }),
@@ -297,7 +294,6 @@ describe("createAgentCommandLifecycle", () => {
       lifecycleGeneration: () => "test-generation",
       startedAt: 100,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },
@@ -331,7 +327,6 @@ describe("createAgentCommandLifecycle", () => {
   it("replaces a provisional overflow with the final compaction failure", async () => {
     emitAgentEvent.mockClear();
     const state: AgentAttemptLifecycleState = {
-      currentTurnUserMessagePersisted: true,
       lifecycleFinishing: false,
       lifecycleEnded: false,
     };
@@ -383,7 +378,6 @@ describe("createAgentCommandLifecycle", () => {
       model: "test-model",
     };
     const state: AgentAttemptLifecycleState = {
-      currentTurnUserMessagePersisted: true,
       lifecycleFinishing: false,
       lifecycleEnded: false,
     };
@@ -440,7 +434,6 @@ describe("createAgentCommandLifecycle", () => {
     const secret = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     const error = `The provider failed. Authorization: Bearer ${secret}`;
     const state = {
-      currentTurnUserMessagePersisted: true,
       lifecycleFinishing: false,
       lifecycleEnded: false,
       ...(source === "lifecycle callback" ? { lifecycleError: error } : {}),
@@ -495,7 +488,6 @@ describe("createAgentCommandLifecycle", () => {
         startedAt: 100,
         abortSignal: controller.signal,
         state: {
-          currentTurnUserMessagePersisted: true,
           lifecycleFinishing: false,
           lifecycleEnded: false,
         },
@@ -577,7 +569,6 @@ describe("createAgentCommandLifecycle", () => {
       startedAt: 100,
       abortSignal: controller.signal,
       state: {
-        currentTurnUserMessagePersisted: true,
         lifecycleFinishing: false,
         lifecycleEnded: false,
       },
@@ -605,6 +596,7 @@ describe("createAgentCommandLifecycle", () => {
     const lifecycle = createLifecycle("post-turn-delivery-owner");
     lifecycle.emitPostTurnError(new Error("delivery failed"), {
       metadata: {
+        suppressErrorNotice: true,
         terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "failed",
           resultCount: 0,
@@ -648,6 +640,7 @@ describe("createAgentCommandLifecycle", () => {
       "providerStarted",
       "terminalReceipt",
       "terminalReply",
+      "suppressErrorNotice",
       "unsafeMetadata",
     ]) {
       expect(event.data).not.toHaveProperty(field);

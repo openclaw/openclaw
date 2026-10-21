@@ -256,7 +256,7 @@ describe("registerPreActionHooks", () => {
     ];
     for (const { args, allowInvalid } of scenarios) {
       vi.clearAllMocks();
-      await runPreAction(["plugins", "install", ...args]);
+      await parse(["plugins", "install", ...args]);
 
       expect(configReadyMock, args.join(" ")).toHaveBeenCalledWith({
         runtime: runtimeMock,

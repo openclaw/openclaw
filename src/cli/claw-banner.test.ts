@@ -1,8 +1,48 @@
 // Claw banner tests: static/animated gating and the final-frame invariant.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
+import { sleep } from "../utils/sleep.js";
 import { printClawBanner } from "./claw-banner.js";
+
+vi.mock("../../packages/terminal-core/src/theme.js", { spy: true });
+vi.mock("../utils/sleep.js", { spy: true });
+
+const stdoutProperties = new Map(
+  ["columns", "isTTY"].map((key) => [key, Object.getOwnPropertyDescriptor(process.stdout, key)]),
+);
+beforeEach(() => {
+  Object.defineProperties(process.stdout, {
+    columns: { value: 120, configurable: true, writable: true },
+    isTTY: { value: true, configurable: true, writable: true },
+  });
+  vi.stubEnv("CI", "");
+  vi.stubEnv("VITEST", "");
+  vi.mocked(isRich).mockReturnValue(true);
+  vi.mocked(sleep).mockResolvedValue(undefined);
+  vi.spyOn(process.stdout, "write").mockReturnValue(true);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  for (const [key, descriptor] of stdoutProperties) {
+    if (descriptor) {
+      Object.defineProperty(process.stdout, key, descriptor);
+    } else {
+      Reflect.deleteProperty(process.stdout, key);
+    }
+  }
+});
+
+function captureOutput() {
+  const chunks: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    chunks.push(String(chunk));
+    return true;
+  });
+  return chunks;
+}
 
 const runtimeStub = () => {
   const log = vi.fn();
@@ -10,25 +50,21 @@ const runtimeStub = () => {
 };
 
 async function runAnimated() {
-  const chunks: string[] = [];
+  const chunks = captureOutput();
   const pauses: number[] = [];
   const { runtime } = runtimeStub();
-  const result = await printClawBanner(runtime, {
-    columns: 120,
-    isTty: true,
-    rich: true,
-    env: {},
-    sleep: async (ms) => {
-      pauses.push(ms);
-    },
-    write: (chunk) => chunks.push(chunk),
+  vi.mocked(sleep).mockImplementation(async (ms) => {
+    pauses.push(ms);
   });
+  const result = await printClawBanner(runtime);
   return { chunks, pauses, result };
 }
 
 async function runStatic() {
   const { runtime, log } = runtimeStub();
-  await printClawBanner(runtime, { columns: 120, isTty: false, env: {} });
+  process.stdout.isTTY = false;
+  await printClawBanner(runtime);
+  process.stdout.isTTY = true;
   return stripAnsi(String(log.mock.calls[0]?.[0]))
     .split("\n")
     .filter((row) => row.length > 0);
@@ -37,7 +73,8 @@ async function runStatic() {
 describe("printClawBanner", () => {
   it("falls back to the plain title on narrow terminals", async () => {
     const { runtime, log } = runtimeStub();
-    await printClawBanner(runtime, { columns: 50, isTty: true, rich: true, env: {} });
+    process.stdout.columns = 50;
+    await printClawBanner(runtime);
     const output = String(log.mock.calls[0]?.[0]);
     expect(output).toContain("OPENCLAW");
     expect(output).not.toContain("█");
@@ -74,17 +111,11 @@ describe("printClawBanner", () => {
     let during = -1;
     let duringSigterm = -1;
     const { runtime } = runtimeStub();
-    await printClawBanner(runtime, {
-      columns: 120,
-      isTty: true,
-      rich: true,
-      env: {},
-      sleep: async () => {
-        during = Math.max(during, process.listenerCount("SIGINT"));
-        duringSigterm = Math.max(duringSigterm, process.listenerCount("SIGTERM"));
-      },
-      write: () => {},
+    vi.mocked(sleep).mockImplementation(async () => {
+      during = Math.max(during, process.listenerCount("SIGINT"));
+      duringSigterm = Math.max(duringSigterm, process.listenerCount("SIGTERM"));
     });
+    await printClawBanner(runtime);
     expect(during).toBe(before + 1);
     expect(duringSigterm).toBe(beforeSigterm + 1);
     expect(process.listenerCount("SIGINT")).toBe(before);
@@ -96,30 +127,20 @@ describe("printClawBanner", () => {
     { signal: "SIGTERM" as const, code: 143 },
   ])("unwinds $signal after restoring its cursor and listeners", async ({ signal, code }) => {
     const previous = process.listeners(signal);
-    const chunks: string[] = [];
+    const chunks = captureOutput();
     const exit = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("forced native exit");
     });
     const { runtime } = runtimeStub();
+    vi.mocked(sleep).mockImplementation(async () => {
+      const handler = process.listeners(signal).find((listener) => !previous.includes(listener));
+      if (!handler) {
+        throw new Error("banner signal owner missing");
+      }
+      handler(signal);
+    });
     try {
-      await expect(
-        printClawBanner(runtime, {
-          columns: 120,
-          isTty: true,
-          rich: true,
-          env: {},
-          sleep: async () => {
-            const handler = process
-              .listeners(signal)
-              .find((listener) => !previous.includes(listener));
-            if (!handler) {
-              throw new Error("banner signal owner missing");
-            }
-            handler(signal);
-          },
-          write: (chunk) => chunks.push(chunk),
-        }),
-      ).rejects.toEqual(new ExitError(code));
+      await expect(printClawBanner(runtime)).rejects.toEqual(new ExitError(code));
       expect(exit).not.toHaveBeenCalled();
       expect(chunks.at(-1)).toBe("\x1b[?25h");
       expect(process.listeners(signal)).toEqual(previous);
@@ -130,22 +151,15 @@ describe("printClawBanner", () => {
 
   it("settles on the static frame when parallel work finishes first", async () => {
     const staticRows = await runStatic();
-    const chunks: string[] = [];
+    const chunks = captureOutput();
     const beforeSigint = process.listenerCount("SIGINT");
     let settle!: () => void;
     const settleWhen = new Promise<void>((resolve) => {
       settle = resolve;
     });
     const { runtime } = runtimeStub();
-    const banner = printClawBanner(runtime, {
-      columns: 120,
-      isTty: true,
-      rich: true,
-      env: {},
-      settleWhen,
-      sleep: () => new Promise<void>(() => {}),
-      write: (chunk) => chunks.push(chunk),
-    });
+    vi.mocked(sleep).mockImplementation(() => new Promise<void>(() => {}));
+    const banner = printClawBanner(runtime, { settleWhen });
 
     expect(chunks[0]).toBe("\x1b[?25l");
     expect(process.listenerCount("SIGINT")).toBe(beforeSigint + 1);

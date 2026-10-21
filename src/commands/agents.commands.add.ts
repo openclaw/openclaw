@@ -43,7 +43,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { stageProviderAuthProfileBatch } from "../plugins/provider-auth-persistence.js";
 import type { ProviderAuthProfile } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -100,7 +100,6 @@ function formatSkippedOAuthProfilesMessage(
 
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
-  runtime: RuntimeEnv = defaultRuntime,
   params?: { hasAutomationFlags?: boolean },
 ) {
   if (opts.role !== undefined) {
@@ -236,15 +235,11 @@ export async function agentsAddCommand(
     params: {},
     target: nameInput ?? "interactive agent setup",
     onForeignOwner: "refuse",
-    runLocal: () => runInteractiveAgentsAdd(opts, runtime, wizardOutput),
+    runLocal: () => runInteractiveAgentsAdd(opts, wizardOutput),
   });
 }
 
-async function runInteractiveAgentsAdd(
-  opts: AgentsAddOptions,
-  runtime: RuntimeEnv,
-  wizardOutput: NodeJS.WriteStream,
-) {
+async function runInteractiveAgentsAdd(opts: AgentsAddOptions, wizardOutput: NodeJS.WriteStream) {
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return;

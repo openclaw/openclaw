@@ -1,5 +1,6 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -16,7 +17,6 @@ import {
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
@@ -78,15 +78,14 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = createMemo(() => data().rows.filter(unfinished));
     const finished = createMemo(() => data().rows.filter((row) => !unfinished(row)));
-    const detailId = createMemo(() =>
-      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined,
-    );
+    const detailId = () =>
+      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined;
     const renderElapsed = (row: SubagentsPanelRow) => {
       const session = row.session;
       const active = isSessionRunStateActive(session);
       if (session.runtimeMs != null) {
         return active && session.runtimeSampledAt != null ? (
-          <openclaw-elapsed-time prop:startMs={session.runtimeSampledAt - session.runtimeMs} />
+          <ElapsedTime startMs={session.runtimeSampledAt - session.runtimeMs} />
         ) : (
           formatDurationCompact(session.runtimeMs)
         );
@@ -94,10 +93,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       return (
         session.startedAt != null &&
         (active || session.endedAt != null) && (
-          <openclaw-elapsed-time
-            prop:startMs={session.startedAt}
-            prop:endMs={active ? null : session.endedAt}
-          />
+          <ElapsedTime startMs={session.startedAt} endMs={active ? null : session.endedAt} />
         )
       );
     };

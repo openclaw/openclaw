@@ -34,7 +34,7 @@ import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-c
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -123,7 +123,7 @@ async function tryRunGatewayRunFastPath(
       import("../runtime.js"),
     ]),
   );
-  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
@@ -847,10 +847,10 @@ async function runCliWithPreparedOutputMode(
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv({ quiet: true });
+        await loadGatewayDispatchCliDotEnv();
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv });
       }
     });
   }

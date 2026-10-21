@@ -231,18 +231,7 @@ function createModelRouteRuntimeResolver(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): ModelRouteRuntimeResolver {
-  const cache = new Map<string, "codex" | "openclaw" | undefined>();
   return (route) => {
-    const baseUrlKey =
-      typeof route.baseUrl === "string"
-        ? route.baseUrl
-        : route.baseUrl == null
-          ? ""
-          : typeof route.baseUrl;
-    const key = [route.provider, route.modelId, route.api ?? "", baseUrlKey].join("\0");
-    if (cache.has(key)) {
-      return cache.get(key);
-    }
     const policy = resolveAgentHarnessPolicy({
       provider: route.provider,
       modelId: route.modelId,
@@ -251,10 +240,11 @@ function createModelRouteRuntimeResolver(params: {
       config: params.config,
       env: params.env,
     });
-    const runtime =
-      policy.runtime === "codex" ? "codex" : policy.runtime === "openclaw" ? "openclaw" : undefined;
-    cache.set(key, runtime);
-    return runtime;
+    return policy.runtime === "codex"
+      ? "codex"
+      : policy.runtime === "openclaw"
+        ? "openclaw"
+        : undefined;
   };
 }
 

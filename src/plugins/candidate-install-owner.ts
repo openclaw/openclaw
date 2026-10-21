@@ -1,35 +1,32 @@
-const PLUGIN_CANDIDATE_INSTALL_OWNER = Symbol.for("openclaw.pluginCandidateInstallOwner");
+type InstallOwner = { installOwner?: string; ambiguous?: true };
 
-type PluginCandidateInstallOwner = { installOwner?: string; ambiguous?: true };
-
-export function recordPluginCandidateInstallOwner<T extends object>(
-  candidate: T,
-  installOwner: string | undefined,
-  ambiguous = false,
-): T {
-  if (!installOwner && !ambiguous) {
-    return candidate;
+export function createPluginInstallOwnerMetadata(key: string, configurable: boolean) {
+  const symbol = Symbol.for(key);
+  function read(value: object): InstallOwner | undefined {
+    return (value as { [symbol]?: InstallOwner })[symbol];
   }
-  Object.defineProperty(candidate, PLUGIN_CANDIDATE_INSTALL_OWNER, {
-    configurable: true,
-    enumerable: true,
-    value: ambiguous ? { ambiguous: true } : { installOwner },
-  });
-  return candidate;
+  return {
+    record: <T extends object>(
+      value: T,
+      installOwner: string | undefined,
+      ambiguous = false,
+    ): T => {
+      if (installOwner || ambiguous) {
+        Object.defineProperty(value, symbol, {
+          configurable,
+          enumerable: true,
+          value: ambiguous ? { ambiguous: true } : { installOwner },
+        });
+      }
+      return value;
+    },
+    resolve: (value: object): string | undefined => read(value)?.installOwner,
+    isAmbiguous: (value: object): boolean => read(value)?.ambiguous === true,
+  };
 }
 
-function readPluginCandidateInstallOwner(
-  candidate: object,
-): PluginCandidateInstallOwner | undefined {
-  return (candidate as { [PLUGIN_CANDIDATE_INSTALL_OWNER]?: PluginCandidateInstallOwner })[
-    PLUGIN_CANDIDATE_INSTALL_OWNER
-  ];
-}
-
-export function resolvePluginCandidateInstallOwner(candidate: object): string | undefined {
-  return readPluginCandidateInstallOwner(candidate)?.installOwner;
-}
-
-export function isPluginCandidateInstallOwnerAmbiguous(candidate: object): boolean {
-  return readPluginCandidateInstallOwner(candidate)?.ambiguous === true;
-}
+export const {
+  record: recordPluginCandidateInstallOwner,
+  resolve: resolvePluginCandidateInstallOwner,
+  isAmbiguous: isPluginCandidateInstallOwnerAmbiguous,
+} = createPluginInstallOwnerMetadata("openclaw.pluginCandidateInstallOwner", true);

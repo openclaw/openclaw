@@ -1,3 +1,4 @@
+import { dynamic } from "@solidjs/web";
 import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
@@ -43,15 +44,11 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
-import {
-  PaneDetails,
-  PaneHeaderPresence,
-  PaneHeaderSessionMenu,
-  PaneSubagentStop,
-  type PaneDetailsProps,
-} from "../chat-pane-header-view.tsx";
+import { PaneHeaderPresence, PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
+import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 import {
@@ -107,7 +104,8 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
-  detailsControl?: PaneDetailsProps;
+  onOpenSubagents?: (focus?: boolean) => void;
+  detailsControl?: ChatDetailsViewProps;
   onOpenDetails?: (source: HTMLElement) => void;
   conversationVisible?: boolean;
   onToggleConversation?: () => void;
@@ -116,7 +114,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   sharingControl?: ChatSessionSharingProps;
   publicAccessIndicator?: ChatSessionSharingProps;
   placementControl?: Parameters<typeof ChatPanePlacement>[0];
-  sessionMenuAction?: Parameters<typeof PaneHeaderSessionMenu>[0];
+  sessionMenuAction?: Parameters<typeof ChatHeaderSessionMenu>[0];
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -242,7 +240,6 @@ function AgentCrumb(
                   <AgentIdentityAvatar agent={props.agent} />
                 </span>
                 <span class="chat-pane__agent-name">{props.agent.name}</span>
-                <Icon name="chevronDown" />
               </>
             }
           >
@@ -253,7 +250,6 @@ function AgentCrumb(
       <button
         class="chat-pane__agent-settings"
         type="button"
-        title={t("agentChip.namedSettings", { name: props.agent.name })}
         aria-label={t("agentChip.namedSettings", { name: props.agent.name })}
         onClick={() => props.onOpenAgentSettings?.(props.agent.id)}
       >
@@ -333,7 +329,7 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
         }
         if (event.key === "Enter") {
           event.preventDefault();
-          if (!props.actionsDisabled) {
+          if (!props.renameDisabledReason) {
             props.onCommitRename();
           }
         } else if (event.key === "Escape") {
@@ -343,7 +339,7 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
       }}
       onBlur={(event) => {
         clearCompositionEnd(event);
-        if (!props.actionsDisabled) {
+        if (!props.renameDisabledReason) {
           props.onCommitRename();
         }
       }}
@@ -581,7 +577,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </button>
           </Show>
           <Show when={props.detailsControl !== undefined}>
-            <PaneDetails {...props.detailsControl!} />
+            <ChatDetails {...props.detailsControl!} />
           </Show>
           {/* The observed row (and its menu) retires offline; cached Details stays local. */}
           <Show
@@ -612,7 +608,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           </Show>
           <div class="chat-pane__actions">
             <Show when={!props.narrow}>
-              <RunningSubagents count={props.runningSubagentCount} />
+              <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
             </Show>
             <Show when={props.runAction}>{(action) => <PaneSubagentStop {...action()} />}</Show>
             <Show when={props.sharingControl}>
@@ -620,19 +616,19 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <Show when={props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
             <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
             <Show when={!props.mergedChrome}>
               <Show when={props.sessionMenuAction}>
-                {(menu) => <PaneHeaderSessionMenu {...menu()} />}
+                {(menu) => <ChatHeaderSessionMenu {...menu()} />}
               </Show>
             </Show>
           </div>
         </div>
         <Show when={props.narrow}>
-          <RunningSubagents count={props.runningSubagentCount} />
+          <RunningSubagents count={props.runningSubagentCount} onOpen={props.onOpenSubagents} />
         </Show>
       </div>
       <Show when={incognito()}>
@@ -671,15 +667,20 @@ export function resolveChatPaneWorkspaceIcon(
   };
 }
 
-function RunningSubagents(props: { count?: number }) {
+function RunningSubagents(props: { count?: number; onOpen?: (focus?: boolean) => void }) {
+  const Status = dynamic(() => (props.onOpen ? "button" : "span"));
   return (
     <Show when={(props.count ?? 0) > 0}>
-      <span class="chat-pane__subagents-running">
+      <Status
+        class={["chat-pane__subagents-running", { "btn btn--ghost": Boolean(props.onOpen) }]}
+        type={props.onOpen ? "button" : undefined}
+        onClick={(event: MouseEvent) => props.onOpen?.(event.detail === 0)}
+      >
         <span aria-hidden="true">
           <Icon name="bot" />
         </span>
         {t("chat.sessionHeader.subagentsRunning", { count: String(props.count) })}
-      </span>
+      </Status>
     </Show>
   );
 }

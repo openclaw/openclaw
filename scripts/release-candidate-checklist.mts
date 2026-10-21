@@ -2376,6 +2376,23 @@ async function main() {
     });
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
+      const reportPath = join(pluginSdkApiDir, "plugin-sdk-api-release-diff.md");
+      let report = "";
+      if (existsSync(reportPath)) {
+        const bytes = readFileSync(reportPath);
+        if (bytes.length > 2 * 1024 * 1024) {
+          throw new Error("Plugin SDK API diff report exceeds its byte limit", { cause: error });
+        }
+        report = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+        if (
+          !report.startsWith("# Plugin SDK API diff\n") ||
+          !report.includes(`Acknowledgement digest: \`${error.digest}\``)
+        ) {
+          throw new Error("Plugin SDK API diff report does not match its acknowledgement", {
+            cause: error,
+          });
+        }
+      }
       const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
       const end = argv.indexOf("--");
       const flag = "--plugin-sdk-api-acknowledgement";
@@ -2390,7 +2407,11 @@ async function main() {
         argv.unshift(flag, error.digest);
       }
       throw new Error(
-        `${error.message}\nReview the Plugin SDK API diff before rerunning.\n${["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" ")}`,
+        [
+          error.message,
+          report || "Review the Plugin SDK API diff artifact before rerunning.",
+          ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
+        ].join("\n\n"),
         { cause: error },
       );
     }

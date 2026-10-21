@@ -32,10 +32,10 @@ export async function queueSessionsSendSteeringWithCustody(
   void (async () => {
     try {
       await custody.run(() =>
-        runWithInProcessGatewaySessionMutation("agent", target, async (assertMutationCurrent) => {
+        runWithInProcessGatewaySessionMutation(target, async (assertMutationCurrent) => {
           const assertCurrent = () => {
             if (!accepted) {
-              assertCallerCurrent?.("agent");
+              assertCallerCurrent?.("sessions.send");
               assertSelectionCurrent();
             }
             assertMutationCurrent();

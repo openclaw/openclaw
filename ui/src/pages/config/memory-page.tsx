@@ -462,12 +462,11 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
       // Config receipts retire obsolete support probes before their results can settle.
       runtime.subscribe(() => syncSupport(application.runtimeConfig)),
+      // Route receipts retire the plugin's settings scope before its pending reads settle.
       props.admittedRoute.subscribe(publishSettings),
     ];
     syncGateway(gateway.read().snapshot);
-    return () => {
-      unsubscribe.forEach((stop) => stop());
-    };
+    return () => unsubscribe.forEach((stop) => stop());
   });
   onCleanup(() => {
     active = false;

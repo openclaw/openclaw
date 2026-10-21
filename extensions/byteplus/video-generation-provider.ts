@@ -127,9 +127,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "BytePlus API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ??
-            BYTEPLUS_BASE_URL,
+          baseUrl: req.cfg?.models?.providers?.byteplus?.baseUrl,
           defaultBaseUrl: BYTEPLUS_BASE_URL,
           allowPrivateNetwork: false,
           provider: "byteplus",

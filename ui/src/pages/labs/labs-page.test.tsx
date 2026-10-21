@@ -126,6 +126,7 @@ describe("LabsPage", () => {
     const toggle = labToggle(page, "Composer predictions");
     expect(toggle.checked).toBe(false);
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
+    expect(select.closest(".settings-row--nested")).not.toBeNull();
     expect(select.value).toBe("utility");
     for (const model of ["conversation", "default", "utility"]) {
       runtimeConfig.patch.mockClear();
@@ -183,6 +184,7 @@ describe("LabsPage", () => {
     const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
     expect(select).not.toBeNull();
+    expect(select?.closest(".settings-row--nested")).not.toBeNull();
     select!.value = executor;
     select!.dispatchEvent(new Event("change", { bubbles: true }));
 

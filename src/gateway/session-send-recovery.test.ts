@@ -2,7 +2,11 @@ import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,7 +26,6 @@ import {
 import { withAgentDatabasePreparationContext } from "../state/agent-database-preparation-context.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test-support.js";
-import { createGatewayStartupTrace } from "./server-startup-trace.js";
 import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
@@ -38,7 +41,18 @@ const io = vi.hoisted(() => ({
   withdraw: vi.fn(),
   restoreOperator:
     vi.fn<typeof import("./operator-run-recovery.js").restoreGatewayQueuedOperatorRecovery>(),
+  resumeMain:
+    vi.fn<
+      typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+    >(),
 }));
+vi.mock(
+  import("../agents/main-session-recovery/main-session-restart-recovery.js"),
+  async (importOriginal) => ({
+    ...(await importOriginal()),
+    retryRestartAbortedMainSessionRecovery: io.resumeMain,
+  }),
+);
 vi.mock(
   import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
   async (importOriginal) => ({
@@ -129,11 +143,15 @@ let targetEntry: {
 };
 let currentConfig = config;
 const dispatch = vi.fn();
+const resumeChat = vi.fn();
 const warn = vi.fn();
 const controller = () => new AbortController();
 const context = createDirectChatContext({
   getRuntimeConfig: () => currentConfig,
-  recoveryRuntime: createMockGatewayRecoveryRuntime({ dispatchAgent: dispatch }),
+  recoveryRuntime: createMockGatewayRecoveryRuntime({
+    dispatchAgent: dispatch,
+    resumeChatInput: resumeChat,
+  }),
 });
 context.logGateway.warn = warn;
 const sourceSnapshot = (
@@ -145,6 +163,8 @@ const sourceSnapshot = (
     current: true,
     pending: {
       input_id: pending.id,
+      run_id: pending.runId,
+      request_hash: "request:original-request-fingerprint",
       state,
       consumed_event_id,
       message_json: JSON.stringify(pending.message),
@@ -153,7 +173,7 @@ const sourceSnapshot = (
   assertCurrent() {},
 });
 const storeTarget = (key: string) => ({
-  agentId: "main",
+  agentId: key.split(":")[1]!,
   canonicalKey: key,
   storePath: "/fixture/sessions.json",
   store: { [key]: key === delivery.source.sessionKey ? sourceEntry : targetEntry },
@@ -192,6 +212,7 @@ beforeEach(() => {
   io.load.mockImplementation(async ({ key }: { key: string }) => storeTarget(key));
   io.report.mockResolvedValue({ ok: true });
   io.withdraw.mockResolvedValue(true);
+  io.resumeMain.mockResolvedValue({ started: 1, settled: 0, failed: 0, skipped: 0 });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -199,6 +220,21 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   recordAgentDatabaseAdmissions([]);
+});
+
+it("retains queued peers when the interrupted predecessor is paused", async () => {
+  io.entries.mockResolvedValue([
+    {
+      sessionKey: delivery.target.sessionKey,
+      entry: { ...targetEntry, abortedLastRun: true },
+    },
+  ]);
+  io.resumeMain.mockResolvedValue({ started: 0, settled: 0, failed: 0, skipped: 0 });
+
+  await recover();
+
+  expect(io.resumeMain).toHaveBeenCalledOnce();
+  expectNoCalls(dispatch, resumeChat, io.withdraw, io.report);
 });
 
 it("recovers a logical agent's saved input from its shared physical store", async () => {
@@ -216,10 +252,6 @@ it("recovers a logical agent's saved input from its shared physical store", asyn
   ]);
   io.pending.mockResolvedValue({ items: [sharedInput], total: 1 });
   io.source.mockResolvedValue(sourceSnapshot(sharedInput));
-  io.load.mockImplementation(async ({ key }: { key: string }) => ({
-    ...storeTarget(key),
-    agentId: key === sharedDelivery.target.sessionKey ? "secondary" : "main",
-  }));
   await recover();
   expect(dispatch).toHaveBeenCalledOnce();
   expect(dispatch.mock.calls[0]![0]).toMatchObject({
@@ -320,6 +352,131 @@ it.each(["admitted", "reconfigured", "permission-revoked", "failed", "cancelled"
   },
 );
 
+it.each([
+  ["chat", "transient"],
+  ["chat", "policy"],
+  ["peer", "transient"],
+  ["peer", "policy"],
+] as const)(
+  "keeps a %s input's %s failure scoped to its session and eligibility",
+  async (inputKind, failure) => {
+    const inputs = ["first", "next", "other"].map((id): SessionPendingInput => ({
+      id,
+      runId: id,
+      acceptedAt: Date.now(),
+      state: "interrupted",
+      message: {
+        role: "user",
+        content: id,
+        timestamp: Date.now(),
+        idempotencyKey: `${id}:user`,
+        __openclaw: { chatInputRecovery: { version: 1 } },
+      },
+    }));
+    if (inputKind === "peer") {
+      inputs[0] = {
+        ...input,
+        id: "first",
+        runId: "first",
+        message: {
+          ...input.message,
+          idempotencyKey: "first:user",
+          __openclaw: {
+            sessionSendDelivery: { ...delivery, runId: "first", operatorSource: null },
+          },
+        },
+      };
+    }
+    io.entries.mockResolvedValue([
+      { sessionKey: delivery.target.sessionKey, entry: targetEntry },
+      { sessionKey: "agent:main:other", entry: { ...targetEntry, sessionId: "other-id" } },
+    ]);
+    io.pending.mockImplementation(async ({ sessionKey }) => ({
+      items: sessionKey === delivery.target.sessionKey ? inputs.slice(0, 2) : inputs.slice(2),
+    }));
+    io.source.mockImplementation(async (_scope, key) => {
+      const pending = inputs.find((entry) => entry.message.idempotencyKey === key);
+      return pending ? sourceSnapshot(pending) : undefined;
+    });
+    const attempts: string[] = [];
+    const attempt = (runId: string) => {
+      attempts.push(runId);
+      if (runId === "first") {
+        throw failure === "transient"
+          ? new WorkerTaskError("Reader capacity exhausted", "overloaded")
+          : new Error("Operator access revoked");
+      }
+    };
+    resumeChat.mockImplementation(async ({ runId }) => attempt(runId));
+    dispatch.mockImplementation(async ({ idempotencyKey }) => attempt(idempotencyKey));
+    await recoverWithTimers();
+    expect(attempts.filter((runId) => runId !== "other")).toEqual(
+      failure === "transient" ? ["first", "first", "first"] : ["first", "next"],
+    );
+    expect(attempts.filter((runId) => runId === "other")).toEqual(["other"]);
+    expectNoCalls(io.withdraw);
+    if (inputKind === "chat") {
+      expectNoCalls(dispatch, io.report);
+    } else {
+      expect(io.report).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+it("resumes chat inputs in acceptance order across pages, excluding expired and withdrawn inputs", async () => {
+  const chat = (id: string, ageMs = 0, state: SessionPendingInput["state"] = "interrupted") => ({
+    ...input,
+    id,
+    runId: id,
+    acceptedAt: Date.now() - ageMs,
+    state,
+    message: {
+      ...input.message,
+      idempotencyKey: `${id}:user`,
+      __openclaw: { chatInputRecovery: { version: 1 } },
+    },
+  });
+  io.source.mockImplementation(async (_scope, idempotencyKey: string) => {
+    const id = idempotencyKey.slice(0, -":user".length);
+    return sourceSnapshot(
+      chat(id),
+      id === "withdrawn" ? "cancelled" : "interrupted",
+      id === "consumed" ? "collected-event" : null,
+    );
+  });
+  io.pending
+    .mockResolvedValueOnce({ items: [chat("second")], nextBefore: 1 })
+    .mockResolvedValueOnce({
+      items: [
+        chat("expired", 24 * 60 * 60_000 + 1),
+        chat("cancelled", 0, "cancelled"),
+        chat("live", 0, "queued"),
+        chat("withdrawn"),
+        chat("consumed"),
+        chat("first"),
+      ],
+    });
+  let releaseFirst!: () => void;
+  let enterFirst!: () => void;
+  const firstEntered = new Promise<void>((resolve) => {
+    enterFirst = resolve;
+  });
+  const firstHeld = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  resumeChat.mockImplementationOnce(async () => {
+    enterFirst();
+    await firstHeld;
+  });
+  const recovering = recover();
+  await firstEntered;
+  expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first"]);
+  releaseFirst();
+  await recovering;
+  expect(resumeChat.mock.calls.map(([target]) => target.runId)).toEqual(["first", "second"]);
+  expectNoCalls(dispatch, io.report, io.withdraw);
+});
+
 it.each(["replaced", "archived-source", "archived-target"] as const)(
   "settles %s inputs durably so the second restart is silent",
   async (change) => {
@@ -395,12 +552,91 @@ it.each(["replaced", "archived-source", "archived-target"] as const)(
   },
 );
 
-it("partitions delivery recovery work and retry backoff in the startup summary", async () => {
-  vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
+it("replays sessions across stores concurrently while preserving each saved input order", async ({
+  signal,
+}) => {
+  const agents = ["main", "secondary"];
+  const sessions = Array.from(
+    { length: 6 },
+    (_, index) => `agent:${agents[Math.floor(index / 3)]}:target-${index}`,
+  );
+  const inputs = sessions.map((sessionKey, index) =>
+    Array.from({ length: 2 }, (_, sequence) => {
+      const runId = `delivery-${index}-${sequence}`;
+      return {
+        ...input,
+        id: `input-${index}-${sequence}`,
+        runId,
+        message: {
+          ...input.message,
+          idempotencyKey: `${runId}:user`,
+          __openclaw: {
+            sessionSendDelivery: {
+              ...delivery,
+              runId,
+              operatorSource: null,
+              target: { ...delivery.target, sessionKey, agentId: sessionKey.split(":")[1]! },
+            },
+          },
+        },
+      };
+    }),
+  );
+  io.discover.mockResolvedValue(
+    agents.map((agentId) => ({ agentId, storePath: `/fixture/${agentId}/sessions.json` })),
+  );
+  io.entries.mockImplementation(async ({ agentId }) =>
+    sessions
+      .filter((sessionKey) => sessionKey.startsWith(`agent:${agentId}:`))
+      .map((sessionKey) => ({ sessionKey, entry: targetEntry })),
+  );
+  io.pending.mockImplementation(async ({ sessionKey }) => ({
+    items: inputs[sessions.indexOf(sessionKey)],
+  }));
+  io.source.mockImplementation(async (_scope, key) =>
+    sourceSnapshot(inputs.flat().find((saved) => saved.message.idempotencyKey === key)!),
+  );
+  const release = createDeferred();
+  const saturated = createDeferred();
+  const accepted: string[] = [];
+  let active = 0;
+  let maximum = 0;
+  dispatch.mockImplementation(async (request) => {
+    active++;
+    maximum = Math.max(maximum, active);
+    if (active === 4) {
+      saturated.resolve();
+    }
+    await release.promise;
+    accepted.push(request.idempotencyKey);
+    active--;
+  });
+  const recovery = recover();
+  try {
+    await withinTest(saturated.promise, signal);
+    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(accepted).toEqual([]);
+    release.resolve();
+    await recovery;
+    expect(maximum).toBe(4);
+    expect(accepted).toHaveLength(12);
+    expect(new Set(accepted).size).toBe(12);
+    for (let index = 0; index < sessions.length; index++) {
+      expect(accepted.filter((runId) => runId.startsWith(`delivery-${index}-`))).toEqual([
+        `delivery-${index}-0`,
+        `delivery-${index}-1`,
+      ]);
+    }
+  } finally {
+    release.resolve();
+    await recovery;
+  }
+});
+
+it("reports each input replay phase and retry backoff without input identity", async () => {
   const startedAt = Date.now();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now() - startedAt);
   const info = vi.spyOn(context.logGateway, "info").mockImplementation(() => {});
-  const trace = createGatewayStartupTrace(context.logGateway, 0);
   io.discover.mockImplementation(
     timed(10, () => [{ agentId: "main", storePath: "/fixture/sessions.json" }]),
   );
@@ -419,20 +655,24 @@ it("partitions delivery recovery work and retry backoff in the startup summary",
   });
   sourceEntry.sessionId = "replaced-source";
   io.report.mockImplementation(timed(250, () => ({ ok: true })));
-  try {
-    const recovery = trace.measure("sidecars.subagent-recovery", () =>
-      trace.measure("sidecars.delivery-recovery", () =>
-        recoverSessionSendDeliveries(context, controller().signal, trace),
-      ),
-    );
-    await Promise.all([recovery, vi.runAllTimersAsync()]);
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(info.mock.calls.at(-1)?.[0]).toContain(
-      "deliveryMs=5450.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=140.0 deliveryNoticesMs=250.0 retryWaitMs=5000.0",
-    );
-  } finally {
-    trace.close();
-  }
+  await recoverWithTimers();
+  expect(dispatch).not.toHaveBeenCalled();
+  const replay = info.mock.calls.find(([message]) =>
+    message.startsWith("Pending input replay: "),
+  )?.[0];
+  expect(JSON.parse(replay!.slice("Pending input replay: ".length))).toMatchObject({
+    kind: "peer",
+    outcome: "blocked",
+    waitReason: "endpoint-replaced",
+    attempts: 2,
+    sourceLoadMs: 40,
+    sessionLoadMs: 100,
+    retryWaitMs: 5000,
+    totalMs: 5140,
+  });
+  expect(replay).not.toContain(input.id);
+  expect(replay).not.toContain(delivery.source.sessionKey);
+  expect(replay).not.toContain(delivery.message);
 });
 
 it("retries transient admission with the saved input and delivery identity, in order", async () => {

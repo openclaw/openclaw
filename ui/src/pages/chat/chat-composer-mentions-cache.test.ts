@@ -60,20 +60,50 @@ describe("mention query cache", () => {
     expect(view.send).not.toHaveBeenCalled();
   });
 
-  it.each(["outage", "revoked"])("handles a background refresh failure: %s", async (failure) => {
+  it.each([
+    { failure: "network outage", error: new Error("Connection interrupted"), message: null },
+    {
+      failure: "directory unavailable",
+      error: new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
+      message: null,
+    },
+    {
+      failure: "access revoked",
+      error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
+      message: "Mention access denied.",
+    },
+    {
+      failure: "profile unavailable",
+      error: new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Profile unavailable",
+        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      }),
+      message: "Profile unverified.",
+    },
+    {
+      failure: "invalid destination",
+      error: new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Session was not found.",
+      }),
+      message: "Mention search rejected.",
+    },
+  ])("handles a background refresh failure: $failure", async ({ error, message }) => {
     const view = await staleFixture();
-    view.request.mockRejectedValueOnce(
-      failure === "outage"
-        ? new Error("Connection interrupted")
-        : new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-    );
+    view.request.mockRejectedValueOnce(error);
     await view.search("Review @Al");
-    expect(view.options()).toHaveLength(failure === "outage" ? 2 : 0);
-    if (failure === "outage") {
+    expect(view.options()).toHaveLength(message ? 0 : 2);
+    expect(view.query(".mention-menu__retry")).toBeNull();
+    if (!message) {
       view.key("Enter");
       expect(view.value().mentions).toHaveLength(1);
     } else {
-      expect(view.container.textContent).toContain("Retry");
+      expect(view.container.textContent).toContain(message);
+      expect(view.container.textContent).not.toContain(error.message);
+      view.key("Enter");
+      expect(view.value().mentions).toHaveLength(0);
+      expect(view.send).not.toHaveBeenCalled();
       view.key("Escape");
       view.edit("Again @Al");
       expect(view.options()).toHaveLength(0);

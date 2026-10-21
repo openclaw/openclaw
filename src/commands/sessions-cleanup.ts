@@ -104,30 +104,6 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
   return [...summaryByLabel.values()].toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
-function renderLabelSummaries(params: {
-  actionRows: SessionCleanupActionRow[];
-  runtime: RuntimeEnv;
-}) {
-  const summaries = buildLabelSummaries(params.actionRows);
-  if (summaries.length === 0) {
-    return;
-  }
-  const labelPad = summaries.reduce(
-    (max, summary) => Math.max(max, visibleWidth(summary.label)),
-    0,
-  );
-  const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
-  const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
-  params.runtime.log("");
-  params.runtime.log("Summary by Label:");
-  for (const summary of summaries) {
-    const remaining = labelPad - visibleWidth(summary.label);
-    const paddedLabel = remaining > 0 ? `${summary.label}${" ".repeat(remaining)}` : summary.label;
-    params.runtime.log(`${paddedLabel}  ${summary.kept} kept, ${summary.pruned} pruned`);
-  }
-  params.runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
-}
-
 function toDisplayedCleanupSummary(summary: SessionCleanupSummary): SessionCleanupSummary {
   return {
     ...summary,
@@ -135,69 +111,6 @@ function toDisplayedCleanupSummary(summary: SessionCleanupSummary): SessionClean
       agentId: summary.agentId,
     }).path,
   };
-}
-
-function renderStoreDryRunPlan(params: {
-  cfg: OpenClawConfig;
-  summary: SessionCleanupSummary;
-  actionRows: SessionCleanupActionRow[];
-  runtime: RuntimeEnv;
-  showAgentHeader: boolean;
-}) {
-  const rich = isRich();
-  const displaySummary = toDisplayedCleanupSummary(params.summary);
-  if (params.showAgentHeader) {
-    params.runtime.log(`Agent: ${params.summary.agentId}`);
-  }
-  params.runtime.log(`Session store: ${displaySummary.storePath}`);
-  params.runtime.log(`Maintenance mode: ${params.summary.mode}`);
-  params.runtime.log(
-    `Entries: ${params.summary.beforeCount} -> ${params.summary.afterCount} (remove ${params.summary.beforeCount - params.summary.afterCount})`,
-  );
-  params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
-  params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
-  params.runtime.log(`Would prune stale model-run checks: ${params.summary.modelRunPruned}`);
-  params.runtime.log(`Would archive inactive sessions: ${params.summary.archived ?? 0}`);
-  params.runtime.log(`Would archive cap overflow: ${params.summary.capArchived ?? 0}`);
-  params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
-  params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
-  if (params.summary.unreferencedArtifacts?.scannedFiles) {
-    params.runtime.log(
-      `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
-    );
-  }
-  if (params.summary.diskBudget) {
-    params.runtime.log(
-      `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
-    );
-  }
-  if (params.actionRows.length === 0) {
-    return;
-  }
-  params.runtime.log("");
-  params.runtime.log("Planned session actions:");
-  params.runtime.log(
-    renderTable({
-      width: getTerminalTableWidth(),
-      columns: [
-        { key: "action", header: "Action" },
-        { key: "key", header: "Key" },
-        { key: "age", header: "Age" },
-        { key: "model", header: "Model" },
-        { key: "flags", header: "Flags", flex: true },
-      ].map((column) =>
-        Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
-      ),
-      rows: params.actionRows.map((row) => ({
-        action: formatCleanupActionCell(row.action, rich),
-        key: formatSessionKeyCell(row.key, rich),
-        age: formatSessionAgeCell(row.updatedAt, rich),
-        model: formatSessionModelCell(resolveSessionDisplayModelRef(params.cfg, row).model, rich),
-        flags: formatSessionFlagsCell(row, rich),
-      })),
-    }).trimEnd(),
-  );
-  renderLabelSummaries({ actionRows: params.actionRows, runtime: params.runtime });
 }
 
 function renderAppliedResult(
@@ -317,13 +230,81 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       if (i > 0) {
         runtime.log("");
       }
-      renderStoreDryRunPlan({
-        cfg,
-        summary: result.summary,
-        actionRows: buildActionRows(result),
-        runtime,
-        showAgentHeader: previewResults.length > 1,
-      });
+      const storeSummary = result.summary;
+      const actionRows = buildActionRows(result);
+      const showAgentHeader = previewResults.length > 1;
+      const rich = isRich();
+      const displaySummary = toDisplayedCleanupSummary(storeSummary);
+      if (showAgentHeader) {
+        runtime.log(`Agent: ${storeSummary.agentId}`);
+      }
+      runtime.log(`Session store: ${displaySummary.storePath}`);
+      runtime.log(`Maintenance mode: ${storeSummary.mode}`);
+      runtime.log(
+        `Entries: ${storeSummary.beforeCount} -> ${storeSummary.afterCount} (remove ${storeSummary.beforeCount - storeSummary.afterCount})`,
+      );
+      runtime.log(`Would prune missing transcripts: ${storeSummary.missing}`);
+      runtime.log(`Would retire stale direct DM sessions: ${storeSummary.dmScopeRetired}`);
+      runtime.log(`Would prune stale model-run checks: ${storeSummary.modelRunPruned}`);
+      runtime.log(`Would archive inactive sessions: ${storeSummary.archived ?? 0}`);
+      runtime.log(`Would archive cap overflow: ${storeSummary.capArchived ?? 0}`);
+      runtime.log(`Would prune stale: ${storeSummary.pruned}`);
+      runtime.log(`Would cap overflow: ${storeSummary.capped}`);
+      if (storeSummary.unreferencedArtifacts?.scannedFiles) {
+        runtime.log(
+          `Would prune unreferenced artifacts: ${storeSummary.unreferencedArtifacts.removedFiles}`,
+        );
+      }
+      if (storeSummary.diskBudget) {
+        runtime.log(
+          `Would enforce disk budget: ${storeSummary.diskBudget.totalBytesBefore} -> ${storeSummary.diskBudget.totalBytesAfter} bytes (files ${storeSummary.diskBudget.removedFiles}, entries ${storeSummary.diskBudget.removedEntries})`,
+        );
+      }
+      if (actionRows.length === 0) {
+        continue;
+      }
+      runtime.log("");
+      runtime.log("Planned session actions:");
+      runtime.log(
+        renderTable({
+          width: getTerminalTableWidth(),
+          columns: [
+            { key: "action", header: "Action" },
+            { key: "key", header: "Key" },
+            { key: "age", header: "Age" },
+            { key: "model", header: "Model" },
+            { key: "flags", header: "Flags", flex: true },
+          ].map((column) =>
+            Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
+          ),
+          rows: actionRows.map((row) => ({
+            action: formatCleanupActionCell(row.action, rich),
+            key: formatSessionKeyCell(row.key, rich),
+            age: formatSessionAgeCell(row.updatedAt, rich),
+            model: formatSessionModelCell(resolveSessionDisplayModelRef(cfg, row).model, rich),
+            flags: formatSessionFlagsCell(row, rich),
+          })),
+        }).trimEnd(),
+      );
+      const summaries = buildLabelSummaries(actionRows);
+      if (summaries.length === 0) {
+        continue;
+      }
+      const labelPad = summaries.reduce(
+        (max, summary) => Math.max(max, visibleWidth(summary.label)),
+        0,
+      );
+      const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
+      const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
+      runtime.log("");
+      runtime.log("Summary by Label:");
+      for (const summary of summaries) {
+        const remaining = labelPad - visibleWidth(summary.label);
+        const paddedLabel =
+          remaining > 0 ? `${summary.label}${" ".repeat(remaining)}` : summary.label;
+        runtime.log(`${paddedLabel}  ${summary.kept} kept, ${summary.pruned} pruned`);
+      }
+      runtime.log(`Total: ${totalKept} kept, ${totalPruned} pruned`);
     }
     return;
   }

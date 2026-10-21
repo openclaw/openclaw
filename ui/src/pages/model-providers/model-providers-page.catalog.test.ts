@@ -247,7 +247,7 @@ describe("Models page catalog publication", () => {
     },
   );
 
-  it("retires an old agent's queued publication when selection changes during auth refresh", async () => {
+  it("retires an old agent's read when selection changes during auth refresh", async () => {
     const {
       context,
       request,

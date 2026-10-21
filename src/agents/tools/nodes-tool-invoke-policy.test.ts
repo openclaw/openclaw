@@ -8,20 +8,20 @@ const mocks = vi.hoisted(() => ({
   resolveAgentNodeId: vi.fn(async () => "node-1"),
 }));
 
-vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
+vi.mock("./gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway.js")>()),
+  callGatewayTool: mocks.callGatewayTool,
+  readGatewayCallOptions: () => ({}),
+}));
 vi.mock("./nodes-utils.js", () => ({ resolveAgentNodeId: mocks.resolveAgentNodeId }));
 vi.mock("../../gateway/node-plugin-tool-snapshot.js", () => ({
   listConnectedNodePluginTools: mocks.listConnectedNodePluginTools,
 }));
 
-const { executeNodeCommandAction } = await import("./nodes-tool-commands.js");
+const { createNodesTool } = await import("./nodes-tool.js");
 
 async function execute(action: "device_status" | "invoke", input: Record<string, unknown>) {
-  return executeNodeCommandAction({
-    action,
-    input: { node: "macbook", ...input },
-    gatewayOpts: {},
-  });
+  return createNodesTool().execute("invoke-fixture", { action, node: "macbook", ...input });
 }
 
 async function invoke(command: string) {
@@ -54,6 +54,14 @@ describe("generic node invoke policy", () => {
       ],
       rawToolName: "remote_secret",
     },
+    {
+      name: "prototype-like node-published plugin tool",
+      command: "constructor",
+      descriptors: [
+        { nodeId: "node-1", descriptor: { name: "remote_constructor", command: "constructor" } },
+      ],
+      rawToolName: "remote_constructor",
+    },
   ])("blocks raw $name commands in favor of policy-filtered tools", async (testCase) => {
     mocks.listConnectedNodePluginTools.mockReturnValue(testCase.descriptors);
 
@@ -69,20 +77,23 @@ describe("generic node invoke policy", () => {
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("allows ordinary generic commands when another node publishes the same command", async () => {
-    mocks.listConnectedNodePluginTools.mockReturnValue([
-      { nodeId: "node-2", descriptor: { name: "remote_status", command: "device.status" } },
-    ]);
-    mocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+  it.each(["device.status", "constructor", "__proto__", "toString"])(
+    "allows generic %s when another node publishes the same command",
+    async (command) => {
+      mocks.listConnectedNodePluginTools.mockReturnValue([
+        { nodeId: "node-2", descriptor: { name: "remote_status", command } },
+      ]);
+      mocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
 
-    await invoke("device.status");
+      await invoke(command);
 
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
-      {},
-      expect.objectContaining({ nodeId: "node-1", command: "device.status" }),
-    );
-  });
+      expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+        "node.invoke",
+        {},
+        expect.objectContaining({ nodeId: "node-1", command }),
+      );
+    },
+  );
 
   it("blocks a typed action when the selected node publishes its command as an agent tool", async () => {
     mocks.listConnectedNodePluginTools.mockReturnValue([

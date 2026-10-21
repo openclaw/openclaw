@@ -148,6 +148,12 @@ describe("checkGatewayHealth", () => {
       expect.stringContaining("CLI and live Gateway use different"),
       "Gateway state directory mismatch",
     );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "the running Gateway still uses the paths it started with. A full restart is required: `openclaw gateway restart` (not a reload). Then rerun `openclaw doctor`.",
+      ),
+      "Gateway state directory mismatch",
+    );
     expect(readServiceCommand).not.toHaveBeenCalled();
   });
 
@@ -547,6 +553,49 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it.each([
+    ["auth profile migration required", "auth profile migration required", "doctor --fix", ""],
+    [
+      "auth profile migration required",
+      "auth profile migration required",
+      "doctor --fix",
+      "repair-test",
+    ],
+    ["secret reference was not found", "secret reference was not found", "secrets reload", ""],
+    ["private unknown reason", "secret resolution failed", "secrets reload", ""],
+  ])(
+    "reports the remedy for %s in Doctor (%s, %s, %s)",
+    async (_reason, redacted, command, profile) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+      callGateway
+        .mockResolvedValueOnce({
+          degradedSecretOwners: [
+            {
+              ownerKind: "route",
+              ownerId: "legacy-agent",
+              state: "unavailable",
+              degradationState: "cold",
+              paths: ["auth-profile-legacy:auth-profiles"],
+              reason: redacted,
+            },
+          ],
+        })
+        .mockResolvedValue({});
+
+      await expect(checkGatewayHealth({ runtime: sharedRuntime, cfg })).resolves.toMatchObject({
+        healthOk: true,
+        authenticated: true,
+      });
+
+      const retryHint = `openclaw${profile ? ` --profile ${profile}` : ""} ${command}`;
+      expect(note).toHaveBeenCalledWith(
+        `- cold route:legacy-agent (auth-profile-legacy:auth-profiles): ${redacted}\n  Retry: ${retryHint}`,
+        "Secret runtime degradation",
+      );
+    },
+  );
+
   it("lists every degraded SecretRef owner reported by Gateway status", async () => {
     callGateway
       .mockResolvedValueOnce({
@@ -627,6 +676,15 @@ describe("checkGatewayHealth", () => {
       ].join("\n"),
       "Plugins configured unavailable",
     );
+  });
+
+  it("shows the Gateway's observed model reasoning mismatch and remediation", async () => {
+    const warning = "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.";
+    callGateway.mockResolvedValue({ modelReasoningWarning: warning });
+
+    await checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 });
+
+    expect(note).toHaveBeenCalledWith(warning, "Model reasoning");
   });
 
   it("reports a typed close without depending on gateway error wording", async () => {
@@ -714,6 +772,32 @@ describe("checkGatewayHealth", () => {
     );
   });
 
+  it("keeps a reachable Gateway healthy when device-less auth lacks read scope", async () => {
+    const error = new GatewayClientRequestError({
+      code: "FORBIDDEN",
+      message: "missing scope: operator.read",
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: "operator.read",
+        requiredScopes: ["operator.read"],
+      },
+    });
+    retainGatewayResponsePayload(error, undefined);
+    callGateway.mockRejectedValueOnce(error);
+    probeGatewayStatus.mockResolvedValueOnce({ ok: false, gatewayReached: true });
+
+    await expect(
+      checkGatewayHealth({ runtime: sharedRuntime, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ authenticated: false, healthOk: true });
+
+    expect(probeGatewayStatus).toHaveBeenCalledOnce();
+    expect(sharedRuntime.error).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
+      GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
+    );
+  });
+
   it("reports credentials-required when status RPC auth SecretRefs are unavailable", async () => {
     const error = new Error("gateway.auth.password unavailable");
     callGateway.mockRejectedValueOnce(error);
@@ -771,6 +855,7 @@ describe("probeGatewayMemoryStatus", () => {
       method: "doctor.memory.status",
       params: { probe: false },
       timeoutMs: 1234,
+      sharedStateMode: "read-only",
       config: cfg,
     });
   });

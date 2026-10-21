@@ -47,6 +47,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   restartRecoveryOperatorTarget?: GatewayInstanceAgentDispatchOptions["restartRecoveryOperatorTarget"];
   restartRecoveryRequesterTarget?: GatewayInstanceAgentDispatchOptions["restartRecoveryRequesterTarget"];
   assertAdmissionCurrent?: () => void;
+  executionSource?: GatewayInstanceAgentDispatchOptions["executionSource"];
   prepareDispatchCurrent?: () => Promise<void>;
   onSettled?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
@@ -129,6 +130,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
         restartRecoveryOperatorTarget: params.restartRecoveryOperatorTarget,
         restartRecoveryRequesterTarget: params.restartRecoveryRequesterTarget,
         assertAdmissionCurrent: params.assertAdmissionCurrent,
+        executionSource: params.executionSource,
         prepareDispatchCurrent: params.prepareDispatchCurrent,
         onAccepted: () => {
           dispatchAccepted = true;

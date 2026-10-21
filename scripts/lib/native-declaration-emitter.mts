@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { API, EmitOnly, type EmitOutputFile } from "typescript/unstable/async";
+import { API, EmitOnly, type EmitOutputFile } from "typescript/async";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import {
@@ -77,10 +77,10 @@ export async function compileNativeProject({
     const manifestFile = admit(path.join(root, "package.json"));
     const manifestText = view.filesystem.readFile(manifestFile);
     view.assertValid();
-    if (manifestText === null && assertInput) {
+    if (manifestText === undefined && assertInput) {
       throw new Error(`Missing declaration package manifest: ${manifestFile}`);
     }
-    if (manifestText !== null) {
+    if (manifestText !== undefined) {
       const manifest: unknown = JSON.parse(manifestText);
       if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
         throw new Error(`Invalid declaration package manifest: ${manifestFile}`);

@@ -56,7 +56,6 @@ vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
     resume: vi.fn(),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
-    stopBeforeUpdate: vi.fn(() => undefined),
     stopAll: stopAllMock,
     activeJobIds: () => [],
     inspect: () => undefined,

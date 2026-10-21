@@ -129,14 +129,7 @@ export function rowToAcpSessionMeta(
 }
 
 export function readAcpSessionMetaForEntry(
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    entry: AcpSessionEntryBinding | undefined;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-  },
+  params: Parameters<typeof readAcpSessionMetaForEntryAsync>[0],
   options: { current?: true } = {},
 ): SessionAcpMeta | undefined {
   const sessionKey = params.sessionKey.trim();

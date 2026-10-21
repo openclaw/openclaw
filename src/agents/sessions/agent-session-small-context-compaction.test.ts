@@ -153,22 +153,15 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: createResourceLoader(
-        new Map([
-          [
-            "session_before_compact",
-            [
-              async () => ({
-                compaction: {
-                  summary: "Earlier work completed.",
-                  firstKeptEntryId: userId,
-                  tokensBefore: 0,
-                },
-              }),
-            ],
-          ],
-        ]),
-      ),
+      resourceLoader: await createResourceLoader((api) => {
+        api.on("session_before_compact", async () => ({
+          compaction: {
+            summary: "Earlier work completed.",
+            firstKeptEntryId: userId,
+            tokensBefore: 0,
+          },
+        }));
+      }),
       systemPrompt: "Preserve project requirements.",
     });
     const before = structuredClone(sessionManager.getBranch());
@@ -331,22 +324,15 @@ describe("AgentSession small-context compaction", () => {
         settingsManager: SettingsManager.inMemory({
           compaction: { keepRecentTokens: 1, reserveTokens: 1_024 },
         }),
-        resourceLoader: createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => ({
-                  compaction: {
-                    summary: "Earlier request answered.",
-                    firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
-                    tokensBefore: 100,
-                  },
-                }),
-              ],
-            ],
-          ]),
-        ),
+        resourceLoader: await createResourceLoader((api) => {
+          api.on("session_before_compact", async () => ({
+            compaction: {
+              summary: "Earlier request answered.",
+              firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
+              tokensBefore: 100,
+            },
+          }));
+        }),
       });
       const before = structuredClone(sessionManager.getBranch());
       const work = session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {

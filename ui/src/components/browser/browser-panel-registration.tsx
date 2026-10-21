@@ -3,6 +3,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import {
   createBrowserPanelPresentation,
@@ -11,7 +12,6 @@ import {
   type BrowserPanelPresentation,
 } from "./browser-panel-presentation.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
-import dockStyles from "../dock-panel-solid.css?inline";
 import browserStyles from "./browser-panel.css?inline";
 
 type Host = SolidBridgeElement<BrowserPanelInputs, BrowserPanelMethods>;

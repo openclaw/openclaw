@@ -494,7 +494,7 @@ async function requireTuiVerifiedInference(opts: SystemAgentTuiOptions) {
     throw new SystemAgentInferenceUnavailableError("conversation");
   }
   try {
-    const verified = await resolveSystemAgentVerifiedInferenceState(binding, opts.deps);
+    const verified = await resolveSystemAgentVerifiedInferenceState(binding);
     if (verified) {
       const { config, route } = verified;
       const [{ getPreparedModelCatalogSnapshot }, { resolveThinkingDefault }] = await Promise.all([

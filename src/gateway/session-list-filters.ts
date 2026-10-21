@@ -12,6 +12,7 @@ import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
@@ -491,7 +492,7 @@ export function* filterSessionEntries(
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
+    if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
       continue;
     }
     if (ownerId && effectiveOwner?.id !== ownerId) {

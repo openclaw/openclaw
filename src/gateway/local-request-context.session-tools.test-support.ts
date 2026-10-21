@@ -16,7 +16,10 @@ import { persistAgentSessionMessage } from "../agents/sessions/agent-session-tra
 import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
+import {
+  reportSteeringMessagePersistenceFailure,
+  setSteeringMessageIdentity,
+} from "../agents/sessions/steering-message-identity.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -198,6 +201,7 @@ export async function withDelayedSessionToolsSteering(
   run: (receiver: {
     commit: () => Promise<void>;
     cancel: () => Promise<void>;
+    waitForAccepted: () => Promise<void>;
     pendingCount: () => number;
     end: () => void;
     abort: () => boolean;
@@ -221,6 +225,7 @@ export async function withDelayedSessionToolsSteering(
     recorder: UserTurnTranscriptRecorder;
   }> = [];
   const listeners = new Set<(event: AgentSessionEvent) => unknown>();
+  const accepted = createDeferredCore();
   const settled = createDeferredCore();
   const emit = (event: AgentSessionEvent) => {
     for (const listener of listeners) {
@@ -269,9 +274,16 @@ export async function withDelayedSessionToolsSteering(
       steerActiveSessionWithOptionalDeliveryWait(
         session,
         text,
-        options?.reportSettlement === false
-          ? { ...queueOptions, onQueueSettled: undefined }
-          : queueOptions,
+        {
+          ...queueOptions,
+          onQueueAccepted: (value) => {
+            queueOptions?.onQueueAccepted?.(value);
+            if (value) {
+              accepted.resolve();
+            }
+          },
+          ...(options?.reportSettlement === false ? { onQueueSettled: undefined } : {}),
+        },
         target.sessionKey,
         () => {
           assertCurrent();
@@ -329,6 +341,7 @@ export async function withDelayedSessionToolsSteering(
         );
         await withGatewayToolCallerIdentity(source, () =>
           run({
+            waitForAccepted: () => accepted.promise,
             pendingCount: () => queued.length,
             cancel,
             end: () => {
@@ -351,12 +364,16 @@ export async function withDelayedSessionToolsSteering(
               );
             },
             commit: async () => {
-              const entry = expectDefined(queued[0], "Expected an accepted steering message");
-              await persistAgentSessionMessage(manager, entry.message, {
-                invalidateSerializedPrefixCache: true,
-              });
-              await entry.recorder.waitForRuntimePersistence();
-              queued.shift();
+              const entry = expectDefined(queued.shift(), "Expected an accepted steering message");
+              try {
+                await persistAgentSessionMessage(manager, entry.message, {
+                  invalidateSerializedPrefixCache: true,
+                });
+                await entry.recorder.waitForRuntimePersistence();
+              } catch (error) {
+                reportSteeringMessagePersistenceFailure(entry.message, error);
+                throw error;
+              }
               emit({ type: "message_end", message: entry.message });
               await settled.promise;
             },

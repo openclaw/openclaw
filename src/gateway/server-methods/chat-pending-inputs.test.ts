@@ -124,8 +124,8 @@ describe("pending input read boundary", () => {
       const commands = Array.from({ length: 150 }, (_, index) => ({
         name: `synthetic_command_${index}`,
         description: "Synthetic skill or plugin command description. ".repeat(6),
-        source: index % 2 ? "skill" : "plugin",
-        scope: "text",
+        source: index % 2 ? ("skill" as const) : ("plugin" as const),
+        scope: "text" as const,
         acceptsArgs: true,
       }));
       metadata.buildCommands.mockResolvedValue({ commands });
@@ -174,7 +174,9 @@ describe("pending input read boundary", () => {
       expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
 
       metadata.setSkillsVersion(2);
-      metadata.buildCommands.mockResolvedValue({ commands: [{ name: "replacement_skill" }] });
+      metadata.buildCommands.mockResolvedValue({
+        commands: [{ ...expectDefined(commands[0], "command"), name: "replacement_skill" }],
+      });
       await metadata.refresh();
       await metadata.read();
       const refreshed = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });

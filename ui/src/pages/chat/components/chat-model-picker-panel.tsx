@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -17,11 +17,13 @@ import {
   ChatModelPickerOption,
   ChatModelPickerTargetOption,
   ChatModelProviderIcon,
+  modelOptionSearchRow,
 } from "./chat-model-picker-options.tsx";
 import {
+  ChatModelSearchContext,
   handleModelSearchKeydown,
-  toggleModelProviderGroup,
   updateModelSearch,
+  type ChatModelSearchCatalog,
 } from "./chat-model-picker-search.ts";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
@@ -97,9 +99,11 @@ function prepareChatModelPickerPanel(params: ChatModelPickerParams) {
   };
 }
 
-function ModelList(props: { label: string; more?: boolean; children: JSX.Element }) {
+function ModelList(props: { label: string; id: string; more?: boolean; children: JSX.Element }) {
+  const search = useContext(ChatModelSearchContext);
   return (
     <div
+      id={search?.listId(props.id)}
       class="chat-controls__provider-model-list"
       data-chat-model-list="true"
       data-chat-model-more={props.more ? "" : undefined}
@@ -116,7 +120,71 @@ export function ChatModelPickerPanel(panel: {
   onSelectionClose: (event: MouseEvent) => void;
   searchRef: (element: HTMLInputElement) => void;
 }) {
+  const search = useContext(ChatModelSearchContext);
   const state = createMemo(() => prepareChatModelPickerPanel(panel.params));
+  const accounts = createMemo(() =>
+    panel.params.accountSection?.viewProps(
+      state().orderedOptions.length + state().targetOptionCount,
+    ),
+  );
+  const catalog = createMemo<ChatModelSearchCatalog>(() => {
+    const current = state();
+    const unlocked = !panel.params.modelSelectionLocked;
+    const providerGroups = unlocked ? current.orderedProviderGroups : [];
+    const targetGroups = unlocked ? current.targetGroups : [];
+    const account = accounts();
+    return {
+      activeProvider: current.activeProvider,
+      providers: providerGroups.map(([provider]) => provider),
+      lists: [
+        ...providerGroups.flatMap(([provider, group]) => [
+          provider,
+          ...(group.more.length ? [`${provider}:more`] : []),
+        ]),
+        ...targetGroups.map((group) => `target:${group.id}`),
+        ...(account ? ["accounts"] : []),
+      ],
+      rows: [
+        ...providerGroups.flatMap(([provider, group]) =>
+          group.lead
+            .map((entry) =>
+              Object.assign(modelOptionSearchRow({ ...panel.params, entry }), { provider }),
+            )
+            .concat(
+              group.more.map((entry) =>
+                Object.assign(modelOptionSearchRow({ ...panel.params, entry }), {
+                  provider,
+                  more: true,
+                }),
+              ),
+            ),
+        ),
+        ...targetGroups.flatMap((group) =>
+          group.options.map((entry) => ({
+            key: `target:${group.id}:${entry.value}`,
+            name: entry.label.toLocaleLowerCase(),
+            providerLabel: group.label.toLocaleLowerCase(),
+            reference: entry.value,
+            selected: false,
+            hasShortcut: true,
+            disabled: panel.params.disabled,
+          })),
+        ),
+        ...(account?.options.map((entry) => ({
+          key: `account:${entry.value}`,
+          name: entry.label.toLocaleLowerCase(),
+          keywords: entry.description?.toLocaleLowerCase(),
+          providerLabel: "account",
+          reference: `account:${entry.value}`,
+          selected: entry.value === account.currentValue,
+          hasShortcut: false,
+          disabled: account.disabled || Boolean(entry.disabled),
+          visible: account.open,
+        })) ?? []),
+      ],
+    };
+  });
+  const searchView = search?.createView(catalog);
   const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.
@@ -169,7 +237,7 @@ export function ChatModelPickerPanel(panel: {
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
     const auth = () => panel.params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
-    const authKind = createMemo(() => auth()?.kind);
+    const authKind = () => auth()?.kind;
     const showAuth = createMemo(
       () =>
         Boolean(auth()) &&
@@ -183,9 +251,8 @@ export function ChatModelPickerPanel(panel: {
           )
         ),
     );
-    const authLabel = createMemo(() =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined,
-    );
+    const authLabel = () =>
+      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
     const routeDetail = () => {
       const route = resolveModelRuntimeRoute(props.provider);
       return route ? t(`chat.modelControls.routes.${route}.detail`) : undefined;
@@ -206,11 +273,18 @@ export function ChatModelPickerPanel(panel: {
             type="button"
             data-chat-model-group-toggle
             data-chat-model-provider-toggle
-            aria-expanded={props.provider === state().activeProvider ? "true" : "false"}
+            aria-expanded={searchView?.providerOpen(props.provider) ? "true" : "false"}
+            aria-controls={[
+              search?.listId(props.provider),
+              ...(props.more.length ? [search?.listId(`${props.provider}:more`)] : []),
+            ].join(" ")}
             aria-label={`${groupLabel()} (${options().length})`}
             aria-description={routeDetail()}
             disabled={panel.params.disabled}
-            onClick={toggleModelProviderGroup}
+            onClick={(event) => {
+              event.stopPropagation();
+              searchView?.toggleProvider(props.provider);
+            }}
           >
             <ChatModelProviderIcon provider={props.provider} />
             <span class="chat-controls__provider-label">{providerLabel()}</span>
@@ -250,7 +324,7 @@ export function ChatModelPickerPanel(panel: {
             </button>
           ) : undefined}
         </div>
-        <ModelList label={groupLabel()}>
+        <ModelList label={groupLabel()} id={props.provider}>
           <For each={props.lead} keyed={modelPickerOptionKey}>
             {(entry) => <ModelOption entry={entry()} />}
           </For>
@@ -261,10 +335,15 @@ export function ChatModelPickerPanel(panel: {
               class="chat-controls__inline-select-option chat-controls__model-more-toggle"
               type="button"
               data-chat-model-more-toggle
-              aria-expanded="false"
-              hidden
+              aria-expanded={searchView?.moreOpen(props.provider) ? "true" : "false"}
+              aria-controls={search?.listId(`${props.provider}:more`)}
+              hidden={
+                searchView?.filtering() ||
+                searchView?.moreOpen(props.provider) ||
+                !searchView?.providerOpen(props.provider)
+              }
               disabled={panel.params.disabled}
-              onClick={toggleModelProviderGroup}
+              onClick={(event) => searchView?.expandMore(props.provider, event)}
             >
               <span class="chat-controls__model-option-provider" aria-hidden="true" />
               <span>{t("chat.modelControls.allModels", { count: String(props.more.length) })}</span>
@@ -272,7 +351,7 @@ export function ChatModelPickerPanel(panel: {
                 <Icon name="chevronDown" />
               </span>
             </button>
-            <ModelList label={groupLabel()} more>
+            <ModelList label={groupLabel()} id={`${props.provider}:more`} more>
               <For each={props.more} keyed={modelPickerOptionKey}>
                 {(entry) => <ModelOption entry={entry()} />}
               </For>
@@ -286,6 +365,7 @@ export function ChatModelPickerPanel(panel: {
     <div
       class="chat-controls__inline-select-menu chat-controls__model-menu"
       aria-label={t("chat.selectors.model")}
+      data-chat-model-filtering={searchView?.filtering() ? "" : undefined}
     >
       {panel.params.modelSelectionLocked ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
@@ -301,12 +381,18 @@ export function ChatModelPickerPanel(panel: {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={panel.searchRef}
+                ref={[search?.inputRef(), panel.searchRef]}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"
                 role="combobox"
                 aria-autocomplete="list"
+                aria-controls={searchView?.controls()}
+                aria-expanded={search?.open() ? "true" : "false"}
+                aria-activedescendant={
+                  search?.highlighted() ? search.optionId(search.highlighted()!) : undefined
+                }
+                value={search?.query() ?? ""}
                 autocomplete="off"
                 spellcheck="false"
                 placeholder={t("chat.modelControls.searchModels")}
@@ -383,7 +469,7 @@ export function ChatModelPickerPanel(panel: {
                           }
                         />
                       ) : undefined}
-                      <ModelList label={group().label}>
+                      <ModelList label={group().label} id={`target:${group().id}`}>
                         <For each={group().options} keyed={(entry) => entry.value}>
                           {(entry, index) => (
                             <ChatModelPickerTargetOption
@@ -401,14 +487,14 @@ export function ChatModelPickerPanel(panel: {
                   )}
                 </For>
                 {panel.params.accountSection ? (
-                  <ChatModelAccountSectionView
-                    {...panel.params.accountSection.viewProps(
-                      state().orderedOptions.length + state().targetOptionCount,
-                    )}
-                  />
+                  <ChatModelAccountSectionView {...accounts()!} />
                 ) : undefined}
               </div>
-              <div class="chat-controls__model-search-empty" data-chat-model-search-empty hidden>
+              <div
+                class="chat-controls__model-search-empty"
+                data-chat-model-search-empty
+                hidden={!searchView?.empty()}
+              >
                 {t("chat.modelControls.noMatchingModels")}
               </div>
               {panel.params.contextWindow ? (
@@ -423,7 +509,7 @@ export function ChatModelPickerPanel(panel: {
       )}
       {panel.params.modelSelectionLocked && panel.params.accountSection ? (
         <div class="chat-controls__model-options">
-          <ChatModelAccountSectionView {...panel.params.accountSection.viewProps(0)} />
+          <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
         </div>
       ) : undefined}
       {panel.params.modelCatalogState?.modelSelectionPolicy?.restricted ? (

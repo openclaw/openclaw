@@ -167,11 +167,9 @@ describe("scaleAnnotations", () => {
     },
   ];
 
-  it("returns identity (structural copy) when both factors are 1", () => {
+  it("preserves coordinates when both factors are 1", () => {
     const out = scaleAnnotations(sample, 1, 1);
     expect(out[0]).toEqual(sample[0]);
-    expect(out[0]).not.toBe(sample[0]);
-    expect(out[0]?.box).not.toBe(sample[0]?.box);
   });
 
   it("scales box dimensions by independent x/y factors", () => {

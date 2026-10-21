@@ -458,6 +458,26 @@ describe("board widget frame message confirmation", () => {
 });
 
 describe("board widget frame ticket refresh", () => {
+  it("refreshes an already-expired restored ticket", async () => {
+    vi.useFakeTimers();
+    const refreshFrame = vi.fn(async () => undefined);
+    const widget = boardWidget({
+      name: "expired",
+      viewTicket: "expired-ticket",
+      viewTicketTtlMs: 0,
+    });
+    recordBoardWidgetTicketReceipt(widget);
+    const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);
+    try {
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshFrame).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshFrame).toHaveBeenCalledExactlyOnceWith("expired");
+    } finally {
+      lifecycle.disconnect();
+    }
+  });
+
   it("pauses ticket refresh while inactive and retains its frame on activation", async () => {
     vi.useFakeTimers();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<p>Retained board</p>"));

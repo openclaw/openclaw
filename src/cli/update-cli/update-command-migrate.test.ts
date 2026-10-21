@@ -19,6 +19,8 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
+const readText = (file: string) => fs.readFile(file, "utf8");
+
 it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unchanged"] as const)(
   "settles native migration recovery as %s",
   async (outcome) => {
@@ -54,40 +56,36 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         backupRoot = path.join(alias, "native");
       }
       const receiptPath = `${backupRoot}.receipt.json`;
+      const readReceipt = async () => JSON.parse(await readText(receiptPath));
+      const restore = () => updateRestoreCommand(backupRoot);
       const runDoctor = vi
         .spyOn(doctor, "runDoctorHealthFlow")
         .mockImplementation(async (_runtime, _options, _authority, preflight) => {
-          const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+          const receipt = await readReceipt();
           expect(receipt.status).toBe("backed-up");
           const [agentIdentity, sharedIdentity] = await Promise.all([
             fs.stat(agentPath, { bigint: true }),
             fs.stat(shared.path, { bigint: true }),
           ]);
-          expect(preflight?.verifiedSnapshots).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                sourcePath: agentPath,
-                role: "agent",
-                agentId: "main",
-                dev: agentIdentity.dev,
-                ino: agentIdentity.ino,
-              }),
-              expect.objectContaining({
-                sourcePath: shared.path,
-                role: "global",
-                dev: sharedIdentity.dev,
-                ino: sharedIdentity.ino,
-              }),
-            ]),
-          );
-          expect(receipt.databaseIdentities[agentPath]).toEqual({
-            dev: Number(agentIdentity.dev),
-            ino: Number(agentIdentity.ino),
-          });
-          expect(receipt.databaseIdentities[shared.path]).toEqual({
-            dev: Number(sharedIdentity.dev),
-            ino: Number(sharedIdentity.ino),
-          });
+          for (const [file, identity, owner] of [
+            [agentPath, agentIdentity, { role: "agent", agentId: "main" }],
+            [shared.path, sharedIdentity, { role: "global" }],
+          ] as const) {
+            expect(preflight?.verifiedSnapshots).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  sourcePath: file,
+                  ...owner,
+                  dev: identity.dev,
+                  ino: identity.ino,
+                }),
+              ]),
+            );
+            expect(receipt.databaseIdentities[file]).toEqual({
+              dev: Number(identity.dev),
+              ino: Number(identity.ino),
+            });
+          }
           using database = new DatabaseSync(agentPath);
           database.exec("UPDATE update_witness SET value='candidate';");
           await fs.writeFile(state.configPath, '{"gateway":{"mode":"local"}}\n');
@@ -104,18 +102,13 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
         await updateMigrateCommand(backupRoot);
       }
       expect(runDoctor).toHaveBeenCalledOnce();
-      expect(JSON.parse(await fs.readFile(receiptPath, "utf8")).status).toBe(
-        fail ? "failed" : "migrated",
-      );
+      expect((await readReceipt()).status).toBe(fail ? "failed" : "migrated");
       if (outcome === "finished") {
         await updateFinishCommand(backupRoot);
-        const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
-        expect(receipt.status).toBe("finished");
-        expect(receipt.configFiles).toEqual([]);
+        const receipt = await readReceipt();
+        expect(receipt).toMatchObject({ status: "finished", configFiles: [] });
         await expect(fs.stat(receipt.backup.directory)).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "rollback backup has been retired",
-        );
+        await expect(restore()).rejects.toThrow("rollback backup has been retired");
         return;
       }
       if (outcome === "retried") {
@@ -128,32 +121,28 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
           }
           return write(...args);
         });
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "synthetic include restoration failure",
-        );
-        expect(JSON.parse(await fs.readFile(receiptPath, "utf8")).status).toBe("restoring-config");
+        await expect(restore()).rejects.toThrow("synthetic include restoration failure");
+        expect((await readReceipt()).status).toBe("restoring-config");
         const later = '{"gateway":{"mode":"local","port":19999}}\n';
         await fs.writeFile(state.configPath, later);
-        await expect(updateRestoreCommand(backupRoot)).rejects.toThrow(
-          "newer bytes were preserved",
-        );
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(later);
+        await expect(restore()).rejects.toThrow("newer bytes were preserved");
+        expect(await readText(state.configPath)).toBe(later);
         await fs.writeFile(state.configPath, original);
       }
-      await updateRestoreCommand(backupRoot);
-      const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+      await restore();
+      const receipt = await readReceipt();
       expect(receipt.status).toBe("restored");
       if (outcome === "absent") {
         await expect(fs.stat(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(receipt.configIdentity).toBeNull();
       } else {
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+        expect(await readText(state.configPath)).toBe(original);
         expect(receipt.configIdentity.ino).toBe((await fs.stat(state.configPath)).ino);
       }
-      expect(await fs.readFile(included, "utf8")).toBe(originalIncluded);
+      expect(await readText(included)).toBe(originalIncluded);
       if (outcome === "symlink") {
         expect((await fs.lstat(included)).isSymbolicLink()).toBe(true);
-        expect(await fs.readFile(includeTarget, "utf8")).toBe(originalIncluded);
+        expect(await readText(includeTarget)).toBe(originalIncluded);
       }
       if (outcome === "unchanged") {
         expect((await fs.stat(included)).ino).toBe(originalIncludeIdentity.ino);
@@ -164,9 +153,9 @@ it.each(["restored", "failed", "finished", "retried", "absent", "symlink", "unch
           : [state.configPath, outcome === "symlink" ? includeTarget : included]
       ).map((file) => `${file}.migrated-${receipt.runId}`);
       expect(receipt.displacedConfigFiles).toEqual(displaced);
-      expect(await fs.readFile(displaced[0]!, "utf8")).toBe('{"gateway":{"mode":"local"}}\n');
+      expect(await readText(displaced[0]!)).toBe('{"gateway":{"mode":"local"}}\n');
       if (outcome !== "absent" && outcome !== "unchanged") {
-        expect(await fs.readFile(displaced[1]!, "utf8")).toBe("{}\n");
+        expect(await readText(displaced[1]!)).toBe("{}\n");
       }
       using restored = new DatabaseSync(agentPath, { readOnly: true });
       expect(restored.prepare("SELECT value FROM update_witness").get()?.value).toBe("before");

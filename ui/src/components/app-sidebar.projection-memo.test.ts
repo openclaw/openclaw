@@ -36,7 +36,7 @@ import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SelectPicker } from "./select-picker.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type Sidebar = AppSidebarSessionNavigationElement;
+type Sidebar = AppSidebarSessionNavigationElement & HTMLElement;
 
 const key = (name: string) => `agent:main:${name}`;
 const ada = { type: "human" as const, id: "ada", label: "Ada" };
@@ -152,26 +152,42 @@ describe("sidebar projection memo", () => {
     });
     gateway.publish({ phase: "connected", client, hello: gatewayHelloForMethods([]) });
     sidebar.connected = true;
+    const gatewayStatus = {
+      kind: "connected" as const,
+      lastError: null,
+      queuedCount: 0,
+      onRetry: vi.fn(),
+    };
+    sidebar.gatewayStatus = gatewayStatus;
     sidebar.sessionKey = target.key;
     await waitForSolid(() => expect(row()?.textContent).toContain("question-proof"));
     expect(sidebar.navigationVisible).toBe(false);
     const heldRow = row();
     const reads = sessions.list.mock.calls.length;
+    const created = session("created-while-hidden");
+    const createdRow = () => sidebar.querySelector(`[data-session-key="${created.key}"]`);
 
     sessions.publishList({
       result: {
         ...sessions.sessions.state.result!,
-        sessions: [{ ...target, label: "Updated while hidden" }],
-        count: 1,
+        sessions: [{ ...target, label: "Updated while hidden" }, created],
+        count: 2,
       },
     });
     await settleLitElement(sidebar);
+    expect(createdRow()).toBeNull();
+
+    // Shell commits recreate status even when the connection has not changed.
+    sidebar.gatewayStatus = { ...gatewayStatus };
+    await settleLitElement(sidebar);
+    expect(createdRow()).toBeNull();
     expect(row()).toBe(heldRow);
     expect(row()?.textContent).toContain("question-proof");
     expect(row()?.textContent).not.toContain("Updated while hidden");
     expect(sessions.list).toHaveBeenCalledTimes(reads);
     sidebar.navigationVisible = true;
     await waitForSolid(() => expect(row()?.textContent).toContain("Updated while hidden"));
+    expect(createdRow()?.textContent).toContain("created-while-hidden");
   });
 
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {

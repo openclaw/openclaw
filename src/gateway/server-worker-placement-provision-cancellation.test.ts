@@ -14,7 +14,6 @@ vi.mock("./worker-environments/workspace-sync-preflight.js", () => ({
 
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
-  GatewayDrainingError,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -622,6 +621,74 @@ describe("dispatch Stop before provider allocation", () => {
     },
   );
 
+  it("shutdown cancels recovery queued behind a session mutation before provider entry", async () => {
+    const mutationEntered = createDeferredCore();
+    const releaseMutation = createDeferredCore();
+    const admissionTargetReady = createDeferredCore();
+    const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+      "./session-utils-store-worker.js",
+    );
+    moveDestinationMocks.prepareGatewaySessionTarget.mockImplementation(async (params) => {
+      const target = await targetReader.resolveGatewaySessionStoreTargetInWorker(params);
+      admissionTargetReady.resolve();
+      return target;
+    });
+    const provider = support.createProvider();
+    vi.spyOn(provider, "provision");
+    vi.spyOn(provider, "destroy");
+    const environments = support.createService(provider);
+    const environment = await support.seedBootstrapping("environment-shutdown-queued-recovery");
+    const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
+    await seedProvisioningPlacement(placements, environment.environmentId, "remote-exec");
+    const runtime = await createRuntime(placements, environments);
+    const uninstall = installWorkerPlacementReconcileGuard({
+      placements,
+      environments,
+      dispatch: runtime.dispatchService,
+      isStopping: environments.isStopping,
+    });
+    const mutation = runSessionMutation({
+      ...sessionIdentity(),
+      prepare: async () => {
+        mutationEntered.resolve();
+        await releaseMutation.promise;
+      },
+      run: async () => {},
+    });
+    let recovery: Promise<unknown> = Promise.resolve();
+    let stopping: Promise<unknown> = Promise.resolve();
+    try {
+      await mutationEntered.promise;
+      recovery = environments.reconcileEnvironment(environment.environmentId).catch(captureError);
+      await waitForBoundary(
+        admissionTargetReady.promise,
+        recovery,
+        "Recovery ended before session admission",
+      );
+      let stopped = false;
+      environments.beginClose();
+      stopping = environments.stop().then(() => {
+        stopped = true;
+      });
+      // Shutdown must release queued recovery without waiting for the unrelated mutation.
+      await support.waitForFast(() => expect(stopped).toBe(true));
+      await recovery;
+      expect(provider.provision).not.toHaveBeenCalled();
+      expect(provider.destroy).not.toHaveBeenCalled();
+      expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+      expect(support.testState.store.get(environment.environmentId)).toMatchObject({
+        state: "bootstrapping",
+        leaseId: environment.leaseId,
+        destroyRequestedAtMs: null,
+      });
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled([mutation, recovery, stopping]);
+      await uninstall();
+    }
+  });
+
   it.each([
     "replaced",
     "archived",
@@ -713,7 +780,7 @@ describe("dispatch Stop before provider allocation", () => {
       const recovery = environments.reconcileEnvironment(environment.environmentId).then(
         () => {
           settled = true;
-          return "recovered";
+          return "settled";
         },
         (error: unknown) => {
           settled = true;
@@ -763,7 +830,8 @@ describe("dispatch Stop before provider allocation", () => {
             reason === "started-failure" ? "failed" : "destroyed",
           );
         } else {
-          expect(first).toBeInstanceOf(reason === "shutdown" ? GatewayDrainingError : Error);
+          // Shutdown skips reconciliation before admission and preserves recovery state.
+          expect(first).toEqual(reason === "shutdown" ? "settled" : expect.any(Error));
           expect(destroy).not.toHaveBeenCalled();
           expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
           expect(support.testState.store.get(environment.environmentId)).toMatchObject({

@@ -19,13 +19,14 @@ import {
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
+import type { ComposerQuestions } from "./chat-composer-questions.ts";
 import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
-export function ChatComposer(props: ChatComposerProps) {
+export function ChatComposer(props: ChatComposerProps & { questions: ComposerQuestions }) {
   // A pane owns this component's lifetime; a different pane mounts a different composer.
   const initialPaneId = untrack(() => props.paneId);
   const state = getChatComposerState(initialPaneId);
@@ -76,7 +77,7 @@ export function ChatComposer(props: ChatComposerProps) {
   );
   const dictation = projectOwner(voice.dictation, (owner) => owner);
   const microphone = projectOwner(voice.picker, (owner) => owner);
-  const prediction = createComposerPrediction(() => {
+  const readPredictionSource = () => {
     const options = currentProps.composerPredictions;
     const client = currentProps.gatewayClient;
     if (!options || !client) {
@@ -106,8 +107,14 @@ export function ChatComposer(props: ChatComposerProps) {
         document.visibilityState !== "hidden",
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
-  });
-  const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
+  };
+  const prediction = createComposerPrediction(readPredictionSource);
+  const questionPanel = createComposerQuestionPanel(
+    () => props.questions,
+    composition,
+    () => props.getTranscriptElement,
+  );
+  const streaming = createMemo(() => currentProps.stream !== null);
   const context = createMemo(() => {
     draftState();
     dictation.read();
@@ -119,11 +126,12 @@ export function ChatComposer(props: ChatComposerProps) {
       voice,
       prediction,
       questionPanel(),
+      streaming(),
     );
   });
   createEffect(
-    () => ({ context: context(), predictions: currentProps.composerPredictions }),
-    ({ context: current }, previous) => {
+    () => ({ context: context(), predictions: readPredictionSource() }),
+    ({ context: current, predictions }, previous) => {
       state.mentionMenu.syncDirectory(current.mentionDirectory);
       if (current.clearSlashMenu) {
         state.slashMenu.reset();
@@ -137,9 +145,11 @@ export function ChatComposer(props: ChatComposerProps) {
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
-      prediction.sync();
+      prediction.sync(predictions);
     },
   );
-  onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
+  onSettled(() =>
+    listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
+  );
   return renderChatComposerView(context, currentProps, state);
 }

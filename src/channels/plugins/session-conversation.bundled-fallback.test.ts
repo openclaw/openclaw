@@ -36,7 +36,7 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   };
 });
 
-import { resolveSessionConversationRef, resolveSessionThreadInfo } from "./session-conversation.js";
+import { resolveSessionConversationRef } from "./session-conversation.js";
 
 type ResolveSessionConversation = NonNullable<typeof fallbackState.resolveSessionConversation>;
 
@@ -140,14 +140,6 @@ describe("session conversation bundled fallback", () => {
       baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
       baseConversationId: "room:topic:42",
       parentConversationCandidates: [],
-    });
-    expect(
-      resolveSessionThreadInfo("agent:main:mock-threaded:group:room:topic:42", {
-        bundledFallback: false,
-      }),
-    ).toEqual({
-      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
-      threadId: undefined,
     });
   });
 

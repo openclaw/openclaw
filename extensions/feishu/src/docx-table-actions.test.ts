@@ -6,18 +6,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const toolAccountModule = await import("./tool-account.js");
 const clientModule = await import("./client.js");
 vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
-vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
-  doc: true,
-  chat: false,
-  wiki: false,
-  drive: false,
-  perm: false,
-  scopes: false,
-  bitable: false,
-});
 const { registerFeishuDocTools } = await import("./docx.js");
 
 type Patch = Lark.Client["docx"]["documentBlock"]["patch"];

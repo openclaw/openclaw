@@ -11,6 +11,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -270,12 +271,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
             failures.push(error);
           }
         }
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "MCP container and host-process cleanup failed");
-        }
+        throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
         recordAgentCleanupFailure();
         throw error;

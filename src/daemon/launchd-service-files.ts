@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import {
@@ -188,10 +189,7 @@ export async function readExistingLaunchAgentPlist(
       await handle.close();
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 

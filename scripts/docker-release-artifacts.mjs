@@ -95,6 +95,14 @@ export function dockerReleaseArtifactName(sourceSha, runAttempt) {
   return `docker-release-${sourceSha}-${runAttempt}`;
 }
 
+function isDockerReleaseArtifactName(name, sourceSha) {
+  return (
+    typeof name === "string" &&
+    name.startsWith(`docker-release-${sourceSha}-`) &&
+    POSITIVE_INTEGER.test(name.slice(`docker-release-${sourceSha}-`.length))
+  );
+}
+
 export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, runId, runAttempt }) {
   const prepared = manifest.publicationArtifacts?.docker;
   // Historical successful FRV manifests did not prepare publication images.
@@ -115,8 +123,7 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
       POSITIVE_INTEGER.test(prepared.preparedRunId) &&
       typeof prepared.preparedRunAttempt === "string" &&
       POSITIVE_INTEGER.test(prepared.preparedRunAttempt) &&
-      prepared.preparedArtifactName ===
-        dockerReleaseArtifactName(sourceSha, prepared.preparedRunAttempt) &&
+      isDockerReleaseArtifactName(prepared.preparedArtifactName, sourceSha) &&
       /^[a-f0-9]{64}$/u.test(prepared.preparedManifestSha256),
     "Full release Docker qualification tuple is incomplete or stale.",
   );
@@ -369,17 +376,69 @@ function artifactByName(repository, runId, name, readApi) {
   return artifacts[0];
 }
 
-export function sealDockerRelease({ metadataDirectory, context, checkRunId, readApi = ghJson }) {
-  const artifactName = dockerReleaseArtifactName(context.sourceSha, context.producer.runAttempt);
+function jobsForAttempt(repository, runId, runAttempt, readApi) {
+  const jobs = [];
+  for (let page = 1; ; page += 1) {
+    const result = readApi(
+      `repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100&page=${page}`,
+    );
+    requireValue(
+      Array.isArray(result.jobs) && Number.isSafeInteger(result.total_count),
+      "Invalid Docker producer jobs response.",
+    );
+    jobs.push(...result.jobs);
+    if (page * 100 >= result.total_count) {
+      break;
+    }
+  }
+  return jobs;
+}
+
+export function sealDockerRelease({
+  metadataDirectory,
+  context,
+  artifactName = dockerReleaseArtifactName(context.sourceSha, context.producer.runAttempt),
+  checkRunId,
+  readApi = ghJson,
+}) {
+  requireValue(
+    isDockerReleaseArtifactName(artifactName, context.sourceSha),
+    "Invalid Docker preparation artifact name.",
+  );
   const architectures = ARCHITECTURES.map((architecture) => {
     const metadata = readJson(path.join(metadataDirectory, `${architecture}.json`));
-    for (const key of Object.keys(context)) {
+    for (const key of Object.keys(context).filter((contextKey) => contextKey !== "producer")) {
       requireValue(
         JSON.stringify(metadata[key]) === JSON.stringify(context[key]),
         `Docker ${architecture} metadata mismatch: ${key}`,
       );
     }
+    requireValue(
+      metadata.producer?.runId === context.producer.runId &&
+        POSITIVE_INTEGER.test(metadata.producer.runAttempt) &&
+        BigInt(metadata.producer.runAttempt) <= BigInt(context.producer.runAttempt) &&
+        metadata.producer.workflowRef === context.producer.workflowRef &&
+        metadata.producer.workflowSha === context.producer.workflowSha &&
+        metadata.producer.preparationWorkflowRef === context.producer.preparationWorkflowRef,
+      `Docker ${architecture} producer mismatch.`,
+    );
     requireValue(metadata.architecture === architecture, "Docker architecture metadata mismatch.");
+    const expectedJobName = `Prepare Docker images (${architecture})`;
+    const producerJobs = jobsForAttempt(
+      context.repository,
+      context.producer.runId,
+      metadata.producer.runAttempt,
+      readApi,
+    ).filter(
+      (job) =>
+        (job.name === expectedJobName || job.name.endsWith(` / ${expectedJobName}`)) &&
+        String(job.run_id) === context.producer.runId &&
+        String(job.run_attempt) === metadata.producer.runAttempt &&
+        job.status === "completed" &&
+        job.conclusion === "success" &&
+        job.head_sha === context.toolingSha,
+    );
+    requireValue(producerJobs.length === 1, `Cannot resolve the exact Docker ${architecture} job.`);
     const artifact = artifactByName(
       context.repository,
       context.producer.runId,
@@ -388,6 +447,11 @@ export function sealDockerRelease({ metadataDirectory, context, checkRunId, read
     );
     return {
       architecture,
+      producer: {
+        ...metadata.producer,
+        jobId: String(producerJobs[0].id),
+        jobName: producerJobs[0].name,
+      },
       artifact: {
         id: String(artifact.id),
         name: artifact.name,
@@ -401,26 +465,16 @@ export function sealDockerRelease({ metadataDirectory, context, checkRunId, read
     POSITIVE_INTEGER.test(String(checkRunId)),
     "Missing Docker seal check-run identity.",
   );
-  const jobs = [];
-  for (let page = 1; ; page += 1) {
-    const result = readApi(
-      `repos/${context.repository}/actions/runs/${context.producer.runId}/attempts/${context.producer.runAttempt}/jobs?per_page=100&page=${page}`,
-    );
-    requireValue(
-      Array.isArray(result.jobs) && Number.isSafeInteger(result.total_count),
-      "Invalid Docker producer jobs response.",
-    );
-    jobs.push(
-      ...result.jobs.filter(
-        (job) =>
-          job.check_run_url ===
-          `https://api.github.com/repos/${context.repository}/check-runs/${checkRunId}`,
-      ),
-    );
-    if (page * 100 >= result.total_count) {
-      break;
-    }
-  }
+  const jobs = jobsForAttempt(
+    context.repository,
+    context.producer.runId,
+    context.producer.runAttempt,
+    readApi,
+  ).filter(
+    (job) =>
+      job.check_run_url ===
+      `https://api.github.com/repos/${context.repository}/check-runs/${checkRunId}`,
+  );
   requireValue(
     jobs.length === 1 &&
       (jobs[0].name === SEAL_JOB_NAME || jobs[0].name.endsWith(` / ${SEAL_JOB_NAME}`)),
@@ -447,7 +501,7 @@ export function validateDockerReleaseManifest(manifest, expected) {
     sourceSha: expected.sourceSha,
     imageTagSuffix: expected.imageTagSuffix ?? "",
   });
-  const artifactName = dockerReleaseArtifactName(expected.sourceSha, expected.runAttempt);
+  const artifactName = expected.artifactName;
   requireValue(
     manifest.schemaVersion === 1 &&
       manifest.repository === expected.repository &&
@@ -456,7 +510,7 @@ export function validateDockerReleaseManifest(manifest, expected) {
       manifest.version === policy.version &&
       manifest.imageTagSuffix === (expected.imageTagSuffix ?? "") &&
       manifest.artifactName === artifactName &&
-      expected.artifactName === artifactName,
+      isDockerReleaseArtifactName(artifactName, expected.sourceSha),
     "Prepared Docker manifest does not match the release.",
   );
   requireValue(
@@ -485,8 +539,17 @@ export function validateDockerReleaseManifest(manifest, expected) {
   );
   for (const [index, architecture] of ARCHITECTURES.entries()) {
     const entry = manifest.architectures[index];
+    const expectedJobName = `Prepare Docker images (${architecture})`;
     requireValue(
       entry.architecture === architecture &&
+        (entry.producer === undefined ||
+          (entry.producer.runId === String(expected.runId) &&
+            POSITIVE_INTEGER.test(entry.producer.runAttempt) &&
+            BigInt(entry.producer.runAttempt) <= BigInt(expected.runAttempt) &&
+            entry.producer.workflowSha === manifest.toolingSha &&
+            POSITIVE_INTEGER.test(entry.producer.jobId) &&
+            (entry.producer.jobName === expectedJobName ||
+              entry.producer.jobName?.endsWith(` / ${expectedJobName}`)))) &&
         entry.artifact?.name === `${artifactName}-${architecture}` &&
         POSITIVE_INTEGER.test(entry.artifact.id) &&
         DIGEST.test(entry.artifact.digest),
@@ -667,6 +730,19 @@ export async function verifyDockerReleaseProducer(
     }
   }
   for (const entry of manifest.architectures) {
+    if (entry.producer) {
+      const architectureJob = readApi(`repos/${repository}/actions/jobs/${entry.producer.jobId}`);
+      requireValue(
+        String(architectureJob.id) === entry.producer.jobId &&
+          String(architectureJob.run_id) === producer.runId &&
+          String(architectureJob.run_attempt) === entry.producer.runAttempt &&
+          architectureJob.name === entry.producer.jobName &&
+          architectureJob.status === "completed" &&
+          architectureJob.conclusion === "success" &&
+          architectureJob.head_sha === toolingSha,
+        `Exact Docker ${entry.architecture} preparation job has not completed successfully.`,
+      );
+    }
     const artifact = artifactByName(repository, producer.runId, entry.artifact.name, readApi);
     requireValue(
       String(artifact.id) === entry.artifact.id &&
@@ -896,6 +972,7 @@ async function main() {
     const manifest = sealDockerRelease({
       metadataDirectory: values.directory,
       context: releaseContext(env),
+      artifactName: env.PREPARED_ARTIFACT_NAME,
       checkRunId: env.SEAL_CHECK_RUN_ID,
     });
     writeJson(values.output, manifest);

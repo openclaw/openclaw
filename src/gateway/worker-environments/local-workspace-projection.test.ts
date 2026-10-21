@@ -182,6 +182,55 @@ it.each([false, true])(
   },
 );
 
+it("preserves host-admitted build-root inputs while excluding guest cache churn", async () => {
+  const inputs = [
+    ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
+    ".artifacts/build-cache-inputs/authored.json",
+  ];
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  for (const entryPath of inputs) {
+    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
+    await writeText(canonical, entryPath, "original input\n");
+  }
+  await git(canonical, "add", "--force", "--", ...inputs);
+  const projection = await prepare();
+  for (const entryPath of inputs) {
+    await expectText(projection, entryPath, "original input\n");
+    await writeText(projection, entryPath, "guest input edit\n");
+  }
+  const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
+  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
+  await writeText(projection, cache, "disposable cache\n");
+  // The guest's independent index cannot turn generated outputs into host-admitted inputs.
+  await git(projection, "add", "--force", "--", cache);
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, cache), 0);
+  }
+  await synchronize();
+  await closeOpenClawStateDatabaseAsync();
+  await prepare();
+  for (const entryPath of inputs) {
+    await expectText(canonical, entryPath, "guest input edit\n");
+    await expectText(projection, entryPath, "guest input edit\n");
+  }
+  await expectMissing(canonical, cache);
+  await writeText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(projection, inputs[0]!, "conflicting guest edit\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+  await expectText(canonical, inputs[0]!, "human input edit\n");
+  await writeText(canonical, inputs[0]!, "guest input edit\n");
+  await settleProjection();
+  await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, inputs[1]!), 0);
+    try {
+      await expect(synchronize()).rejects.toThrow("EACCES");
+    } finally {
+      await fs.chmod(path.join(projection, inputs[1]!), 0o644);
+    }
+  }
+});
+
 it("expires an old runtime-file baseline while preserving unaccepted source", async () => {
   const { proveGeneratedWorkspaceExpiry } =
     await import("./local-workspace-generated-paths.test-support.js");
@@ -598,6 +647,8 @@ it.for([false, true])(
     }
     const paused = createDeferred();
     const settle = createDeferred();
+    vi.stubEnv("DOCKER_HOST", "unix:///synthetic/checkpoint-docker.sock");
+    vi.stubEnv("DOCKER_CONTEXT", undefined);
     let runtimePaused = false;
     const events: string[] = [];
     const entry = {
@@ -611,6 +662,9 @@ it.for([false, true])(
     };
     await registry.updateRegistry(entry);
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+      if (args[0] === "info") {
+        return { code: 0, stdout: "checkpoint-daemon", stderr: "" };
+      }
       if (args[0] === "inspect") {
         if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
           return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
@@ -618,7 +672,12 @@ it.for([false, true])(
         if (args.includes("{{json .State}}")) {
           return {
             code: 0,
-            stdout: JSON.stringify({ Running: true, Paused: runtimePaused, Pid: 1 }),
+            stdout: JSON.stringify({
+              Running: true,
+              Paused: runtimePaused,
+              Pid: 1,
+              StartedAt: "2026-01-01T00:00:00.000Z",
+            }),
             stderr: "",
           };
         }
@@ -654,6 +713,9 @@ it.for([false, true])(
     vi.spyOn(docker, "ensureSandboxContainer").mockResolvedValue({
       containerName: entry.containerName,
       containerId: "a".repeat(64),
+      configHash: "checkpoint-fixture-config",
+      mountPlan: { binds: [], skippedBinds: [], readOnlyWorkspaceSkillMounts: [], tmpfs: [] },
+      currentConfig: true,
     });
     vi.spyOn(docker, "execContainerRaw").mockImplementation(async (_engine, args) => {
       if (runtimePaused) {
@@ -745,7 +807,6 @@ it.for([false, true])(
           throw outcome.reason;
         }
       }
-      await acceptedFinalization;
       await expectText(canonical, "term-output.txt", "final descendant output\n");
       expect(events.slice(0, 2)).toEqual(["paused", "resumed"]);
       expect(
@@ -790,6 +851,10 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
   async (mode) => {
     const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
     const { service, registry, retentionMs } = await archiveFixture([".env.allowed"]);
+    const originalInput = ".artifacts/build-cache-inputs/archived.json";
+    await fs.mkdir(path.dirname(path.join(canonical, originalInput)), { recursive: true });
+    await writeText(canonical, originalInput, "original archived input\n");
+    await git(canonical, "add", "--force", "--", originalInput);
     await writeText(canonical, ".env.allowed", "original provisioned bytes");
     await fs.chmod(path.join(canonical, ".env.allowed"), 0o600);
     await writeText(canonical, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
@@ -900,6 +965,7 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     }
     await prepare();
     for (const workspace of [canonical, projection]) {
+      await expectText(workspace, originalInput, "original archived input\n");
       expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);
       expect((await fs.stat(path.join(workspace, "guest-ignored/empty"))).isDirectory()).toBe(true);
       if (process.platform !== "win32") {
@@ -918,6 +984,40 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     expect(await treePaths(published.workspaceTree)).not.toContain("guest-ignored");
   },
 );
+
+it("preserves later inputs from an older archive without admitting new caches", async () => {
+  const { service } = await archiveFixture();
+  const projection = await prepare();
+  const originalAdmission = (await readProjection())!.source_paths_json;
+  const input = ".artifacts/build-cache-inputs/late-original.json";
+  expect(JSON.parse(originalAdmission)).not.toContain(input);
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
+  await git(canonical, "add", "--force", "--", input);
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
+  expect(removed.removed).toBe(true);
+  expect(await treePaths(removed.snapshotRef!)).toContain(input);
+  // Before this policy, host-index admission did not update source_paths_json.
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { source_paths_json: originalAdmission });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  await service.restore({ id: owner.worktree.id });
+  await prepare();
+  await expectText(projection, input, "host-admitted input\n");
+  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
+  await writeText(projection, generated, "new disposable cache\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, generated), 0);
+  }
+  await writeText(projection, input, "restored authored edit\n");
+  await synchronize();
+  await expectText(canonical, input, "restored authored edit\n");
+  await expectMissing(canonical, generated);
+});
 
 it.each(["lifecycle reset", "replacement session"] as const)(
   "preserves pending bytes across a %s without transferring session authority",

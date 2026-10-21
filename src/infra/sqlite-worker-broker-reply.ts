@@ -375,6 +375,9 @@ function decodeSqliteWorkerReplyError(
   if (error.name === "SqliteWorkerAdmissionTimeoutError" && error.code === "admission-timeout") {
     return new SqliteWorkerAdmissionTimeoutError();
   }
+  if (error.name === "SqliteWorkerError" && error.code === "outcome-unknown") {
+    return new SqliteWorkerError(error.message, "outcome-unknown");
+  }
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),

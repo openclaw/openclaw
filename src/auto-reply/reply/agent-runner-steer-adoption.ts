@@ -307,20 +307,13 @@ export async function runActiveReplySteer(
     };
     const text = followupRun.prompt;
     const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
-    const sourceBound = Boolean(
-      automaticFallbackRoute ||
-      followupRun.operatorAuthority ||
-      followupRun.abortSignal ||
-      followupRun.controllerInput ||
-      params.opts?.abortSignal,
-    );
     const injectionAttempt = await beginReplyMessageInjectionTarget(injectionTarget, text, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
-      assertCurrent: sourceBound ? assertSourceCurrent : undefined,
+      assertCurrent: assertSourceCurrent,
       toolAuthorityPreparation: bindPreparedToolAuthority(
         bindWorkerToolPreparation({
-          authorityKind: sourceBound ? ("source-bound" as const) : ("run" as const),
+          authorityKind: "source-bound" as const,
           assertCurrent: assertSourceCurrent,
           compatAssertCurrent: assertLegacyPolicyCurrent,
           prepareCurrent: async () => {

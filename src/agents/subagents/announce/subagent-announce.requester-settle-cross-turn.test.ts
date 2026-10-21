@@ -119,3 +119,65 @@ it.each(["older batch", "cross-agent descendant", "paused member", "pending clea
     expect(deliverSpy).toHaveBeenCalledTimes(early ? 2 : 1);
   },
 );
+
+it.each([
+  { name: "delivered child", status: "delivered", yielded: false, siblings: 1, retained: false },
+  { name: "yielded child", status: "delivered", yielded: true, siblings: 1, retained: true },
+  {
+    name: "grouped private results",
+    status: "delivered",
+    yielded: false,
+    siblings: 2,
+    retained: false,
+  },
+  { name: "failed delivery", status: "failed", yielded: false, siblings: 1, retained: true },
+  { name: "suspended delivery", status: "suspended", yielded: false, siblings: 1, retained: true },
+] as const)(
+  "retires only redundant wakes behind a running sibling: $name",
+  async ({ status, yielded, siblings, retained }) => {
+    const now = Date.now();
+    const children = Array.from({ length: siblings }, (_, index) =>
+      makeSettledChild({
+        runId: `finished-${index}`,
+        requesterAgentId: "main",
+        completionTarget: "parent",
+        completionRequesterSessionId: "sess-main",
+        createdAt: now - 100,
+        endedAt: now,
+        delivery: { status },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          ...(yielded ? { requesterYieldBatch: true, rearmGeneration: 1 } : {}),
+        },
+      }),
+    );
+    const long = makeSettledChild({
+      runId: "still-running",
+      requesterAgentId: "main",
+      createdAt: now - 200,
+      execution: { status: "running", startedAt: now - 200 },
+      requesterSettleWake: undefined,
+    });
+    const runs = new Map([...children, long].map((entry) => [entry.runId, entry]));
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([...runs.values()]);
+    readDescendantFacts.mockImplementation(async (params) => ({
+      unsettled: hasDescendantRunAwaitingSettleFromRuns(
+        runs,
+        params.requesterSessionKey,
+        params.settledEntry.runId,
+        params.requesterAgentId,
+        params.requesterStorePath,
+        params.settledBefore,
+        params.rootRunIds,
+      ),
+      active: 1,
+    }));
+
+    await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[0] }));
+
+    expect(children.every((entry) => entry.requesterSettleWake !== undefined)).toBe(retained);
+    expect(long.execution.status).toBe("running");
+    expect(deliverSpy).not.toHaveBeenCalled();
+  },
+);

@@ -5,6 +5,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { beginModelCatalogRead, publishModelCatalogResult } from "../model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
   invalidateChatMetadataForSessionEvent,
@@ -14,9 +15,9 @@ import {
 } from "./chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
-  loadChatMetadata,
   loadChatMetadataRefresh,
   peekChatMetadata,
+  revalidateChatMetadata,
   retireChatMetadataRefresh,
   subscribeChatMetadata,
 } from "./chat-metadata-store.ts";
@@ -95,12 +96,13 @@ describe("automatic metadata admission", () => {
       vi.fn(async () => ({ models, sessionModelRevision })),
     );
     const { settled } = autoRefresh(client);
-    const publish = (revision: string) =>
+    const publish = (revision: string, catalogChanged = false) =>
       invalidateChatMetadataForSessionEvent(
         client,
         {
           ...scope,
           reason: "patch",
+          ...(catalogChanged ? { catalogChanged: true } : {}),
           session: { key: scope.sessionKey, sessionModelRevision: revision },
         },
         {},
@@ -108,12 +110,12 @@ describe("automatic metadata admission", () => {
     await refresh(client).completed;
     request.mockClear();
     for (let index = 0; index < 50; index++) {
-      publish(sessionModelRevision);
+      publish(sessionModelRevision, index % 2 === 0);
       await vi.advanceTimersByTimeAsync(3_000);
     }
     expect(request).not.toHaveBeenCalled();
     sessionModelRevision = "selection-2";
-    publish(sessionModelRevision);
+    publish(sessionModelRevision, true);
     await settled();
     expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list"]);
     publish(sessionModelRevision);
@@ -214,7 +216,13 @@ describe("automatic metadata admission", () => {
         vi.fn(() => metadata.promise),
         vi.fn(() => catalog.promise),
       );
-      mount(client, undefined, (update) => updates.push(update));
+      const commandsPublished = pending(commands);
+      mount(client, undefined, (update) => {
+        updates.push(update);
+        if (update.type === "result") {
+          commandsPublished.resolve(update.result);
+        }
+      });
       invalidateChatMetadataForSessionEvent(
         client,
         { ...scope, reason: "patch", catalogChanged: true },
@@ -226,9 +234,8 @@ describe("automatic metadata admission", () => {
         "models.list",
         "chat.metadata",
       ]);
-      const commandsRead = loadChatMetadata(client, scope);
       metadata.resolve(commands);
-      await expect(commandsRead).resolves.toEqual(commands);
+      await expect(commandsPublished.promise).resolves.toEqual(commands);
       expect(peekChatMetadata(client, scope)).toEqual(commands);
       const failure = new Error("Catalog unavailable");
       if (outcome === "failed") {
@@ -247,6 +254,24 @@ describe("automatic metadata admission", () => {
       );
     },
   );
+
+  it("admits metadata after a published catalog settles display before its wire responds", async () => {
+    const catalog = pending({ models });
+    const { client, counts } = metadataClient(
+      undefined,
+      vi.fn(() => catalog.promise),
+    );
+    mount(client);
+    const display = loadModelCatalog(client, scope);
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, { models });
+    await expect(display).resolves.toEqual({ models });
+
+    const read = refresh(client);
+    await expect(read.catalog).resolves.toEqual({ models });
+    await read.completed;
+    expect(peekChatMetadata(client, scope)).toEqual(commands);
+    expect(counts()).toEqual([1, 1]);
+  });
 
   it("reuses metadata across concurrent presentations and route remounts until invalidated", async () => {
     const { client, metadataRead } = metadataClient();
@@ -319,7 +344,7 @@ describe("automatic metadata admission", () => {
       }
       active = true;
       const visible = refresh(client);
-      expect(counts()).toEqual([returning === "visible" ? 1 : 0, 1]);
+      expect(counts()).toEqual([1, returning === "visible" ? 1 : 2]);
       pendingCatalog.resolve({ models: oldModels });
       await Promise.all([startup.completed, fallback.completed, visible.completed]);
       expect(counts()).toEqual([1, returning === "visible" ? 1 : 2]);
@@ -364,7 +389,7 @@ describe("automatic metadata admission", () => {
     );
     let active = true;
     mount(client, () => active);
-    const explicit = loadChatMetadata(client, scope);
+    const explicit = revalidateChatMetadata(client, scope);
     beginChatMetadataPublication(client, scope);
     const startup = refresh(client, { kind: "startup" });
     active = false;

@@ -126,7 +126,10 @@ it("shows distinct verification and activation phases before offering the named 
     );
     page.querySelector<HTMLButtonElement>("[data-login-start-chat]")!.click();
     await waitForSolid(() =>
-      expect(create).toHaveBeenCalledWith({ agentId: "writer", model: "meta/muse-spark-1.3" }),
+      expect(create).toHaveBeenCalledWith(
+        { agentId: "writer", model: "meta/muse-spark-1.3" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
   } finally {
     activation.resolve({ done: true, status: "cancelled" });

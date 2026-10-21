@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import {
   acquireGatewayLock,
   readLockPayloadSync,
@@ -72,6 +73,7 @@ function fixture(published: boolean) {
     databasePath,
     payload: {
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "gateway",
       createdAt: new Date().toISOString(),
       configPath: path.join(stateDir, "openclaw.json"),

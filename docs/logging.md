@@ -268,6 +268,14 @@ You can override both via the **`OPENCLAW_LOG_LEVEL`** environment variable (e.g
 `--verbose` only affects console output and WS log verbosity; it does not change
 file log levels.
 
+### Expected shutdown cancellation
+
+During Gateway shutdown, automatic provider catalog discovery can be canceled,
+and cron startup or session recovery can be refused admission. These expected
+lifecycle outcomes do not emit failure warnings or errors. Provider, storage,
+and cleanup failures still use their existing error reporting, including failures
+that wrap a cancellation error.
+
 ### Provider request failures
 
 Model transport failures emit `Model request failed` at warning level with the
@@ -520,9 +528,7 @@ settlement and queue release. The Gateway's earlier operator-start queue is sepa
 
 `stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
 through actual settlement, including authority checks, factory work, and I/O
-waits. `continuationWaitMs` measures queue waiting after an incomplete step until
-resumption or cancellation; it excludes initial admission. These fields are not
-an exact disjoint partition and do not measure CPU time.
+waits. These fields are not an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
@@ -530,7 +536,6 @@ omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
 cause or prove that native work stopped. An active provider call or `next()` step
 keeps its slot until its actual promise settles, including after cancellation.
-An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host

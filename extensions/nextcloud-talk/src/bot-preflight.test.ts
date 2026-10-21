@@ -1,46 +1,37 @@
-// Nextcloud Talk tests cover bot preflight plugin behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
-import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { createAccount } from "./inbound-media.test-fixtures.js";
 
-const hoisted = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(),
-  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => undefined),
-}));
+const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
-  fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
-}));
-
-vi.mock("./send.runtime.js", () => ({
-  ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
+  fetchWithSsrFGuard,
 }));
 
 const { probeNextcloudTalkBotResponseFeature } = await import("./bot-preflight.js");
 
-function account(
-  overrides: Partial<ResolvedNextcloudTalkAccount> = {},
-): ResolvedNextcloudTalkAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    baseUrl: "https://cloud.example.com",
-    secret: "secret",
-    secretSource: "config",
-    config: {
-      baseUrl: "https://cloud.example.com",
-      botSecret: "secret",
-      apiUser: "admin",
-      apiPassword: "app-password",
-      webhookPublicUrl: "https://bot.example.com/nextcloud-talk-webhook",
-    },
-    ...overrides,
-  };
+const apiConfig = {
+  apiUser: "admin",
+  apiPassword: "app-password",
+  webhookPublicUrl: "https://bot.example.com/nextcloud-talk-webhook",
+};
+
+function probe(config: NonNullable<Parameters<typeof createAccount>[0]>["config"] = apiConfig) {
+  return probeNextcloudTalkBotResponseFeature({ account: createAccount({ config }) });
+}
+
+function mockResponse(response: Response): void {
+  fetchWithSsrFGuard.mockResolvedValueOnce({
+    response,
+    release: async () => {},
+    finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
+  });
 }
 
 function mockBotAdmin(features: number | string): void {
-  hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: Response.json({
+  mockResponse(
+    Response.json({
       ocs: {
         data: [
           {
@@ -52,40 +43,31 @@ function mockBotAdmin(features: number | string): void {
         ],
       },
     }),
-    release: async () => {},
-    finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
-  });
+  );
 }
 
 describe("probeNextcloudTalkBotResponseFeature", () => {
-  beforeEach(() => {
-    hoisted.fetchWithSsrFGuard.mockClear();
-  });
-
   afterEach(() => {
-    hoisted.fetchWithSsrFGuard.mockReset();
+    fetchWithSsrFGuard.mockReset();
   });
 
-  it.each([1 | 2 | 8])(
-    "accepts numeric or signed decimal response features: %j",
-    async (features) => {
-      mockBotAdmin(features);
+  it("accepts numeric response features", async () => {
+    mockBotAdmin(1 | 2 | 8);
 
-      await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
-        ok: true,
-        code: "ok",
-        botId: "7",
-        botName: "OpenClaw",
-        features: 11,
-        message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
-      });
-    },
-  );
+    await expect(probe()).resolves.toEqual({
+      ok: true,
+      code: "ok",
+      botId: "7",
+      botName: "OpenClaw",
+      features: 11,
+      message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
+    });
+  });
 
   it("reports missing response feature for the matching webhook bot", async () => {
     mockBotAdmin(1 | 8);
 
-    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+    await expect(probe()).resolves.toEqual({
       ok: false,
       code: "missing_response_feature",
       botId: "7",
@@ -96,33 +78,28 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     });
   });
 
-  it.each(["2response"])(
-    "rejects malformed or negative response features: %j",
-    async (features) => {
-      mockBotAdmin(features);
+  it("rejects malformed response features", async () => {
+    mockBotAdmin("2response");
 
-      await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
-        ok: false,
-        code: "missing_response_feature",
-        botId: "7",
-        botName: "OpenClaw",
-        message:
-          'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
-      });
-    },
-  );
+    await expect(probe()).resolves.toEqual({
+      ok: false,
+      code: "missing_response_feature",
+      botId: "7",
+      botName: "OpenClaw",
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
+    });
+  });
 
   it("reports malformed bot admin JSON with a stable channel error", async () => {
-    hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: new Response("{ nope", {
+    mockResponse(
+      new Response("{ nope", {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
-      release: async () => {},
-      finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
-    });
+    );
 
-    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+    await expect(probe()).resolves.toEqual({
       ok: false,
       code: "request_failed",
       message:
@@ -139,13 +116,9 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       },
     );
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: tracked.response,
-      release: async () => {},
-      finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
-    });
+    mockResponse(tracked.response);
 
-    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+    await expect(probe()).resolves.toEqual({
       ok: false,
       code: "api_error",
       status: 503,
@@ -157,15 +130,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
 
   it("skips when API credentials are absent", async () => {
     await expect(
-      probeNextcloudTalkBotResponseFeature({
-        account: account({
-          config: {
-            baseUrl: "https://cloud.example.com",
-            botSecret: "secret",
-            webhookPublicUrl: "https://bot.example.com/nextcloud-talk-webhook",
-          },
-        }),
-      }),
+      probe({ ...apiConfig, apiUser: undefined, apiPassword: undefined }),
     ).resolves.toEqual({
       ok: true,
       skipped: true,
@@ -173,6 +138,6 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       message:
         "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     });
-    expect(hoisted.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

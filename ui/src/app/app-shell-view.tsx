@@ -5,16 +5,13 @@ import { registerModalSurface } from "../components/overlay-registry.ts";
 import { LazySettingsSidebar } from "../components/settings-sidebar-lazy.tsx";
 import { GatewayStatus, gatewayStatusLabel } from "../components/solid/gateway-status.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { ShortcutHint } from "../components/solid/kbd.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { registerToastContainer } from "../lib/toast.ts";
@@ -77,7 +74,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
-      ? gatewayStatusLabel(kind, view().sidebarProperties.storedOutboxes?.total)
+      ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
       : view().gatewayConnected
         ? t("nav.gateway.connected")
         : "";
@@ -123,9 +120,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
         }}
-        onTheme-change={(event: CustomEvent<ThemeModeChangeDetail>) =>
-          props.host.handleThemeChange(event)
-        }
       >
         <a class="shell-skip-link" href="#control-ui-main" inert={view().navDrawerOpen}>
           {t("common.skipToMainContent")}
@@ -171,9 +165,13 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           <div class="shell-chrome-controls" onMouseDown={beginNativeWindowDrag}>
             {/* Native hosts retain their window-control expand action; web uses the rail. */}
             <Show when={view().nativeWebChrome || legacyMacChrome()}>
-              <openclaw-tooltip
-                prop:content={`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-              >
+              <openclaw-tooltip>
+                <span slot="content">
+                  <ShortcutHint
+                    label={t("nav.expand")}
+                    combo={KEYBOARD_SHORTCUT_COMBOS.toggleSidebar}
+                  />
+                </span>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
@@ -202,9 +200,13 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
               />
             </Show>
             <Show when={!view().railAvailable || legacyMacChrome()}>
-              <openclaw-tooltip
-                prop:content={`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-              >
+              <openclaw-tooltip>
+                <span slot="content">
+                  <ShortcutHint
+                    label={t("chat.openCommandPalette")}
+                    combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+                  />
+                </span>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"

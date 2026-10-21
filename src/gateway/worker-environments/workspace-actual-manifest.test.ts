@@ -386,7 +386,7 @@ it("preserves bottom-up directory membership and canonical output across input o
 it("reserves aggregate inventory bytes even when every file hits the hash memo", async () => {
   const { root, capture } = await inventoryFixture();
   const memo = new Map<string, string>();
-  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const metrics = { contentHashCount: 0, memoHitCount: 0 };
   for (const file of ["first.bin", "second.bin"]) {
     const target = path.join(root, file);
     await fs.writeFile(target, "");

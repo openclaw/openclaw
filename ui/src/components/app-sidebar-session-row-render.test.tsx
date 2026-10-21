@@ -202,7 +202,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -321,7 +321,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -330,7 +330,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -362,7 +362,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);
@@ -413,11 +412,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
+  // The visible name already labels the trigger; no hover tooltip repeats it.
+  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {

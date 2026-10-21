@@ -329,9 +329,6 @@ export async function applyAuthItem(
   item: MigrationItem,
   targets: PlannedMigrationTargets,
 ): Promise<MigrationItem> {
-  if (item.status !== "planned") {
-    return item;
-  }
   const source = item.source;
   const profileId = typeof item.details?.profileId === "string" ? item.details.profileId : "";
   const sourceProfileId =

@@ -13,16 +13,23 @@ import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const widget = { title: "Status", widget_code: "<p>ready</p>" };
+const scheduled = { title: "Scheduled status", widget_code: "<main>ready</main>" };
+const payload = (result: Awaited<ReturnType<ReturnType<typeof createShowWidgetTool>["execute"]>>) =>
+  JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
 beforeEach(() => resetPluginRuntimeStateForTest());
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
     const stateDir = tempDirs.make("openclaw-widget-presenter-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const present = vi.fn(async () => ({
       ok: true as const,
       value: {
@@ -52,7 +59,6 @@ describe("show_widget current-channel presentation", () => {
       present,
     };
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "current-channel",
       inlineClientAvailable: inlineClient,
       presenters: [presenter],
@@ -65,13 +71,7 @@ describe("show_widget current-channel presentation", () => {
     expect(
       (tool.parameters as { properties?: { kind?: { enum?: string[] } } }).properties?.kind?.enum,
     ).toEqual(["html"]);
-    const result = await tool.execute("current-channel", {
-      title: "Status",
-      widget_code: "<p>ready</p>",
-    });
-    const parsed = JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
-
-    expect(parsed).toMatchObject({
+    expect(payload(await tool.execute("current-channel", widget))).toMatchObject({
       kind: "widget",
       presentation: {
         target: "current_channel",
@@ -87,13 +87,10 @@ describe("show_widget current-channel presentation", () => {
     });
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
-});
-
-describe("show_widget capability outcomes", () => {
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",
     async (grantState) => {
-      const { mock, callGateway } = createBoardPutCaller();
+      const { mock } = createBoardPutCaller();
       const original = mock.getMockImplementation()!;
       mock.mockImplementation(async (...args) => {
         const snapshot = await original(...args);
@@ -103,7 +100,6 @@ describe("show_widget capability outcomes", () => {
       const tool = createShowWidgetTool({
         agentSessionKey: "agent:main:approval",
         inlineHostEnabled: false,
-        callGateway,
       });
       const result = await tool.execute("pin", {
         title: "Runs",
@@ -111,31 +107,23 @@ describe("show_widget capability outcomes", () => {
         pin: true,
         capabilities: { tools: ["github.actions.runs:owner/repo"] },
       });
-      const text = result.content.find((item) => item.type === "text")?.text;
-      if (!text) {
-        throw new Error("expected widget tool text result");
-      }
-      const payload = JSON.parse(text);
-      expect(payload).toMatchObject({ boardWidgetName: "runs", capabilityState: grantState });
-      expect(payload.text).toContain(grantState);
+      const parsed = payload(result);
+      expect(parsed).toMatchObject({ boardWidgetName: "runs", capabilityState: grantState });
+      expect(parsed.text).toContain(grantState);
       if (grantState !== "granted") {
-        expect(payload.text).toMatch(/approve|review/i);
+        expect(parsed.text).toMatch(/approve|review/i);
       }
     },
   );
-});
-
-describe("scheduled show_widget", () => {
   it("keeps scheduled widget authoring pinned-only without an inline client", async () => {
-    const { mock: callGatewayMock, callGateway } = createBoardPutCaller();
+    const { mock: callGatewayMock } = createBoardPutCaller();
     const stateDir = tempDirs.make("openclaw-scheduled-widget-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "scheduled-board-only",
       agentSessionKey: "agent:main:dashboard:scheduled",
       inlineClientAvailable: false,
       pinnedOnly: true,
-      callGateway,
     });
     const schema = tool.parameters as {
       properties?: {
@@ -151,29 +139,24 @@ describe("scheduled show_widget", () => {
     expect(schema.properties?.presentation?.properties).not.toHaveProperty("target");
     expect(tool.description).toContain("This surface is pinned-only");
 
-    await expect(
-      tool.execute("scheduled-unpinned", {
-        title: "Scheduled status",
-        widget_code: "<main>ready</main>",
-      }),
-    ).rejects.toThrow("pin=true is required for this pinned-only widget surface");
+    await expect(tool.execute("scheduled-unpinned", scheduled)).rejects.toThrow(
+      "pin=true is required for this pinned-only widget surface",
+    );
     await expect(
       tool.execute("scheduled-target", {
-        title: "Scheduled status",
-        widget_code: "<main>ready</main>",
+        ...scheduled,
         pin: true,
         presentation: { target: "assistant_message" },
       }),
     ).rejects.toThrow("presentation.target is unavailable for this pinned-only widget surface");
 
     const result = await tool.execute("scheduled-pinned", {
-      title: "Scheduled status",
+      ...scheduled,
       widget_code: "<button onclick=\"this.textContent='updated'\">Update</button>",
       name: "scheduled-status",
       pin: true,
     });
-    const text = result.content.find((item) => item.type === "text")?.text;
-    expect(JSON.parse(text ?? "null")).toEqual({
+    expect(payload(result)).toEqual({
       status: "pinned",
       boardWidgetName: "scheduled-status",
       capabilityState: "none",
@@ -192,23 +175,16 @@ describe("scheduled show_widget", () => {
     );
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
-});
-
-describe("show_widget script syntax gate", () => {
   it("rejects broken scripts before any side effect", async () => {
     const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    const { mock: gateway, callGateway } = createBoardPutCaller();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const { mock: gateway } = createBoardPutCaller();
     const present = vi.fn<WidgetPresenter["present"]>();
     const availability = vi.fn<WidgetPresenter["availability"]>();
-    const presenters: WidgetPresenter[] = [
-      { target: "node_panel", description: "Test panel", availability, present },
-    ];
     const tool = createShowWidgetTool({
-      stateDir,
       sessionId: "syntax",
       agentSessionKey: "agent:main:syntax",
-      callGateway,
-      presenters,
+      presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
     });
     const result = tool.execute("broken", {
       title: "Broken widget",
@@ -228,7 +204,8 @@ describe("show_widget script syntax gate", () => {
   it("leaves registered source validation to the content kind", async () => {
     registerTestWidgetContentKind("diagram", () => "<p>Rendered diagram</p>");
     const stateDir = tempDirs.make("openclaw-widget-syntax-");
-    const tool = createShowWidgetTool({ stateDir, sessionId: "registered-syntax" });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createShowWidgetTool({ sessionId: "registered-syntax" });
     expect(tool.description).toContain(
       "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations.",
     );
@@ -239,7 +216,6 @@ describe("show_widget script syntax gate", () => {
       kind: "diagram",
       widget_code: "diagram:<script>const =</script>",
     });
-    const text = result.content.find((item) => item.type === "text")?.text;
-    expect(JSON.parse(text ?? "null")).toMatchObject({ kind: "canvas" });
+    expect(payload(result)).toMatchObject({ kind: "canvas" });
   });
 });

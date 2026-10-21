@@ -22,13 +22,14 @@ import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
+import { DirectDictationView } from "../chat/components/direct-dictation-view.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
-import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
+import { DraftError, NewSessionBody, preloadNewSessionSubmission } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
 import { DraftWelcome } from "./draft-welcome.tsx";
@@ -47,6 +48,10 @@ registerNewSessionSetupEnglish();
 const CreationComposer = lazy(() => import("./creation-composer-render.tsx"), {
   export: "CreationComposer",
 });
+const preloadSubmissionViews = () => {
+  preloadNewSessionSubmission();
+  void CreationComposer.preload().catch(() => undefined);
+};
 
 export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
   // Instant-thread handoff parks and restores this exact registered host across route roots.
@@ -65,7 +70,10 @@ const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 // Retained draft hosts can reconnect under a fresh native bridge root.
 const renderedPages = new WeakSet<PageHost>();
 
-function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
+function DraftAgentSelect(props: {
+  page: () => NewSessionPageOwner;
+  ref?: (element: HTMLSpanElement) => void;
+}) {
   const place = () => props.page().place;
   const submission = () => props.page().submission;
   return (
@@ -73,6 +81,7 @@ function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
       <AgentSelect
         ref={(node) => {
           props.page().agentPicker = node;
+          props.ref?.(node);
         }}
         params={{
           agents: place().agents(),
@@ -97,6 +106,23 @@ function DraftBlock(props: {
 }) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
+  let root: HTMLDivElement | undefined;
+  let agent: HTMLSpanElement | undefined;
+  let notice: HTMLDivElement | undefined;
+  let catalogElements: () => readonly HTMLElement[] = () => [];
+  let placeElements: () => readonly HTMLElement[] = () => [];
+  const surroundings = () =>
+    root
+      ? {
+          root,
+          obstacles: [
+            agent,
+            ...catalogElements(),
+            ...placeElements(),
+            ...(submission().visibility === "incognito" ? [notice] : []),
+          ].filter((element): element is HTMLElement => element?.isConnected === true),
+        }
+      : undefined;
   const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
     context: props.page().context,
     data: props.page().data,
@@ -126,22 +152,29 @@ function DraftBlock(props: {
     <ComposerDictationStatus readDictation={() => props.page().dictation.dictation} />
   );
   const voiceControl = (
-    <NewSessionDictationView
+    <DirectDictationView
       control={props.page().dictation}
       ownerKey={props.page().routeOwnerKey()}
       inputDeviceId={props.page().context?.theme.settings.realtimeTalkInputDeviceId}
+      idleLabel={t("newSession.dictate")}
       renderRevision={props.revision()}
     />
   );
   return (
     <div
       class="new-session-page__draft"
+      ref={(element) => {
+        root = element;
+      }}
       aria-busy={submission().submitting ? "true" : "false"}
       onCompositionStart={() => props.page().titlePreparation?.setComposing(true)}
       onCompositionEnd={() => props.page().titlePreparation?.setComposing(false)}
       onFocusOut={() => props.page().titlePreparation?.setComposing(false)}
     >
       <CatalogBar
+        ref={(read) => {
+          catalogElements = read;
+        }}
         data={props.page().data}
         groupPending={catalog.isGroupRoutePending(
           props.page().data,
@@ -156,10 +189,22 @@ function DraftBlock(props: {
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
           <Show when={Boolean(props.page().submission.completedSubmission)}>
-            <DraftAgentSelect page={props.page} />
+            <DraftAgentSelect
+              page={props.page}
+              ref={(element) => {
+                agent = element;
+              }}
+            />
           </Show>
         }
-        placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
+        placeSelect={
+          <NewSessionPlaceControls
+            params={placeOptions()}
+            ref={(read) => {
+              placeElements = read;
+            }}
+          />
+        }
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -191,6 +236,7 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,
           dictationStatus,
@@ -198,7 +244,12 @@ function DraftBlock(props: {
         })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
-        <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
+        <NewSessionIncognitoNotice
+          active={submission().visibility === "incognito"}
+          ref={(element) => {
+            notice = element;
+          }}
+        />
       </Show>
     </div>
   );
@@ -254,25 +305,17 @@ function renderPageContent(host: PageHost) {
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
+  const Draft = () => (
+    <NewSessionComposerTextareaContext value={owner.submission.composerTextarea}>
+      <DraftBlock page={page} revision={revision} options={options} />
+    </NewSessionComposerTextareaContext>
+  );
   // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
-    const context = owner.context;
-    const notify = owner.changed;
-    const stops = context
-      ? [
-          context.theme,
-          context.agents,
-          context.agentIdentity,
-          context.sessions,
-          context.placementStartup,
-          context.runtimeConfig,
-          context.config,
-        ].map((source) => source.subscribe(notify))
-      : [];
     const document = host.ownerDocument;
-    stops.push(
+    const stops = [
       installChatComposerPickerDismissal(document),
       listen(
         document,
@@ -286,8 +329,12 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-    );
-    notify();
+      // Submit mounts the deferred preview and composer; fetch them on first
+      // intent so the page never flashes their loading fallbacks.
+      ...(["pointerdown", "keydown"] as const).map((type) =>
+        listen(host, type, preloadSubmissionViews, { capture: true, once: true }),
+      ),
+    ];
     return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
@@ -383,11 +430,11 @@ function renderPageContent(host: PageHost) {
                       <DraftAgentSelect page={page} />
                     ) : undefined
                   }
-                  composer={<DraftBlock page={page} revision={revision} options={options} />}
+                  composer={<Draft />}
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} options={options} />
+              <Draft />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}

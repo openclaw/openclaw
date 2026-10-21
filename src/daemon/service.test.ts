@@ -339,9 +339,7 @@ describe("readGatewayServiceState", () => {
           expect(result.serviceMutationSkipMessage).toContain(
             "No supported service manager detected",
           );
-          expect(result.serviceMutationSkipMessage).toContain(
-            "Restart the Gateway you launched manually after the update.",
-          );
+          expect(result.serviceMutationSkipMessage).toContain("Stop the Gateway through its owner");
           expect(result.serviceEnv === undefined).toBe(true);
           expect(result.serviceDefinitionEnv === undefined).toBe(true);
           expect(result.serviceNodeRunner === undefined).toBe(true);
@@ -579,7 +577,6 @@ describe("startGatewayService", () => {
     expect(result.outcome).toBe("repair-required");
     if (result.outcome === "repair-required") {
       expect(result.issues).toContainEqual({
-        code: "port-mismatch",
         message: "service port 18789 does not match current gateway config port 19001",
       });
     }
@@ -616,7 +613,6 @@ describe("startGatewayService", () => {
           outcome: "repair-required",
           issues: [
             {
-              code: `${kind}-program`,
               message: `service command points at a ${kind} path: ${program}`,
             },
           ],

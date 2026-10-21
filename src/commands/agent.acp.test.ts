@@ -1,10 +1,10 @@
-// Agent ACP tests cover ACP runtime integration, embedded agent dispatch, and agent command behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import { emitAcpLifecycleEnd } from "../agents/command/acp-lifecycle.js";
 import type * as AttemptExecutionHelpers from "../agents/command/attempt-execution.helpers.js";
 import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { persistAcpTurnTranscript } from "../agents/command/transcript-persistence.js";
@@ -15,8 +15,6 @@ import * as configIoModule from "../config/io.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
@@ -56,9 +54,10 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
-  persistAcpTurnTranscript: vi.fn<
-    typeof import("../agents/command/transcript-persistence.js").persistAcpTurnTranscript
-  >(async ({ sessionEntry }) => ({ kind: "persisted", sessionEntry })),
+  persistAcpTurnTranscript: vi.fn<typeof persistAcpTurnTranscript>(async ({ sessionEntry }) => ({
+    kind: "persisted",
+    sessionEntry,
+  })),
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);
@@ -71,13 +70,10 @@ vi.mock("../infra/agent-run-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: ACP routing captures delivered payloads without invoking outbound transports.
 vi.mock("../agents/command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: vi.fn(
-    async (params: {
-      runtime: RuntimeEnv;
-      payloads?: Array<{ text?: string }>;
-      result: { meta: object };
-    }) => {
+    async (params: Parameters<typeof deliverAgentCommandResult>[0]) => {
       for (const payload of params.payloads ?? []) {
         if (payload.text) {
           params.runtime.log(payload.text);
@@ -105,39 +101,29 @@ vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
       saturated: false,
     }),
     createAcpVisibleTextAccumulator,
-    emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
-    emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,
-    emitAcpLifecycleError: attemptExecutionMocks.emitAcpLifecycleError,
-    emitAcpPromptSubmitted: attemptExecutionMocks.emitAcpPromptSubmitted,
-    emitAcpRuntimeEvent: attemptExecutionMocks.emitAcpRuntimeEvent,
+    ...attemptExecutionMocks,
     emitAcpAssistantDelta,
     buildAcpResult,
     resolveAcpLifecycleEndFields,
-    persistAcpTurnTranscript: attemptExecutionMocks.persistAcpTurnTranscript,
   };
 });
 
 const loadConfigSpy = vi.spyOn(configIoModule, "loadConfig");
 const runEmbeddedAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
-
 const runtime = createThrowingTestRuntime();
+const runCommand = (opts: Partial<Parameters<typeof agentCommand>[0]> = {}) =>
+  agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test", ...opts }, runtime);
 
-async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, {
-    prefix: "openclaw-agent-acp-",
-    // The ACP/runtime fixtures already own plugin selection.
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-}
-
-function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig {
-  return {
+type AcpConfig = Partial<NonNullable<OpenClawConfig["acp"]>>;
+function mockConfig(home: string, storePath: string, acpOverrides: AcpConfig = {}) {
+  const cfg: OpenClawConfig = {
     acp: {
       enabled: true,
       backend: "acpx",
       allowedAgents: ["codex", "kimi"],
       dispatch: { enabled: true },
+      ...acpOverrides,
     },
     agents: {
       defaults: {
@@ -148,67 +134,19 @@ function createAcpEnabledConfig(home: string, storePath: string): OpenClawConfig
     },
     session: { store: storePath, mainKey: "main" },
   };
-}
-
-function mockConfig(home: string, storePath: string) {
-  const cfg = createAcpEnabledConfig(home, storePath);
   loadConfigSpy.mockReturnValue(cfg);
   configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
 }
 
-function mockConfigWithAcpOverrides(
-  home: string,
-  storePath: string,
-  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>,
-) {
-  const cfg = createAcpEnabledConfig(home, storePath);
-  cfg.acp = {
-    ...cfg.acp,
-    ...acpOverrides,
-  };
-  loadConfigSpy.mockReturnValue(cfg);
-  configIoModule.setRuntimeConfigSnapshot(cfg, cfg);
-}
-
-function writeAcpSessionStore(storePath: string, agent = "codex") {
-  const sessionKey = `agent:${agent}:acp:test`;
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(
-    storePath,
-    JSON.stringify({
-      [sessionKey]: {
-        sessionId: "acp-session-1",
-        updatedAt: Date.now(),
-        acp: {
-          backend: "acpx",
-          agent,
-          runtimeSessionName: sessionKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      },
-    }),
-  );
-}
-
-function resolveReadySession(
-  sessionKey: string,
-  agent = "codex",
-): Awaited<
-  ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSessionAsync"]>
-> {
-  const owner = parseAgentSessionKey(sessionKey);
-  if (!owner) {
-    throw new Error("Expected an owner-qualified ACP fixture key");
-  }
+type ReadySession = Extract<acpManagerModule.AcpSessionResolution, { kind: "ready" }>;
+function resolveReadySession(sessionKey: string): ReadySession {
   return {
     kind: "ready",
     sessionKey,
-    agentId: owner.agentId,
+    agentId: "codex",
     meta: {
       backend: "acpx",
-      agent,
+      agent: "codex",
       runtimeSessionName: sessionKey,
       mode: "oneshot",
       state: "idle",
@@ -218,10 +156,8 @@ function resolveReadySession(
 }
 
 function mockAcpManager(params: {
-  runTurn: (params: unknown) => Promise<void>;
-  resolveSessionAsync?: ReturnType<
-    typeof acpManagerModule.getAcpSessionManager
-  >["resolveSessionAsync"];
+  runTurn: acpManagerModule.AcpSessionManager["runTurn"];
+  resolveSessionAsync?: acpManagerModule.AcpSessionManager["resolveSessionAsync"];
 }) {
   getAcpSessionManagerSpy.mockReturnValue({
     runTurn: params.runTurn,
@@ -231,28 +167,37 @@ function mockAcpManager(params: {
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
-async function withAcpSessionEnv(fn: () => Promise<void>) {
-  await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfig(home, storePath);
-    await fn();
-  });
+async function withAcpSession(
+  fn: () => Promise<void>,
+  acpOverrides: AcpConfig = {},
+  stale = false,
+) {
+  await withTempHomeBase(
+    async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const sessionKey = stale ? "agent:codex:acp:stale" : "agent:codex:acp:test";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: stale ? "stale-1" : "acp-session-1",
+            updatedAt: Date.now(),
+            ...(!stale && { acp: resolveReadySession(sessionKey).meta }),
+          },
+        }),
+      );
+      mockConfig(home, storePath, acpOverrides);
+      await fn();
+    },
+    {
+      prefix: "openclaw-agent-acp-",
+      // ACP fixtures own plugin selection.
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    },
+  );
 }
 
-function createRunTurnFromTextDeltas(chunks: string[]) {
-  return vi.fn(async (paramsUnknown: unknown) => {
-    const params = paramsUnknown as {
-      onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
-    };
-    for (const text of chunks) {
-      await params.onEvent?.({ type: "text_delta", text });
-    }
-    await params.onEvent?.({ type: "done", stopReason: "stop" });
-  });
-}
-
-function subscribeAssistantEvents() {
+async function runAcpTurn(chunks: string[]) {
   const assistantEvents: Array<{ text?: string; delta?: string; itemId?: string }> = [];
   const stop = agentEventMocks.onAgentEvent((evt) => {
     if (evt.stream !== "assistant") {
@@ -264,336 +209,242 @@ function subscribeAssistantEvents() {
       delta: typeof evt.data?.delta === "string" ? evt.data.delta : undefined,
     });
   });
-  return { assistantEvents, stop };
-}
-
-async function runAcpTurnWithAssistantEvents(chunks: string[]) {
-  const { assistantEvents, stop } = subscribeAssistantEvents();
-  const runTurn = createRunTurnFromTextDeltas(chunks);
-
   mockAcpManager({
-    runTurn: (params: unknown) => runTurn(params),
+    runTurn: vi.fn(async (params: acpManagerModule.AcpRunTurnInput) => {
+      for (const text of chunks) {
+        await params.onEvent?.({ type: "text_delta", text });
+      }
+      await params.onEvent?.({ type: "done", stopReason: "stop" });
+    }),
   });
-
   try {
     vi.mocked(runtime.log).mockClear();
-    await agentCommand({ message: "ping", sessionKey: "agent:codex:acp:test" }, runtime);
+    await runCommand();
   } finally {
     stop();
   }
-
   const logLines = vi.mocked(runtime.log).mock.calls.map(([first]) => String(first));
   return { assistantEvents, logLines };
 }
 
-async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
-  acpOverrides: Partial<NonNullable<OpenClawConfig["acp"]>>;
-  resolveSessionAsync?: Parameters<typeof mockAcpManager>[0]["resolveSessionAsync"];
-}) {
-  await withTempHome(async (home) => {
-    const storePath = path.join(home, "sessions.json");
-    writeAcpSessionStore(storePath);
-    mockConfigWithAcpOverrides(home, storePath, params.acpOverrides);
+beforeEach(() => {
+  vi.clearAllMocks();
+  runEmbeddedAgentSpy.mockResolvedValue({
+    payloads: [{ text: "embedded" }],
+    meta: { durationMs: 5 },
+  } as never);
+});
 
-    const runTurn = vi.fn(async (_params: unknown) => {});
-    mockAcpManager({
-      runTurn: (input: unknown) => runTurn(input),
-      ...(params.resolveSessionAsync ? { resolveSessionAsync: params.resolveSessionAsync } : {}),
-    });
-
-    await expectAcpCommandRejects("agent:codex:acp:test", "ACP_DISPATCH_DISABLED");
-    expect(runTurn).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-  });
-}
-
-async function expectAcpCommandRejects(
-  sessionKey: string,
-  code: string,
-  messageIncludes?: string,
-): Promise<void> {
-  await expect(agentCommand({ message: "ping", sessionKey }, runtime)).rejects.toMatchObject({
-    code,
-    ...(messageIncludes ? { message: expect.stringContaining(messageIncludes) } : {}),
-  });
-}
-
-describe("agentCommand ACP runtime routing", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    runEmbeddedAgentSpy.mockResolvedValue({
-      payloads: [{ text: "embedded" }],
-      meta: {
-        durationMs: 5,
-      },
-    } as never);
-  });
-
-  it.each([
-    { name: "completed stop", status: "completed", outcome: "completed" },
-    { name: "cancelled result", status: "cancelled", outcome: "failed" },
-    { name: "runtime timeout", status: "completed", abort: "timeout", outcome: "failed" },
-    {
-      name: "transcript cancellation",
-      status: "completed",
-      abort: "transcript",
-      outcome: "failed",
-    },
-    { name: "late cancellation", status: "completed", abort: "delivery", outcome: "failed" },
-  ] as const)(
-    "hands off the terminal outcome after real ACP projection: $name",
-    async (scenario) => {
-      await withAcpSessionEnv(async () => {
-        const controller = new AbortController();
-        let transcriptTarget: Parameters<typeof loadTranscriptEvents>[0] | undefined;
-        const runTurn = vi.fn(async (input: unknown) => {
-          const params = input as Parameters<
-            ReturnType<typeof acpManagerModule.getAcpSessionManager>["runTurn"]
-          >[0];
-          await params.onEvent?.({ type: "text_delta", text: "  ACP reply\n" });
-          if ("abort" in scenario && scenario.abort === "timeout") {
-            controller.abort(new DOMException("deadline", "TimeoutError"));
-          }
-          await params.onEvent?.({ type: "done", status: scenario.status, stopReason: "stop" });
-        });
-        mockAcpManager({ runTurn });
-        if ("abort" in scenario && scenario.abort === "transcript") {
-          const actualExecution = await vi.importActual<
-            typeof import("../agents/command/attempt-execution.runtime.js")
-          >("../agents/command/attempt-execution.runtime.js");
-          attemptExecutionMocks.emitAcpLifecycleEnd.mockImplementationOnce(
-            actualExecution.emitAcpLifecycleEnd,
-          );
-          attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (input) => {
+it.each([
+  ["completed stop", "completed", undefined, "completed"],
+  ["cancelled result", "cancelled", undefined, "failed"],
+  ["runtime timeout", "completed", "timeout", "failed"],
+  ["transcript cancellation", "completed", "transcript", "failed"],
+  ["late cancellation", "completed", "delivery", "failed"],
+] as const)(
+  "hands off the terminal outcome after real ACP projection: %s",
+  (_name, status, abort, outcome) =>
+    withAcpSession(async () => {
+      const controller = new AbortController();
+      let transcriptTarget: Parameters<typeof loadTranscriptEvents>[0] | undefined;
+      const runTurn = vi.fn(async (params: acpManagerModule.AcpRunTurnInput) => {
+        await params.onEvent?.({ type: "text_delta", text: "  ACP reply\n" });
+        if (abort === "timeout") {
+          controller.abort(new DOMException("deadline", "TimeoutError"));
+        }
+        await params.onEvent?.({ type: "done", status, stopReason: "stop" });
+      });
+      mockAcpManager({ runTurn });
+      if (abort === "transcript") {
+        attemptExecutionMocks.emitAcpLifecycleEnd.mockImplementationOnce(emitAcpLifecycleEnd);
+        attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(
+          async (transcript) => {
             await Promise.resolve();
             controller.abort();
-            const transcript = input as Parameters<
-              typeof actualExecution.persistAcpTurnTranscript
-            >[0];
             transcriptTarget = {
               agentId: transcript.sessionAgentId,
               sessionId: transcript.sessionId,
               sessionKey: transcript.sessionKey,
               storePath: transcript.storePath,
             };
-            const persisted = await actualExecution.persistAcpTurnTranscript(transcript);
+            const persisted = await persistAcpTurnTranscript(transcript);
             return { kind: "persisted", sessionEntry: persisted.sessionEntry };
-          });
-        }
-        const actualDelivery = await vi.importActual<
-          typeof import("../agents/command/delivery.js")
-        >("../agents/command/delivery.js");
-        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(async (params) => {
-          const projected = await actualDelivery.deliverAgentCommandResult(params);
-          if ("abort" in scenario && scenario.abort === "delivery") {
-            controller.abort();
-          }
-          return projected;
-        });
-
-        const result = await agentCommand(
-          {
-            message: "  probe\n",
-            sessionKey: "agent:codex:acp:test",
-            json: true,
-            abortSignal: controller.signal,
           },
-          runtime,
         );
-
-        expect(runTurn).toHaveBeenCalledOnce();
-        expect(runTurn).toHaveBeenCalledWith(
+      }
+      const actualDelivery = await vi.importActual<typeof import("../agents/command/delivery.js")>(
+        "../agents/command/delivery.js",
+      );
+      vi.mocked(deliverAgentCommandResult).mockImplementationOnce(async (params) => {
+        const projected = await actualDelivery.deliverAgentCommandResult(params);
+        if (abort === "delivery") {
+          controller.abort();
+        }
+        return projected;
+      });
+      const result = await runCommand({
+        message: "  probe\n",
+        json: true,
+        abortSignal: controller.signal,
+      });
+      expect(runTurn).toHaveBeenCalledOnce();
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:codex:acp:test",
+          text: "  probe\n",
+          mode: "prompt",
+        }),
+      );
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
+      expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject({
+        body: "  probe\n",
+        finalText: "  ACP reply\n",
+      });
+      expect(result?.payloads).toEqual([{ text: "  ACP reply", mediaUrl: null }]);
+      expect(result?.meta.aborted).toBe(
+        status === "cancelled" || (abort !== undefined && abort !== "delivery"),
+      );
+      expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
+      expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+      if (abort === "transcript") {
+        if (!transcriptTarget) {
+          throw new Error("Expected the runtime-owned transcript identity");
+        }
+        const transcript = await loadTranscriptEvents(transcriptTarget);
+        expect(transcript).toContainEqual(
           expect.objectContaining({
-            sessionKey: "agent:codex:acp:test",
-            text: "  probe\n",
-            mode: "prompt",
+            type: "message",
+            message: expect.objectContaining({
+              role: "assistant",
+              content: [{ type: "text", text: "  ACP reply\n" }],
+              stopReason: "stop",
+            }),
           }),
         );
-        expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-        expect(attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0]).toMatchObject(
-          {
-            body: "  probe\n",
-            finalText: "  ACP reply\n",
-          },
-        );
-        expect(result?.payloads).toEqual([{ text: "  ACP reply", mediaUrl: null }]);
-        expect(result?.meta.aborted).toBe(
-          scenario.status === "cancelled" || ("abort" in scenario && scenario.abort !== "delivery"),
-        );
-        expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
-        expect(readAgentRunTerminalOutcome(result)).toBe(scenario.outcome);
-        if ("abort" in scenario && scenario.abort === "transcript") {
-          if (!transcriptTarget) {
-            throw new Error("Expected the runtime-owned transcript identity");
-          }
-          const transcript = await loadTranscriptEvents(transcriptTarget);
-          expect(transcript).toContainEqual(
-            expect.objectContaining({
-              type: "message",
-              message: expect.objectContaining({
-                role: "assistant",
-                content: [{ type: "text", text: "  ACP reply\n" }],
-                stopReason: "stop",
-              }),
-            }),
-          );
-          expect(
-            attemptExecutionMocks.emitAcpLifecycleEnd.mock.results.at(-1)?.value,
-          ).toMatchObject({ reason: "completed", status: "ok" });
-        }
-      });
-    },
-  );
-
-  it("streams ACP visible text with the committed assistant occurrence identity", async () => {
-    await withAcpSessionEnv(async () => {
-      const updates: InternalSessionTranscriptUpdate[] = [];
-      const unsubscribe = onInternalSessionTranscriptUpdate((event) => {
-        if (getTranscriptMessageRole(event.message) === "assistant") {
-          updates.push(event);
-        }
-      });
-      attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(
-        persistAcpTurnTranscript,
-      );
-      try {
-        const repeated = await runAcpTurnWithAssistantEvents(["bo", "ok"]);
-        expect(updates).toHaveLength(1);
-        const committed = updates[0];
-        if (!committed?.target) {
-          throw new Error("Expected an inline committed ACP assistant");
-        }
-        expect(committed.runId).toEqual(expect.any(String));
-        expect(committed.message).toMatchObject({
-          idempotencyKey: committed.runId,
-          __openclaw: { runId: committed.runId },
-          content: [{ type: "text", text: "book" }],
+        expect(attemptExecutionMocks.emitAcpLifecycleEnd.mock.results.at(-1)?.value).toMatchObject({
+          reason: "completed",
+          status: "ok",
         });
-        expect(await loadTranscriptEvents(committed.target)).toContainEqual(
-          expect.objectContaining({ type: "message", message: committed.message }),
-        );
-        expect(repeated.assistantEvents).toEqual([
-          { itemId: committed.runId, text: "bo", delta: "bo" },
-          { itemId: committed.runId, text: "book", delta: "ok" },
-        ]);
-        expect(repeated.logLines.join("\n")).toContain("book");
-      } finally {
-        unsubscribe();
+      }
+    }),
+);
+
+it("streams ACP visible text with the committed assistant occurrence identity", () =>
+  withAcpSession(async () => {
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    const unsubscribe = onInternalSessionTranscriptUpdate((event) => {
+      if (getTranscriptMessageRole(event.message) === "assistant") {
+        updates.push(event);
       }
     });
-  });
-
-  it.each(["", "NO_REPLY", " \tNO_REPLY\n"])(
-    "fails result-required ACP completion without delivering %j",
-    async (text) => {
-      await withAcpSessionEnv(async () => {
-        await expect(runAcpTurnWithAssistantEvents([text])).rejects.toMatchObject({
-          code: "ACP_TURN_FAILED",
-          message: expect.stringContaining("empty response"),
-        });
-        expect(deliverAgentCommandResult).not.toHaveBeenCalled();
-        expect(attemptExecutionMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
-          expect.objectContaining({
-            terminalReply: { disposition: text ? "silent" : "empty" },
-          }),
-        );
-        expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledWith(
-          expect.objectContaining({ finalText: text }),
-        );
+    attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(persistAcpTurnTranscript);
+    try {
+      const repeated = await runAcpTurn(["bo", "ok"]);
+      expect(updates).toHaveLength(1);
+      const committed = updates[0];
+      if (!committed?.target) {
+        throw new Error("Expected an inline committed ACP assistant");
+      }
+      expect(committed.runId).toEqual(expect.any(String));
+      expect(committed.message).toMatchObject({
+        idempotencyKey: committed.runId,
+        __openclaw: { runId: committed.runId },
+        content: [{ type: "text", text: "book" }],
       });
-    },
-  );
-
-  it.each([
-    "NO_REPLY.",
-    '"NO_REPLY"',
-    '{"action":"NO_REPLY"}',
-    "I will not reply.",
-    "NO_REPLY\nNO_REPLY",
-  ])("delivers ordinary ACP output %j", async (text) => {
-    await withAcpSessionEnv(async () => {
-      const { logLines } = await runAcpTurnWithAssistantEvents([text]);
-      const expected = text.startsWith("NO_REPLY\n") ? text.slice(9) : text;
-      expect(logLines).toContain(expected);
-      expect(attemptExecutionMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
-        expect.objectContaining({
-          terminalReply: { disposition: "visible", text: expected },
-        }),
+      expect(await loadTranscriptEvents(committed.target)).toContainEqual(
+        expect.objectContaining({ type: "message", message: committed.message }),
       );
-    });
-  });
-
-  it("fails closed for ACP-shaped session keys missing ACP metadata", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      fs.mkdirSync(path.dirname(storePath), { recursive: true });
-      fs.writeFileSync(
-        storePath,
-        JSON.stringify({
-          "agent:codex:acp:stale": {
-            sessionId: "stale-1",
-            updatedAt: Date.now(),
-          },
-        }),
-      );
-      mockConfig(home, storePath);
-
-      const runTurn = vi.fn(async (_params: unknown) => {});
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-        resolveSessionAsync: async ({ sessionKey }) => {
-          return {
-            kind: "stale",
-            sessionKey,
-            agentId: "codex",
-            error: new AcpRuntimeError(
-              "ACP_SESSION_INIT_FAILED",
-              `ACP metadata is missing for session ${sessionKey}.`,
-            ),
-          };
-        },
-      });
-
-      await expectAcpCommandRejects(
-        "agent:codex:acp:stale",
-        "ACP_SESSION_INIT_FAILED",
-        "ACP metadata is missing",
-      );
-      expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("blocks ACP turns when disabled by policy", async () => {
-    for (const acpOverrides of [
-      { enabled: false },
-      { dispatch: { enabled: false } },
-    ] satisfies Array<Partial<NonNullable<OpenClawConfig["acp"]>>>) {
-      await runAcpSessionWithPolicyOverridesAndExpectBlocked({ acpOverrides });
+      expect(repeated.assistantEvents).toEqual([
+        { itemId: committed.runId, text: "bo", delta: "bo" },
+        { itemId: committed.runId, text: "book", delta: "ok" },
+      ]);
+      expect(repeated.logLines.join("\n")).toContain("book");
+    } finally {
+      unsubscribe();
     }
-  });
+  }));
 
-  it("blocks ACP turns when ACP agent is disallowed by policy", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-      writeAcpSessionStore(storePath);
-      mockConfigWithAcpOverrides(home, storePath, {
-        allowedAgents: ["claude"],
+it.each(["", "NO_REPLY", " \tNO_REPLY\n"])(
+  "fails result-required ACP completion without delivering %j",
+  (text) =>
+    withAcpSession(async () => {
+      await expect(runAcpTurn([text])).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: expect.stringContaining("empty response"),
       });
-
-      const runTurn = vi.fn(async (_params: unknown) => {});
-      mockAcpManager({
-        runTurn: (params: unknown) => runTurn(params),
-        resolveSessionAsync: async ({ sessionKey }) => resolveReadySession(sessionKey, "codex"),
-      });
-
-      await expectAcpCommandRejects(
-        "agent:codex:acp:test",
-        "ACP_SESSION_INIT_FAILED",
-        "not allowed by policy",
+      expect(deliverAgentCommandResult).not.toHaveBeenCalled();
+      expect(attemptExecutionMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalReply: { disposition: text ? "silent" : "empty" },
+        }),
       );
+      expect(attemptExecutionMocks.persistAcpTurnTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ finalText: text }),
+      );
+    }),
+);
+
+it.each([
+  "NO_REPLY.",
+  '"NO_REPLY"',
+  '{"action":"NO_REPLY"}',
+  "I will not reply.",
+  "NO_REPLY\nNO_REPLY",
+])("delivers ordinary ACP output %j", (text) =>
+  withAcpSession(async () => {
+    const { logLines } = await runAcpTurn([text]);
+    const expected = text.startsWith("NO_REPLY\n") ? text.slice(9) : text;
+    expect(logLines).toContain(expected);
+    expect(attemptExecutionMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalReply: { disposition: "visible", text: expected },
+      }),
+    );
+  }),
+);
+
+it("fails closed for ACP-shaped session keys missing ACP metadata", () =>
+  withAcpSession(
+    async () => {
+      const runTurn = vi.fn(async () => {});
+      mockAcpManager({
+        runTurn,
+        resolveSessionAsync: async ({ sessionKey }) => ({
+          kind: "stale",
+          sessionKey,
+          agentId: "codex",
+          error: new AcpRuntimeError(
+            "ACP_SESSION_INIT_FAILED",
+            `ACP metadata is missing for session ${sessionKey}.`,
+          ),
+        }),
+      });
+      await expect(runCommand({ sessionKey: "agent:codex:acp:stale" })).rejects.toMatchObject({
+        code: "ACP_SESSION_INIT_FAILED",
+        message: expect.stringContaining("ACP metadata is missing"),
+      });
       expect(runTurn).not.toHaveBeenCalled();
       expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
-    });
-  });
-});
+    },
+    {},
+    true,
+  ));
+
+it.each([
+  [{ enabled: false }, "ACP_DISPATCH_DISABLED", undefined],
+  [{ dispatch: { enabled: false } }, "ACP_DISPATCH_DISABLED", undefined],
+  [{ allowedAgents: ["claude"] }, "ACP_SESSION_INIT_FAILED", "not allowed by policy"],
+] satisfies Array<[AcpConfig, string, string | undefined]>)(
+  "blocks ACP turns under policy %j",
+  (acpOverrides, code, message) =>
+    withAcpSession(async () => {
+      const runTurn = vi.fn(async () => {});
+      mockAcpManager({ runTurn });
+      await expect(runCommand()).rejects.toMatchObject({
+        code,
+        ...(message ? { message: expect.stringContaining(message) } : {}),
+      });
+      expect(runTurn).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
+    }, acpOverrides),
+);

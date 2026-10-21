@@ -135,13 +135,7 @@ export class PlivoProvider implements VoiceCallProvider {
       console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
     }
 
-    return {
-      ok: result.ok,
-      reason: result.reason,
-      isReplay: result.isReplay,
-      verifiedRequestKey: result.verifiedRequestKey,
-      releaseReplay: result.releaseReplay,
-    };
+    return result;
   }
 
   parseWebhookEvent(

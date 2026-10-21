@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  autoMigrateLegacyStateDir,
-  resetAutoMigrateLegacyStateDirForTest,
-} from "./state-migrations.state-dir.js";
+let { autoMigrateLegacyStateDir } = await import("./state-migrations.state-dir.js");
 
 function stateDirFixture(root: string) {
   return {
@@ -24,13 +21,11 @@ function stateDirFixture(root: string) {
 async function withStateDirFixture(
   run: (fixture: ReturnType<typeof stateDirFixture>) => Promise<void>,
 ) {
-  try {
-    await withTestDir({ prefix: "openclaw-state-dir-" }, async (root) => {
-      await run(stateDirFixture(root));
-    });
-  } finally {
-    resetAutoMigrateLegacyStateDirForTest();
-  }
+  vi.resetModules();
+  ({ autoMigrateLegacyStateDir } = await import("./state-migrations.state-dir.js"));
+  await withTestDir({ prefix: "openclaw-state-dir-" }, async (root) => {
+    await run(stateDirFixture(root));
+  });
 }
 
 it.each(["config", "environment"])(

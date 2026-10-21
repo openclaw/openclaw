@@ -9,7 +9,6 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
-  type ExecTarget,
 } from "../infra/exec-approvals.js";
 import {
   execRequestAbortSignal,
@@ -62,7 +61,6 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -74,7 +72,6 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
-import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -121,80 +118,6 @@ export type ExecProcessHandle = {
   /** Immediately suppress all future `onUpdate` calls for this handle. */
   disableUpdates: () => void;
 };
-
-/** Renders an exec target label, preserving `auto`. */
-export function renderExecTargetLabel(target: ExecTarget) {
-  return target;
-}
-
-/** Resolves configured/requested/elevated exec target into an effective host. */
-export function resolveExecTarget(params: {
-  configuredTarget?: ExecTarget;
-  requestedTarget?: ExecTarget | null;
-  elevatedRequested: boolean;
-  sandboxAvailable: boolean;
-  sandboxRequired?: boolean;
-}) {
-  const sandboxRequired = params.sandboxRequired === true;
-  if (sandboxRequired && !params.sandboxAvailable) {
-    throw registerTrustedToolNoStartError(
-      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
-    );
-  }
-  if (sandboxRequired && params.elevatedRequested) {
-    throw registerTrustedToolNoStartError(
-      new Error("Elevated execution is unavailable because this session requires a sandbox."),
-    );
-  }
-  // Session isolation outranks every agent, session, and request-scoped host preference.
-  const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget =
-    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
-  if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
-      ),
-    );
-  }
-  if (
-    requestedTarget &&
-    !isRequestedExecTargetAllowed({
-      configuredTarget,
-      requestedTarget,
-      sandboxAvailable: params.sandboxAvailable,
-    })
-  ) {
-    const allowedConfig = (
-      configuredTarget === "auto" &&
-      params.sandboxAvailable &&
-      (requestedTarget === "gateway" || requestedTarget === "node")
-        ? [renderExecTargetLabel(requestedTarget)]
-        : [renderExecTargetLabel(requestedTarget), "auto"]
-    ).join(" or ");
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-          `set tools.exec.host=${allowedConfig} to allow this override).`,
-      ),
-    );
-  }
-  const selectedTarget = requestedTarget ?? configuredTarget;
-  const resolvedTarget = params.elevatedRequested
-    ? selectedTarget === "node"
-      ? "node"
-      : "gateway"
-    : selectedTarget;
-  const effectiveHost =
-    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
-  return {
-    configuredTarget,
-    requestedTarget,
-    selectedTarget: resolvedTarget,
-    effectiveHost,
-  };
-}
 
 /** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
@@ -566,7 +489,6 @@ export async function runExecProcess({
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
-  let sandboxFinalized = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
@@ -589,10 +511,9 @@ export async function runExecProcess({
     exitCode: number | null;
     timedOut: boolean;
   }) => {
-    if (!sandboxPrepared || sandboxFinalized || !opts.sandbox?.finalizeExec) {
+    if (!sandboxPrepared || !opts.sandbox?.finalizeExec) {
       return;
     }
-    sandboxFinalized = true;
     await opts.sandbox.finalizeExec({
       ...params,
       token: sandboxFinalizeToken,

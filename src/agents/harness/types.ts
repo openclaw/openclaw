@@ -308,6 +308,10 @@ export type AgentHarnessSideQuestionParams = {
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Non-authorizing native ownership captured before model and auth preparation. */
+  expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
+  /** Core-prepared search policy, bound to the side question's model and requester facts. */
+  preparedWebSearchPolicy?: InternalEmbeddedRunAttemptParams["preparedWebSearchPolicy"];
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;

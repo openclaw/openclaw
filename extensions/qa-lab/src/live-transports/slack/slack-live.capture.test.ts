@@ -71,7 +71,6 @@ describe("Slack QA debug capture", () => {
         blockText: ["Update", "COMMENTARY"],
         channelId: "C123",
         text: "fallback",
-        threadTs: "1.000000",
         ts: "2.000000",
       },
       { channelId: "C123", text: "receipt", ts: "2.000000" },

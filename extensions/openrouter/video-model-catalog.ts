@@ -56,38 +56,6 @@ function normalizeFrameImageRoles(value: unknown): Array<"first_frame" | "last_f
   );
 }
 
-function buildOpenRouterVideoModeCapabilities(params: {
-  durations: number[];
-  aspectRatios: string[];
-  resolutions: VideoGenerationResolution[];
-  sizes: string[];
-  supportsAudio?: boolean;
-}): NonNullable<VideoGenerationProviderCapabilities["generate"]> {
-  return {
-    maxVideos: 1,
-    ...(params.durations.length > 0 ? { supportedDurationSeconds: params.durations } : {}),
-    ...(params.aspectRatios.length > 0
-      ? {
-          supportsAspectRatio: true,
-          aspectRatios: params.aspectRatios,
-        }
-      : {}),
-    ...(params.resolutions.length > 0
-      ? {
-          supportsResolution: true,
-          resolutions: params.resolutions,
-        }
-      : {}),
-    ...(params.sizes.length > 0
-      ? {
-          supportsSize: true,
-          sizes: params.sizes,
-        }
-      : {}),
-    ...(params.supportsAudio === undefined ? {} : { supportsAudio: params.supportsAudio }),
-  };
-}
-
 function buildOpenRouterVideoModelCapabilities(
   model: Record<string, unknown>,
 ): OpenRouterVideoModelCatalogCapabilities {
@@ -101,13 +69,29 @@ function buildOpenRouterVideoModelCapabilities(
   );
   const supportsAudio =
     typeof model.generate_audio === "boolean" ? model.generate_audio : undefined;
-  const modeCapabilities = buildOpenRouterVideoModeCapabilities({
-    durations,
-    aspectRatios,
-    resolutions,
-    sizes,
-    supportsAudio,
-  });
+  const modeCapabilities: NonNullable<VideoGenerationProviderCapabilities["generate"]> = {
+    maxVideos: 1,
+    ...(durations.length > 0 ? { supportedDurationSeconds: durations } : {}),
+    ...(aspectRatios.length > 0
+      ? {
+          supportsAspectRatio: true,
+          aspectRatios,
+        }
+      : {}),
+    ...(resolutions.length > 0
+      ? {
+          supportsResolution: true,
+          resolutions,
+        }
+      : {}),
+    ...(sizes.length > 0
+      ? {
+          supportsSize: true,
+          sizes,
+        }
+      : {}),
+    ...(supportsAudio === undefined ? {} : { supportsAudio }),
+  };
   const capabilities: OpenRouterVideoModelCatalogCapabilities = {
     providerOptions: {
       callback_url: "string",

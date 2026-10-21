@@ -1,6 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -149,23 +148,6 @@ describe("getShellConfig", () => {
       commandTransport: "argv",
     });
   });
-
-  it("uses an explicit custom shell path through the same resolver", () => {
-    const binDir = createTempCommandDir("zsh");
-    const shellPath = path.join(binDir, "zsh");
-
-    expect(getShellConfig(shellPath)).toEqual({
-      shell: shellPath,
-      args: ["-f", "-c"],
-      commandTransport: "argv",
-    });
-  });
-
-  it("rejects a missing explicit custom shell path", () => {
-    expect(() => getShellConfig(path.join(os.tmpdir(), "missing-openclaw-shell"))).toThrow(
-      "Custom shell path not found",
-    );
-  });
 });
 
 describe.skipIf(isWin)("getBashShellConfig POSIX discovery", () => {
@@ -252,10 +234,16 @@ describe("getBashShellConfig", () => {
   it.each(["System32", "Sysnative"])(
     "uses stdin transport for the legacy %s WSL launcher",
     (systemDirectory) => {
-      const shellPath = `C:\\Windows\\${systemDirectory}\\bash.exe`;
-      vi.spyOn(fs, "existsSync").mockImplementation((candidate) => String(candidate) === shellPath);
+      const shellPath = writeCommand(
+        tempDirs.make("openclaw-wsl-bash-"),
+        `Windows/${systemDirectory}/bash.exe`,
+        true,
+      );
+      vi.stubEnv("ProgramFiles", "");
+      vi.stubEnv("ProgramFiles(x86)", "");
+      vi.stubEnv("PATH", path.dirname(shellPath));
 
-      expect(getBashShellConfig(shellPath)).toEqual({
+      expect(getBashShellConfig()).toEqual({
         shell: shellPath,
         args: ["-s"],
         commandTransport: "stdin",

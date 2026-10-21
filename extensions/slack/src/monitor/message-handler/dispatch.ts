@@ -144,7 +144,7 @@ async function dispatchSlackMessageWithSetup(
         text: formatSlackGroupThreadReply(payload.text ?? "", info.participant),
       };
     }
-    if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
+    if (info.kind === "final" && slackStreaming.mode === "progress") {
       const supplement = getReplyPayloadTtsSupplement(payload);
       const finalPayload =
         !progress.useDraftProgressCard &&

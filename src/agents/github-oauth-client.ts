@@ -21,7 +21,6 @@ const GITHUB_OAUTH_STRING_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_CHARS = 4 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_COUNT = 32;
 const GITHUB_OAUTH_SCOPE_MAX_LENGTH = 64;
-const GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_MAX_DURATION_SECONDS = 366 * 24 * 60 * 60;
 const GITHUB_OAUTH_MAX_INTERVAL_SECONDS = 60 * 60;
 
@@ -82,28 +81,23 @@ const GITHUB_OAUTH_ERROR_CODES = [
 type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
 const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
-type GitHubOAuthErrorDetails = {
-  errorDescription?: string;
-  errorUri?: string;
-};
-
 type GitHubOAuthDevicePollResult =
   | { status: "authorized"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "authorization_pending" } & GitHubOAuthErrorDetails)
-  | ({ status: "slow_down"; intervalSeconds?: number } & GitHubOAuthErrorDetails)
-  | ({ status: "expired_token" } & GitHubOAuthErrorDetails)
-  | ({ status: "access_denied" } & GitHubOAuthErrorDetails)
-  | ({
+  | { status: "authorization_pending" }
+  | { status: "slow_down"; intervalSeconds?: number }
+  | { status: "expired_token" }
+  | { status: "access_denied" }
+  | {
       status: "error";
       code: Exclude<
         GitHubOAuthErrorCode,
         "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
       >;
-    } & GitHubOAuthErrorDetails);
+    };
 
 type GitHubOAuthRefreshResult =
   | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "error"; code: GitHubOAuthErrorCode } & GitHubOAuthErrorDetails);
+  | { status: "error"; code: GitHubOAuthErrorCode };
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -125,34 +119,11 @@ function readBoundedString(
   return value;
 }
 
-function readOptionalBoundedString(
-  value: unknown,
-  surface: string,
-  maxChars: number,
-): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return readBoundedString(value, surface, maxChars);
-}
-
 function readPositiveInteger(value: unknown, surface: string, max: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > max) {
     throw githubOAuthProtocolError(surface);
   }
   return value;
-}
-
-function readOptionalErrorUri(value: unknown, surface: string): string | undefined {
-  const raw = readOptionalBoundedString(value, surface, GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS);
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = URL.parse(raw);
-  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw githubOAuthProtocolError(surface);
-  }
-  return raw;
 }
 
 function normalizeGitHubScopes(value: unknown, surface: string): string[] {
@@ -215,7 +186,7 @@ function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
 function parseGitHubOAuthError(
   record: Record<string, unknown>,
   surface: string,
-): { code: GitHubOAuthErrorCode; intervalSeconds?: number } & GitHubOAuthErrorDetails {
+): { code: GitHubOAuthErrorCode; intervalSeconds?: number } {
   const code = record.error;
   if (!isGitHubOAuthErrorCode(code)) {
     throw githubOAuthProtocolError(surface);
@@ -224,16 +195,8 @@ function parseGitHubOAuthError(
     record.interval === undefined
       ? undefined
       : readPositiveInteger(record.interval, surface, GITHUB_OAUTH_MAX_INTERVAL_SECONDS);
-  const errorDescription = readOptionalBoundedString(
-    record.error_description,
-    surface,
-    GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS,
-  );
-  const errorUri = readOptionalErrorUri(record.error_uri, surface);
   return {
     code,
-    ...(errorDescription !== undefined ? { errorDescription } : {}),
-    ...(errorUri !== undefined ? { errorUri } : {}),
     ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
   };
 }
@@ -438,20 +401,19 @@ export async function pollGitHubOAuthDeviceToken(
     params,
   );
   if (result.error) {
-    const { code, intervalSeconds, ...details } = result.error;
+    const { code, intervalSeconds } = result.error;
     switch (code) {
       case "authorization_pending":
       case "expired_token":
       case "access_denied":
-        return { status: code, ...details };
+        return { status: code };
       case "slow_down":
         return {
           status: code,
-          ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
       default:
-        return { status: "error", code, ...details };
+        return { status: "error", code };
     }
   }
   return { status: "authorized", tokens: result.tokens };
@@ -472,8 +434,7 @@ export async function refreshGitHubOAuthToken(
     params,
   );
   if (result.error) {
-    const { intervalSeconds: _intervalSeconds, ...details } = result.error;
-    return { status: "error", ...details };
+    return { status: "error", code: result.error.code };
   }
   return { status: "refreshed", tokens: result.tokens };
 }

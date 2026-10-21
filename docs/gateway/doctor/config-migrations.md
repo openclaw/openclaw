@@ -28,6 +28,12 @@ Doctor keeps plugin repair and diagnostic contracts available through later heal
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
 
+Stale agent model-reference repair reads agent-local `models.json` with the same
+line-comment and trailing-comma support as model loading. It keeps references
+backed by those local providers and repairs references to unavailable providers.
+This repair leaves `models.json` unchanged, preserving its comments. Unreadable
+or malformed catalogs still produce a warning and leave affected references intact.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
@@ -659,8 +665,11 @@ versions can still open their historical default port.
 
 Startup leaves config bytes unchanged. When the completion marker is the sole
 required change, startup records it in stored SQLite machine state, including
-when no config file exists yet. If endpoints or other channel settings need
-repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
+when no config file exists yet. Later starts read
+that stored completion before loading migration contracts, including when the
+inspection found no listeners to pin. A failure to save completion warns and
+retries on the next boot without blocking startup. If endpoints or other channel
+settings need repair, startup refuses with `openclaw doctor --fix` guidance. For a read-only
 external config source, update that source and its completion marker as directed
 by the startup error. Startup refuses to drop an unmigrated endpoint. A fresh
 installation needs no pins or a new config file that would interfere with
@@ -1090,6 +1099,8 @@ against the current SQLite owners before the import can rename profiles.
     Ordinary config recovery can restore an already valid backup without changing its authored bytes. A backup that needs legacy transformations must be recovered through Doctor, which applies the same shared migration transforms before validation and restoration.
 
     Doctor checks the authored config revision, included files, and environment-resolved values before migration writes. Runtime path expansion (such as `~/.openclaw/wiki` on Windows) does not count as an input change. A real change reports whether the config path, file contents, included files, or resolved values changed; rerun Doctor so migrations can validate the new inputs.
+
+    Doctor preserves model choices that a provider still serves. A model's name, age, or absence from the bundled catalog is not evidence of retirement. Retirement repairs require an explicit provider catalog retirement declaration, with any declared route conditions satisfied. Missing retirement or required route evidence leaves the choice unchanged. Canonical spelling and provider-identity migrations still apply.
 
     When model migrations change a configured consumer between subscription/OAuth and metered API-key billing, Doctor reports the consumer, model, and old and new routes after saving the config. The warning also appears in the diagnostic log and update run record. A later Doctor run does not repeat it when the resolved billing route is unchanged. Missing credentials are not treated as proof of a billing change.
 

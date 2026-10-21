@@ -272,6 +272,7 @@ describe("Git ref mutation ownership", () => {
 
   it("does not accept an interrupted cached remote HEAD", async () => {
     const root = await repository();
+    await requireGit(root, ["remote", "add", "origin", path.join(root, "missing.git")]);
     const run = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
       const command = argv[argv.indexOf("-C") + 2];

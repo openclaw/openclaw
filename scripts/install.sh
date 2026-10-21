@@ -42,6 +42,7 @@ installer_step() { run_quiet_step "$@"; }
 installer_error() { ui_error "$@"; }
 installer_npm_version_error() {
     echo "Unable to determine npm version from ${1}; no package changes were made." >&2
+    echo "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
     ui_error "Could not publish the cloned checkout: ${1}"
@@ -465,7 +466,7 @@ ui_success() {
 }
 
 ui_error() {
-    local msg="$*"
+    local msg="$*"$'\nSupport: https://community.openclaw.ai/'
     if [[ -n "$GUM" ]]; then
         "$GUM" log --level error "$msg"
     else
@@ -551,11 +552,12 @@ show_footer_links() {
     local faq_url="https://docs.openclaw.ai/start/faq"
     if [[ -n "$GUM" ]]; then
         local content
-        content="$(printf '%s\n%s' "Need help?" "FAQ: ${faq_url}")"
+        content="$(printf '%s\n%s\n%s' "Need help?" "FAQ: ${faq_url}" "Support: https://community.openclaw.ai/")"
         ui_panel "$content"
     else
         echo ""
         echo -e "FAQ: ${INFO}${faq_url}${NC}"
+        echo "Support: https://community.openclaw.ai/"
     fi
 }
 
@@ -1257,6 +1259,9 @@ HELP=0
 print_usage() {
     cat <<EOF
 OpenClaw installer (macOS + Linux)
+
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
 
 Usage:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- [options]
@@ -2377,7 +2382,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.11.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.12.1"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1

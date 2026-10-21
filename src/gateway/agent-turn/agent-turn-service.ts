@@ -62,6 +62,8 @@ export function createAgentTurnService(
     replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
+    assertCancellationCurrent,
+    executionSource,
     assertInputCommitAllowed,
     hasCurrentClientAuthority,
     preflight,
@@ -90,7 +92,6 @@ export function createAgentTurnService(
     assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
-    const runFacts = { ...preflight };
     const {
       request,
       cfg,
@@ -102,7 +103,7 @@ export function createAgentTurnService(
       isRestartRecoveryResumeRun,
       suppressVisibleSessionEffects,
       agentDedupeKeys,
-    } = runFacts;
+    } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -118,6 +119,7 @@ export function createAgentTurnService(
       ...preflight,
       reconcileDurableInput,
       assertAdmissionCurrent,
+      assertCancellationCurrent,
       ownerConnId,
       ownerDeviceId,
       context,
@@ -598,7 +600,7 @@ export function createAgentTurnService(
         const { activeSessionAgentId } = delivery;
 
         const runParams = {
-          ...runFacts,
+          ...preflight,
           ...session,
           cfgForAgent,
           freshChild,
@@ -667,6 +669,7 @@ export function createAgentTurnService(
                 ...runParams,
                 ...session,
                 assertContextCurrent,
+                executionSource,
                 prepared: preparedDispatch,
                 mainRestartRecoveryOwnerLease,
                 agentId,
