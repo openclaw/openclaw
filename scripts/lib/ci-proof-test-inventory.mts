@@ -901,7 +901,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/workboard/src/tools.test.ts",
   "extensions/xai/image-generation-provider.test.ts",
   "extensions/xai/prompt-cache.test.ts",
-  "extensions/xai/speech-provider.test.ts",
   "extensions/xiaomi/speech-provider.test.ts",
   "extensions/zalo/src/channel.pairing.test.ts",
   "extensions/zalo/src/channel.startup.test.ts",

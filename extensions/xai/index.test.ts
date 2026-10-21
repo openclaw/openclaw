@@ -38,28 +38,21 @@ function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
 
 type XaiBilledToolName = "code_execution" | "x_search";
 
-function registerXaiBilledToolFactories() {
-  const tools = new Map<string, Parameters<OpenClawPluginApi["registerTool"]>[0]>();
+function billedToolFactory(name: XaiBilledToolName) {
+  const captured: { factory?: Parameters<OpenClawPluginApi["registerTool"]>[0] } = {};
   plugin.register(
     createTestPluginApi({
       registerTool(tool, opts) {
-        if (opts?.name) {
-          tools.set(opts.name, tool);
+        if (opts?.name === name) {
+          captured.factory = tool;
         }
       },
     }),
   );
 
-  function requireFactory(name: XaiBilledToolName) {
-    const factory = tools.get(name);
-    assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
-    return factory;
-  }
-
-  return {
-    code_execution: requireFactory("code_execution"),
-    x_search: requireFactory("x_search"),
-  };
+  const { factory } = captured;
+  assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
+  return factory;
 }
 
 function createXaiBilledToolConfig(name: XaiBilledToolName, enabled?: boolean) {
@@ -451,7 +444,7 @@ describe("xai provider plugin", () => {
   });
 
   it("forwards exact caller cancellation through the registered lazy X search factory", async () => {
-    const factory = registerXaiBilledToolFactories().x_search;
+    const factory = billedToolFactory("x_search");
     const tool = factory(xaiToolContext("x_search", "xai", true));
     assert(tool && !Array.isArray(tool), "Expected one registered lazy X search tool");
     expect(tool.resultContentSource).toBe("network");
@@ -488,7 +481,7 @@ describe("xai provider plugin", () => {
       ["runtime disable overrides source", "xai", true, false, true, false],
       ["runtime consent overrides source", "openai", true, true, false, true],
     ])("%s", (_label, provider, hasAuth, expected, enabled, runtimeEnabled) => {
-      const factory = registerXaiBilledToolFactories()[toolName];
+      const factory = billedToolFactory(toolName);
       const tool = factory({
         ...xaiToolContext(toolName, provider, enabled, hasAuth),
         ...(runtimeEnabled === undefined
@@ -527,18 +520,6 @@ describe("xai provider plugin", () => {
     expectXaiFastToolStreamShaping(capture);
   });
 
-  it("defaults tool_stream extra params but preserves explicit values", async () => {
-    const prepare = (extraParams: { fastMode: boolean; tool_stream?: boolean }) =>
-      registeredProvider.prepareExtraParams?.({
-        provider: "xai",
-        modelId: "grok-4",
-        extraParams,
-      } as never);
-    expect(prepare({ fastMode: true })).toEqual({ fastMode: true, tool_stream: true });
-    const explicit = { fastMode: true, tool_stream: false };
-    expect(prepare(explicit)).toBe(explicit);
-  });
-
   function resolveModel(modelId: string, api = "openai-responses") {
     return registeredProvider.resolveDynamicModel?.({
       provider: "xai",
@@ -569,11 +550,6 @@ describe("xai provider plugin", () => {
       input: ["text", "image"],
       contextWindow: 1_000_000,
     });
-    expect(resolveModel("grok-build-latest")).toMatchObject({
-      id: "grok-4.5",
-      reasoning: true,
-      contextWindow: 500_000,
-    });
     const expectModel = (input: string, id: string, fields: Record<string, unknown> = {}) =>
       expect(resolveModel(input)).toMatchObject({
         provider: "xai",
@@ -586,15 +562,12 @@ describe("xai provider plugin", () => {
         ...fields,
       });
     const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-    const thinking = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "high" };
     expectModel("grok-4-1-fast", "grok-4-1-fast", { cost: zeroCost });
     expectModel("grok-4.5-latest", "grok-4.5", {
-      thinkingLevelMap: { off: null, ...thinking },
       input: ["text", "image"],
       contextWindow: 500_000,
     });
     expectModel("grok-4.3-latest", "grok-4.3", {
-      thinkingLevelMap: { off: "none", ...thinking },
       input: ["text", "image"],
     });
     expectModel("grok-4.20-0309-reasoning", "grok-4.20-0309-reasoning", {

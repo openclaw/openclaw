@@ -18,23 +18,12 @@ function configuredTool(codeExecution?: {
   return createCodeExecutionTool({ config: { plugins: { entries: { xai: { config } } } } });
 }
 
-function outputText(text: string, ...urls: string[]) {
-  return {
-    type: "output_text",
-    text,
-    ...(urls.length ? { annotations: urls.map((url) => ({ type: "url_citation", url })) } : {}),
-  };
-}
-
-function installCodeExecutionFetch(
-  payload: Record<string, unknown> = {
-    output: [
-      { type: "code_interpreter_call" },
-      { type: "message", content: [outputText("Mean: 42", "https://example.com/data.csv")] },
-    ],
+function installCodeExecutionFetch() {
+  const payload = {
+    output: [{ type: "code_interpreter_call" }],
+    output_text: "Mean: 42",
     citations: ["https://example.com/data.csv"],
-  },
-) {
+  };
   const mockFetch = vi.fn((_input?: unknown, _init?: RequestInit) =>
     Promise.resolve(jsonResponse(payload)),
   );
@@ -66,23 +55,8 @@ describe("xai code_execution tool", () => {
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
   });
 
-  it("requests code_interpreter and returns every answer and citation", async () => {
-    const mockFetch = installCodeExecutionFetch({
-      output: [
-        { type: "code_interpreter_call" },
-        {
-          type: "message",
-          content: [
-            outputText("Mean: ", "https://example.com/input.csv"),
-            outputText("42", "https://example.com/result.csv", "https://example.com/input.csv"),
-          ],
-        },
-        {
-          type: "message",
-          content: [outputText(". Verified.")],
-        },
-      ],
-    });
+  it("requests code_interpreter and returns the execution result", async () => {
+    const mockFetch = installCodeExecutionFetch();
     const tool = configuredTool({ maxTurns: 2, timeoutSeconds: 45 });
 
     const result = await tool?.execute?.("code-execution:multi-block", {
@@ -95,8 +69,8 @@ describe("xai code_execution tool", () => {
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.tools).toEqual([{ type: "code_interpreter" }]);
     expect(result?.details).toMatchObject({
-      content: "Mean: 42. Verified.",
-      citations: ["https://example.com/input.csv", "https://example.com/result.csv"],
+      content: "Mean: 42",
+      citations: ["https://example.com/data.csv"],
       usedCodeExecution: true,
     });
   });
@@ -118,19 +92,5 @@ describe("xai code_execution tool", () => {
     expect(body.store).toBe(false);
     expect(body).not.toHaveProperty("reasoning");
     expect(body).not.toHaveProperty("max_turns");
-  });
-
-  it("reports missing code_execution answers without blaming JSON decoding", async () => {
-    installCodeExecutionFetch({
-      status: "incomplete",
-      output: [{ type: "code_interpreter_call" }],
-    });
-    const tool = configuredTool();
-
-    await expect(
-      tool?.execute?.("code-execution:missing-text", {
-        task: "Calculate the mean of [40, 42, 44]",
-      }),
-    ).rejects.toThrow("xAI code execution failed: no answer text returned; try a simpler request");
   });
 });

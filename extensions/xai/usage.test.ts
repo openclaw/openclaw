@@ -33,13 +33,11 @@ describe("fetchXaiUsage", () => {
   it.each([
     {
       name: "explicit zero weekly usage",
-      payload: {
-        subscription_tier: "SuperGrok Heavy",
-        config: {
-          creditUsagePercent: 0,
-          currentPeriod: weekly,
-          prepaidBalance: { val: "1250" },
-        },
+      tier: { subscription_tier: "SuperGrok Heavy" },
+      config: {
+        creditUsagePercent: 0,
+        currentPeriod: weekly,
+        prepaidBalance: { val: "1250" },
       },
       expected: {
         windows: [{ label: "Weekly", usedPercent: 0, resetAt: Date.parse(weekly.end) }],
@@ -49,13 +47,11 @@ describe("fetchXaiUsage", () => {
     },
     {
       name: "legacy monthly counters",
-      payload: {
-        subscriptionTier: "Premium+",
-        config: {
-          used: { val: 2500 },
-          monthly_limit: { val: 10000 },
-          billing_period_end: "2026-09-30T00:00:00Z",
-        },
+      tier: { subscriptionTier: "Premium+" },
+      config: {
+        used: { val: 2500 },
+        monthly_limit: { val: 10000 },
+        billing_period_end: "2026-09-30T00:00:00Z",
       },
       expected: {
         windows: [
@@ -63,35 +59,28 @@ describe("fetchXaiUsage", () => {
         ],
       },
       plan: "Premium+",
-      balance: 0,
     },
     {
       name: "omitted weekly usage despite on-demand counters",
-      payload: {
-        config: {
-          currentPeriod: weekly,
-          onDemandCap: { val: 10000 },
-          onDemandUsed: { val: 2500 },
-          isUnifiedBillingUser: true,
-          prepaidBalance: { val: 0 },
-          billingPeriodStart: weekly.start,
-          billingPeriodEnd: weekly.end,
-        },
+      config: {
+        currentPeriod: weekly,
+        onDemandCap: { val: 10000 },
+        onDemandUsed: { val: 2500 },
+        isUnifiedBillingUser: true,
+        prepaidBalance: { val: 0 },
+        billingPeriodStart: weekly.start,
+        billingPeriodEnd: weekly.end,
       },
       expected: omitted,
-      plan: "SuperGrok",
-      balance: 0,
     },
     {
       name: "omitted monthly usage",
-      payload: { config: { currentPeriod: { ...weekly, type: "USAGE_PERIOD_TYPE_MONTHLY" } } },
+      config: { currentPeriod: { ...weekly, type: "USAGE_PERIOD_TYPE_MONTHLY" } },
       expected: omitted,
-      plan: "SuperGrok",
-      balance: 0,
     },
   ])(
     "fetches billing with CLI headers and preserves $name",
-    async ({ payload, expected, plan, balance }) => {
+    async ({ config, tier, expected, plan = "SuperGrok", balance = 0 }) => {
       const mockFetch = createProviderUsageFetch(async (url, init) => {
         expect(url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
         expect(init?.headers).toMatchObject({
@@ -100,7 +89,7 @@ describe("fetchXaiUsage", () => {
           "x-grok-client-mode": "cli",
           "x-grok-client-version": "1.0.4",
         });
-        return makeResponse(200, payload);
+        return makeResponse(200, { ...tier, config });
       });
       await expect(fetchUsage(mockFetch)).resolves.toEqual({
         provider: "xai",

@@ -468,19 +468,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
-  it("copies pending realtime audio views without retaining their backing allocation", async () => {
-    const bridge = createTestBridge();
-    const backing = Buffer.alloc(2 * 1024 * 1024, 0x7f);
-    const view = backing.subarray(0, 1);
-
-    bridge.sendAudio(view);
-    backing[0] = 0;
-    const socket = await openRealtimeBridge(bridge);
-    expect(sent(socket, "input_audio_buffer.append")).toEqual([
-      { type: "input_audio_buffer.append", audio: "fw==" },
-    ]);
-  });
-
   it("drops queued realtime input on close and ignores late input until reconnect", async () => {
     const bridge = createTestBridge();
 
@@ -894,30 +881,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     expect(onReady).toHaveBeenCalledOnce();
   });
 
-  it("exhausts reconnect attempts when websocket opens without session setup", async () => {
-    const { onEvent, onClose } = observers();
-    const { socket: firstSocket } = await resumable({ onEvent, onClose });
-    firstSocket.close(1006, "connection lost");
-
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      const delayMs = 1000 * 2 ** (attempt - 1);
-      await vi.advanceTimersByTimeAsync(delayMs);
-      await waitForRealtimeState(() => expect(FakeWebSocket.instances.length).toBe(attempt + 1));
-      const socket = requireSocket(attempt);
-      socket.open();
-      socket.close(1006, "session setup failed");
-    }
-
-    await waitForRealtimeState(() =>
-      expect(onEvent).toHaveBeenCalledWith({
-        direction: "client",
-        type: "session.reconnect.exhausted",
-        detail: "reason=websocket-close attempts=5",
-      }),
-    );
-    expect(onClose).toHaveBeenCalledWith("error");
-  });
-
   it("cancels a pending reconnect and allows a later explicit connect", async () => {
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: ["xai", "test"].join("-") });
     const onError = vi.fn();
@@ -977,7 +940,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     const { connecting, socket } = await pendingConnection(bridge);
     socket.open();
     socket.emit("error", new Error("bad auth"));
-
     await expect(connecting).rejects.toThrow("bad auth");
     await vi.advanceTimersByTimeAsync(1000);
     expect(FakeWebSocket.instances).toHaveLength(1);

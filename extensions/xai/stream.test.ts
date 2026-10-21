@@ -107,13 +107,7 @@ async function captureXaiResponsesPayloadWithThinking(
   reasoning: ModelThinkingLevel,
   modelId: string,
 ): Promise<Record<string, unknown>> {
-  const model = applyXaiRuntimeModelCompat(
-    xaiModel({
-      id: modelId,
-      baseUrl: XAI_BASE_URL,
-      cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
-    }),
-  );
+  const model = applyXaiRuntimeModelCompat(xaiModel({ id: modelId, baseUrl: XAI_BASE_URL }));
   const wrapped = wrapXaiProviderStream({
     provider: "xai",
     modelId,
@@ -124,29 +118,25 @@ async function captureXaiResponsesPayloadWithThinking(
     throw new Error("expected the xAI stream wrapper");
   }
 
-  const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const stream = wrapped(
-      model,
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-      {
-        apiKey: "test-api-key",
-        cacheRetention: "none",
-        reasoning,
-        onPayload: (payload) => {
-          resolve(structuredClone(payload as Record<string, unknown>));
-          throw new Error("stop after payload capture");
-        },
+  let captured: Record<string, unknown> | undefined;
+  const stream = await wrapped(
+    model,
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+    {
+      apiKey: "test-api-key",
+      cacheRetention: "none",
+      reasoning,
+      onPayload: (payload) => {
+        captured = structuredClone(payload as Record<string, unknown>);
+        throw new Error("stop after payload capture");
       },
-    );
-    void Promise.resolve(stream)
-      .then((result) => result.result())
-      .then(
-        () => reject(new Error("provider payload callback was not invoked")),
-        (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
-      );
-  });
-
-  return await payloadPromise;
+    },
+  );
+  await stream.result();
+  if (!captured) {
+    throw new Error("provider payload callback was not invoked");
+  }
+  return captured;
 }
 
 describe("xai stream wrappers", () => {

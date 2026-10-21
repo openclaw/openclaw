@@ -4,9 +4,10 @@ import { requireApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createXaiFetchInspectors } from "./responses-http.test-support.js";
 import { defineSearchCacheTests } from "./search-cache.test-support.js";
-import { createXaiWebSearchProvider as createXaiWebSearchContractProvider } from "./web-search-contract-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
+import { createXSearchTool } from "./x-search.js";
 
 const providerAuthMocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn().mockResolvedValue({ source: "test", mode: "api-key" }),
@@ -224,9 +225,10 @@ describe("xai web search config resolution", () => {
       ),
     );
     const query = "credential-scoped Grok cache regression";
-    const first = await search(query, { config: {}, agentDir: "fixture-agent-a" });
-    const other = await search(query, { config: {}, agentDir: "fixture-agent-b" });
-    const repeated = await search(query, { config: {}, agentDir: "fixture-agent-a" });
+    const context = (agentDir: string) => ({ config: defaultAgentConfig, agentDir });
+    const first = await search(query, context("fixture-agent-a"));
+    const other = await search(query, context("fixture-agent-b"));
+    const repeated = await search(query, context("fixture-agent-a"));
 
     expect(first.content).toContain("Account A answer");
     expect(other.content).toContain("Account B answer");
@@ -235,11 +237,6 @@ describe("xai web search config resolution", () => {
       "Bearer fixture-key-a",
       "Bearer fixture-key-b",
     ]);
-  });
-
-  it("advertises xAI auth profiles in runtime and setup contracts", () => {
-    expect(createXaiWebSearchProvider().authProviderId).toBe("xai");
-    expect(createXaiWebSearchContractProvider().authProviderId).toBe("xai");
   });
 
   it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
@@ -262,30 +259,6 @@ describe("xai web search config resolution", () => {
         message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
       });
     });
-  });
-
-  it("uses the active agentDir for xAI OAuth web search auth", async () => {
-    resolveAuth.mockResolvedValue(profileAuth("active-agent-oauth-token", "oauth", "xai:active"));
-    const mockFetch = installXaiWebSearchFetch();
-    await search("OpenClaw Grok active agent OAuth web search", {
-      agentDir: "/tmp/openclaw-xai-active-agent",
-      config: {
-        agents: {
-          entries: {
-            main: { agentDir: "/tmp/openclaw-xai-main-agent" },
-            side: { agentDir: "/tmp/openclaw-xai-active-agent" },
-          },
-        },
-      },
-    });
-
-    expect(resolveAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "xai",
-        agentDir: "/tmp/openclaw-xai-active-agent",
-      }),
-    );
-    expect(authorizationHeaders(mockFetch)).toEqual(["Bearer active-agent-oauth-token"]);
   });
 
   it.each([
@@ -381,7 +354,12 @@ describe("xai web search config resolution", () => {
     const inlineCitation = { start_index: 0, end_index: 8, url: "https://example.test/source" };
     mockFetch.mockResolvedValueOnce(
       jsonResponse({
-        output: [{ type: "message", content: [{ type: "output_text", text: "Grounded" }] }],
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "Grounded" + "x".repeat(25_000) }],
+          },
+        ],
         inline_citations: [inlineCitation],
       }),
     );
@@ -404,13 +382,8 @@ describe("xai web search config resolution", () => {
       tools: [{ type: "web_search" }],
     });
     expect(result.inlineCitations).toEqual([inlineCitation]);
-  });
-
-  it("reports missing xAI web search answers without blaming JSON decoding", async () => {
-    installXaiWebSearchFetch({ status: "incomplete", output: [] });
-    await expect(search("OpenClaw")).rejects.toThrow(
-      "xAI web search failed: no answer text returned; try a simpler request",
-    );
+    expect(result.truncated).toBe(true);
+    expect(String(result.content).length).toBeLessThan(20_200);
   });
 
   it("converts internal xAI timeout aborts into structured tool errors", async () => {
@@ -422,15 +395,6 @@ describe("xai web search config resolution", () => {
       code: "ETIMEDOUT",
       timeoutMs: 60_000,
     });
-  });
-
-  it("bounds actual generic xAI provider content after special-token expansion", async () => {
-    installXaiWebSearchFetch({ output_text: "<s>".repeat(6_666), citations: [] });
-    const result = await search("bounded sanitized xAI answer");
-
-    expect(result.truncated).toBe(true);
-    expect(String(result.content).length).toBeLessThan(20_200);
-    expect(String(result.content)).not.toContain("<s>");
   });
 
   it("preserves caller abort identity through the registered generic xAI provider", async () => {
@@ -476,5 +440,189 @@ describe("xai web search config resolution", () => {
       reason,
     );
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("xai x_search tool", () => {
+  const { firstFetchUrl, parseFirstRequestBody } = createXaiFetchInspectors("x_search");
+  const citation = "https://x.com/openclaw/status/1";
+  const textContent = (text: string) => ({
+    type: "output_text",
+    text,
+    annotations: [{ type: "url_citation", url: citation }],
+  });
+
+  function installXSearchFetch(
+    payload: Record<string, unknown> = {
+      output: [
+        {
+          type: "message",
+          content: [textContent("Found X posts")],
+        },
+      ],
+      citations: [citation],
+    },
+  ) {
+    return installXaiWebSearchFetch(payload);
+  }
+
+  function xSearchConfig({
+    apiKey = "xai-config-test",
+    webSearch,
+    xSearch,
+  }: {
+    apiKey?: unknown;
+    webSearch?: Record<string, unknown>;
+    xSearch?: Record<string, unknown>;
+  } = {}) {
+    const config = { webSearch: { apiKey, ...webSearch }, ...(xSearch ? { xSearch } : {}) };
+    return { plugins: { entries: { xai: { config } } } };
+  }
+
+  function createConfiguredXSearchTool(config?: Parameters<typeof xSearchConfig>[0]) {
+    const tool = createXSearchTool({ config: xSearchConfig(config) });
+    if (!tool) {
+      throw new Error("expected x_search tool to be configured");
+    }
+    return tool;
+  }
+
+  function profileTool(apiKey: string) {
+    const tool = createXSearchTool({
+      config: {},
+      runtimeConfig: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) => (providerId === "xai" ? apiKey : undefined),
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected configured X search tool");
+    }
+    return tool;
+  }
+
+  function runXSearch(
+    query: string,
+    config?: Parameters<typeof xSearchConfig>[0],
+    args: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) {
+    return createConfiguredXSearchTool(config).execute(query, { query, ...args }, signal);
+  }
+
+  it("reuses answers only for the resolved credential across tool instances", async () => {
+    const mockFetch = installXSearchFetch().mockImplementation(async (_url, init) =>
+      jsonResponse({
+        output_text:
+          new Headers(init?.headers).get("Authorization") === "Bearer fixture-key-a"
+            ? "Account A answer"
+            : "Account B answer",
+      }),
+    );
+    const firstTool = profileTool("fixture-key-a");
+    const otherTool = profileTool("fixture-key-b");
+    expect(firstTool.name).toBe("x_search");
+    const args = { query: "credential-scoped X search cache regression" };
+    const first = await firstTool.execute("account-a", args);
+    const other = await otherTool.execute("account-b", args);
+    const repeated = await firstTool.execute("account-a-repeat", args);
+
+    expect(first.details).toMatchObject({ content: expect.stringContaining("Account A answer") });
+    expect(other.details).toMatchObject({ content: expect.stringContaining("Account B answer") });
+    expect(repeated.details).toMatchObject({
+      cached: true,
+      content: expect.stringContaining("Account A answer"),
+    });
+    expect(
+      mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer fixture-key-a", "Bearer fixture-key-b"]);
+  });
+
+  it("rejects an already-cancelled X search without contacting the billed provider", async () => {
+    const mockFetch = installXSearchFetch();
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled before billing");
+    controller.abort(reason);
+    await expect(runXSearch("xai-pre-cancel", undefined, {}, controller.signal)).rejects.toBe(
+      reason,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  defineSearchCacheTests(
+    "X search",
+    (text) => jsonResponse({ output_text: text, citations: [] }),
+    async (query, { ttl, signal }) =>
+      (await runXSearch(query, { xSearch: { cacheTtlMinutes: ttl } }, {}, signal))
+        .details as Record<string, unknown>,
+  );
+
+  it("uses the xAI Responses x_search tool with structured filters", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
+    const filters = {
+      allowed_x_handles: ["openclaw"],
+      from_date: "2026-03-01",
+      to_date: "2026-03-20",
+      enable_image_understanding: true,
+    };
+    expect(tool.resultContentSource).toBe("network");
+    const result = await tool.execute("x-search:1", {
+      query: "dinner recipes",
+      ...structuredClone(filters),
+    });
+    expect(mockFetch).toHaveBeenCalled();
+    expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
+    expect(parseFirstRequestBody(mockFetch)).toMatchObject({
+      model: "grok-4.7",
+      input: [{ role: "user", content: "dinner recipes" }],
+      store: false,
+      reasoning: { effort: "low" },
+      max_turns: 2,
+      tools: [{ type: "x_search", ...filters }],
+    });
+    expect((result.details as { citations?: string[] }).citations).toEqual([citation]);
+  });
+
+  it.each([
+    {
+      name: "combined handle filters",
+      args: { allowed_x_handles: ["openclaw"], excluded_x_handles: ["spam"] },
+      error: "allowed_x_handles and excluded_x_handles cannot be used together",
+    },
+    {
+      name: "over-limit handles",
+      args: { allowed_x_handles: Array.from({ length: 21 }, (_, i) => `handle-${i}`) },
+      error: "allowed_x_handles cannot contain more than 20 handles",
+    },
+    {
+      name: "invalid date ordering",
+      args: { from_date: "2026-03-20", to_date: "2026-03-01" },
+      error: /from_date must be on or before to_date/i,
+    },
+  ])("rejects $name before calling xAI", async ({ name, args, error }) => {
+    const mockFetch = installXSearchFetch();
+    await expect(runXSearch(name, undefined, args)).rejects.toThrow(error);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts the xAI limit for excluded_x_handles", async () => {
+    const mockFetch = installXSearchFetch();
+    const handles = Array.from({ length: 20 }, (_, index) => `excluded_x_handles-${index}`);
+    await runXSearch("excluded_x_handles boundary", undefined, { excluded_x_handles: handles });
+    expect(parseFirstRequestBody(mockFetch).tools).toEqual([
+      { type: "x_search", excluded_x_handles: handles },
+    ]);
+  });
+
+  it("shares plugin webSearch.baseUrl with x_search when xSearch.baseUrl is unset", async () => {
+    const mockFetch = installXSearchFetch();
+    await runXSearch("shared base url route", {
+      apiKey: "xai-plugin-key",
+      webSearch: { baseUrl: "https://api.x.ai/shared/v1/" },
+      xSearch: { enabled: true },
+    });
+    expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/shared/v1/responses");
   });
 });

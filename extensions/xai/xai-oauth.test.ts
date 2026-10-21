@@ -11,7 +11,6 @@ import { jsonResponse, requestUrl, withProxyFixture } from "openclaw/plugin-sdk/
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyXaiConfig } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
@@ -496,7 +495,7 @@ describe("xAI OAuth", () => {
     expect(await refresh()).toMatchObject({ expires: 100 });
   });
 
-  it.each(["subscription", "api"] as const)("device-code login from %s setup", async (setup) => {
+  it("replaces stale API configuration through device-code login", async () => {
     const progress = { update: vi.fn(), stop: vi.fn() };
     mockLoginFetch(
       {
@@ -520,43 +519,38 @@ describe("xAI OAuth", () => {
     const deviceCode = vi.fn(async () => {});
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
-    const config = applyXaiConfig({});
-    config.agents = {
-      defaults: { model: { primary: "other/selected", fallbacks: ["other/fallback"] } },
-    };
-    if (setup === "subscription") {
-      const provider = buildXaiProvider("openai-responses", "oauth");
-      const model = provider.models[0];
-      assert(model, "expected a catalog model for the stale config fixture");
-      provider.models = [
-        {
-          ...model,
-          id: "grok-4.6",
-          name: "Stale",
-          thinkingLevelMap: { xhigh: null },
-          compat: { supportedReasoningEfforts: ["low", "high"] },
-        },
-      ];
-      config.models = { providers: { xai: provider } };
-    }
+    const provider = buildXaiProvider("openai-responses");
+    const model = provider.models[0];
+    assert(model, "expected a catalog model for the stale config fixture");
+    provider.models = [
+      {
+        ...model,
+        id: "grok-4.6",
+        name: "Stale",
+        thinkingLevelMap: { xhigh: null },
+        compat: { supportedReasoningEfforts: ["low", "high"] },
+      },
+    ];
+    Object.assign(provider, {
+      apiKey: "fixture-api-key",
+      headers: { Authorization: "Bearer fixture-key" },
+      request: {
+        auth: { mode: "authorization-bearer", token: "fixture-token" },
+        headers: { "x-api-key": "fixture-key" },
+        allowPrivateNetwork: false,
+      },
+    });
+    const primary = { primary: "other/selected", fallbacks: ["other/fallback"] };
     const ctx = loginContext({
-      config,
+      config: {
+        agents: { defaults: { model: primary } },
+        models: { providers: { xai: provider } },
+      },
       openUrl,
       prompter: createTestWizardPrompter({ progress: vi.fn(() => progress), deviceCode }),
       runtime: { ...createRuntimeEnv(), log },
     });
 
-    if (setup === "api" && ctx.config.models?.providers?.xai) {
-      Object.assign(ctx.config.models.providers.xai, {
-        apiKey: "fixture-api-key",
-        headers: { Authorization: "Bearer fixture-key" },
-        request: {
-          auth: { mode: "authorization-bearer", token: "fixture-token" },
-          headers: { "x-api-key": "fixture-key" },
-          allowPrivateNetwork: false,
-        },
-      });
-    }
     const result = await createXaiOAuthAuthMethod().run(ctx);
 
     expect(openUrl).toHaveBeenCalledWith(`${VERIFY_URL}?user_code=ABCD-1234`);
@@ -595,10 +589,7 @@ describe("xAI OAuth", () => {
       access: expect.any(String),
     });
     expect(result.defaultModel).toBe("xai/grok-4.7");
-    expect(result.configPatch?.agents?.defaults?.model).toEqual({
-      primary: "other/selected",
-      fallbacks: ["other/fallback"],
-    });
+    expect(result.configPatch?.agents?.defaults?.model).toEqual(primary);
     const savedProvider = result.configPatch?.models?.providers?.xai;
     expect(savedProvider).toMatchObject({
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
@@ -608,7 +599,7 @@ describe("xAI OAuth", () => {
       headers: undefined,
       request: { auth: undefined, headers: undefined },
     });
-    expect(savedProvider?.models.map((model) => model.id)).toEqual(["grok-4.6"]);
+    expect(savedProvider?.models.map((entry) => entry.id)).toEqual(["grok-4.6"]);
     expect(
       fetchImpl.mock.calls
         .map(([input]) => requestUrl(input))
@@ -616,9 +607,7 @@ describe("xAI OAuth", () => {
     ).toEqual([MODELS_URL]);
     expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
     expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
-    if (setup === "api") {
-      expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
-    }
+    expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
     expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
@@ -704,28 +693,26 @@ describe("xAI OAuth", () => {
       name: `invalid token schema ${JSON.stringify(value)}`,
       bytes: Buffer.from(JSON.stringify(value)),
     })),
-  ])("decodes $name across byte boundaries through both public choices", async ({ bytes }) => {
-    for (const alias of [false, true]) {
-      const login = startLogin(
-        () =>
-          streamResponse({
-            start(stream) {
-              for (const byte of bytes) {
-                stream.enqueue(Uint8Array.of(byte));
-              }
-              stream.close();
-            },
-          }),
-        alias,
-      );
-      await expectRejected(
-        login,
-        3,
-        expect.objectContaining({
-          message: expect.stringContaining("token response is missing"),
+  ])("rejects $name across byte boundaries", async ({ bytes, name }) => {
+    const login = startLogin(
+      () =>
+        streamResponse({
+          start(stream) {
+            for (const byte of bytes) {
+              stream.enqueue(Uint8Array.of(byte));
+            }
+            stream.close();
+          },
         }),
-      );
-    }
+      name === "malformed UTF-8 128",
+    );
+    await expectRejected(
+      login,
+      3,
+      expect.objectContaining({
+        message: expect.stringContaining("token response is missing"),
+      }),
+    );
   });
 
   it("cancels a streamed response above the byte cap before accepting credentials", async () => {

@@ -10,6 +10,10 @@ function mediaConfig(models: unknown[]): OpenClawConfig {
   return { tools: { media: { models } } } as OpenClawConfig;
 }
 
+function imageEntry(overrides: Record<string, unknown> = {}) {
+  return { provider: "xai", model: "grok-4-fast", capabilities: ["image"], ...overrides };
+}
+
 function migrate(config: OpenClawConfig, count: number) {
   expect(
     legacyConfigRules.filter((rule) => rule.match(readPathForTest(config, rule.path))),
@@ -97,24 +101,15 @@ describe("xAI doctor contract", () => {
 
   it("migrates retired xAI image models in tools.media.models to grok-4.3", () => {
     const config = mediaConfig([
-      { provider: "xai", model: "grok-4-fast", capabilities: ["image"] },
-      { provider: "x-ai", model: "grok-4-fast", capabilities: ["image"] },
-      {
-        provider: "xai",
-        model: "grok-4-fast-non-reasoning",
-        capabilities: ["image"],
-      },
-      { provider: "xai", model: "grok-4.3", capabilities: ["image"] },
-      { provider: "openai", model: "grok-4-fast", capabilities: ["image"] },
+      imageEntry(),
+      imageEntry({ provider: "x-ai" }),
+      imageEntry({ model: "grok-4-fast-non-reasoning" }),
+      imageEntry({ model: "grok-4.3" }),
+      imageEntry({ provider: "openai" }),
       { type: "cli", provider: "xai", model: "grok-4-fast", command: "vision" },
-      {
-        provider: "xai",
-        model: "grok-4-fast",
-        command: "vision",
-        capabilities: ["image"],
-      },
-      { provider: "xai", model: "custom-vision", capabilities: ["image"] },
-      { provider: "xai", model: "grok-4-fast", capabilities: ["audio"] },
+      imageEntry({ command: "vision" }),
+      imageEntry({ model: "custom-vision" }),
+      imageEntry({ capabilities: ["audio"] }),
       { provider: "xai", model: "grok-4-fast" },
       { provider: "xai", model: "grok-4-fast", capability: "image" },
     ]);
@@ -132,12 +127,7 @@ describe("xAI doctor contract", () => {
 
   it("removes only the obsolete xAI STT model selector from media entries", () => {
     const config = mediaConfig([
-      {
-        provider: " xAI ",
-        model: " GROK-STT ",
-        language: "en",
-        timeoutSeconds: 30,
-      },
+      { provider: " xAI ", model: " GROK-STT ", language: "en", timeoutSeconds: 30 },
       { type: "provider", provider: "xai", model: "custom-stt" },
       { type: "provider", provider: "openai", model: "grok-stt" },
       { type: "cli", provider: "xai", model: "grok-stt", command: "whisper" },

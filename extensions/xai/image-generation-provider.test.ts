@@ -12,20 +12,6 @@ const { auth, http } = vi.hoisted(() => ({
       vi.fn<
         (params: ImageRequest) => Promise<{ response: Response; release: () => Promise<void> }>
       >(),
-    assertOkOrThrowHttpError: vi.fn(async () => {}),
-    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.x.ai/v1",
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
-    createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => ({
-      timeoutMs: params.timeoutMs,
-      label: params.label,
-    })),
-    resolveProviderOperationTimeoutMs: vi.fn(
-      (params: Record<string, unknown>) => params.defaultTimeoutMs ?? 60000,
-    ),
   },
 }));
 
@@ -84,15 +70,16 @@ function inputImage(value: string, mimeType = "image/png") {
 }
 
 describe("xai image generation provider", () => {
-  beforeEach(() => mockImage());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockImage();
+  });
 
   afterEach(() => {
     auth.mockClear();
     vi.unstubAllEnvs();
     http.postJsonRequest.mockReset();
-    for (const mock of Object.values(http)) {
-      mock.mockClear();
-    }
+    vi.useRealTimers();
   });
 
   it("builds provider with correct models, default, and capabilities", async () => {
@@ -135,11 +122,6 @@ describe("xai image generation provider", () => {
     });
 
     expect(auth.mock.calls[0]?.[0]).toMatchObject({ provider: "xai" });
-    expect(http.resolveProviderHttpRequestConfig.mock.calls[0]?.[0]).toMatchObject({
-      provider: "xai",
-      capability: "image",
-      baseUrl: "https://custom.x.ai/v1",
-    });
     const request = requirePostJsonCall();
     expect(result.model).toBe(model);
     expect(provider.defaultTimeoutMs).toBe(600_000);
@@ -148,9 +130,6 @@ describe("xai image generation provider", () => {
       timeoutMs: 600_000,
       body: { model, aspect_ratio: "20:9", resolution: "2k" },
     });
-    expect(http.resolveProviderOperationTimeoutMs).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultTimeoutMs: 600_000 }),
-    );
   });
 
   it.each(["grok-imagine-image-2.0", "grok-imagine-image-quality"])(

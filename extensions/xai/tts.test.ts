@@ -1,7 +1,10 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { buildXaiSpeechProvider } from "./speech-provider.js";
 import { listXaiTtsVoices, xaiTTS, xaiTTSStream } from "./tts.js";
 
 const ttsRequest = {
@@ -12,6 +15,19 @@ const ttsRequest = {
   timeoutMs: 5_000,
 };
 
+const resolveKey = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: undefined })),
+);
+// mock-isolation: OAuth fallback responses are fixtures and must not read host credentials.
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveKey,
+}));
+// mock-isolation: Requests supply credential availability independently of host auth storage.
+vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: async () => false,
+}));
+
 const { FakeWebSocket } = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
 
@@ -20,6 +36,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
     static readonly CONNECTING = 0;
     static readonly CLOSED = 3;
     static instances: MockWebSocket[] = [];
+    static onCreate: ((socket: MockWebSocket) => void) | undefined;
 
     readyState = MockWebSocket.CONNECTING;
     sent: string[] = [];
@@ -30,6 +47,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
     ) {
       super();
       MockWebSocket.instances.push(this);
+      MockWebSocket.onCreate?.(this);
     }
 
     send(payload: string): void {
@@ -84,6 +102,8 @@ describe("xai tts", () => {
 
   beforeEach(() => {
     ssrfMock = mockPinnedHostnameResolution();
+    vi.stubEnv("XAI_API_KEY", undefined);
+    vi.stubEnv("XAI_BASE_URL", undefined);
   });
 
   afterEach(() => {
@@ -91,8 +111,120 @@ describe("xai tts", () => {
     ssrfMock = undefined;
     globalThis.fetch = originalFetch;
     FakeWebSocket.instances = [];
+    FakeWebSocket.onCreate = undefined;
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resolveKey.mockReset().mockResolvedValue({ apiKey: undefined });
+    vi.unstubAllEnvs();
+  });
+
+  describe("speech provider", () => {
+    const provider = buildXaiSpeechProvider();
+    function request(overrides: Partial<SpeechSynthesisRequest> = {}): SpeechSynthesisRequest {
+      return {
+        text: "hello",
+        cfg: {},
+        providerConfig: { apiKey: "xai-key" },
+        target: "audio-file",
+        timeoutMs: 5_000,
+        ...overrides,
+      };
+    }
+    function audioResponse() {
+      return mockFetch(new Response("audio-bytes", { headers: { "content-type": "audio/mpeg" } }));
+    }
+
+    it("streams alaw when requested by a compatible caller", async () => {
+      const created = new Promise<InstanceType<typeof FakeWebSocket>>((resolve) => {
+        FakeWebSocket.onCreate = resolve;
+      });
+      const pending = provider.streamSynthesize?.(
+        request({ providerConfig: { apiKey: "xai-key", responseFormat: "alaw" } }),
+      );
+      const ws = await created;
+      expect(new URL(ws.url ?? "").searchParams.get("codec")).toBe("alaw");
+      ws.emit("open");
+      const result = await pending;
+      expect(result?.outputFormat).toBe("alaw");
+      await result?.release?.();
+    });
+
+    it("honors voice, language, and speed overrides for telephony output", async () => {
+      const fetchMock = audioResponse();
+      const result = await provider.synthesizeTelephony?.(
+        request({
+          providerConfig: {
+            apiKey: "xai-key",
+            baseUrl: XAI_BASE_URL,
+            voiceId: "eve",
+            language: "en",
+            speed: 1,
+          },
+          providerOverrides: { voice: "aura", language: "es", speed: 1.2 },
+        }),
+      );
+      expect(result).toEqual({
+        audioBuffer: Buffer.from("audio-bytes"),
+        outputFormat: "pcm",
+        sampleRate: 24_000,
+      });
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+        voice_id: "aura",
+        language: "es",
+        speed: 1.2,
+        output_format: { codec: "pcm" },
+      });
+    });
+
+    it("drops malformed speed values before synthesis", async () => {
+      const fetchMock = audioResponse();
+      await provider.synthesize(
+        request({
+          providerConfig: { apiKey: "xai-key", speed: 2 },
+          providerOverrides: { speed: 0.5 },
+        }),
+      );
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).not.toHaveProperty("speed");
+    });
+
+    it("treats blank direct credentials as absent across readiness and requests", async () => {
+      vi.stubEnv("XAI_API_KEY", "   ");
+      const fetchMock = audioResponse();
+      const providerConfig = { apiKey: "   " };
+      expect(
+        await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, timeoutMs: 5_000 }),
+      ).toBe(false);
+      await expect(provider.listVoices?.({ apiKey: "   ", providerConfig })).resolves.toEqual(
+        ["ara", "eve", "leo", "rex", "sal"].map((voice) => ({ id: voice, name: voice })),
+      );
+      await expect(provider.synthesize(request({ providerConfig }))).rejects.toThrow(
+        "xAI credentials missing for TTS",
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["voices", "synthesis"] as const)(
+      "uses cfg-scoped profile auth for %s",
+      async (operation) => {
+        resolveKey.mockResolvedValue({ apiKey: "oauth-bearer" });
+        const cfg = { agents: { defaults: {} } };
+        const fetchMock =
+          operation === "voices"
+            ? mockFetch(Response.json({ voices: [{ voice_id: "altair", name: "Altair" }] }))
+            : audioResponse();
+        if (operation === "voices") {
+          await expect(provider.listVoices?.({ providerConfig: {}, cfg })).resolves.toEqual([
+            { id: "altair", name: "Altair", locale: undefined, gender: undefined },
+          ]);
+        } else {
+          await provider.synthesize(request({ cfg, providerConfig: {}, target: "voice-note" }));
+        }
+        expect(resolveKey).toHaveBeenCalledWith({ provider: "xai", cfg });
+        expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Authorization")).toBe(
+          "Bearer oauth-bearer",
+        );
+      },
+    );
   });
 
   describe("listXaiTtsVoices", () => {
