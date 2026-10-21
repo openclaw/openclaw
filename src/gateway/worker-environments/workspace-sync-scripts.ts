@@ -365,10 +365,8 @@ async function eligiblePaths(ignoredPaths) {
     if (isStagedInput(candidate)) addSelected(candidate);
   }
   for (const candidate of included) {
-    // .worktreeinclude is an explicit admission decision. Retain new
-    // cache-root selections before the build-cache filter runs so worker
-    // edits under these roots remain visible to reconciliation.
-    rememberBuildCacheInputs([candidate]);
+    // Initialization already retained every explicit selection before either
+    // capture mode filters build-cache paths.
     addSelected(candidate);
   }
   for (const priorManifestDigest of priorManifestDigests) {
