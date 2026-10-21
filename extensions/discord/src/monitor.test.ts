@@ -75,24 +75,13 @@ describe("registerDiscordListener", () => {
 });
 
 describe("DiscordMessageListener", () => {
-  const messageEvent = {} as Parameters<InstanceType<typeof DiscordMessageListener>["handle"]>[0];
-  const messageClient = {} as import("./internal/discord.js").Client;
-  async function flushAsyncWork() {
-    await Promise.resolve();
-    await Promise.resolve();
-  }
-
   it("logs handler failures", async () => {
-    const logger = { warn: vi.fn(), error: vi.fn() } as unknown as ReturnType<
-      typeof import("openclaw/plugin-sdk/logging-core").createSubsystemLogger
-    >;
-    const handler = vi.fn(async () => {
+    const logger = makeReactionListenerParams().logger;
+    const listener = new DiscordMessageListener(async () => {
       throw new Error("boom");
-    });
-    const listener = new DiscordMessageListener(handler, logger);
+    }, logger);
 
-    await listener.handle(messageEvent, messageClient);
-    await flushAsyncWork();
+    await listener.handle({} as Parameters<typeof listener.handle>[0], {} as DiscordReactionClient);
     expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
 });
@@ -263,7 +252,7 @@ it("discord reaction notification gating: applies mode-specific reaction notific
 
 const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   enqueueSystemEventSpy: vi.fn(),
-  resolveAgentRouteMock: vi.fn((params: unknown) => ({
+  resolveAgentRouteMock: vi.fn(() => ({
     agentId: "default",
     channel: "discord",
     accountId: "acc-1",
@@ -271,7 +260,6 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
     mainSessionKey: "discord:acc-1:dm:user-1",
     lastRoutePolicy: "session" as const,
     matchedBy: "default" as const,
-    ...(typeof params === "object" && params !== null ? { _params: params } : {}),
   })),
 }));
 
@@ -293,60 +281,53 @@ const {
 
 const requireRecord = fixtures.createRequireRecord("object", "expected-label-object");
 
-function makeReactionEvent(overrides?: {
+function makeReactionEvent({
+  guildId,
+  channelId = "channel-1",
+  userId = "user-1",
+  username = "testuser",
+  messageFetch = vi.fn(async () => ({
+    author: { id: "bot-1", username: "bot", discriminator: "0" },
+  })),
+  guild,
+  memberRoleIds,
+}: {
   guildId?: string;
   channelId?: string;
   userId?: string;
   username?: string;
-  messageId?: string;
-  emojiName?: string;
-  botAsAuthor?: boolean;
-  messageAuthorId?: string;
   messageFetch?: ReturnType<typeof vi.fn>;
   guild?: { name?: string; id?: string };
   memberRoleIds?: string[];
-}) {
-  const userId = overrides?.userId ?? "user-1";
-  const messageId = overrides?.messageId ?? "1001";
-  const channelId = overrides?.channelId ?? "channel-1";
-  const messageFetch =
-    overrides?.messageFetch ??
-    vi.fn(async () => ({
-      author: {
-        id: overrides?.messageAuthorId ?? (overrides?.botAsAuthor ? "bot-1" : "other-user"),
-        username: overrides?.botAsAuthor ? "bot" : "otheruser",
-        discriminator: "0",
-      },
-    }));
+} = {}) {
   return {
-    guild_id: overrides?.guildId,
+    guild_id: guildId,
     channel_id: channelId,
-    message_id: messageId,
-    emoji: { name: overrides?.emojiName ?? "👍", id: null },
-    guild: overrides?.guild,
-    rawMember: overrides?.memberRoleIds ? { roles: overrides.memberRoleIds } : undefined,
+    message_id: "1001",
+    emoji: { name: "👍", id: null },
+    guild,
+    rawMember: memberRoleIds ? { roles: memberRoleIds } : undefined,
     user: {
       id: userId,
       bot: false,
-      username: overrides?.username ?? "testuser",
+      username,
       discriminator: "0",
     },
     message: { fetch: messageFetch },
   } as unknown as DiscordReactionEvent;
 }
 
-function makeReactionClient(options?: {
+function makeReactionClient({
+  channelType = ChannelType.DM,
+  channelName = channelType === ChannelType.DM ? undefined : "test-channel",
+  parentId,
+  parentName = "parent-channel",
+}: {
   channelType?: ChannelType;
   channelName?: string;
   parentId?: string;
   parentName?: string;
-}) {
-  const channelType = options?.channelType ?? ChannelType.DM;
-  const channelName =
-    options?.channelName ?? (channelType === ChannelType.DM ? undefined : "test-channel");
-  const parentId = options?.parentId;
-  const parentName = options?.parentName ?? "parent-channel";
-
+} = {}) {
   return {
     fetchChannel: vi.fn(async (channelId: string) => {
       if (parentId && channelId === parentId) {
@@ -393,7 +374,7 @@ async function handleReaction(
   event: Parameters<typeof makeReactionEvent>[0] = {},
   channelType = ChannelType.DM,
 ) {
-  const data = makeReactionEvent({ botAsAuthor: true, ...event });
+  const data = makeReactionEvent(event);
   const client = makeReactionClient({ channelType });
   const listener = new DiscordReactionListener(makeReactionListenerParams(params));
   await listener.handle(data, client);
@@ -427,7 +408,7 @@ describe("discord DM reaction handling", () => {
   });
 
   it("keeps the actor id when a reaction removal does not include a Discord username", async () => {
-    const data = makeReactionEvent({ userId: "user-42", username: "", botAsAuthor: true });
+    const data = makeReactionEvent({ userId: "user-42", username: "" });
     const client = makeReactionClient({ channelType: ChannelType.DM });
     const listener = new DiscordReactionRemoveListener(makeReactionListenerParams());
 
@@ -540,7 +521,7 @@ describe("discord DM reaction handling", () => {
         readConfig: () => cfg,
       }),
     });
-    const data = makeReactionEvent({ botAsAuthor: true, userId: "user-1" });
+    const data = makeReactionEvent({ userId: "user-1" });
     const client = makeReactionClient({ channelType: ChannelType.DM });
     await listener.handle(data, client);
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
@@ -598,16 +579,6 @@ describe("discord DM reaction handling", () => {
   });
 
   it("allows guild reactions for sender in channel role allowlist override", async () => {
-    resolveAgentRouteMock.mockReturnValueOnce({
-      agentId: "default",
-      channel: "discord",
-      accountId: "acc-1",
-      sessionKey: "discord:acc-1:guild-123:channel-1",
-      mainSessionKey: "discord:acc-1:guild-123:channel-1",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    });
-
     const client = await handleReaction(
       {
         guildEntries: {

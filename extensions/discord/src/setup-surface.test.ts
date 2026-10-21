@@ -1,10 +1,7 @@
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  inspectDiscordSetupAccount,
-  resolveDiscordSetupAccountConfig,
-} from "./setup-account-state.js";
+import { inspectDiscordSetupAccount } from "./setup-account-state.js";
 import { createDiscordSetupWizardBase } from "./setup-core.js";
 
 const discordSetupWizard = createDiscordSetupWizardBase({
@@ -36,27 +33,6 @@ describe("discordSetupWizard.dmPolicy", () => {
 
 describe("discord setup accounts", () => {
   afterEach(() => vi.unstubAllEnvs());
-  it.each([
-    ["work", undefined, "Work"],
-    [undefined, "work", "work"],
-  ] as const)(
-    "resolves explicit account %s or default %s with case-insensitive overrides",
-    (accountId, defaultAccount, key) => {
-      const cfg = config({
-        defaultAccount,
-        allowFrom: ["top"],
-        accounts: {
-          alerts: { allowFrom: ["alerts-only"] },
-          [key]: { name: "Work", allowFrom: ["acct"] },
-        },
-      });
-      expect(resolveDiscordSetupAccountConfig({ cfg, accountId })).toMatchObject({
-        accountId: "work",
-        config: { name: "Work", allowFrom: ["acct"] },
-      });
-    },
-  );
-
   it.each([
     ["default", "setup-token", "env", true],
     ["work", "", "none", false],

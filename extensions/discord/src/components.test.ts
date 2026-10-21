@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  InteractionResponseType,
+  MessageFlags,
+  type APIContainerComponent,
+} from "discord-api-types/v10";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   registerDiscordComponentEntries,
   resolveDiscordComponentEntryWithPersistence,
@@ -19,10 +26,19 @@ import {
   parseDiscordModalCustomIdForInteraction,
   readDiscordComponentSpec,
   coerceDiscordComponentParam,
+  createDiscordFormModal,
   type DiscordComponentEntry,
   type DiscordModalEntry,
 } from "./components.js";
+import type { DiscordComponentBlock, DiscordComponentSelectSpec } from "./components.types.js";
+import { RoleSelectMenu, StringSelectMenu, UserSelectMenu } from "./internal/components.message.js";
+import { BaseComponentInteraction, createInteraction } from "./internal/interactions.js";
+import {
+  createInternalComponentInteractionPayload,
+  createInternalTestClient,
+} from "./internal/test-builders.test-support.js";
 import { setDiscordRuntime } from "./runtime.js";
+import { createDiscordLoopbackRest } from "./send.test-harness.js";
 
 type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
 
@@ -55,7 +71,12 @@ function expectInvalidModal(field: Record<string, unknown>, property: string) {
 }
 const linkAccessory = {
   type: "button",
-  button: { label: " Read ", style: "link", url: "https://example.com" },
+  button: {
+    label: " Read ",
+    style: "link",
+    url: "https://example.com",
+    emoji: { id: "123456789012345678", name: "guide", animated: true },
+  },
 };
 const textComponent = (content: string) => ({ type: 10, content });
 const actionSpec = (buttons: Record<string, unknown>[]) => ({
@@ -80,7 +101,10 @@ const sectionSpec = (text: string | string[]) => ({
 const sectionComponent = (...texts: string[]) => ({
   type: 9,
   components: texts.map(textComponent),
-  accessory: { label: "Read" },
+  accessory: {
+    label: "Read",
+    emoji: { id: "123456789012345678", name: "guide", animated: true },
+  },
 });
 const lookupComponent = (id: string) =>
   resolveDiscordComponentEntryWithPersistence({ id, consume: false });
@@ -117,30 +141,6 @@ describe("discord components", () => {
     });
   });
 
-  it("builds v2 containers with modal trigger", () => {
-    const spec = requireSpec({
-      text: "Choose a path",
-      ...actionSpec([{ label: "Approve", style: "success", callbackData: "codex:approve" }]),
-      modal: {
-        title: "Details",
-        callbackData: "codex:modal",
-        allowedUsers: ["discord:user-1"],
-        fields: [{ type: "text", label: "Requester" }],
-      },
-    });
-    const result = buildDiscordComponentMessage({ spec });
-    expect(result).toMatchObject({
-      components: [{ isV2: true }],
-      modals: [{ callbackData: "codex:modal", allowedUsers: ["discord:user-1"] }],
-    });
-    expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
-    const trigger = result.entries.find((entry) => entry.kind === "modal-trigger");
-    expect(trigger?.modalId).toBe(result.modals[0]?.id);
-    expect(result.entries.find((entry) => entry.kind === "button")?.callbackData).toBe(
-      "codex:approve",
-    );
-  });
-
   it.each([
     { label: "minimum", accentColor: 0, expected: 0 },
     { label: "negative", accentColor: -1, expected: undefined },
@@ -168,6 +168,7 @@ describe("discord components", () => {
       style: "link",
       url: "https://example.com/docs",
       disabled: true,
+      emoji: { name: "📖" },
     };
     const spec = requireSpec(actionSpec([linkButton]));
     const result = buildDiscordComponentMessage({ spec });
@@ -293,7 +294,6 @@ describe("discord component registry", () => {
   ] as const)(
     "preserves %s button reuse=%s over card reuse=%s through delivery (expected %s)",
     async (placement, buttonReusable, cardReusable, expectedReusable) => {
-      const { RequestClient } = await import("./internal/rest.js");
       const { sendDiscordComponentMessage } = await import("./send.components.js");
       const button = {
         label: "Refresh",
@@ -308,42 +308,27 @@ describe("discord component registry", () => {
             : { type: "section", text: "Actions", accessory: { type: "button", button } },
         ],
       });
-      const requests: Array<{ method: string | undefined; path: string; body: unknown }> = [];
-      const rest = new RequestClient("fixture-token", {
-        queueRequests: false,
-        fetch: async (input, init) => {
-          const url = new URL(input instanceof Request ? input.url : input);
-          requests.push({
-            method: init?.method,
-            path: url.pathname,
-            body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-          });
-          const message =
-            init?.method === "GET"
-              ? { id: "789", type: 0 }
-              : { id: "delivered-message", channel_id: "789" };
-          return Response.json(message);
-        },
-      });
+      const { rest, requests, close } = await createDiscordLoopbackRest();
+      onTestFinished(close);
 
       const delivery = await sendDiscordComponentMessage("channel:789", spec, {
         cfg: { channels: { discord: { token: "fixture-token" } } },
         rest,
         token: "fixture-token",
       });
-      expect(delivery.messageId).toBe("delivered-message");
+      expect(delivery.messageId).toBe("loopback-message");
       const sent = requests.find((request) => request.method === "POST");
-      expect(sent?.path).toBe("/api/v10/channels/789/messages");
-      expect(JSON.stringify(sent?.body)).not.toContain("reusable");
+      expect(sent?.path).toBe("/v10/channels/789/messages");
+      expect(sent?.body).not.toContain("reusable");
 
-      const sentBody = sent?.body as {
+      const sentBody: {
         components?: Array<{
           components?: Array<{
             components?: Array<{ custom_id?: string }>;
             accessory?: { custom_id?: string };
           }>;
         }>;
-      };
+      } = JSON.parse(sent?.body ?? "{}");
       const block = sentBody.components?.[0]?.components?.[0];
       const customId = block?.components?.[0]?.custom_id ?? block?.accessory?.custom_id;
       assert(customId, "Expected a delivered Discord button custom id");
@@ -351,7 +336,7 @@ describe("discord component registry", () => {
       assert(componentId, "Expected a registered Discord component id");
 
       const registered = await lookupComponent(componentId);
-      expect(registered?.reusable).toBe(expectedReusable);
+      expect(registered).toMatchObject({ reusable: expectedReusable, callbackData: "refresh" });
       const firstInteraction = await resolveDiscordComponentEntryWithPersistence({
         id: componentId,
         consume: !registered?.reusable,
@@ -536,4 +521,219 @@ describe("discord component registry", () => {
       }),
     );
   });
+});
+const generatedId = (prefix: string) =>
+  expect.stringMatching(new RegExp(`^${prefix}_[A-Za-z0-9_-]{8}$`));
+
+function readContainer(result: ReturnType<typeof buildDiscordComponentMessage>) {
+  const container = result.components[0]?.serialize() as APIContainerComponent | undefined;
+  if (container?.type !== ComponentType.Container) {
+    throw new Error("Expected a Discord component container");
+  }
+  return container;
+}
+
+function selectBlock(select: DiscordComponentSelectSpec): DiscordComponentBlock[] {
+  return [{ type: "actions", select }];
+}
+
+function buttonBlock(length: number): DiscordComponentBlock[] {
+  return [
+    {
+      type: "actions",
+      buttons: Array.from({ length }, (_, index) => ({ label: `Button ${index + 1}` })),
+    },
+  ];
+}
+
+describe("discord select components", () => {
+  it.each([
+    ["string", ComponentType.StringSelect, "select"],
+    ["user", ComponentType.UserSelect, "user select"],
+    ["role", ComponentType.RoleSelect, "role select"],
+    ["mentionable", ComponentType.MentionableSelect, "mentionable select"],
+    ["channel", ComponentType.ChannelSelect, "channel select"],
+  ] as const)("preserves %s payload and metadata", (type, componentType, defaultLabel) => {
+    const options = [
+      {
+        label: "Primary",
+        value: "primary",
+        description: "First choice",
+        emoji: { name: "1️⃣" },
+        default: true,
+      },
+    ];
+    const result = buildDiscordComponentMessage({
+      spec: {
+        reusable: false,
+        blocks: selectBlock({
+          type,
+          callbackData: "select:callback",
+          callbackDataKind: "callback",
+          minValues: 0,
+          maxValues: 2,
+          options,
+          allowedUsers: ["user-1"],
+        }),
+      },
+      sessionKey: "session-1",
+      agentId: "agent-1",
+      accountId: "default",
+    });
+    const row = readContainer(result).components[0];
+    if (row?.type !== ComponentType.ActionRow) {
+      throw new Error("Expected a Discord action row");
+    }
+    const select = expectDefined(row.components[0], "select component");
+    const entry = expectDefined(result.entries[0], "select entry");
+    expect(entry.id).toEqual(generatedId("sel"));
+
+    expect(select).toEqual({
+      type: componentType,
+      ...(type === "string" ? { options } : {}),
+      custom_id: `occomp:cid=${entry.id}`,
+      min_values: 0,
+      max_values: 2,
+    });
+    expect(result.entries).toEqual([
+      {
+        id: entry.id,
+        kind: "select",
+        label: defaultLabel,
+        callbackData: "select:callback",
+        callbackDataKind: "callback",
+        selectType: type,
+        ...(type === "string" ? { options: [{ value: "primary", label: "Primary" }] } : {}),
+        allowedUsers: ["user-1"],
+        sessionKey: "session-1",
+        agentId: "agent-1",
+        accountId: "default",
+        reusable: false,
+        consumptionGroupId: generatedId("grp"),
+        consumptionGroupEntryIds: [entry.id],
+      },
+    ]);
+  });
+
+  it("preserves modal identity, required values, and callback payload", async () => {
+    const fields = [
+      ["select", ComponentType.StringSelect, StringSelectMenu, "Priority", 1, 1, undefined],
+      ["role-select", ComponentType.RoleSelect, RoleSelectMenu, "Roles", 0, 2, false],
+      ["user-select", ComponentType.UserSelect, UserSelectMenu, "Owner", 1, 1, true],
+    ] as const;
+    const options = () => [{ label: "High", value: "high", default: true }];
+    const result = buildDiscordComponentMessage({
+      spec: {
+        modal: {
+          title: "Select details",
+          callbackData: "codex:modal",
+          allowedUsers: ["discord:user-1"],
+          fields: fields.map(
+            ([type, _wireType, _constructor, label, minValues, maxValues, required]) => ({
+              type,
+              label,
+              minValues,
+              maxValues,
+              required,
+              placeholder: `Pick ${label.toLowerCase()}`,
+              ...(type === "select" ? { options: options() } : {}),
+            }),
+          ),
+        },
+      },
+    });
+    const modalEntry = expectDefined(result.modals[0], "modal entry");
+    expect(modalEntry).toMatchObject({
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+    });
+    expect(result.entries[0]).toMatchObject({ kind: "modal-trigger", modalId: modalEntry.id });
+    expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
+    expect(modalEntry.id).toEqual(generatedId("mdl"));
+    const ids = modalEntry.fields.map((field) => field.id);
+    expect(ids).toEqual([generatedId("fld"), generatedId("fld"), generatedId("fld")]);
+    expect(new Set(ids).size).toBe(3);
+    const modal = createDiscordFormModal(modalEntry);
+    expect(modal.components).toMatchObject(
+      fields.map((field) => ({
+        component: expect.any(field[2]),
+      })),
+    );
+
+    const expectedSerialized = {
+      title: "Select details",
+      custom_id: `ocmodal:mid=${modalEntry.id}`,
+      components: fields.map(
+        ([type, componentType, , label, min_values, max_values, required], index) => ({
+          type: ComponentType.Label,
+          label,
+          component: {
+            type: componentType,
+            ...(type === "select" ? { options: options() } : {}),
+            custom_id: ids[index],
+            placeholder: `Pick ${label.toLowerCase()}`,
+            min_values,
+            max_values,
+            required,
+          },
+        }),
+      ),
+    };
+    expect(modal.serialize()).toEqual(expectedSerialized);
+
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const client = createInternalTestClient();
+      client.rest = loopback.rest;
+      const interaction = createInteraction(
+        client,
+        createInternalComponentInteractionPayload({
+          id: "interaction-1",
+          token: "interaction-token",
+        }),
+      );
+      if (!(interaction instanceof BaseComponentInteraction)) {
+        throw new Error("Expected a Discord button interaction");
+      }
+      await interaction.showModal(modal);
+
+      expect(loopback.requests).toMatchObject([
+        {
+          method: "POST",
+          path: "/v10/interactions/interaction-1/interaction-token/callback",
+        },
+      ]);
+      expect(loopback.requests[0]?.body).toBe(
+        JSON.stringify({ type: InteractionResponseType.Modal, data: expectedSerialized }),
+      );
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each([
+    ["no preceding row", [], [1]],
+    ["four preceding buttons", buttonBlock(4), [5]],
+    ["five preceding buttons", buttonBlock(5), [5, 1]],
+    [
+      "preceding select",
+      selectBlock({ type: "string", options: [{ label: "One", value: "one" }] }),
+      [1, 1],
+    ],
+  ] satisfies Array<[string, DiscordComponentBlock[], number[]]>)(
+    "keeps the modal trigger row placement after %s",
+    (_label, blocks, expectedSizes) => {
+      const result = buildDiscordComponentMessage({
+        spec: {
+          blocks: [...blocks],
+          modal: { title: "Details", fields: [{ type: "text", label: "Name" }] },
+        },
+      });
+      const rows = readContainer(result).components.filter(
+        (component) => component.type === ComponentType.ActionRow,
+      );
+      expect(rows.map((row) => row.components.length)).toEqual(expectedSizes);
+      expect(rows.at(-1)?.components.at(-1)?.type).toBe(ComponentType.Button);
+    },
+  );
 });

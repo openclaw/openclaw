@@ -48,7 +48,11 @@ async function runDurableScenario(params: {
   replyToIdSource?: "implicit" | "explicit";
   replyToMode?: "first" | "all";
   formatting?: Parameters<typeof sendDurableMessageBatch>[0]["formatting"];
-  forum?: { parentType: ChannelType.GuildForum | ChannelType.GuildMedia; threadId?: string };
+  forum?: {
+    parentType: ChannelType.GuildForum | ChannelType.GuildMedia;
+    threadId?: string;
+    payloads?: Parameters<typeof sendDurableMessageBatch>[0]["payloads"];
+  };
 }) {
   const apiUrlBefore = process.env.DISCORD_API_URL;
   vi.stubEnv("DISCORD_API_URL", undefined);
@@ -95,6 +99,7 @@ async function runDurableScenario(params: {
   const baseUrl = expectDefined(loopback.rest.options.baseUrl, "loopback base URL");
   vi.stubEnv("DISCORD_API_URL", `${baseUrl}/api/v10`);
   const afterDeliverPayload = vi.fn();
+  const onDeliveryResult = vi.fn();
   const plugin = params.forum
     ? { ...discordPlugin, outbound: { ...discordPlugin.outbound, afterDeliverPayload } }
     : discordPlugin;
@@ -109,30 +114,33 @@ async function runDurableScenario(params: {
       identity: params.webhook ? { ...persona } : undefined,
       replyToId: params.forum ? undefined : "fixture-reply",
       replyToMode: params.replyToMode,
-      payloads: params.forum
-        ? [
-            { text: "Forum starter" },
-            {
-              text: "Generated images",
-              mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
-            },
-          ]
-        : [
-            {
-              text: params.text ?? twentyLineText,
-              ...(params.replyToIdSource === "explicit" ? { replyToId: "fixture-reply" } : {}),
-              ...(params.structured
-                ? {
-                    channelData: {
-                      execApproval: {
-                        approvalId: "proof-approval",
-                        approvalSlug: "proof-approval",
+      onDeliveryResult: params.forum?.payloads ? onDeliveryResult : undefined,
+      payloads:
+        params.forum?.payloads ??
+        (params.forum
+          ? [
+              { text: "Forum starter" },
+              {
+                text: "Generated images",
+                mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
+              },
+            ]
+          : [
+              {
+                text: params.text ?? twentyLineText,
+                ...(params.replyToIdSource === "explicit" ? { replyToId: "fixture-reply" } : {}),
+                ...(params.structured
+                  ? {
+                      channelData: {
+                        execApproval: {
+                          approvalId: "proof-approval",
+                          approvalSlug: "proof-approval",
+                        },
                       },
-                    },
-                  }
-                : {}),
-            },
-          ],
+                    }
+                  : {}),
+              },
+            ]),
       formatting: params.formatting,
       deps: {
         discord: async (...[target, text, options]: Parameters<typeof sendMessageDiscord>) =>
@@ -168,6 +176,7 @@ async function runDurableScenario(params: {
       deliveredThreadIds: afterDeliverPayload.mock.calls.map(
         ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
       ),
+      deliveredTargets: onDeliveryResult.mock.calls.map(([delivery]) => delivery.target),
     };
   } finally {
     vi.stubEnv("DISCORD_API_URL", apiUrlBefore);
@@ -215,6 +224,29 @@ it("uses the selected account limit for structured payload fallback text", async
   });
 
   expect(chunks).toEqual([twentyLineText]);
+});
+
+it("keeps every single-payload chunk in its newly created thread", async () => {
+  const actual = await runDurableScenario({
+    cfg: { channels: { discord: { accounts: { default: {} } } } },
+    forum: {
+      parentType: ChannelType.GuildForum,
+      payloads: [
+        {
+          text: "a".repeat(2001),
+          mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
+        },
+      ],
+    },
+  });
+  expect(actual.postPaths).toEqual([
+    "/v10/channels/700/threads",
+    "/v10/channels/701/messages",
+    "/v10/channels/701/messages",
+  ]);
+  expect(actual.deliveredTargets).toEqual(
+    Array.from({ length: 3 }, () => ({ kind: "channel", id: "701" })),
+  );
 });
 
 describe.each([false, true])("durable Discord transport webhook=%s", (webhook) => {

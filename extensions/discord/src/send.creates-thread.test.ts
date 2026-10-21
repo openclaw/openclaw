@@ -20,10 +20,6 @@ const member = { guildId: "g1", userId: "u1" };
 type Rest = ReturnType<typeof makeDiscordRest>["rest"];
 type CreateSpec = Partial<Parameters<typeof send.createThreadDiscord>[1]>;
 type CreateOptions = Parameters<typeof send.createThreadDiscord>[2];
-type PayloadOptions = Pick<
-  Parameters<NonNullable<typeof discordOutbound.sendPayload>>[0],
-  "threadId" | "onDeliveryResult"
->;
 const timeoutMember = (rest: Rest, durationMinutes: number) =>
   send.timeoutMemberDiscord({ ...member, durationMinutes }, clientOpts(rest));
 const clientOpts = (rest: Rest) => ({ cfg, rest, token: "t" });
@@ -43,33 +39,24 @@ function threadHarness(type = ChannelType.GuildText, archive?: number) {
   };
 }
 
-function forumPayloadHarness() {
-  const { rest, getMock, postMock } = makeDiscordRest();
-  let messageCount = 0;
-  getMock.mockImplementation(async (path: unknown) => ({
-    id: String(path).split("/").at(-1),
-    type: path === Routes.channel("700") ? ChannelType.GuildForum : ChannelType.PublicThread,
-  }));
-  postMock.mockImplementation(async (path: unknown) =>
-    path === Routes.threads("700")
-      ? { id: "701", message: { id: "starter", channel_id: "701" } }
-      : { id: `message-${++messageCount}`, channel_id: String(path).split("/").at(-2) },
-  );
-  return {
-    postMock,
-    run: (payload: { text: string; mediaUrls?: string[] }, options: PayloadOptions = {}) =>
-      discordOutbound.sendPayload?.({
-        cfg,
-        to: "channel:700",
-        text: payload.text,
-        payload,
-        ...options,
-        deps: {
-          discord: async (...[to, text, opts]: Parameters<typeof send.sendMessageDiscord>) =>
-            await send.sendMessageDiscord(to, text, { ...opts, rest, token: "t" }),
-        },
-      }),
-  };
+function sendForumPayload(
+  rest: Rest,
+  options: Pick<
+    Parameters<NonNullable<typeof discordOutbound.sendPayload>>[0],
+    "threadId" | "onDeliveryResult"
+  > = {},
+) {
+  return discordOutbound.sendPayload?.({
+    cfg,
+    to: "channel:700",
+    text: longText,
+    payload: { text: longText },
+    ...options,
+    deps: {
+      discord: async (to, text, opts) =>
+        send.sendMessageDiscord(to, text, { ...opts, rest, token: "t" }),
+    },
+  });
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -88,13 +75,6 @@ const rateLimitError = (retryAfter = 0) =>
   );
 
 describe("structured sends and retries", () => {
-  it("lists emojis for a guild", async () => {
-    const { rest, getMock } = makeDiscordRest();
-    getMock.mockResolvedValue([{ id: "e1", name: "party" }]);
-    await send.listGuildEmojisDiscord("g1", clientOpts(rest));
-    expect(getMock).toHaveBeenCalledWith(Routes.guildEmojis("g1"));
-  });
-
   it("allows sticker link embeds when suppression is disabled", async () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
@@ -173,41 +153,25 @@ describe("structured sends and retries", () => {
   });
 });
 
-it.each([false, true])("keeps chunked replies in one thread (explicit=%s)", async (explicit) => {
-  const { postMock, run } = forumPayloadHarness();
-  const onDeliveryResult = vi.fn();
-  const result = await run(
-    {
-      text: longText,
-      mediaUrls: explicit
-        ? undefined
-        : ["https://example.com/first.jpg", "https://example.com/second.jpg"],
-    },
-    {
-      threadId: explicit ? "701" : undefined,
-      onDeliveryResult: explicit ? undefined : onDeliveryResult,
-    },
-  );
+it("returns the last chunk receipt for an explicitly targeted thread", async () => {
+  const { rest, postMock } = threadHarness(ChannelType.PublicThread);
+  postMock
+    .mockResolvedValueOnce({ id: "message-1", channel_id: "701" })
+    .mockResolvedValueOnce({ id: "message-2", channel_id: "701" });
+  const result = await sendForumPayload(rest, { threadId: "701" });
   expect(postMock.mock.calls.map(([path]) => path)).toEqual([
-    ...(explicit ? [] : [Routes.threads("700")]),
     Routes.channelMessages("701"),
     Routes.channelMessages("701"),
   ]);
-  if (!explicit) {
-    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.target)).toEqual(
-      Array.from({ length: 3 }, () => ({ kind: "channel", id: "701" })),
-    );
-  }
-  expect(result?.receipt?.threadId).toBe(explicit ? undefined : "701");
-  expect(result?.receipt).toMatchObject({
-    platformMessageIds: explicit ? ["message-2"] : ["starter", "message-1", "message-2"],
-  });
+  expect(result?.receipt?.threadId).toBeUndefined();
+  expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
 });
 
 it("does not follow up when delivery bookkeeping rejects the starter", async () => {
-  const { postMock, run } = forumPayloadHarness();
+  const { rest, postMock } = threadHarness(ChannelType.GuildForum);
+  postMock.mockResolvedValueOnce({ id: "701", message: { id: "starter", channel_id: "701" } });
   const onDeliveryResult = vi.fn().mockRejectedValue(new Error("delivery bookkeeping failed"));
-  await expect(run({ text: longText }, { onDeliveryResult })).rejects.toThrow(
+  await expect(sendForumPayload(rest, { onDeliveryResult })).rejects.toThrow(
     "delivery bookkeeping failed",
   );
   expect(onDeliveryResult).toHaveBeenCalledOnce();

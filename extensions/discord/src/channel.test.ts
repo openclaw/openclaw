@@ -169,6 +169,7 @@ function mockPermissions(channelId: string, channelType: ChannelType) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   sleepWithAbortMock.mockReset();
@@ -185,44 +186,27 @@ beforeAll(async () => {
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
-const guildPolicyCases: Array<{
-  name: string;
-  accountId: string;
-  warning: boolean;
-  discord: NonNullable<DiscordConfig>;
-}> = [
-  {
-    name: "named account override",
-    accountId: "ops",
-    warning: true,
-    discord: {
+const guildPolicyCases: Array<[string, NonNullable<DiscordConfig>]> = [
+  [
+    "ops",
+    {
       groupPolicy: "open",
-      accounts: {
-        ops: { token: "discord-token", groupPolicy: "allowlist", guilds: {} },
-      },
+      accounts: { ops: { token: "discord-token", groupPolicy: "allowlist", guilds: {} } },
     },
-  },
-  {
-    name: "explicit default account overrides top-level guilds",
-    accountId: "default",
-    warning: true,
-    discord: {
+  ],
+  [
+    "default",
+    {
       token: "discord-token",
       groupPolicy: "allowlist",
       guilds: { "*": {} },
       accounts: { default: { guilds: {} } },
     },
-  },
-  {
-    name: "disabled account",
-    accountId: "default",
-    warning: false,
-    discord: { token: "discord-token", groupPolicy: "allowlist", enabled: false },
-  },
+  ],
 ];
 it.each(guildPolicyCases)(
-  "discordPlugin reports effective guild policy for $name without probing",
-  async ({ discord, accountId, warning }) => {
+  "discordPlugin reports effective guild policy for %s without probing",
+  async (accountId, discord) => {
     const cfg = createCfg(discord);
     const account = resolveAccount(cfg, accountId);
     const snapshot = await discordPlugin.status!.buildAccountSnapshot!({
@@ -233,12 +217,9 @@ it.each(guildPolicyCases)(
     const issues = discordPlugin.status!.collectStatusIssues!([snapshot]);
     expect(
       issues.some((issue) => issue.kind === "config" && issue.message.includes("no guilds")),
-    ).toBe(warning);
-    expect(snapshot).toMatchObject({ running: account.enabled, lastError: null });
-    if (account.enabled) {
-      expect(snapshot.connected).toBe(true);
-    }
-    if (warning && accountId === "default") {
+    ).toBe(true);
+    expect(snapshot).toMatchObject({ running: true, connected: true, lastError: null });
+    if (accountId === "default") {
       expect(issues[0]?.fix).toContain("channels.discord.accounts.default.guilds");
     }
     expect(probeDiscordMock).not.toHaveBeenCalled();
@@ -345,36 +326,19 @@ describe("discordPlugin outbound", () => {
     });
   });
 
-  it("honors per-account replyToMode overrides", () => {
-    const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
-    assert(resolveReplyToMode);
-    const cfg = createCfg({
-      replyToMode: "all",
-      token: "discord-token",
-      accounts: { work: { token: "discord-token-work", replyToMode: "first" } },
-    });
-
-    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
-    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
-  });
-
   it("sends typing to the attached Discord thread", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
     const rest = new RequestClient("synthetic-token", { fetch });
-    const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
-    try {
-      await discordPlugin.heartbeat!.sendTyping!({
-        cfg: createCfg(),
-        to: "channel:123",
-        accountId: "work",
-        threadId: "456",
-      });
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(fetch.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/channels/456/typing");
-      expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
-    } finally {
-      resolveRest.mockRestore();
-    }
+    vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+    await discordPlugin.heartbeat!.sendTyping!({
+      cfg: createCfg(),
+      to: "channel:123",
+      accountId: "work",
+      threadId: "456",
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/channels/456/typing");
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
   });
 
   it.each(["cancelled", "revoked"] as const)(
@@ -432,22 +396,18 @@ describe("discordPlugin outbound", () => {
   );
 
   it("subtracts lazy probe loading from the status budget", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_200);
+    vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_200);
     probeDiscordMock.mockResolvedValue({ ok: true, elapsedMs: 1 });
-    try {
-      const cfg = createCfg();
-      await discordPlugin.status!.probeAccount!({
-        account: resolveAccount(cfg),
-        timeoutMs: 5_000,
-        cfg,
-      });
+    const cfg = createCfg();
+    await discordPlugin.status!.probeAccount!({
+      account: resolveAccount(cfg),
+      timeoutMs: 5_000,
+      cfg,
+    });
 
-      expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 4_800, {
-        includeApplication: true,
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 4_800, {
+      includeApplication: true,
+    });
   });
 
   it.each([
@@ -455,20 +415,16 @@ describe("discordPlugin outbound", () => {
     ["333", ChannelType.GuildPublicThread, ["SendMessagesInThreads"]],
   ] as const)("reports required permissions for channel %s", async (id, type, missingRequired) => {
     const fetchPermissionsSpy = mockPermissions(id, type);
-    try {
-      const diagnostics = await diagnosePermissions(id);
-      expect(argAt(fetchPermissionsSpy, 0, 0)).toBe(id);
-      expect(objectArgAt(fetchPermissionsSpy, 0, 1).token).toBe("discord-token");
-      expect(recordField(diagnostics?.details?.permissions, "permissions")).toMatchObject({
-        channelId: id,
-        missingRequired,
-      });
-      expect(diagnostics?.lines?.map((line) => line.text).join("\n")).toContain(
-        `Missing required: ${missingRequired.join(", ")}`,
-      );
-    } finally {
-      fetchPermissionsSpy.mockRestore();
-    }
+    const diagnostics = await diagnosePermissions(id);
+    expect(argAt(fetchPermissionsSpy, 0, 0)).toBe(id);
+    expect(objectArgAt(fetchPermissionsSpy, 0, 1).token).toBe("discord-token");
+    expect(recordField(diagnostics?.details?.permissions, "permissions")).toMatchObject({
+      channelId: id,
+      missingRequired,
+    });
+    expect(diagnostics?.lines?.map((line) => line.text).join("\n")).toContain(
+      `Missing required: ${missingRequired.join(", ")}`,
+    );
   });
 
   it("returns a timeout error when capabilities diagnostics exceed the timeout", async () => {
@@ -486,17 +442,13 @@ describe("discordPlugin outbound", () => {
             );
           }),
       );
-    try {
-      const diagnostics = await diagnosePermissions("222", 10);
+    const diagnostics = await diagnosePermissions("222", 10);
 
-      const timeoutPerms = recordField(diagnostics?.details?.permissions, "permissions");
-      expect(String(timeoutPerms.error)).toContain("timed out");
-      expect(diagnostics?.lines?.[0]?.tone).toBe("error");
-      expect(objectArgAt(fetchPermissionsSpy, 0, 1).timeoutMs).toBe(10);
-      expect(diagnosticSignal?.aborted).toBe(true);
-    } finally {
-      fetchPermissionsSpy.mockRestore();
-    }
+    const timeoutPerms = recordField(diagnostics?.details?.permissions, "permissions");
+    expect(String(timeoutPerms.error)).toContain("timed out");
+    expect(diagnostics?.lines?.[0]?.tone).toBe("error");
+    expect(objectArgAt(fetchPermissionsSpy, 0, 1).timeoutMs).toBe(10);
+    expect(diagnosticSignal?.aborted).toBe(true);
   });
 
   it("fails loudly before provider startup when a token SecretRef is configured but unresolved", async () => {

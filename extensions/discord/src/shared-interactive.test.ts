@@ -132,59 +132,48 @@ describe("buildDiscordInteractiveComponents", () => {
     ]);
   });
 
-  it("renders system-agent approvals as actionable Discord controls", () => {
-    const rendered = renderButtons([
-      {
-        label: "Allow Once",
-        action: approval("change-1", "system-agent", "allow-once"),
-        value: "/approve change-1 allow-once",
-        style: "success",
-      },
-    ]);
-
-    const customId = firstCustomId(rendered);
-    expect(customId).toBe("execapproval:kind=system-agent;id=change-1;action=allow-once");
-    expect(parseApproval(customId ?? "")).toEqual({
-      approvalId: "change-1",
-      approvalKind: "system-agent",
-      action: "allow-once",
-    });
-  });
-
-  it("renders typed approvals as actionable transport-private Discord controls", () => {
-    const rendered = renderButtons([
-      {
-        label: "Deny",
-        action: approval("opaque:approval;id=7", "plugin", "deny"),
-        value: "/approve opaque:approval;id=7 deny",
-        style: "danger",
-      },
-    ]);
-
-    expectButtons(rendered, [
-      {
-        label: "Deny",
-        style: "danger",
-        internalCustomId: "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
-      },
-    ]);
-    const customId = firstCustomId(rendered);
-    expect(customId).toBeDefined();
-    if (!rendered) {
-      throw new Error("Expected Discord presentation components");
-    }
-    const built = buildDiscordComponentMessage({ spec: rendered });
-    const serialized = built.components[0]?.serialize() as
-      | { components?: Array<{ components?: Array<{ custom_id?: string }> }> }
-      | undefined;
-    expect(serialized?.components?.[0]?.components?.[0]?.custom_id).toBe(customId);
-    expect(built.entries).toEqual([]);
-    expect(parseApproval(customId ?? "")).toEqual({
-      approvalId: "opaque:approval;id=7",
-      approvalKind: "plugin",
-      action: "deny",
-    });
-  });
+  it.each([
+    [
+      "system-agent",
+      "change-1",
+      "allow-once",
+      "Allow Once",
+      "success",
+      "execapproval:kind=system-agent;id=change-1;action=allow-once",
+    ],
+    [
+      "plugin",
+      "opaque:approval;id=7",
+      "deny",
+      "Deny",
+      "danger",
+      "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
+    ],
+  ] as const)(
+    "renders %s approvals as actionable transport-private controls",
+    (approvalKind, approvalId, decision, label, style, expectedId) => {
+      const rendered = renderButtons([
+        {
+          label,
+          style,
+          action: approval(approvalId, approvalKind, decision),
+          value: `/approve ${approvalId} ${decision}`,
+        },
+      ]);
+      const customId = firstCustomId(rendered);
+      expect(customId).toBe(expectedId);
+      expectButtons(rendered, [{ label, style, internalCustomId: expectedId }]);
+      if (!rendered) {
+        throw new Error("Expected Discord presentation components");
+      }
+      const built = buildDiscordComponentMessage({ spec: rendered });
+      expect(built.components[0]?.serialize()).toMatchObject({
+        components: [{ components: [{ custom_id: expectedId }] }],
+      });
+      expect(built.entries).toEqual([]);
+      expect(parseApproval(customId ?? "")).toEqual({ approvalId, approvalKind, action: decision });
+    },
+  );
 
   it("uses declared-choice indices when custom input is interleaved", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";

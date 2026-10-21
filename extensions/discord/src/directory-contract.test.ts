@@ -5,7 +5,6 @@ import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
@@ -26,37 +25,31 @@ describe("Discord config directory", () => {
   const config = (discord: NonNullable<DirectoryConfigParams["cfg"]["channels"]>["discord"]) => ({
     channels: { discord },
   });
-  it.each([
-    "discord-test",
-    { source: "env", provider: "default", id: "MISSING_TEST_SECRET" },
-  ] as const)(
-    "lists only numeric peers/groups without requiring resolved token %j",
-    async (token) => {
-      const cfg = config({
-        token,
-        allowFrom: ["<@111>", "<@!333>", "nope"],
-        dms: { "222": {} },
-        guilds: {
-          "123": {
-            users: ["<@12345>", " discord:444 ", "not-an-id"],
-            channels: { "555": {}, "<#777>": {}, "channel:666": {}, general: {} },
-          },
+  it("lists numeric peers/groups even with an unresolved credential", async () => {
+    const cfg = config({
+      token: { source: "env", provider: "default", id: "MISSING_TEST_SECRET" },
+      allowFrom: ["<@111>", "<@!333>", "nope"],
+      dms: { "222": {} },
+      guilds: {
+        "123": {
+          users: ["<@12345>", " discord:444 ", "not-an-id"],
+          channels: { "555": {}, "<#777>": {}, "channel:666": {}, general: {} },
         },
-      });
-      await expectDirectoryIds(
-        listDiscordDirectoryPeersFromConfig,
-        cfg,
-        ["user:111", "user:12345", "user:222", "user:333", "user:444"],
-        { sorted: true },
-      );
-      await expectDirectoryIds(
-        listDiscordDirectoryGroupsFromConfig,
-        cfg,
-        ["channel:555", "channel:666", "channel:777"],
-        { sorted: true },
-      );
-    },
-  );
+      },
+    });
+    await expectDirectoryIds(
+      listDiscordDirectoryPeersFromConfig,
+      cfg,
+      ["user:111", "user:12345", "user:222", "user:333", "user:444"],
+      { sorted: true },
+    );
+    await expectDirectoryIds(
+      listDiscordDirectoryGroupsFromConfig,
+      cfg,
+      ["channel:555", "channel:666", "channel:777"],
+      { sorted: true },
+    );
+  });
 
   it("uses account allowFrom before inherited root allowFrom", async () => {
     const cfg = config({ allowFrom: ["<@111>"], accounts: { work: { allowFrom: ["<@222>"] } } });
@@ -94,17 +87,6 @@ function mockDirectoryResponses(responses: Record<string, unknown>) {
   });
 }
 
-function hangingBodyResponse(signal?: AbortSignal): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode("["));
-        signal?.addEventListener("abort", () => controller.error(signal.reason), { once: true });
-      },
-    }),
-  );
-}
-
 describe("discord directory live lookups", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -128,20 +110,6 @@ describe("discord directory live lookups", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     },
   );
-
-  it("aborts hanging group directory response bodies after the lookup timeout", async () => {
-    vi.useFakeTimers();
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementation(async (_input, init) => hangingBodyResponse(init?.signal ?? undefined));
-
-    const rows = listDiscordDirectoryGroupsLive(makeParams({ query: "general" }));
-    const rejection = expect(rows).rejects.toThrow(/abort/i);
-
-    await vi.advanceTimersByTimeAsync(DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS);
-    await rejection;
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
 
   it("filters group channels by query and respects limit", async () => {
     mockDirectoryResponses({

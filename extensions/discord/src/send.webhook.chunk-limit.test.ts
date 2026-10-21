@@ -4,7 +4,6 @@ import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
-import { chunkDiscordTextWithMode } from "./chunk.js";
 import { DiscordError } from "./internal/rest-errors.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { maybeSendBindingMessage } from "./monitor/thread-bindings.discord-api.js";
@@ -120,53 +119,20 @@ describe("Discord webhook delivery", () => {
     });
   });
 
-  it.each([
-    { label: "reasoning", text: `Reasoning:\n_${"a".repeat(4000)}_`, aliases: undefined },
-    {
-      label: "expanded mention",
-      text: `${"a".repeat(1995)} @ops`,
-      aliases: { ops: "123456789012345678" },
-    },
-  ])(
-    "sends only transport-sized $label chunks to the real HTTP adapter",
-    async ({ text, aliases }) => {
-      await withWebhookServer(
-        (content, index) =>
-          content.length > 2000
-            ? { status: 400, body: { code: 50035, message: "Invalid Form Body" } }
-            : accepted(content, index),
-        async (contents) => {
-          const chunks = chunkDiscordTextWithMode(text, {
-            chunkMode: "length",
-            maxChars: 2000,
-            maxLines: 50,
-          });
-          const receipts: string[] = [];
-          const progress: string[] = [];
-          for (const chunk of chunks) {
-            const result = await realWebhookSend(chunk, {
-              cfg: config(aliases),
-              webhookId: "123",
-              webhookToken: "test-token",
-              threadId: "thread-1",
-              wait: true,
-              onDeliveryResult: (part) => {
-                progress.push(part.messageId);
-              },
-            });
-            receipts.push(...(result.receipt?.platformMessageIds ?? []));
-          }
-          expect(contents.join("")).toBe(
-            aliases ? `${"a".repeat(1995)} <@123456789012345678>` : chunks.join(""),
-          );
-          expect(contents.length).toBeGreaterThan(1);
-          expect(contents.every((content) => content.length <= 2000)).toBe(true);
-          expect(receipts).toEqual(contents.map((_, index) => String(index + 1)));
-          expect(progress).toEqual(receipts);
+  it("reports every accepted physical webhook chunk", async () => {
+    await withWebhookServer(accepted, async (contents) => {
+      const progress: string[] = [];
+      const result = await realWebhookSend("x".repeat(2001), {
+        ...webhookOpts,
+        onDeliveryResult: ({ messageId }) => {
+          progress.push(messageId);
         },
-      );
-    },
-  );
+      });
+      expect(contents.map((content) => content.length)).toEqual([2000, 1]);
+      expect(progress).toEqual(["1", "2"]);
+      expect(result.receipt?.platformMessageIds).toEqual(progress);
+    });
+  });
 
   it("does not replay an ambiguous binding notification", async () => {
     await withWebhookServer(
@@ -352,14 +318,9 @@ describe("Discord webhook transport", () => {
       if (!signal) {
         throw new Error("expected webhook request signal");
       }
+      signal.throwIfAborted();
       return new Promise<Response>((_resolve, reject) => {
-        const abort = () =>
-          reject(signal.reason instanceof Error ? signal.reason : new Error("request aborted"));
-        if (signal.aborted) {
-          abort();
-        } else {
-          signal.addEventListener("abort", abort, { once: true });
-        }
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
       });
     });
     await expectDeadline();

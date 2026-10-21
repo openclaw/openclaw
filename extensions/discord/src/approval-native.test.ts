@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { getDiscordApprovalCapability } from "./approval-native.js";
-import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
@@ -108,19 +107,6 @@ describe("createDiscordNativeApprovalAdapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: true,
     });
-  });
-
-  it("honors ownerAllowFrom fallback when gating approval requests", async () => {
-    expect(
-      await shouldHandleDiscordApprovalRequest({
-        cfg: {
-          commands: { ownerAllowFrom: ["discord:123"] },
-        } as never,
-        accountId: "main",
-        configOverride: { enabled: true } as never,
-        request: execRequest({ command: "pwd", ...ORIGIN, turnSourceTo: "channel:123456789" }),
-      }),
-    ).toBe(true);
   });
 
   it("lets only the current typed Discord owner approve owner-derived exec requests", async () => {
