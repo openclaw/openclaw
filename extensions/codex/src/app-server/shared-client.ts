@@ -1209,6 +1209,7 @@ function detachCurrentSharedClient(
   }
   // A clear is a semantic change for this key: catalog observations must not survive it.
   invalidateSharedClientKey(entry.key);
+  cancelSharedClientIdleRetirement(entry);
   return getSharedCodexAppServerClientState().clients.delete(entry.key);
 }
 
