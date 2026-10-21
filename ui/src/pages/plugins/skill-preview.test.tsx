@@ -202,6 +202,31 @@ it("keeps an unavailable body retryable when it arrives in the inventory or a se
   expect(request).toHaveBeenLastCalledWith("plugins.skills.read", { ...params, path: "SKILL.md" });
 });
 
+it("clears an entry error when selecting a non-fetchable inventory sibling", async () => {
+  const { preview, request, container } = setup();
+  request.mockResolvedValueOnce({
+    ...result,
+    files: [
+      { ...result.files[0]!, status: "unavailable", content: undefined },
+      { path: "large.md", sizeBytes: 1_000_000, status: "too-large" },
+    ],
+  });
+  await preview.open(params);
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
+  const modal = container.querySelector("openclaw-file-preview-modal");
+
+  container.querySelector<HTMLButtonElement>('.item[data-path="large.md"]')!.click();
+
+  await waitForSolid(() =>
+    expect(container.querySelector('.detail [role="status"]')?.textContent).toContain(
+      "exceeds the preview limit",
+    ),
+  );
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.querySelector("openclaw-file-preview-modal")).toBe(modal);
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
 it.each([
   { selectedFile: false, change: "selection" },
   { selectedFile: false, change: "reconnect" },
