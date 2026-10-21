@@ -2,13 +2,9 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { CronService } from "../../cron/service.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { withAgentTerminalOpenAdmission } from "../terminal/open-admission.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import {
@@ -16,6 +12,10 @@ import {
   expectTerminalOpen,
   makeFakePty,
 } from "../terminal/session-manager.test-helpers.js";
+import {
+  configureDeletionAgents,
+  createDeletionCron,
+} from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 async function openTerminal(
@@ -34,43 +34,21 @@ it("keeps deletion draining until every connection terminal exits, without touch
     const witness = "still owned by terminal work";
     await fs.mkdir(workspace);
     await fs.writeFile(`${workspace}/witness.txt`, witness);
-    await state.writeConfig({
-      agents: {
-        ownership: "explicit",
-        defaults: { skipBootstrap: true },
-        entries: {
-          keeper: { workspace: state.workspaceDir },
-          doomed: { workspace },
-        },
-      },
-    });
+    await configureDeletionAgents(state, workspace, { skipBootstrap: true });
     expect(
       await readSessionEntrySummariesInWorker({
         agentId: "doomed",
         storePath: `${state.sessionsDir("doomed")}/sessions.json`,
       }),
     ).toEqual([]);
-    const scheduler = createTestGatewayScheduler();
-    const cron = new CronService({
-      scheduler,
-      storePath: state.statePath("cron/jobs.json"),
-      cronEnabled: false,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
+    const { context, stop } = createDeletionCron(state);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const terminals = new TerminalSessionManager({
       emit: () => {},
       withOpenAdmission: withAgentTerminalOpenAdmission,
       detachGraceMs: 60_000,
     });
-    const context = createDirectChatContext({
-      cron,
-      getRuntimeConfig,
-      terminalSessions: terminals,
-    });
+    context.terminalSessions = terminals;
     const ptys = [makeFakePty(), makeFakePty(), makeFakePty()];
     const pendingPty = makeFakePty();
     const backend = createDeferred<typeof pendingPty>();
@@ -149,8 +127,6 @@ it("keeps deletion draining until every connection terminal exits, without touch
       terminals.disposeAll();
       keeper.emitExit(0);
       vi.useRealTimers();
-      cron.stop();
-      await cron.waitForIdle();
-      await scheduler.stop();
+      await stop();
     }
   }));

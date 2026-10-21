@@ -19,7 +19,9 @@ import {
 } from "../node-wake-state.test-support.js";
 import { expectRecordFields, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
+  bindNodeRegistry,
   createNodeInvokeTestHarness,
+  invokeNodeRequest,
   createOperatorClient,
   firstRespondCall,
   mockArg,
@@ -335,19 +337,14 @@ async function rpc(
   client: GatewayRequestHandlerOptions["client"],
   context: GatewayRequestHandlerOptions["context"],
 ) {
-  const respond = vi.fn();
-  await expectDefined(
-    nodeHandlers[method],
-    method,
-  )({
-    req: { type: "req", id: "request", method },
-    params,
-    client,
+  return invokeNodeRequest(
+    expectDefined(nodeHandlers[method], method),
     context,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  return respond;
+    client,
+    method,
+    params,
+    "request",
+  );
 }
 
 function mockNode(get: () => TestNodeSession | undefined, result: NodeInvokeResult = { ok: true }) {
@@ -576,11 +573,7 @@ describe("node.invoke APNs wake path", () => {
 
     function start(requestParams: Partial<Record<string, unknown>> = {}, client?: unknown) {
       const invocation = invokeNode({
-        nodeRegistry: {
-          get: registry.get.bind(registry),
-          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
-          invoke: registry.invoke.bind(registry),
-        },
+        nodeRegistry: bindNodeRegistry(registry),
         requestParams: { nodeId, command, params: { bins: ["git"] }, ...requestParams },
         signal: controller.signal,
         client,
@@ -847,16 +840,10 @@ describe("node.invoke APNs wake path", () => {
     "enforces browser.proxy admin scope for $owner ($scope)",
     async ({ scope, owner, allowed }) => {
       const command = "browser.proxy";
-      const nodeRegistry = {
-        get: vi.fn(() => ({
-          nodeId: "browser-node",
-          commands: [command],
-        })),
-        invoke: vi.fn().mockResolvedValue({
-          ok: true,
-          payloadJSON: '{"ok":true}',
-        }),
-      };
+      const nodeRegistry = mockNode(() => ({ nodeId: "browser-node", commands: [command] }), {
+        ok: true,
+        payloadJSON: '{"ok":true}',
+      });
 
       const respond = await invokeNode({
         nodeRegistry,
@@ -1237,11 +1224,7 @@ describe("node.invoke APNs wake path", () => {
     );
     try {
       const invocation = invokeNode({
-        nodeRegistry: {
-          get: registry.get.bind(registry),
-          getForPairingGeneration: registry.getForPairingGeneration.bind(registry),
-          invoke: registry.invoke.bind(registry),
-        },
+        nodeRegistry: bindNodeRegistry(registry),
         requestParams: {
           nodeId,
           command: "system.which",
@@ -1335,7 +1318,6 @@ describe("node.invoke APNs wake path", () => {
       },
       { dropIfSlow: true },
     ]);
-    expect(mockArg(broadcast, 0, 2)).toEqual({ dropIfSlow: true });
   });
 
   it("clears stale registrations after an invalid device token wake failure", async () => {
@@ -1601,19 +1583,17 @@ describe("node.invoke APNs wake path", () => {
     let pairingCurrent = true;
     mocks.isNodePairingGenerationCurrent.mockImplementation(async () => pairingCurrent);
     const session = makeNodeSession(nodeId, { connId: "revoked-conn" });
-    const nodeRegistry = {
-      get: vi.fn(() => session),
-      invoke: vi.fn(
-        (payload: { signal?: AbortSignal }) =>
-          new Promise<{ ok: false; error: { code: string; message: string } }>((resolve) => {
-            payload.signal?.addEventListener(
-              "abort",
-              () => resolve({ ok: false, error: { code: "ABORTED", message: "cancelled" } }),
-              { once: true },
-            );
-          }),
-      ),
-    };
+    const nodeRegistry = mockNode(() => session);
+    nodeRegistry.invoke.mockImplementation(
+      ({ signal }) =>
+        new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, error: { code: "ABORTED", message: "cancelled" } }),
+            { once: true },
+          );
+        }),
+    );
 
     const pending = invokeAt(nodeRegistry, nodeId);
     await vi.waitFor(() => expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1));

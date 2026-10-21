@@ -25,6 +25,7 @@ import {
   agentConfig,
   expectUncalled,
 } from "./agents-mutate.test-support.js";
+import type { AgentMutationMocks } from "./agents-mutate.test.js";
 import * as lifecycleDrain from "./sessions-lifecycle-drain.js";
 
 function setActiveEmbeddedRun(...args: Parameters<typeof registerNativeRun>) {
@@ -35,39 +36,7 @@ function clearActiveEmbeddedRun(...args: Parameters<typeof clearNativeRun>) {
   return args[2] === undefined ? clearNativeRun(...args) : clearTestEmbeddedRun(...args);
 }
 type AgentDeleteRecoveryHarness = {
-  mocks: {
-    loadConfigReturn: Record<string, unknown>;
-    sharedAuthStoreOwnership: { location: "legacy-main" | "state-db" };
-    findAgentEntryIndex: Mock<(list?: unknown, agentId?: string) => number>;
-    readAgentDeletionJournal: Mock<() => Record<string, unknown> | undefined>;
-    listPendingAgentDeletionJournals: Mock<() => Record<string, unknown>[]>;
-    beginAgentDeletionRetire: Mock<() => void>;
-    beginAgentDeletionFinish: unknown;
-    beginAgentDeletionRollback: unknown;
-    closeOpenClawAgentDatabaseByPath: unknown;
-    resolveOpenClawAgentSqlitePath: Mock<(params?: { path?: string }) => string>;
-    resolveRegisteredAgentIdForDir: Mock<(pathname?: string) => string | undefined>;
-    isPathOwnedByAnotherRegisteredAgent: Mock<
-      (params: { agentId: string; pathname: string }) => boolean
-    >;
-    unregisterResolvedAgentDir: Mock<(params: { agentId: string; agentDir: string }) => boolean>;
-    listOpenClawRegisteredAgentDatabases: Mock<() => Array<Record<string, unknown>>>;
-    assertNoOpenClawAgentDatabaseLeases: unknown;
-    closeDeletedAgentDatabases: unknown;
-    assertAgentDeletionCurrentFinal: unknown;
-    assertAgentDeletionCurrentAsync: unknown;
-    deleteWorkspaceState: unknown;
-    movePathToTrash: unknown;
-    readSessionEntrySummariesInWorker: unknown;
-    logGatewayWarn: unknown;
-    writeConfigFile: Mock<(nextConfig?: unknown, writeOptions?: unknown) => Promise<void>>;
-    cronRemoveAgentJobsTransactional: Mock<
-      (agentId: string, commit: () => Promise<unknown>) => Promise<unknown>
-    >;
-    withAgentExecApprovalsRemoved: Mock<
-      (agentId: string, commit: () => Promise<unknown>) => Promise<unknown>
-    >;
-  };
+  mocks: AgentMutationMocks;
   makeCall: (
     method: "agents.delete" | "agents.create",
     params: Record<string, unknown>,
