@@ -3,6 +3,14 @@ import { buildConfigSchemaCore } from "./schema.js";
 import { validateConfigObjectRaw } from "./validation-core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const familyEngines = (engines: string[]) =>
+  Object.fromEntries(
+    ["state", "agent", "workboard", "logbook", "team-reports"].map((name, index) => [
+      name,
+      { engine: engines[index] },
+    ]),
+  );
+
 describe("database config", () => {
   it.each([
     { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
@@ -16,14 +24,8 @@ describe("database config", () => {
   it.each(["sqlite", "postgres"])(
     "reports a store-backed DSN for Doctor with %s selected",
     (engine) => {
-      const result = validateConfigObjectRaw({
-        database: {
-          engine,
-          postgres: {
-            connection: { source: "store", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
-          },
-        },
-      });
+      const connection = { source: "store", provider: "default", id: "OPENCLAW_DATABASE_DSN" };
+      const result = validateConfigObjectRaw({ database: { engine, postgres: { connection } } });
       expect(result).toMatchObject({
         ok: false,
         issues: [
@@ -56,25 +58,11 @@ describe("database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
-    {
-      families: {
-        state: { engine: "postgres" },
-        agent: { engine: "postgres" },
-        workboard: { engine: "postgres" },
-        logbook: { engine: "postgres" },
-        "team-reports": { engine: "postgres" },
-      },
-    },
+    { families: familyEngines(Array.from({ length: 5 }, () => "postgres")) },
     { families: {} },
     {
       engine: "postgres",
-      families: {
-        state: { engine: "sqlite" },
-        agent: { engine: "sqlite" },
-        workboard: { engine: "postgres" },
-        logbook: { engine: "sqlite" },
-        "team-reports": { engine: "postgres" },
-      },
+      families: familyEngines(["sqlite", "sqlite", "postgres", "sqlite", "postgres"]),
     },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);

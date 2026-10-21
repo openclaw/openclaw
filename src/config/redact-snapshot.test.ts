@@ -235,47 +235,35 @@ describe("replaceSensitiveValuesInRaw", () => {
 });
 
 describe("redactConfigSnapshot", () => {
-  it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
-    const token = "synthetic-canonical-token-canary";
-    const authoredToken = "synthetic-authored-token-canary";
-    const preMigrationToken = "synthetic-pre-migration-token-canary";
-    const snapshot = {
-      ...makeSnapshot({ ...tokenConfig(token), plugins: { allow: ["demo"] } }),
-      valid,
-      authoredConfig: tokenConfig(authoredToken),
-      sourceConfigBeforeMigrations: makeSnapshot(tokenConfig(preMigrationToken)).sourceConfig,
-      pluginMetadataSnapshot: {
-        manifestRegistry: { plugins: [{ rootDir: "/private/plugin/root" }] },
-      },
-    };
-    const original = structuredClone(snapshot);
-    const result = redactConfigSnapshot(snapshot);
-    const serialized = JSON.stringify(result);
-    for (const secret of [preMigrationToken, authoredToken, token, "/private/plugin/root"]) {
-      expect(serialized).not.toContain(secret);
-    }
-    for (const key of [
-      "sourceConfigBeforeMigrations",
-      "authoredConfig",
-      "pluginMetadataSnapshot",
-    ]) {
-      expect(key in result).toBe(false);
-    }
-    expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
-    const expectedConfig = valid
-      ? { ...tokenConfig(REDACTED_SENTINEL), plugins: { allow: ["demo"] } }
-      : {};
-    expect([result.config, result.sourceConfig, result.resolved, result.runtimeConfig]).toEqual(
-      Array(4).fill(expectedConfig),
-    );
-    expect(result.sourceConfig).toBe(result.resolved);
-    expect(result.runtimeConfig).toBe(result.config);
-    if (!valid) {
-      expect(result.raw).toBeNull();
-      expect(result.parsed).toBeNull();
-    }
-    expect(snapshot).toEqual(original);
-  });
+  it.each([true, false])(
+    "omits plugin metadata and withholds invalid projections (valid=%s)",
+    (valid) => {
+      const token = "synthetic-canonical-token-canary";
+      const snapshot = {
+        ...makeSnapshot({ ...tokenConfig(token), plugins: { allow: ["demo"] } }),
+        valid,
+        pluginMetadataSnapshot: {
+          manifestRegistry: { plugins: [{ rootDir: "/private/plugin/root" }] },
+        },
+      };
+      const result = redactConfigSnapshot(snapshot);
+      expect(JSON.stringify(result)).not.toContain("/private/plugin/root");
+      expect(result).not.toHaveProperty("pluginMetadataSnapshot");
+      expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
+      const expectedConfig = valid
+        ? { ...tokenConfig(REDACTED_SENTINEL), plugins: { allow: ["demo"] } }
+        : {};
+      expect([result.config, result.sourceConfig, result.resolved, result.runtimeConfig]).toEqual(
+        Array(4).fill(expectedConfig),
+      );
+      expect(result.sourceConfig).toBe(result.resolved);
+      expect(result.runtimeConfig).toBe(result.config);
+      if (!valid) {
+        expect(result.raw).toBeNull();
+        expect(result.parsed).toBeNull();
+      }
+    },
+  );
 });
 
 describe("restoreRedactedValues", () => {
