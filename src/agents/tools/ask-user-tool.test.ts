@@ -118,7 +118,7 @@ function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
 }
 
 function steerReply(
-  steer: ReturnType<typeof vi.fn>,
+  steer: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0]["steer"],
   text: string,
   options: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2],
   sessionKey = SESSION_KEY,
@@ -166,7 +166,11 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
   return questionId;
 }
 
-beforeEach(() => onTestFinished(() => vi.restoreAllMocks()));
+beforeEach(() =>
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  }),
+);
 
 describe("ask_user", () => {
   it("reserves duplicate bare keys independently per agent", () => {

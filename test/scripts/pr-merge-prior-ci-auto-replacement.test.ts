@@ -25,7 +25,11 @@ const providerRejection = readFileSync(
 );
 type Fixture = ReturnType<typeof fixture>;
 
-function expectAdminIntentRetained(f: Fixture, oid: string, diagnostic: string) {
+function expectAdminIntentRetained(
+  f: ReturnType<typeof preExistingCandidate>,
+  oid: string,
+  diagnostic: string,
+) {
   const result = expectExit(f.adminPriorCi(f.path, true, oid), 1);
   expect(result.output).toContain(diagnostic);
   expect(f.git(["rev-parse", outcomeRef])).toBe(oid);

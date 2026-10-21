@@ -33,7 +33,7 @@ function expectCompleteReviewOmitted(result: Result) {
   expect(JSON.stringify(result)).not.toContain("complete-review-only");
 }
 function expectFailure(result: Result, details: Record<string, unknown>) {
-  expect(result.isError).toBe(true);
+  expect(result).toMatchObject({ isError: true });
   expectBounded(result, details);
 }
 
