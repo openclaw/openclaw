@@ -25,6 +25,7 @@ import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admissio
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
+import { createComposerQuestions } from "../pages/chat/components/chat-composer-questions.ts";
 import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import { listStoredChatOutboxes } from "../pages/chat/composer-persistence.ts";
 import {
@@ -316,10 +317,17 @@ describe("Control UI Gateway target lineage", () => {
             onCancel: () => cancelQueuedMessageEdit(state),
           },
         });
-        unmountComposer = mountSolid(() => createComponent(ChatComposer, props), {
-          container: composer,
-          wrapper: composerContextWrapper(composer),
-        }).unmount;
+        unmountComposer = mountSolid(
+          () =>
+            createComponent(ChatComposer, {
+              ...props,
+              questions: createComposerQuestions(props.paneId, () => props),
+            }),
+          {
+            container: composer,
+            wrapper: composerContextWrapper(composer),
+          },
+        ).unmount;
         flush();
         if (!sameOwner) {
           await handleSendChat(state, captured.draftText, {

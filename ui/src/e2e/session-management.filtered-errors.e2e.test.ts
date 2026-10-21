@@ -160,6 +160,7 @@ suite.define(() => {
       });
 
       try {
+        await page.clock.install();
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
           await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
@@ -172,13 +173,17 @@ suite.define(() => {
         const failure = {
           __mockError: { code: "UNAVAILABLE", message: "Session list temporarily unavailable" },
         };
-        const refresh = () =>
-          gateway.emitGatewayEvent("sessions.changed", {
+        const refresh = async () => {
+          await pauseVirtualClock(page);
+          await gateway.emitGatewayEvent("sessions.changed", {
             ...archived,
             agentId: "main",
             reason: "update",
             sessionKey: archived.key,
           });
+          await page.clock.runFor(5_001);
+          await page.clock.resume();
+        };
         const alert = page.locator("[data-sidebar-session-error]");
 
         await gateway.setMethodResponse("sessions.list", failure);

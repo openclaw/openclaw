@@ -27,7 +27,7 @@ describe("legacy config migration end to end", () => {
   it.each([
     { prefsPath: "/tmp/synthetic-tts.json" },
     { personas: { narrator: { prompt: { style: "Synthetic instruction" } } } },
-  ])("converges legacy TTS ownership and retirement in one pass: %j", (tts) => {
+  ])("converges legacy TTS ownership without replacing its model: %j", (tts) => {
     const raw = { messages: { tts: { ...tts, summaryModel: "anthropic/claude-sonnet-4-5" } } };
     const result = migrate(raw);
     expect(result.partiallyValid).toBeUndefined();
@@ -35,7 +35,7 @@ describe("legacy config migration end to end", () => {
     expect(result.config).not.toHaveProperty("messages.tts");
     expect(result.config).not.toHaveProperty("tts.prefsPath");
     expect(result.config).not.toHaveProperty("tts.personas.narrator.prompt");
-    expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-5");
     expectIdempotent(result.config);
   });
 

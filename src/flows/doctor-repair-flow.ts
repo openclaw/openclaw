@@ -70,7 +70,7 @@ export async function runDoctorHealthRepairs(
     let remainingFindings = checkFindings;
     // Split checks expose detect/repair separately, so repair output must be validated by detect().
     try {
-      const repair = check.repair;
+      const repair = check.repair.bind(check);
       const result = await phase("repair", () =>
         repair(
           { ...checkContext, dryRun: opts.dryRun === true, diff: opts.diff === true },

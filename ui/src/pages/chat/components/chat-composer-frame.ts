@@ -222,8 +222,9 @@ export function createChatComposerContext(
         : "steer"
       : undefined;
   const showComposer =
-    !state.presentation.activeQuestionKey?.startsWith("gateway:") ||
-    state.presentation.questionCollapsed;
+    !questionPanelProps ||
+    questionPanelProps.model.nonBlocking === true ||
+    questionPanelProps.model.collapsed;
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.

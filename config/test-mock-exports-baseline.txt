@@ -2472,7 +2472,6 @@
 ["src/agents/subagents/registry/subagent-registry-queued-registration.test.ts","./subagent-registry.js","5035b37223c42fd527077644b6ea6ea9af63f52246cf4d9752288670eaddf4f2",1]
 ["src/agents/subagents/registry/subagent-registry-restart-recovery.test-support.ts","../../../config/config.js","90ac912a16b0e7d941e540f542e62e706a910461a58261b1e155c20acae6962b",1]
 ["src/agents/subagents/registry/subagent-registry-restart-recovery.test-support.ts","../../../config/sessions/session-accessor.sqlite-replacement-projection.js","cebc8ef2c26c4babd5b4a8a54c11a82ff29f1779db7a84ec286d0712cc090f74",1]
-["src/agents/subagents/registry/subagent-registry-restart-recovery.test-support.ts","../../../config/sessions/session-entry-current-runtime.js","d68b7648e6a2c082868acf552cd1e60c56da38dd8b44d0531aa5a279534c1dd2",1]
 ["src/agents/subagents/registry/subagent-registry-restart-recovery.test-support.ts","../../../config/sessions/session-entry-read-runtime.js","925a1d4c3ad70ef9637a643dfa835299c696298753443335c1acc61b763b7be9",1]
 ["src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts","../../../browser-lifecycle-cleanup.js","a15f6b686117caa464a53ef59fb9b0055b2c9f3ae40ed4c2bc6a0070c8fe360a",1]
 ["src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts","../../../config/config.js","ed19fff3cbd2c8e013f6b67c9f46b66ae0bd40951c214fe8eb5e1887bf24da33",1]

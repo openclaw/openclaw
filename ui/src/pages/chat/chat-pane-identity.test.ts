@@ -30,6 +30,7 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -369,6 +370,7 @@ describe("chat pane approval requester identity", () => {
           return pane.chatProps!;
         });
         return createComponent(ChatView, {
+          questions: createComposerQuestions(pane.presentationId, props),
           get props() {
             return props();
           },

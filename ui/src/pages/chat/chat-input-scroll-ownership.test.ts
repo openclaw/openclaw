@@ -7,6 +7,7 @@ import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
@@ -36,7 +37,8 @@ function userMessage(sendId: string) {
 }
 function setup() {
   const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
-  const controller = getPaneTestRuntime(pane).chatState;
+  const runtime = getPaneTestRuntime(pane);
+  const controller = runtime.chatState;
   const dispose = controller.dispose;
   disposals.push(dispose);
   state.sessionKey = "agent:main:scroll-ownership";
@@ -70,6 +72,7 @@ function setup() {
   disposals.push(chatRunPresentation(state).subscribe(published));
   return {
     state,
+    runtime,
     controller,
     dispose,
     published,
@@ -86,12 +89,24 @@ function setup() {
 
 describe("transcript arrival scroll ownership", () => {
   it("keeps text publications out of the message and run-state projections", () => {
-    const { state } = setup();
+    const { state, runtime } = setup();
     state.chatRunId = "stream-run";
+    const props = runtime.render().layout?.primary.chat;
+    if (!props) {
+      throw new Error("Expected a chat pane");
+    }
     const observed = vi.fn();
     disposals.push(
       createRoot((dispose) => {
-        createEffect(() => ({ messages: state.chatMessages, runId: state.chatRunId }), observed);
+        const questions = createComposerQuestions(props.paneId, () => props);
+        createEffect(
+          () => ({
+            messages: state.chatMessages,
+            runId: state.chatRunId,
+            questions: questions.source(),
+          }),
+          observed,
+        );
         return dispose;
       }),
     );

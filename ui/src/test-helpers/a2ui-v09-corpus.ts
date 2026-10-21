@@ -1,5 +1,5 @@
 /** Synthetic corpus shared by the built-renderer test and its visual proof. */
-export const a2uiV09CatalogId = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
+const a2uiV09CatalogId = "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json";
 
 export function a2uiV09Corpus() {
   const text = (id: string, value: string) => ({ id, component: "Text", text: value });
