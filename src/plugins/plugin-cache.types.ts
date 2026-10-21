@@ -1,5 +1,9 @@
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
-import type { PluginCacheArtifacts, PluginRootArtifactCache } from "./plugin-cache-artifacts.js";
+import type {
+  InspectionNativeEsmPolicy,
+  PluginCacheArtifacts,
+  PluginRootArtifactCache,
+} from "./plugin-cache-artifacts.js";
 import type {
   PluginDirectoryCacheEntry,
   PluginEntryCheck,
@@ -9,7 +13,6 @@ import type {
 import type { PluginCacheManagement } from "./plugin-cache-management.js";
 import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
 import type { PluginCacheSdk } from "./plugin-cache-sdk.js";
-import type { InspectionNativeEsmPolicy } from "./plugin-instance-module-loader.js";
 import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 
 export type PluginRootCacheRecord = PluginRootArtifactCache & {

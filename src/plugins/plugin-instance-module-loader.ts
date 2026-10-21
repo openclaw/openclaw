@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   resolvePluginLoaderTryNative,
@@ -13,7 +13,7 @@ import {
   supportsBunRuntimeOnResolveTargets,
   useNodeModuleHooks,
 } from "./native-module-require.js";
-import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
+import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   capturePluginGenerationArtifact,
@@ -45,7 +45,7 @@ import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-ali
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
 type SourceBuilds = Map<string, PluginSourceBuild>;
-export type RetainedNativeEsm = {
+type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;
   modules: Map<string, unknown>;
@@ -54,25 +54,36 @@ export type RetainedNativeEsm = {
   knownOwners: WeakSet<PluginInstanceModuleLoaderParams["instance"]>;
 };
 
-export type InspectionNativeEsmPolicy = {
-  workspaces: ReadonlySet<string>;
-  sources: ReadonlyMap<string, string>;
-  devSourceRoot?: string | null;
-};
-
-export type InspectionNativeEsmRetention = InspectionNativeEsmPolicy & {
-  entries: Map<string, RetainedNativeEsm>;
-};
-
 const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
   Symbol.for("openclaw.retainedNativeEsmPluginModules"),
 );
+const inspectionNativeEsmModules = resolveGlobalSingleton(
+  Symbol.for("openclaw.inspectionNativeEsmPluginModules"),
+  () => new WeakMap<InspectionNativeEsmRetention, Map<string, RetainedNativeEsm>>(),
+);
+
+function inspectionModulesFor(retention: InspectionNativeEsmRetention) {
+  let entries = inspectionNativeEsmModules.get(retention);
+  if (!entries) {
+    entries = new Map();
+    inspectionNativeEsmModules.set(retention, entries);
+    const owned = entries;
+    retention.dispose = async () => {
+      for (const retained of owned.values()) {
+        await disposeModuleSources(retained.builds, retained.artifact);
+        retained.artifact = undefined;
+        retained.modules.clear();
+      }
+      owned.clear();
+    };
+  }
+  return entries;
+}
 
 type RetainedNativeEsmTarget = Pick<
   PluginInstanceModuleLoaderParams,
   | "origin"
   | "source"
-  | "expectedSourceDigest"
   | "nativeRecovery"
   | "recoverySourceMap"
   | "inspectionSourceIdentity"
@@ -81,22 +92,19 @@ type RetainedNativeEsmTarget = Pick<
   | "pluginSdkResolution"
 > & { registry: PluginRegistry | undefined };
 
-function isCatalogWorkerThread(): boolean {
-  return (
-    !isMainThread &&
-    workerData !== null &&
-    typeof workerData === "object" &&
-    "sourceCaptureDirectory" in workerData
-  );
-}
-
 function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
   // Explicit recovery keeps its own source custody and must not join an installed entry.
   if (target.nativeRecovery || target.recoverySourceMap) {
     return undefined;
   }
   const retention = isMainThread ? target.inspectionRetention : undefined;
-  if (!retention && !isCatalogWorkerThread()) {
+  if (
+    !retention &&
+    (isMainThread ||
+      workerData === null ||
+      typeof workerData !== "object" ||
+      !("sourceCaptureDirectory" in workerData))
+  ) {
     return undefined;
   }
   const extension = path.extname(target.source).toLowerCase();
@@ -121,7 +129,7 @@ function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
     return undefined;
   }
   return {
-    entries: retention.entries,
+    entries: inspectionModulesFor(retention),
     key: JSON.stringify([source, workspace, target.pluginSdkResolution ?? "auto"]),
   };
 }
@@ -209,6 +217,14 @@ function createSourceOutputLookup(builds: SourceBuilds) {
       return entry.generated ? filename : entry.source;
     },
   };
+}
+
+function disposeModuleSources(builds: SourceBuilds, artifact?: PluginGenerationArtifact) {
+  for (const build of builds.values()) {
+    build.dispose();
+  }
+  builds.clear();
+  return artifact?.disposeAsync();
 }
 
 function ownsNativeEsmResolution(
@@ -322,11 +338,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       retained.artifact = undefined;
       retained.modules.clear();
     }
-    for (const build of sourceBuilds.values()) {
-      build.dispose();
-    }
-    sourceBuilds.clear();
-    return artifact.disposeAsync();
+    return disposeModuleSources(sourceBuilds, artifact);
   });
   const bindRecoveredModuleLoader = preparePluginModuleLoaderRecovery(
     params,

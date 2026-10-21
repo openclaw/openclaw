@@ -7,7 +7,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { compareOpenClawReleaseVersions } from "../infra/npm-registry-spec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import {
+  resolveImmutableInstallIdentity,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import {
@@ -16,7 +19,6 @@ import {
 } from "./dashboard-capabilities.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
-import { resolveImmutableInstallIdentity } from "./immutable-install-identity.js";
 import { loadSetupRuntimeChannelCandidate } from "./loader-channel-runtime.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -503,7 +505,6 @@ export function* loadRuntimePluginCandidate(params: {
   let moduleLoadMs = 0;
   let modulePreparationMs = 0;
   let beforeRegister: number | undefined;
-  let failurePhase: "load" | "register" = "load";
   let failed = false;
   const beforeModuleLoad = performance.now();
   const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
@@ -631,7 +632,6 @@ export function* loadRuntimePluginCandidate(params: {
       return;
     }
     beforeRegister = performance.now();
-    failurePhase = "register";
     const registerPlugin = () => {
       const ownedDefinition = instance?.wrap(definition) ?? definition;
       // Headless nodes also use non-activating registries; their commands remain available.
@@ -679,6 +679,7 @@ export function* loadRuntimePluginCandidate(params: {
       clearActiveDegradedPlugin(pluginId);
     }
   } catch (error) {
+    const failurePhase = beforeRegister === undefined ? "load" : "register";
     let failure = error;
     try {
       params.options.prepareRegistrationFailureCleanup?.(registry, record);
@@ -714,7 +715,7 @@ export function* loadRuntimePluginCandidate(params: {
       ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
       ["modulePreparationMs", modulePreparationMs],
-      ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
+      ["loadFailedCount", failed && beforeRegister === undefined ? 1 : 0],
       ...(registerMs === undefined
         ? []
         : ([

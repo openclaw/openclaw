@@ -202,7 +202,6 @@ export function createPluginModuleLoader(options: {
         hasRetainedNativeEsmArtifact({
           origin: owner.record.origin,
           source: modulePath,
-          expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
           ...inspection(owner),
           devSourceRoot: captured.devSourceRoot,
           pluginSdkResolution: captured.pluginSdkResolution,

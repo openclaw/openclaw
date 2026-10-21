@@ -1,5 +1,6 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveImmutableInstallIdentity } from "./candidate-install-owner.js";
 import type {
   PluginMetadataSnapshotCandidate,
   ScopedPluginMetadataSnapshot,
@@ -11,11 +12,11 @@ import {
   setCurrentPluginMetadataSnapshotState,
   selectCurrentPluginMetadataCache,
 } from "./current-plugin-metadata-state.js";
-import { resolveImmutableInstallIdentity } from "./immutable-install-identity.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import { safeRealpathSync } from "./path-safety.js";
+import type { InspectionNativeEsmPolicy } from "./plugin-cache-artifacts.js";
 import {
   getPluginMetadataSnapshotCache,
   getScopedPluginCaches,
@@ -35,7 +36,6 @@ import {
   runWithPluginExecutionFrame,
 } from "./plugin-instance-invocation.js";
 import type { PluginExecutionFrame } from "./plugin-instance-invocation.types.js";
-import type { InspectionNativeEsmPolicy } from "./plugin-instance-module-loader.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";

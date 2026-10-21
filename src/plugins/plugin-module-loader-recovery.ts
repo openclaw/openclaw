@@ -1,10 +1,9 @@
-import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
+import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import type {
   capturePluginGenerationArtifact,
   PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
-import type { InspectionNativeEsmRetention } from "./plugin-instance-module-loader.js";
 import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
