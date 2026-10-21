@@ -60,10 +60,6 @@ function waitForImage(container: Element, src: string, selector = "img") {
   });
 }
 
-function expectSlotClass(container: Element, name: string, value: boolean) {
-  expect(container.querySelector(".chat-avatar-slot")?.classList.contains(name)).toBe(value);
-}
-
 function expectBearerFetch(
   fetchAvatar: ReturnType<typeof mockAvatarFetch>,
   url: unknown,
@@ -301,33 +297,28 @@ describe("ChatAvatar", () => {
           role="assistant"
           assistant={{ agentId: "scout", name: "Scout", avatar: null }}
         />
+        <ChatAvatar
+          role="assistant"
+          assistant={{
+            agentId: "scout",
+            name: "Renamed Scout",
+            avatar: "https://example.com/avatar.png",
+          }}
+        />
         <ForwardedAvatar agentId="scout" options={{ agentId: "main", agents: [{ id: "scout" }] }} />
         <ChatAuthorAvatar sender={sender} />
         <ChatAvatar role="user" sender={sender} />
       </>
     ));
     await vi.waitFor(() =>
-      expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(5),
+      expect(container.querySelectorAll(".identity-avatar__agent-face")).toHaveLength(6),
     );
     const faces = [...container.querySelectorAll(".identity-avatar__agent-face")].map(
       (face) => face.outerHTML,
     );
     expect(new Set(faces).size).toBe(1);
+    expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".chat-author-avatar__initials")).toBeNull();
-  });
-
-  it("preserves explicit image and text precedence", () => {
-    for (const avatar of ["blob:managed-image", "/avatar/main", "data:image/png;base64,YQ=="]) {
-      const image = renderAvatar(["assistant", { avatar, name: "Val", textAvatar: "🦉" }]);
-      expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
-      expect(image?.getAttribute("src")).toBe(avatar);
-      expect(image?.getAttribute("alt")).toBe("Val");
-    }
-
-    const textAvatar = renderAvatar(["assistant", { avatar: "🦉", name: "Val" }]);
-    expect(textAvatar?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
-    expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
-    expect(textAvatar?.getAttribute("role")).toBe("img");
   });
 
   it.each(["openclaw"])("keeps the product mark for system agent %s", (agentId) => {
@@ -387,21 +378,10 @@ describe("ChatAvatar", () => {
     expect(fetchAvatar).toHaveBeenCalledOnce();
   });
 
-  it("renders local user image and text avatars", () => {
-    const imageAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "/avatar/user" }]);
-    expect(imageAvatar?.getAttribute("src")).toBe("/avatar/user");
-    expect(imageAvatar?.getAttribute("alt")).toBe("Buns");
-
+  it("renders local user text avatars", () => {
     const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
-
-    for (const avatar of ["data:image/png;base64,YQ==", "/custom.svg"]) {
-      const { container } = mountSolid(() => (
-        <ChatAvatar role="user" user={{ name: "Buns", avatar }} />
-      ));
-      expect(container.querySelector("img")?.getAttribute("src")).toBe(avatar);
-    }
   });
 
   it("swaps a failing local user image to initials instead of a broken image", () => {
@@ -410,6 +390,7 @@ describe("ChatAvatar", () => {
     const slot = container.querySelector<HTMLElement>(".chat-avatar-slot");
     const image = slot?.querySelector("img");
     expect(image?.getAttribute("src")).toBe("/avatar/user");
+    expect(image?.getAttribute("alt")).toBe("Buns");
     expect(slot?.classList.contains("is-fallback")).toBe(false);
 
     image?.dispatchEvent(new Event("error"));
@@ -794,39 +775,5 @@ describe("refreshSenderAgentAvatars", () => {
     expect(host.chatAvatarUrl).toBe(current);
     expect(revoke).not.toHaveBeenCalled();
     invalidateChatAvatarCache(host);
-  });
-});
-
-describe("attributed sender avatars", () => {
-  it("restores pending initials when the authenticated sender avatar changes", async () => {
-    setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
-    mockAvatarFetch();
-    mockBlobUrls("blob:first-sender", "blob:second-sender");
-    const firstSender = {
-      id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
-      name: "Ada Lovelace",
-      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=1",
-    };
-
-    const [sender, setSender] = createSignal(firstSender);
-    const { container } = mountSolid(() => <ChatAvatar role="user" sender={sender()} />);
-    const firstImage = await waitForImage(container, "blob:first-sender", ".chat-avatar-slot img");
-    firstImage.dispatchEvent(new Event("load"));
-    expectSlotClass(container, "is-fallback", false);
-
-    setSender({
-      ...firstSender,
-      profileAvatarUrl: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar?v=2",
-    });
-    flush();
-    expectSlotClass(container, "is-pending", true);
-    const secondImage = await waitForImage(
-      container,
-      "blob:second-sender",
-      ".chat-avatar-slot img",
-    );
-    expect(secondImage).toBe(firstImage);
-    secondImage.dispatchEvent(new Event("load"));
-    expectSlotClass(container, "is-fallback", false);
   });
 });

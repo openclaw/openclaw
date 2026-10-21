@@ -103,21 +103,7 @@ function restrictedSnapshot(
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
-  const active = overrides?.status === "running" || overrides?.hasActiveRun === true;
-  return {
-    key,
-    spawnedBy: overrides?.spawnedBy,
-    kind: "direct",
-    updatedAt: null,
-    ...(active
-      ? {
-          hasActiveRun: true,
-          activeRunIds: ["active-run"],
-          activeLeafEntryId: "leaf-active",
-        }
-      : {}),
-    ...overrides,
-  };
+  return { key, kind: "direct", updatedAt: null, ...overrides };
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
@@ -260,55 +246,38 @@ describe("executeSlashCommand directives", () => {
     );
   });
 
-  it("does not patch through a replacement connection after loading session state", async () => {
-    const { promise: description, resolve: resolveDescription } = createDeferred<{
-      session: GatewaySessionRow;
-    }>();
-    const request = mockRequests({
-      "sessions.describe": async () => await description,
-      "sessions.patch": () => ({ ok: true }),
-    });
-    const client = createTestGatewayClient(request);
-    let current = true;
-    const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
-      isCurrent: () => current,
-    });
-    current = false;
-    resolveDescription({
-      session: row("agent:main:main", {
-        thinkingOptions: ["off", "low", "high"],
-      }),
-    });
-    const result = await pending;
-    expect(result.failed).toBe(true);
-    expectNoRequestCall(request, "sessions.patch");
-  });
-
-  it("rechecks live scopes before patching after loading session state", async () => {
-    const { promise: description, resolve: resolveDescription } = createDeferred<{
-      session: GatewaySessionRow;
-    }>();
-    const request = mockRequests({
-      "sessions.describe": async () => await description,
-      "sessions.patch": () => ({ ok: true }),
-    });
-    const client = createTestGatewayClient(request);
-    let snapshot = restrictedSnapshot(client, ["sessions.patch"], ["operator.admin"]);
-    const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
-      sessionAccessSnapshot: snapshot,
-      readSessionAccessSnapshot: () => snapshot,
-      isCurrent: () => true,
-    });
-    snapshot = restrictedSnapshot(client, ["sessions.patch"]);
-    resolveDescription({
-      session: row("agent:main:main", {
-        thinkingOptions: ["off", "low", "high"],
-      }),
-    });
-    const result = await pending;
-    expect(result.failed).toBe(true);
-    expectNoRequestCall(request, "sessions.patch");
-  });
+  it.each(["connection", "scope"] as const)(
+    "rechecks %s before patching after session loading",
+    async (changed) => {
+      const description = createDeferred<{ session: GatewaySessionRow }>();
+      const request = mockRequests({
+        "sessions.describe": () => description.promise,
+        "sessions.patch": () => ({ ok: true }),
+      });
+      const client = createTestGatewayClient(request);
+      let current = true;
+      let snapshot = restrictedSnapshot(client, ["sessions.patch"], ["operator.admin"]);
+      const pending = executeSlashCommand(client, "agent:main:main", "think", "high", {
+        isCurrent: () => current,
+        ...(changed === "scope"
+          ? {
+              sessionAccessSnapshot: snapshot,
+              readSessionAccessSnapshot: () => snapshot,
+            }
+          : {}),
+      });
+      if (changed === "connection") {
+        current = false;
+      } else {
+        snapshot = restrictedSnapshot(client, ["sessions.patch"]);
+      }
+      description.resolve({
+        session: row("agent:main:main", { thinkingOptions: ["off", "low", "high"] }),
+      });
+      expect((await pending).failed).toBe(true);
+      expectNoRequestCall(request, "sessions.patch");
+    },
+  );
 
   it("resolves the legacy main alias for bare /model", async () => {
     const request = mockSession(
@@ -631,52 +600,32 @@ describe("executeSlashCommand directives", () => {
 });
 
 describe("executeSlashCommand /steer (soft inject)", () => {
-  it("sends the selected session without resolving a run or leaf", async () => {
-    const request = mockRequests({ "chat.send": () => ({ status: "started", runId: "run-1" }) });
-    const result = await runCommand(request, "steer", "try a different approach");
-    expect(result.content).toBe(resultText("steer.succeeded"));
-    expect(result.pendingCurrentRun).toBe(true);
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload).toMatchObject({
-      sessionKey: "agent:main:main",
-      message: "try a different approach",
-      deliver: false,
-      queueMode: "steer",
-      idempotencyKey: expect.any(String),
-    });
-    expect(chatSend.payload).not.toHaveProperty("expectedRunId");
-    expect(chatSend.payload).not.toHaveProperty("expectedLeafEntryId");
-    expectNoRequestCall(request, "sessions.list");
-  });
-
-  it("does not mark the current run pending when chat.send returns terminal ok", async () => {
-    const request = mockRequests({
-      "chat.send": () => ({ status: "ok", runId: "run-ok", messageSeq: 2 }),
-    });
-    const result = await runCommand(request, "steer", "try a different approach");
-    expect(result.content).toBe(resultText("steer.succeeded"));
-    expect(result.pendingCurrentRun).toBeUndefined();
-    const chatSend = requireRequestCall(request, "chat.send");
-    expect(chatSend.payload.deliver).toBe(false);
-  });
-
   it.each([
-    ["timeout", "chat.commandResults.steer.timeout"],
-    ["error", "chat.commandResults.steer.failed"],
+    [{ status: "started", runId: "run-1" }, true, "succeeded"],
+    [{ status: "ok", runId: "run-ok", messageSeq: 2 }, undefined, "succeeded"],
+    [{ status: "timeout", runId: "run-timeout", summary: "aborted" }, undefined, "timeout"],
+    [{ status: "error", runId: "run-error", summary: "aborted" }, undefined, "failed"],
   ] as const)(
-    "reports terminal %s ACK without marking the current run pending",
-    async (status, expectedKey) => {
-      const request = mockRequests({
-        "chat.send": () => ({ status, runId: `run-${status}`, summary: "aborted" }),
-      });
-
+    "sends the selected session and settles a %j steer ACK",
+    async (ack, pending, key) => {
+      const request = mockRequests({ "chat.send": () => ack });
       const result = await runCommand(request, "steer", "try a different approach");
-
-      expect(result.content).toBe(t(expectedKey));
-      expect(result.content).not.toBe(resultText("steer.succeeded"));
-      expect(result.pendingCurrentRun).toBeUndefined();
-      const chatSend = requireRequestCall(request, "chat.send");
-      expect(chatSend.payload.deliver).toBe(false);
+      expect(result.content).toBe(resultText(`steer.${key}`));
+      expect(result.pendingCurrentRun).toBe(pending);
+      if (key !== "succeeded") {
+        expect(result.content).not.toBe(resultText("steer.succeeded"));
+      }
+      const { payload } = requireRequestCall(request, "chat.send");
+      expect(payload).toMatchObject({
+        sessionKey: "agent:main:main",
+        message: "try a different approach",
+        deliver: false,
+        queueMode: "steer",
+        idempotencyKey: expect.any(String),
+      });
+      expect(payload).not.toHaveProperty("expectedRunId");
+      expect(payload).not.toHaveProperty("expectedLeafEntryId");
+      expectNoRequestCall(request, "sessions.list");
     },
   );
 

@@ -317,10 +317,10 @@ type SessionTestState = ChatState & {
   sessionsResult: SessionsListResult;
 };
 
-function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTestState {
+function runningSession(chatStream: string, overrides: Partial<ChatState> = {}): SessionTestState {
   const runId = overrides.chatRunId ?? "run-1";
   return {
-    ...createState(overrides),
+    ...createState({ chatRunId: runId, chatStream, chatStreamStartedAt: 100, ...overrides }),
     knownAgentRunIds: new Set([runId]),
     sessionsResult: {
       ts: 0,
@@ -350,11 +350,18 @@ type LiveToolState = ChatHistoryHost &
     toolStreamSyncTimer: number | null;
   };
 
-function attachLiveToolState(
-  state: ChatHistoryHost,
+function createLiveToolHistoryState(
+  messages: unknown[],
+  chatStream: string,
   tools: Record<string, unknown>[],
   segments: HistoryToolSegment[],
 ): LiveToolState {
+  const state = createHistorySnapshot(messages, {
+    chatMessages: [messages[0]],
+    chatRunId: "run-1",
+    chatStream,
+    chatStreamStartedAt: 100,
+  }).state;
   const liveState = state as LiveToolState;
   liveState.chatStreamSegments = segments;
   liveState.chatToolMessages = tools;
@@ -378,15 +385,6 @@ function attachLiveToolState(
   liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
   liveState.toolStreamSyncTimer = null;
   return liveState;
-}
-
-function createLiveToolHistoryState(
-  messages: Array<unknown>,
-  overrides: Partial<ChatHistoryHost>,
-  tools: Record<string, unknown>[],
-  segments: HistoryToolSegment[],
-): LiveToolState {
-  return attachLiveToolState(createHistorySnapshot(messages, overrides).state, tools, segments);
 }
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
@@ -578,34 +576,16 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it.each([
-    {
-      name: "retracts the stream when a replacement snapshot is empty",
-      previous: "Draft",
-      delta: "",
-      snapshot: "",
-      replace: true,
-      expected: "",
-    },
-    {
-      name: "preserves a prepared literal marker in a replacement tail",
-      previous: "The token is ",
-      delta: "",
-      snapshot: "NO_REPLY",
-      replace: true,
-      expected: "NO_REPLY",
-    },
-  ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
-    const state = createState({
-      chatRunId: "run-1",
-      chatStream: previous,
-    });
-    const payload: ChatEventPayload = chatEvent("delta", {
-      deltaText: delta,
+    ["empty snapshot", "Draft", ""],
+    ["prepared literal marker", "The token is ", "NO_REPLY"],
+  ])("replaces the stream with a %s", (_name, previous, snapshot) => {
+    const state = createState({ chatRunId: "run-1", chatStream: previous });
+    receive(state, "delta", {
+      deltaText: "",
       message: textMessage("assistant", snapshot),
-      ...(replace ? { replace: true } : {}),
+      replace: true,
     });
-    handleChatGatewayEvent(state, payload);
-    expect(state.chatStream).toBe(expected);
+    expect(state.chatStream).toBe(snapshot);
   });
 
   it("keeps a delivered legacy text-only assistant visible exactly once across stale history", async () => {
@@ -638,10 +618,9 @@ describe("handleChatGatewayEvent", () => {
   it("settles an active run when its terminal reply was already accepted", () => {
     const runId = "run-1";
     const final = textMessage("assistant", "Delivered answer");
-    const state = createStateWithRunningSession({
+    const state = runningSession("Delivered answer", {
       sessionKey: "main",
       chatRunId: runId,
-      chatStream: "Delivered answer",
       chatStreamStartedAt: 123,
       chatRunStartup: { state: "activity", runId },
     });
@@ -770,39 +749,25 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it.each([
-    {
-      name: "restart interruption",
-      event: { state: "aborted", stopReason: "restart" },
-      projectionStatus: "aborted",
-      sessionStatus: "interrupted",
-      errorSummary: null,
-    },
-    {
-      name: "ordinary Stop",
-      event: { state: "aborted" },
-      projectionStatus: "aborted",
-      sessionStatus: "killed",
-      errorSummary: null,
-    },
-    {
-      name: "provider timeout",
-      event: {
-        state: "error",
-        errorKind: "timeout",
-        errorMessage: "agent provider timeout",
-      },
-      projectionStatus: "timeout",
-      sessionStatus: "timeout",
-      errorSummary: "Error: agent provider timeout",
-    },
+    [
+      "restart interruption",
+      { state: "aborted", stopReason: "restart" },
+      "aborted",
+      "interrupted",
+      null,
+    ],
+    ["ordinary Stop", { state: "aborted" }, "aborted", "killed", null],
+    [
+      "provider timeout",
+      { state: "error", errorKind: "timeout", errorMessage: "agent provider timeout" },
+      "timeout",
+      "timeout",
+      "Error: agent provider timeout",
+    ],
   ] as const)(
-    "projects the canonical $name status onto the selected session",
-    ({ event, projectionStatus, sessionStatus, errorSummary }) => {
-      const state = createStateWithRunningSession({
-        chatRunId: "run-1",
-        chatStream: "Partial assistant reply",
-        chatStreamStartedAt: 100,
-      });
+    "projects the canonical %s status onto the selected session",
+    (_name, event, projectionStatus, sessionStatus, errorSummary) => {
+      const state = runningSession("Partial assistant reply");
       const staleSessionsResult = state.sessionsResult;
 
       handleChatGatewayEvent(state, {
@@ -840,11 +805,7 @@ describe("handleChatGatewayEvent", () => {
   );
 
   it("reconciles cached run and indicator state on terminal events", () => {
-    const state = createStateWithRunningSession({
-      chatRunId: "run-1",
-      chatStream: "Live reply",
-      chatStreamStartedAt: 100,
-    });
+    const state = runningSession("Live reply");
     state.compactionStatus = {
       phase: "active",
       runId: "run-1",
@@ -883,11 +844,7 @@ describe("handleChatGatewayEvent", () => {
   });
 
   it("does not publish Done while a yielded turn has registered continuation work", () => {
-    const state = createStateWithRunningSession({
-      chatRunId: "run-1",
-      chatStream: "Restarting now",
-      chatStreamStartedAt: 100,
-    });
+    const state = runningSession("Restarting now");
     receive(state, "final", {
       stopReason: "end_turn",
       yielded: true,
@@ -1447,12 +1404,7 @@ describe("loadChatHistory retry handling", () => {
       const persistedUser = textMessage("user", "latest ask", { seq: 1 });
       const state = createLiveToolHistoryState(
         [persistedUser, ...tools.slice(0, persistedCount)],
-        {
-          chatMessages: [persistedUser],
-          chatRunId: "run-1",
-          chatStream: stream,
-          chatStreamStartedAt: 100,
-        },
+        stream,
         tools,
         segments,
       );
@@ -1514,12 +1466,7 @@ describe("loadChatHistory retry handling", () => {
     };
     const state = createLiveToolHistoryState(
       [persistedUser, persistedToolCall],
-      {
-        chatMessages: [persistedUser],
-        chatRunId: "run-1",
-        chatStream: "Still answering.",
-        chatStreamStartedAt: 100,
-      },
+      "Still answering.",
       [
         {
           role: "assistant",
@@ -1589,12 +1536,7 @@ describe("loadChatHistory retry handling", () => {
     };
     const state = createLiveToolHistoryState(
       [persistedUser, historyAssistant],
-      {
-        chatMessages: [persistedUser],
-        chatRunId: "run-1",
-        chatStream: "First visible stream text.",
-        chatStreamStartedAt: 100,
-      },
+      "First visible stream text.",
       [liveToolMessage],
       [{ text: "First visible stream text.", ts: 90 }],
     );
@@ -1764,12 +1706,7 @@ describe("loadChatHistory retry handling", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 function createAbortDiagnosticState(runId = "run-validation-abort") {
-  return createStateWithRunningSession({
-    chatRunId: runId,
-    chatStream: "Partial assistant reply",
-    chatStreamStartedAt: 100,
-    chatRunError: null,
-  });
+  return runningSession("Partial assistant reply", { chatRunId: runId, chatRunError: null });
 }
 
 describe("aborted chat diagnostics", () => {

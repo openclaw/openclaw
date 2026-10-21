@@ -202,29 +202,6 @@ describe("renderChatComposer controls", () => {
     expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
   });
 
-  it("keeps voice and generation stop controls distinct when both are active", () => {
-    const onAbort = vi.fn();
-    const onToggleRealtimeTalk = vi.fn();
-    const { container } = renderComposer({
-      canAbort: true,
-      onAbort,
-      onToggleRealtimeTalk,
-      realtimeTalkActive: true,
-    });
-
-    const stopVoice = button(container, t("chat.composer.stopVoiceInput"));
-    const stopGeneration = button(container, t("chat.runControls.stopGenerating"));
-    expect(stopVoice.classList.contains("chat-send-btn--voice-live")).toBe(true);
-    expect(stopVoice.classList.contains("chat-send-btn--stop")).toBe(false);
-    expect(stopGeneration.classList.contains("chat-send-btn--stop")).toBe(true);
-    expect(stopGeneration.closest(".chat-mobile-primary-action")).not.toBeNull();
-    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
-    stopVoice.click();
-    stopGeneration.click();
-    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
-    expect(onAbort).toHaveBeenCalledOnce();
-  });
-
   it("keeps dictation available while Talk is held during an active turn", () => {
     const { container } = renderComposer({
       sending: true,

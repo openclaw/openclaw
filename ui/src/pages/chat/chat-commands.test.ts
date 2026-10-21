@@ -315,43 +315,31 @@ describe("conversation reset confirmation", () => {
   });
 
   it.each([
-    {
-      name: "a run starts",
-      result: "deferred",
-      error: undefined,
-      change: (host: ReturnType<typeof resetHost>) => {
+    ["run", "deferred", null],
+    ["Gateway", "failed", "connection changed"],
+    ["scope", "failed", "operator.admin"],
+  ] as const)(
+    "does not clear when %s changes during confirmation",
+    async (change, result, error) => {
+      const { promise, resolve } = createDeferred<boolean>();
+      const host = resetHost(() => promise);
+      host.hello = gatewayHelloForMethods(["sessions.reset"]);
+      const pending = dispatchChatSlashCommand(host as never, "clear", "");
+      if (change === "run") {
         host.chatRunId = "new-run";
-      },
-    },
-    {
-      name: "the Gateway changes",
-      result: "failed",
-      error: "connection changed",
-      change: (host: ReturnType<typeof resetHost>) => {
-        host.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
-        host.connectionEpoch += 1;
+      } else {
+        if (change === "Gateway") {
+          host.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+          host.connectionEpoch += 1;
+        }
         host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
-      },
+      }
+      resolve(true);
+      await expect(pending).resolves.toBe(result);
+      expect(host.sessions.reset).not.toHaveBeenCalled();
+      if (error) {
+        expect(host.lastError).toContain(error);
+      }
     },
-    {
-      name: "scope is revoked",
-      result: "failed",
-      error: "operator.admin",
-      change: (host: ReturnType<typeof resetHost>) => {
-        host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
-      },
-    },
-  ])("does not clear after confirmation when $name", async ({ change, result, error }) => {
-    const { promise, resolve } = createDeferred<boolean>();
-    const host = resetHost(() => promise);
-    host.hello = gatewayHelloForMethods(["sessions.reset"]);
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    change(host);
-    resolve(true);
-    await expect(pending).resolves.toBe(result);
-    expect(host.sessions.reset).not.toHaveBeenCalled();
-    if (error) {
-      expect(host.lastError).toContain(error);
-    }
-  });
+  );
 });

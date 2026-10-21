@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, getOwner, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
@@ -114,18 +112,12 @@ function renderQueue(
   if (update) {
     update(props);
   } else {
-    const [current, setCurrent] = createSignal(props, { ownedWrite: true });
-    const view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), {
-      container,
-    });
-    queues.set(container, setCurrent);
+    const view = mountSolid(renderChatQueueSolid, props, container);
+    queues.set(container, view.update);
     onTestFinished(() => {
       queues.delete(container);
-      view.unmount();
+      view.dispose();
     });
-  }
-  if (!getOwner()) {
-    flush();
   }
   return container;
 }
