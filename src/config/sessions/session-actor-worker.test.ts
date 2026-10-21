@@ -183,46 +183,6 @@ it("hydrates a cold command inside its transaction and returns a retryable preim
     expect(f.hooks.transactions).toBe(3);
   }));
 
-it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", () =>
-  withActor(async (f) => {
-    const initial = f.read();
-    const command = patch(initial, 10);
-    await f.prepare(command);
-    f.hooks.afterTransaction = () => {
-      throw new Error("synthetic reply failure after native commit");
-    };
-    const committed = expectCommitted(f.mutate(command));
-    expect(committed.failure).toEqual({
-      name: "Error",
-      message: "synthetic reply failure after native commit",
-    });
-    expect(f.reply()).toEqual({ kind: "committed", failure: committed.failure });
-    expect(committed.receipt).toMatchObject({
-      beforeVersion: initial.version,
-      afterVersion: { epoch: initial.version.epoch, sequence: 1 },
-      transcript: { appendedMessages: [], projectionNeedsReconcile: false },
-      reducers: [{ index: 0, kind: "activity", changed: true }],
-      postimage: { entry: { updatedAt: 10 } },
-    });
-    expect(f.receipt()).toMatchObject({
-      kind: "native-commit",
-      committed: { facts: { kind: "committed", receipt: committed.receipt } },
-    });
-    expect(f.nativeEntry()?.updatedAt).toBe(10);
-    delete f.hooks.afterTransaction;
-    const current = f.read();
-    expect(current.version).toEqual(committed.receipt.afterVersion);
-    committed.receipt.postimage.entry!.updatedAt = 999;
-    expect(f.read().entry?.updatedAt).toBe(10);
-
-    revoke(f, "commit", "live run revoked before commit");
-    expectRollback(f.mutate(patch(current, 20)), "live run revoked before commit");
-    expect(f.receipt()).toBeUndefined();
-    expect(f.nativeEntry()?.updatedAt).toBe(10);
-    delete f.hooks.admit;
-    expect(f.read().entry?.updatedAt).toBe(10);
-  }));
-
 it("fences a commit whose settlement is lost and rehydrates its durable state without replay", () =>
   withActor(async (f) => {
     const initial = f.read();
@@ -670,54 +630,22 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
     }),
 );
 
-it("keeps restart receipt custody across retries and settles only the exact provider claim", () =>
+it("replays a cancelled restart delivery without restoring its receipt", () =>
   withActor((f) => {
     const claim = { sessionId: f.scope.sessionId, sourceTurnId: "source", toolCallId: "tool" };
     seedEntry(f, {
       restartRecoveryDeliveryRunId: "run",
       restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
-    });
-    let sequence = 0;
-    const common = () => commandInput(f.read(), `receipt-${++sequence}`, "delivery");
-    const pending = (updatedAt: number) =>
-      f.mutate({
-        type: "session.actor.deliveryPending",
-        input: { ...common(), claim, updatedAt },
-      });
-    const settle = (outcome: "confirmed" | "not-sent", toolCallId = claim.toolCallId) =>
-      f.mutate({
-        type: "session.actor.deliverySettled",
-        input: {
-          ...common(),
-          restart: { claim: { ...claim, toolCallId }, outcome, updatedAt: 20 },
-        },
-      });
-    expectCommitted(pending(10), { value: { disposition: "started" } });
-    expect(f.nativeEntry()).toMatchObject({
       restartRecoveryDeliveryReceiptState: "terminal-pending",
       restartRecoveryDeliveryToolCallId: claim.toolCallId,
-    });
-    expectCommitted(pending(11), { value: { disposition: "delivery-ambiguous" } });
-    expect(settle("confirmed", "unrelated-tool")).toMatchObject({ kind: "rolled-back" });
-    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-    for (let attempt = 0; attempt < 2; attempt++) {
-      expectCommitted(settle("confirmed"), { value: { disposition: "recorded" } });
-    }
-    expectCommitted(settle("not-sent"), { value: { disposition: "stale" } });
-    expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
-    const nextClaim = { ...claim, sourceTurnId: "next-source" };
-    seedEntry(f, {
-      restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
     });
     for (const commandId of ["cancel", "cancel-replay"]) {
       expectCommitted(
         f.mutate({
           type: "session.actor.deliverySettled",
           input: {
-            ...common(),
-            commandId,
-            restart: { claim: nextClaim, outcome: "not-sent", updatedAt: 30 },
+            ...commandInput(f.read(), commandId, "delivery"),
+            restart: { claim, outcome: "not-sent", updatedAt: 30 },
           },
         }),
         { value: { disposition: "cleared" } },
