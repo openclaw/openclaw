@@ -3094,6 +3094,12 @@ watermark while retaining dirty notifications and fresh subsequent reads.
 Cold metadata joins initialization and turn preparation; restoration stays with
 the cold-storage owner, outside the writer FIFO and before message hooks run.
 
+Cache-TTL prefix reads sort marker identities before loading their payloads.
+The same read snapshot supplies each consumed marker by its exact sequence,
+stopping at the newest applicable checkpoint or reset. Obsolete checkpoint
+payloads are not decompressed into the sorter, so their total size does not
+determine the bounded history read's working set.
+
 Ordinary reply initialization reuses its writer-locked snapshot when accepted
 activity is already recorded and neither the entry nor conversation routing
 changes. It does not run lifecycle recovery, count sessions, or schedule

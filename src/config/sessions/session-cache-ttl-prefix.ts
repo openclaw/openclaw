@@ -1,5 +1,8 @@
 import { sql } from "kysely";
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import type {
   CacheTtlProjectionPrefix,
   SessionTranscriptBoundedActiveContext,
@@ -60,18 +63,7 @@ export function readCacheTtlProjectionPrefix(
       .crossJoin("transcript_events as event")
       .whereRef("event.session_id", "=", "active.session_id")
       .whereRef("event.seq", "=", "active.event_seq")
-      .select((eb) =>
-        eb
-          .case()
-          .when(entryType, "=", "reset")
-          // Preserve the classified kind when legacy JSON starts with another duplicate type.
-          .then(
-            transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
-          )
-          .else(transcriptEventJsonSql(projection.database.db, "event"))
-          .end()
-          .as("event_json"),
-      )
+      .select(["event.seq", entryType.as("event_type")])
       .select(
         transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
           "navigation_valid",
@@ -120,7 +112,27 @@ export function readCacheTtlProjectionPrefix(
     (function* () {
       for (const row of rows) {
         assertTranscriptNavigationValid(row.navigation_valid);
-        yield JSON.parse(row.event_json) as unknown;
+        // Sort identities only: projecting payloads there decompresses every obsolete checkpoint
+        // before the first yield. Both reads remain in the caller's projection snapshot.
+        const payload = executeSqliteQueryTakeFirstSync(
+          projection.database.db,
+          db
+            .selectFrom("transcript_events as event")
+            .select(
+              (row.event_type === "reset"
+                ? // Preserve the classified kind when legacy JSON starts with another duplicate type.
+                  transcriptEventModelNavigationSql(
+                    projection.database.db,
+                    "event",
+                    sql.lit("reset"),
+                  )
+                : transcriptEventJsonSql(projection.database.db, "event")
+              ).as("event_json"),
+            )
+            .where("event.session_id", "=", projection.resolved.sessionId)
+            .where("event.seq", "=", row.seq),
+        )!;
+        yield JSON.parse(payload.event_json) as unknown;
       }
     })(),
   );
