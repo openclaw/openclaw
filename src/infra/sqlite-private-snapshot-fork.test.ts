@@ -125,6 +125,7 @@ it.each([
   [0, 32, true],
   [32, null, true],
   [32, 7, true],
+  [113, null, false],
   [113, 0, false],
   [113, 32, false],
   [0, 33, false],

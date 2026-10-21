@@ -1,5 +1,4 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { makeCallbackRetryContext } from "./bot.create-telegram-bot.test-support.js";
 
 export function createReplyPhotoMessage(text: string) {
   return {
@@ -110,14 +109,26 @@ export function createTelegramCallbackContext(params: {
   updateId?: number;
   update?: Record<string, unknown>;
 }): TelegramTestContext {
-  const context = makeCallbackRetryContext({ ...params, messageId: 10 });
+  const callbackQuery = {
+    id: params.id,
+    data: params.data,
+    from: params.from ?? { id: 9, first_name: "Ada", username: "ada_bot" },
+    message: {
+      chat: { id: 1234, type: "private" },
+      date: 1_736_380_800,
+      message_id: 10,
+      ...params.message,
+    },
+  };
   return {
-    ...context,
     ...(params.update
       ? { update: params.update }
       : params.updateId === undefined
         ? {}
-        : { update: { update_id: params.updateId, callback_query: context.callbackQuery } }),
+        : { update: { update_id: params.updateId, callback_query: callbackQuery } }),
+    callbackQuery,
+    me: { username: "openclaw_bot" },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
   };
 }
 
