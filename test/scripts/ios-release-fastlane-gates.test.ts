@@ -1013,7 +1013,7 @@ def capture_release_ios_screenshots!(**options)
     attempts: options.fetch(:capture_attempts), output_path: options.fetch(:capture_attempts_path)
   )
 end
-def sh(command, *arguments, **_options)
+def sh(command, *arguments, error_callback: nil, **_options)
   args = arguments.empty? ? Shellwords.split(command) : [command, *arguments]
   @commands << args
   if args[0, 3] == ["xcrun", "simctl", "create"]
@@ -1040,10 +1040,19 @@ def sh(command, *arguments, **_options)
     @owned.delete(args[3])
   elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
     return "{}" if @scenario == "unavailable-empty" && !$watch_restored
-    return JSON.generate({
-      "watch-image" => { "identifier" => "watch-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
+    images = (@runtime_scanned && !$watch_restored ? %w[watch-reregistered watch-reregistered-extra] : %w[watch-image]).to_h do |identifier|
+      [identifier, { "identifier" => identifier, "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") }]
+    end
+    return JSON.generate(images.merge({
       "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
-    })
+    }))
+  elsif args[0, 4] == ["xcrun", "simctl", "runtime", "delete"]
+    if @scenario.start_with?("unavailable-delete-") && (!@runtime_scanned || @scenario == "unavailable-delete-failure")
+      message = "Removed the runtime, but did not reclaim its MobileAsset. Run 'xcrun simctl runtime scan-and-mount' to re-register the runtime, then delete it again."
+      return error_callback ? error_callback.call(message) : UI.user_error!(message)
+    end
+  elsif args == ["xcrun", "simctl", "runtime", "scan-and-mount"]
+    @runtime_scanned = true
   elsif args == ["xcrun", "--sdk", "watchsimulator", "--show-sdk-version"]
     return "27.0"
   elsif args[0, 2] == ["xcodebuild", "-downloadPlatform"]
@@ -1062,12 +1071,13 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
+results = %w[combined diagnostics startup-probe startup-probe-ended iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local unavailable-recovered unavailable-empty unavailable-delete-recovered unavailable-delete-failure unavailable-download-failure unavailable-still-missing unavailable-create-failure unavailable-local inventory-failure inventory-invalid watch-boot-failure watch-cleanup-failure].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
     @observations, @captures = [], 0
     @watch_creates = 0
+    @runtime_scanned = false
     $screenshot_scenario, $watch_restored = scenario, false
     ENV["CI"] = %w[runtime-local unavailable-local].include?(scenario) ? "false" : "true"
     ENV["HOME"] = root
@@ -1349,6 +1359,32 @@ puts JSON.generate(results)
     }
     expect(row("unavailable-empty").repairCommands.some((args) => args[3] === "delete")).toBe(
       false,
+    );
+    expect(row("unavailable-delete-recovered")).toMatchObject({
+      error: null,
+      pngs: 9,
+      watchCreates: 1,
+    });
+    const reclaimCommands = [
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image"],
+      ["xcrun", "simctl", "runtime", "scan-and-mount"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-reregistered"],
+    ];
+    expect(row("unavailable-delete-recovered").repairCommands).toEqual([
+      ...reclaimCommands,
+      ["xcrun", "simctl", "runtime", "delete", "watch-reregistered-extra"],
+      ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+    ]);
+    expect(row("unavailable-delete-failure")).toMatchObject({
+      pngs: 8,
+      watchCreates: 0,
+      repairCommands: reclaimCommands,
+    });
+    expect(row("unavailable-delete-failure").error).toContain(
+      "runtime deletion failed after scan-and-mount",
     );
     expect(row("unavailable-download-failure")).toMatchObject({
       error: "watchOS download unavailable",

@@ -292,7 +292,19 @@ def repair_watch_screenshot_runtime!(runtime)
   report_watch_runtime_images(runtime, images)
   UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
 
-  sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier")) unless images.empty?
+  unless images.empty?
+    sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier"), error_callback: lambda { |_output|
+      sh("xcrun", "simctl", "runtime", "scan-and-mount")
+      images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+        .select { |image| image["runtimeIdentifier"] == runtime }
+      report_watch_runtime_images(runtime, images)
+      images.each do |image|
+        sh("xcrun", "simctl", "runtime", "delete", image.fetch("identifier"), error_callback: lambda { |_retry_output|
+          UI.user_error!("Cannot repair #{runtime}: runtime deletion failed after scan-and-mount.")
+        })
+      end
+    })
+  end
   sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
   images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
     .select { |image| image["runtimeIdentifier"] == runtime }
