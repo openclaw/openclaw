@@ -167,7 +167,7 @@ it.each([
 });
 
 it.each(["read", "write", "rollback", "inner-rollback"] as const)(
-  "publishes worker receipts only for committed mutations (%s)",
+  "leaves worker commit facts to the domain (%s)",
   (mode) => {
     const { db, command } = transportFixture("normal");
     const admission = harness.admission((_request, grant) => grant());
@@ -206,7 +206,7 @@ it.each(["read", "write", "rollback", "inner-rollback"] as const)(
       run();
     }
     admission.service();
-    expect(receipts).toEqual(mode === "write" || mode === "inner-rollback" ? [{}] : []);
+    expect(receipts).toEqual([]);
   },
 );
 

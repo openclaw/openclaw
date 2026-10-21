@@ -327,7 +327,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
         const config = {
           diagnostics: { enabled: true },
-          logging: { file: gateway.state.path("gateway.log") },
+          logging: { level: "debug", file: gateway.state.path("gateway.log") },
           gateway: {
             port: gateway.port,
             auth: { mode: "token", token: gateway.gatewayToken },

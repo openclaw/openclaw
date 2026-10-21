@@ -54,6 +54,7 @@ export function createPositionRail(props: PositionRailParams) {
   let layoutFrame: number | undefined;
   let currentActiveId: string | undefined;
   let markerIds: string[] = [];
+  let markerSource: ChatPositionIndex["markers"] | undefined;
   let markerIndexes = new Map<string, number>();
   let renderedIndexes: number[] = [];
   let viewportHeight: number | undefined;
@@ -559,8 +560,9 @@ export function createPositionRail(props: PositionRailParams) {
       }
     }
 
-    const ids = markers.map((marker) => marker.id);
-    if (!transcriptArraysEqual(ids, markerIds)) {
+    if (markers !== markerSource) {
+      markerSource = markers;
+      const ids = markers.map((marker) => marker.id);
       pendingProjectionChange ||= markerIds.some((id, index) => id !== ids[index]);
       markerIds = ids;
       markerIndexes = new Map(ids.map((id, index) => [id, index]));
@@ -602,6 +604,7 @@ export function createPositionRail(props: PositionRailParams) {
     return {
       assistant,
       markers,
+      liveMarkers: positions.liveMarkers,
       renderedIndexes,
       activeId: currentActiveId,
       visibleIds,

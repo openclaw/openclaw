@@ -169,6 +169,7 @@ export type LifecycleDiagnosticOperation = {
   readonly traceFlags?: string;
   readonly observedHolder: boolean;
   readonly acquiredAt: number;
+  hasSlowWaiter: boolean;
   phase: Phase;
   hold(): void;
   mark(phase: Phase): void;
@@ -216,6 +217,7 @@ export function createLifecycleDiagnosticOperation(params: {
       get acquiredAt() {
         return acquiredAt;
       },
+      hasSlowWaiter: false,
       phase: "admission",
       hold() {
         if (holderAttempted || finished) {
@@ -275,11 +277,14 @@ export function createLifecycleDiagnosticOperation(params: {
                 return;
               }
               const now = performance.now();
+              const candidate = currentHolder();
+              const holder = candidate?.observedHolder ? candidate : undefined;
+              if (holder) {
+                holder.hasSlowWaiter = true;
+              }
               emit(
                 "session lifecycle queue waiting",
                 () => {
-                  const candidate = currentHolder();
-                  const holder = candidate?.observedHolder ? candidate : undefined;
                   return {
                     queueKind: kind,
                     identityHash: identityHash(operation.scopeIdentity),
@@ -322,7 +327,14 @@ export function createLifecycleDiagnosticOperation(params: {
           current.holders--;
         }
         const elapsedMs = performance.now() - startedAt;
-        if (elapsedMs >= SLOW_MS) {
+        // Effect custody spans whole agent turns; elapsed time alone is not contention.
+        if (
+          elapsedMs >= SLOW_MS &&
+          (params.operation !== "lifecycle" ||
+            operation.hasSlowWaiter ||
+            queueWaitMs.lifecycle >= SLOW_MS ||
+            queueWaitMs.mutation >= SLOW_MS)
+        ) {
           emit(
             "slow session lifecycle operation",
             () => ({

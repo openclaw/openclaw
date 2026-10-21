@@ -187,14 +187,9 @@
 }
 
 .chat-details-subagents__collapsed {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   color: var(--muted);
-}
-
-.chat-details-subagents__collapsed > .chat-details-subagents__spinner {
-  width: 12px;
-  height: 12px;
 }
 
 .chat-details-subagents--mobile {

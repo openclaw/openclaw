@@ -19,7 +19,11 @@ import { insertOperatorApprovalInDatabase } from "../../src/gateway/operator-app
 import { insertProjectRegistryInDatabase } from "../../src/projects/project-registry.kernel.js";
 import { runOpenClawAgentWriteTransaction } from "../../src/state/openclaw-agent-db.js";
 import { runOpenClawStateWriteTransaction } from "../../src/state/openclaw-state-db.js";
-import { TEAM_SHAPE_RUN_SLOT_MS, teamShapeRootSessionCount } from "./team-shape-sessions.js";
+import {
+  TEAM_SHAPE_RUN_SLOT_MS,
+  teamShapeRootSessionCount,
+  waitForTeamShapeWriteBudget,
+} from "./team-shape-sessions.js";
 
 const executeFile = promisify(execFile);
 const DAY_MS = 86_400_000;
@@ -33,6 +37,8 @@ export type TeamShapeExtrasOptions = {
   approvals: number;
   cronJobs: number;
   projects: number;
+  worktreeFiles?: number;
+  nestedRepository?: boolean;
   now: number;
 };
 
@@ -141,7 +147,52 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
     await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic project");
     await fs.mkdir(path.dirname(worktreePath), { recursive: true });
     const branch = `fixture/task-${index}`;
+    const worktreeFiles = index === 0 ? (options.worktreeFiles ?? 0) : 0;
+    if (worktreeFiles > 0) {
+      await git("checkout", "--detach");
+    }
     await git("worktree", "add", "-b", branch, worktreePath);
+    if (worktreeFiles > 0) {
+      for (let file = 0; file < worktreeFiles; file++) {
+        const bucket = path.join(worktreePath, "inventory", String(Math.floor(file / 1_000)));
+        if (file % 1_000 === 0) {
+          await waitForTeamShapeWriteBudget();
+          await fs.mkdir(bucket, { recursive: true });
+        }
+        await fs.writeFile(path.join(bucket, `${file}.txt`), "");
+      }
+      await git("-C", worktreePath, "add", "inventory");
+      await git(
+        "-C",
+        worktreePath,
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "test: seed large synthetic inventory",
+      );
+      // Move the base without materializing a second large checkout in the detached origin.
+      await git("branch", "--force", "main", branch);
+      await waitForTeamShapeWriteBudget();
+    }
+    if (index === 0 && options.nestedRepository) {
+      const nested = path.join(worktreePath, "nested-repository");
+      await fs.mkdir(nested);
+      await git("-C", nested, "init", "--initial-branch=main");
+      await fs.writeFile(path.join(nested, "README.md"), "# Synthetic nested repository\n");
+      await git("-C", nested, "add", "README.md");
+      await git(
+        "-C",
+        nested,
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "test: seed nested synthetic repository",
+      );
+    }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {
       const registered = insertProjectRegistryInDatabase(db, {
@@ -331,6 +382,8 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
     approvals: options.approvals,
     cronJobs: jobs.length,
     projects: projectWorktrees.length,
+    worktreeFiles: options.worktreeFiles ?? 0,
+    nestedRepository: options.nestedRepository ?? false,
     projectWorktrees,
     extrasGenerationMs: performance.now() - started,
   };

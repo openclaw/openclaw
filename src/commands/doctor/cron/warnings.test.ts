@@ -1,5 +1,4 @@
-// Doctor cron delivery-target advisory tests cover concrete-vs-pseudo channel detection.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
@@ -7,99 +6,67 @@ import {
 } from "./warnings.js";
 
 const mocks = vi.hoisted(() => ({
-  listReadOnlyChannelPluginsForConfig: vi.fn(),
+  plugins: vi.fn(),
   note: vi.fn(),
   runExec: vi.fn(),
 }));
 
+// mock-isolation: advisory tests use a fixed channel inventory without loading plugin runtimes.
 vi.mock("../../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfig: mocks.plugins,
 }));
 vi.mock("../../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 vi.mock("../../../process/exec.js", () => ({ runExec: mocks.runExec }));
 
-afterEach(() => {
-  vi.clearAllMocks();
-});
+afterEach(() => vi.clearAllMocks());
 
 function job(overrides: Record<string, unknown>): Record<string, unknown> {
-  return { id: "job", schedule: "0 * * * *", ...overrides };
+  return { id: "job", ...overrides };
 }
 
-/** Resolver thunk returning a fixed channel set; tracks whether it was invoked. */
-function availableChannels(...ids: string[]) {
-  return vi.fn(() => ids);
-}
-
-function collectCronDeliveryTargetAdvisory(params: {
-  jobs: Array<Record<string, unknown>>;
-  resolveAvailableChannelIds: () => string[];
-}): string | null {
-  mocks.note.mockClear();
-  mocks.listReadOnlyChannelPluginsForConfig.mockImplementation(() =>
-    params.resolveAvailableChannelIds().map((id) => ({ id })),
-  );
-  noteCronDeliveryTargetAdvisory({
-    cfg: {},
-    jobs: params.jobs,
-  });
+function advisory(jobs: Array<Record<string, unknown>>, channels: string[] = []): string | null {
+  mocks.plugins.mockReturnValue(channels.map((id) => ({ id })));
+  noteCronDeliveryTargetAdvisory({ cfg: {}, jobs });
   const body = mocks.note.mock.calls.at(-1)?.[0];
   return typeof body === "string" ? body : null;
 }
 
-describe("collectCronDeliveryTargetAdvisory", () => {
-  it("advises when a concrete delivery channel has no active plugin", () => {
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [
-        job({ id: "needs-doctor", delivery: { channel: "slack" } }),
-        job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } }),
-      ],
-      resolveAvailableChannelIds: availableChannels(),
-    });
-    expect(advisory).not.toBeNull();
-    expect(advisory).toContain("Automation delivery targets unavailable channels");
-    expect(advisory).toContain("1 job announces");
-    expect(advisory).toContain("Channels: missing-channel=1");
-    expect(advisory).toContain("Examples: report -> missing-channel");
-  });
-
-  it("treats a channel alias as active when its canonical id is available", () => {
-    // "gchat" canonicalizes to "googlechat"; an alias target must not look unavailable.
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ delivery: { mode: "announce", channel: "gchat" } })],
-      resolveAvailableChannelIds: availableChannels("googlechat"),
-    });
-    expect(advisory).toBeNull();
-  });
-
-  it("falls back to job name then <unnamed> in examples", () => {
-    const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [
-        job({
-          id: undefined,
-          name: "Nightly digest",
-          delivery: { mode: "announce", channel: "ghost" },
-        }),
-        job({ id: undefined, name: undefined, delivery: { mode: "announce", channel: "ghost" } }),
-      ],
-      resolveAvailableChannelIds: availableChannels("slack"),
-    });
-    expect(advisory).toContain("Nightly digest -> ghost");
-    expect(advisory).toContain("<unnamed> -> ghost");
-  });
+it("advises when a concrete delivery channel has no active plugin", () => {
+  const message = advisory([
+    job({ id: "needs-doctor", delivery: { channel: "slack" } }),
+    job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } }),
+  ]);
+  expect(message).toContain("Automation delivery targets unavailable channels");
+  expect(message).toContain("1 job announces");
+  expect(message).toContain("Channels: missing-channel=1");
+  expect(message).toContain("Examples: report -> missing-channel");
 });
 
-describe("collectLegacyWhatsAppCrontabHealthWarning", () => {
-  it("bounds the best-effort crontab read", async () => {
-    mocks.runExec.mockRejectedValueOnce(new Error("crontab timed out"));
+it("treats a channel alias as active when its canonical id is available", () => {
+  expect(
+    advisory([job({ delivery: { mode: "announce", channel: "gchat" } })], ["googlechat"]),
+  ).toBeNull();
+});
 
-    await expect(
-      collectLegacyWhatsAppCrontabHealthWarning({ platform: "linux" }),
-    ).resolves.toBeNull();
-    expect(mocks.runExec).toHaveBeenCalledWith("crontab", ["-l"], {
-      logOutput: false,
-      timeoutMs: 5_000,
-    });
+it("falls back to job name then <unnamed> in examples", () => {
+  const message = advisory(
+    ["Nightly digest", undefined].map((name) =>
+      job({ id: undefined, name, delivery: { mode: "announce", channel: "ghost" } }),
+    ),
+    ["slack"],
+  );
+  expect(message).toContain("Nightly digest -> ghost");
+  expect(message).toContain("<unnamed> -> ghost");
+});
+it("bounds the best-effort crontab read", async () => {
+  mocks.runExec.mockRejectedValueOnce(new Error("crontab timed out"));
+
+  await expect(
+    collectLegacyWhatsAppCrontabHealthWarning({ platform: "linux" }),
+  ).resolves.toBeNull();
+  expect(mocks.runExec).toHaveBeenCalledWith("crontab", ["-l"], {
+    logOutput: false,
+    timeoutMs: 5_000,
   });
 });
 
@@ -116,13 +83,11 @@ it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
     }),
   });
 
-  expect(mocks.note).toHaveBeenCalledWith(
-    expect.stringContaining("Legacy WhatsApp crontab health check detected"),
-    "Cron",
-  );
-  expect(mocks.note).toHaveBeenCalledWith(
-    expect.stringContaining("systemd user bus environment is missing"),
-    "Cron",
-  );
-  expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
+  for (const text of [
+    "Legacy WhatsApp crontab health check detected",
+    "systemd user bus environment is missing",
+    "Matched 1 entry",
+  ]) {
+    expect(mocks.note).toHaveBeenCalledWith(expect.stringContaining(text), "Cron");
+  }
 });

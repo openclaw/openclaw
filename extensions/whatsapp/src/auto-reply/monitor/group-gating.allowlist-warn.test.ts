@@ -1,4 +1,3 @@
-// Whatsapp tests cover group gating.allowlist warn plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./group-activation.js", () => ({
@@ -16,13 +15,8 @@ function makeUnregisteredGroupMsg(
   accountId = "default",
 ): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
-    event: {
-      id: `msg-${conversationId}`,
-      timestamp: 1700000000,
-    },
-    payload: {
-      body: "@openclaw hello",
-    },
+    event: { id: `msg-${conversationId}`, timestamp: 1700000000 },
+    payload: { body: "@openclaw hello" },
     platform: {
       chatJid: conversationId,
       recipientJid: "+15550000001",
@@ -30,58 +24,28 @@ function makeUnregisteredGroupMsg(
     },
     admission: {
       accountId,
-      conversation: {
-        kind: "group",
-        id: conversationId,
-      },
-      sender: {
-        id: "+15550000002",
-      },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
+      conversation: { kind: "group", id: conversationId },
+      sender: { id: "+15550000002" },
+      senderAccess: { reasonCode: "group_policy_allowed" },
     },
   });
 }
 
 type WarnLogger = (...args: unknown[]) => void;
-type GroupTestParams = { cfg: OpenClawConfig };
+const allowlist = { groupPolicy: "allowlist", groups: { "registered@g.us": {} } } as const;
 
 function makeParams(
   msg: AdmittedWebInboundMessage,
   warn: ReturnType<typeof vi.fn<WarnLogger>>,
-  cfg: GroupTestParams["cfg"] = {
-    channels: {
-      whatsapp: {
-        groupPolicy: "allowlist",
-        groups: {
-          "registered@g.us": {},
-        },
-        accounts: {
-          work: {
-            groupPolicy: "allowlist",
-            groups: {
-              "registered@g.us": {},
-            },
-          },
-        },
-      },
-    },
-    messages: {
-      groupChat: {
-        mentionPatterns: ["\\bopenclaw\\b"],
-      },
-    },
-  } as never,
+  cfg: OpenClawConfig = {
+    channels: { whatsapp: { ...allowlist, accounts: { work: allowlist } } },
+    messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+  },
 ) {
   const admission = msg.admission;
-  if (!admission) {
-    throw new Error("Expected admitted WhatsApp test message");
-  }
   const fixture = createGroupGatingTestHandler({ cfg, warn });
   return {
     ...fixture,
-    cfg,
     msg,
     groupHistoryKey: buildGroupHistoryKey({
       channel: "whatsapp",
@@ -89,7 +53,6 @@ function makeParams(
       peerKind: "group",
       peerId: admission.conversation.id,
     }),
-    logVerbose: fixture.verboseMock,
   };
 }
 
@@ -100,25 +63,14 @@ async function handleGroup(params: ReturnType<typeof makeParams>) {
 }
 
 describe("WhatsApp group admission drop warning", () => {
-  it.each([
-    {
-      name: "names the root groups path for non-default accounts inheriting root groups",
-      conversationId: "inherited-unregistered@g.us",
-      accountId: "work",
-      groupsPath: "channels.whatsapp.groups",
-      cfg: {
-        channels: {
-          whatsapp: {
-            groupPolicy: "allowlist",
-            groups: { "registered@g.us": {} },
-            accounts: { work: { groupPolicy: "allowlist" } },
-          },
-        },
-        messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-      } as GroupTestParams["cfg"],
-      verboseMessage: undefined,
-    },
-  ])("$name", async ({ conversationId, accountId, groupsPath, cfg, verboseMessage }) => {
+  it("names the root groups path for non-default accounts inheriting root groups", async () => {
+    const conversationId = "inherited-unregistered@g.us";
+    const accountId = "work";
+    const groupsPath = "channels.whatsapp.groups";
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { ...allowlist, accounts: { work: { groupPolicy: "allowlist" } } } },
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    };
     const warn = vi.fn<WarnLogger>();
     const msg = makeUnregisteredGroupMsg(conversationId, accountId);
     const params = makeParams(msg, warn, cfg);
@@ -126,9 +78,6 @@ describe("WhatsApp group admission drop warning", () => {
     await expect(handleGroup(params)).resolves.toEqual({ shouldProcess: false });
 
     expect(warn).toHaveBeenCalledTimes(1);
-    if (verboseMessage) {
-      expect(params.logVerbose).toHaveBeenCalledWith(verboseMessage);
-    }
     const [context, message] = warn.mock.calls[0] ?? [];
     expect(context).toMatchObject({ conversationId, accountId, groupsPath });
     expect(message).toContain(conversationId);
@@ -154,7 +103,7 @@ describe("WhatsApp group admission drop warning", () => {
           accounts: { work: { groups: { "*": {} } } },
         },
       },
-    } satisfies GroupTestParams["cfg"];
+    } satisfies OpenClawConfig;
     const makeUnmentioned = (conversationId: string, accountId = "default") => {
       const msg = makeUnregisteredGroupMsg(conversationId, accountId);
       msg.payload.body = "What up";
@@ -172,9 +121,9 @@ describe("WhatsApp group admission drop warning", () => {
       "What up",
       "What up",
     ]);
-    expect(first.logVerbose).toHaveBeenCalledWith(expect.stringContaining("no mention detected"));
+    expect(first.verboseMock).toHaveBeenCalledWith(expect.stringContaining("no mention detected"));
     expect(
-      JSON.stringify([first.logVerbose.mock.calls, warn.mock.calls]).toLowerCase(),
+      JSON.stringify([first.verboseMock.mock.calls, warn.mock.calls]).toLowerCase(),
     ).not.toContain("what up");
     expect(warn.mock.calls[0]?.[1]).toContain(
       'channels.whatsapp.groups["mention-a@g.us"].requireMention',

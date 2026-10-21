@@ -652,7 +652,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
                   </span>
                 </Show>
               </span>
-              <Icon name="chevronDown" />
+              <Icon name="chevronDown" class="chat-pane__sharing-chevron" />
             </>
           }
           items={sharing.items()}

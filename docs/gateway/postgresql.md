@@ -865,9 +865,11 @@ follow a prefix):
 Connection loss closes the failed connection. The engine distinguishes a known
 rolled-back transaction from an uncertain outcome, invalidating cached facts
 when a commit may have occurred. It does not switch to SQLite or promise
-transparent replay of every operation. Recover server connectivity, inspect the
-operation's recorded result, and restart the Gateway through its service owner
-if needed to reopen stores.
+transparent replay of every operation. The shared-state worker retires its failed
+connection so a subsequent operation can reopen the store once PostgreSQL is
+available. The interrupted operation is not replayed. Recover server connectivity
+and inspect the operation's recorded result before repeating an external effect.
+If another store remains unavailable, restart the Gateway through its service owner.
 
 ## Roll back to SQLite
 

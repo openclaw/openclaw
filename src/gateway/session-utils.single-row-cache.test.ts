@@ -256,7 +256,7 @@ test(
         if (!denied) {
           throw new Error("expected lifecycle tool overrides");
         }
-        denied.push("response-only");
+        expect(() => denied.push("response-only")).toThrow(TypeError);
         expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
       });
     }

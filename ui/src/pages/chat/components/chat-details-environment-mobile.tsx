@@ -1,6 +1,7 @@
 import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { EnvironmentChangeCounts } from "./chat-details-environment.tsx";
 import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
@@ -18,8 +19,9 @@ export type ChatDetailsEnvironmentMobileProps = Omit<
 
 /** A controlled leaf: the mobile host owns routes, facts, and retained state. */
 export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobileProps) {
+  const visible = createDocumentVisibility();
   const requestUncommitted = createMemo(() =>
-    props.presented ? props.onRequestUncommitted : undefined,
+    props.presented && visible() ? props.onRequestUncommitted : undefined,
   );
   const workspace = () => props.details.detailsWorkspace;
   const session = () => props.details.selectedSession;

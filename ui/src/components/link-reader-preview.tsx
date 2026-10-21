@@ -13,7 +13,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatGitHubItemReference, parseGitHubLinkTarget } from "./github-link-target.ts";
-import { createPreviewRenderer } from "./link-reader-preview-root.ts";
+import { createPreviewRenderer } from "./link-reader-preview-root.tsx";
 import { linkReaderAuthorHref, linkReaderResponseMatchesTarget } from "./link-reader-response.ts";
 import { linkReaderTargetKey, type LinkReaderTarget } from "./link-reader-target.ts";
 import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";

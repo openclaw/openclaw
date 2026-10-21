@@ -32,6 +32,7 @@ import {
 } from "../session-row-projection-access.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import { replaceSessionRowFacts } from "../session-utils-row.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
@@ -174,11 +175,9 @@ function preparePlacementProjection(
     }
     const placement = placements.get(record.entry.sessionId);
     // Simulate committed owner facts without reading the placement store during event snapshots.
-    if (placement) {
-      record.materialized.row.placement = projectWorkerSessionPlacement(placement);
-    } else {
-      delete record.materialized.row.placement;
-    }
+    record.materialized = replaceSessionRowFacts(record.materialized, {
+      placement: placement ? projectWorkerSessionPlacement(placement) : undefined,
+    });
   };
   update();
   return { update };
