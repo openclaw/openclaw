@@ -705,8 +705,8 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           await emitPreamble(options, commentary);
           await tool(options, "exec", "inspect-tool");
           if (!denied) {
-            await waitForContaining(commentary);
-            expect(texts().join("\n")).toContain(commentary);
+            await http.waitForContaining(commentary);
+            expect(http.texts().join("\n")).toContain(commentary);
           }
         },
         {
@@ -733,7 +733,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       } else {
         expect(calls.some((call) => call.method === "deleteMessage")).toBe(true);
       }
-      expect(texts()).toEqual(!denied && ownership === "automatic" ? [finalText] : []);
+      expect(http.texts()).toEqual(!denied && ownership === "automatic" ? [finalText] : []);
     },
   );
 });
