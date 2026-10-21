@@ -603,8 +603,8 @@ suite.define(() => {
         "right",
       );
       await expectHoverTooltip(
-        page.getByRole("button", { name: "Open command palette" }),
-        `Open command palette ${commandPaletteShortcut}`,
+        page.getByRole("button", { name: "Command palette" }),
+        `Command palette ${commandPaletteShortcut}`,
         "right",
       );
       await expectHoverTooltip(
