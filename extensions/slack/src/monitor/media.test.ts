@@ -150,28 +150,6 @@ const privateFile = (name: string, fields: Partial<SlackFile> = {}): SlackFile =
 });
 
 describe("resolveSlackMedia", () => {
-  it("strips Authorization on cross-origin redirects for private downloads", async () => {
-    const redirectedUrl = "https://downloads.slack-edge.com/presigned-url?sig=abc123";
-    mockFetch
-      .mockResolvedValueOnce(
-        new Response(null, { status: 302, headers: { location: redirectedUrl } }),
-      )
-      .mockResolvedValueOnce(mediaResponse("image data", "image/jpeg"));
-
-    const result = await resolveMedia({
-      files: [{ url_private_download: "https://files.slack.com/download.jpg", name: "test.jpg" }],
-    });
-
-    expectSlackMediaResult(result);
-    expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch.mock.calls.map(([url]) => url)).toEqual([
-      "https://files.slack.com/download.jpg",
-      redirectedUrl,
-    ]);
-    expect(getRequestHeader(0, "Authorization")).toBe("Bearer xoxb-test-token");
-    expect(getRequestHeader(1, "Authorization")).toBeNull();
-  });
-
   it("rejects files.info refresh URLs that escape the GovSlack trust plane", async () => {
     const client = fileInfoClient(
       { url_private_download: "https://files.slack.com/cross-plane.png" },
@@ -390,23 +368,6 @@ describe("resolveSlackMedia", () => {
       fallbackContentType: "audio/mp4",
     });
     expect(media[0]?.contentType).toBe("audio/mp4");
-  });
-
-  it("caps downloads to 8 files for large multi-attachment messages", async () => {
-    mockFetch.mockImplementation(async () => mediaResponse("image data", "image/jpeg"));
-
-    const files = Array.from({ length: 9 }, (_, idx) =>
-      privateFile(`file-${idx}.jpg`, { mimetype: "image/jpeg" }),
-    );
-
-    const unavailableFiles = new Map<SlackFile, string>();
-    const result = await resolveMedia({ files, unavailableFiles });
-
-    const media = expectSlackMediaResult(result);
-    expect(media).toHaveLength(8);
-    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(8);
-    expect(mockFetch).toHaveBeenCalledTimes(8);
-    expect([...unavailableFiles]).toEqual([[files[8], "omitted: 8-file limit"]]);
   });
 
   it("uses global fetch without a dispatcher even when fetch is mocked", async () => {

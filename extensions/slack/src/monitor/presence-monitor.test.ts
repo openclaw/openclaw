@@ -362,34 +362,42 @@ describe("Slack presence monitor", () => {
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "UDIRECT" });
   });
 
-  it("times out a stalled presence request and polls the next user", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi
-        .fn()
-        .mockReturnValueOnce(stalled.promise)
-        .mockResolvedValueOnce({ presence: "away" });
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
-      monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
-
-      polling = monitor.advancePoll();
-      const pollSettled = vi.fn();
-      void polling.then(pollSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(pollSettled).toHaveBeenCalledOnce();
-      await polling;
-
-      expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
-      expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
-    } finally {
-      stalled.resolve({ presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
-  });
+  it.each(["continue", "stop"] as const)(
+    "bounds a stalled request when the poll must %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const stalled = createDeferred<{ presence: string }>();
+      let polling: Promise<void> | undefined;
+      try {
+        const getPresence = vi
+          .fn()
+          .mockReturnValueOnce(stalled.promise)
+          .mockResolvedValueOnce({ presence: "away" });
+        const monitor = createPresenceFixture({ getPresence });
+        monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
+        if (action === "continue") {
+          monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
+        }
+        polling = monitor.advancePoll();
+        const stopping = action === "stop" ? monitor.stop() : undefined;
+        const settled = vi.fn();
+        void (stopping ?? polling).then(settled);
+        await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
+        expect(settled).toHaveBeenCalledOnce();
+        await Promise.all([polling, stopping]);
+        expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
+        if (action === "continue") {
+          expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
+        } else {
+          expect(getPresence).toHaveBeenCalledOnce();
+        }
+      } finally {
+        stalled.resolve({ presence: "away" });
+        await polling;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("honors Slack Retry-After without skipping the unpolled page", async () => {
     const clock = createGatewaySchedulerClock(1_000);
@@ -419,31 +427,6 @@ describe("Slack presence monitor", () => {
 
     await monitor.advancePoll();
     expect(getPresence).toHaveBeenNthCalledWith(47, { user: "U0046" });
-  });
-
-  it("bounds stop while a presence request is stalled", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ ok: boolean; presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi.fn(() => stalled.promise);
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1" }));
-
-      polling = monitor.advancePoll();
-      const stopping = monitor.stop();
-      const stopSettled = vi.fn();
-      void stopping.then(stopSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(stopSettled).toHaveBeenCalledOnce();
-      await Promise.all([polling, stopping]);
-
-      expect(getPresence).toHaveBeenCalledOnce();
-    } finally {
-      stalled.resolve({ ok: true, presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
   });
 
   it.each(["retarget", "stop", "ineligible", "expired", "replaced"] as const)(

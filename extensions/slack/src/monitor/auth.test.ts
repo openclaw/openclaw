@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setSlackRuntime } from "../runtime.js";
 import type { SlackMonitorContext } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
+import { slackIngressIdentity } from "./ingress-identity.js";
 
 const upsertChannelPairingRequestMock = vi.hoisted(() => vi.fn());
 
@@ -15,12 +16,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
 }));
 
-const participantDescriptors = vi.hoisted(
-  () =>
-    [] as Array<
-      import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressIdentityDescriptor
-    >,
-);
 const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
 const {
   authorizeSlackBotRoomMessage,
@@ -41,13 +36,6 @@ vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
   >("openclaw/plugin-sdk/channel-ingress-runtime");
   return {
     ...actual,
-    defineStableChannelIngressIdentity: (
-      params: Parameters<typeof actual.defineStableChannelIngressIdentity>[0],
-    ) => {
-      const identity = actual.defineStableChannelIngressIdentity(params);
-      participantDescriptors.push(identity);
-      return identity;
-    },
     readChannelIngressStoreAllowFromForDmPolicy: (...args: unknown[]) =>
       readChannelIngressStoreAllowFromForDmPolicyMock(...args),
   };
@@ -105,6 +93,7 @@ const deniedChannel: AuthorizeExpected = {
   channelName: "general",
 };
 const channelUsers = { C1: { users: ["U_ALLOWED"] } };
+type MembersResponse = { members: string[]; response_metadata: { next_cursor?: string } };
 
 function interactiveRequest(
   senderId: string,
@@ -250,7 +239,6 @@ describe("authorizeSlackSystemEventSender", () => {
   });
 
   it("coalesces in-flight channel member lookups", async () => {
-    type MembersResponse = { members: string[]; response_metadata: Record<string, never> };
     const members = createDeferred<MembersResponse>();
     const { authorize, conversationsMembers } = makeChannelMemberAuth(vi.fn(() => members.promise));
 
@@ -262,34 +250,28 @@ describe("authorizeSlackSystemEventSender", () => {
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
-  it.each([["a cursor cycle", ["cursor-a", "cursor-b", "cursor-a"]]] as const)(
-    "denies channel bot authorization on %s and retries cleanly",
-    async (_name, cursors) => {
-      type MembersResponse = {
-        members: string[];
-        response_metadata: { next_cursor?: string };
-      };
-      const remainingCursors = [...cursors];
-      const conversationsMembers = vi.fn(async (): Promise<MembersResponse> => {
-        const nextCursor = remainingCursors.shift();
-        if (!nextCursor) {
-          throw new Error("channel member pagination escaped the cursor guard");
-        }
-        return { members: ["UOWNER"], response_metadata: { next_cursor: nextCursor } };
-      });
-      const { authorize } = makeChannelMemberAuth(conversationsMembers);
+  it("denies channel bot authorization on a cursor cycle and retries cleanly", async () => {
+    const cursors = ["cursor-a", "cursor-b", "cursor-a"];
+    const remainingCursors = [...cursors];
+    const conversationsMembers = vi.fn(async (): Promise<MembersResponse> => {
+      const nextCursor = remainingCursors.shift();
+      if (!nextCursor) {
+        throw new Error("channel member pagination escaped the cursor guard");
+      }
+      return { members: ["UOWNER"], response_metadata: { next_cursor: nextCursor } };
+    });
+    const { authorize } = makeChannelMemberAuth(conversationsMembers);
 
-      await expect(authorize()).resolves.toBe(false);
-      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length);
+    await expect(authorize()).resolves.toBe(false);
+    expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length);
 
-      conversationsMembers.mockResolvedValueOnce({
-        members: ["UOWNER"],
-        response_metadata: {},
-      });
-      await expect(authorize()).resolves.toBe(true);
-      expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length + 1);
-    },
-  );
+    conversationsMembers.mockResolvedValueOnce({
+      members: ["UOWNER"],
+      response_metadata: {},
+    });
+    await expect(authorize()).resolves.toBe(true);
+    expect(conversationsMembers).toHaveBeenCalledTimes(cursors.length + 1);
+  });
 
   it.each([
     [
@@ -499,9 +481,10 @@ it.each([
   "qualifies Slack participant identity from workspace evidence %s",
   (workspaceSenderId, expected) => {
     expect(
-      participantDescriptors
-        .at(-1)
-        ?.resolveParticipant?.({ stableId: "u123", aliases: { workspaceSenderId } }),
+      slackIngressIdentity.resolveParticipant?.({
+        stableId: "u123",
+        aliases: { workspaceSenderId },
+      }),
     ).toEqual(expected);
   },
 );

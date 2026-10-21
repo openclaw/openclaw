@@ -223,6 +223,11 @@ describe("createSlackBoltApp", () => {
     try {
       const { app, receiver } = await createSocketApp();
       const client = receiver.client;
+      const stop = app.stop.bind(app);
+      vi.spyOn(app, "stop").mockImplementation(async () => {
+        expect(Reflect.get(client, "shuttingDown")).toBe(true);
+        await stop();
+      });
       const start = vi.fn(async () => {
         Reflect.set(client, "shuttingDown", false);
       });
@@ -450,20 +455,6 @@ describe("slack socket reconnect helpers", () => {
       }),
     ).rejects.toThrow(message);
     expectNoSocketListeners(client);
-  });
-
-  it("marks the socket client as shutting down before stop runs", async () => {
-    const app = {
-      receiver: { client: { shuttingDown: false } },
-      stop: vi.fn().mockImplementation(async () => {
-        expect(app.receiver.client.shuttingDown).toBe(true);
-      }),
-    };
-
-    await gracefulStopSlackApp(app, app.receiver.client);
-
-    expect(app.stop).toHaveBeenCalledTimes(1);
-    expect(app.receiver.client.shuttingDown).toBe(true);
   });
 });
 
