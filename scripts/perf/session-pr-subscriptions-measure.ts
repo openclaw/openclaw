@@ -268,7 +268,9 @@ if (values.child) {
     });
   }
   async function rpc(peer: (typeof peers)[number], method: string, params: unknown) {
-    assert(!failure, failure?.message);
+    if (failure) {
+      throw failure;
+    }
     const started = performance.now();
     const response = await peer.request(method, params, 60000);
     assert(response.ok, `${method}: ${JSON.stringify(response.error)}`);

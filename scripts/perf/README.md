@@ -64,7 +64,7 @@ node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
   --approvals 0 --cron 0 --projects 0 --transcript-mib 0 --port 41567
 node --import ./scripts/tsx.mjs scripts/perf/session-pr-subscriptions-measure.ts \
   --root /path/to/new-fixture --output /path/to/results --port 41567 \
-  --clients 8 --keys 50 --operations 1000 --subscribes 256 --interval-ms 50 \
+  --clients 8 --keys 50 --operations 1000 --subscribes 256 --interval-ms 100 \
   --start-at <future-epoch-ms>
 ```
 
