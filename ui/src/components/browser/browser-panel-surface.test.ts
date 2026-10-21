@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationDraft } from "./browser-annotation.ts";
+import { createView } from "./browser-panel-controller-test-support.ts";
 import {
   dispatchCompositedBrowserAnnotation,
   type BrowserPanelView,
@@ -7,30 +8,26 @@ import {
 
 describe("dispatchCompositedBrowserAnnotation", () => {
   const drawImage = vi.fn();
+  const canvas = HTMLCanvasElement.prototype;
   const strokes = [{ points: [{ x: 0.25, y: 0.5 }] }];
   const capture = (view: BrowserPanelView) =>
     dispatchCompositedBrowserAnnotation(view, undefined, strokes, null, null);
   const view = (kind?: BrowserPanelView["kind"]): BrowserPanelView => ({
+    ...createView("tab-1", "https://user:secret@example.com/path"),
     kind,
     browserTab: { target: "host", profile: "managed", targetId: "tab-1" },
-    targetId: "tab-1",
-    dataUrl: "data:image/png;base64,source",
-    image: { naturalWidth: 800, naturalHeight: 600 } as HTMLImageElement,
-    url: "https://user:secret@example.com/path",
     metrics: null,
   });
   beforeEach(() => {
     drawImage.mockClear();
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    vi.spyOn(canvas, "getContext").mockReturnValue({
       drawImage,
       beginPath: vi.fn(),
       moveTo: vi.fn(),
       lineTo: vi.fn(),
       stroke: vi.fn(),
     } as unknown as CanvasRenderingContext2D);
-    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
-      "data:image/png;base64,annotated",
-    );
+    vi.spyOn(canvas, "toDataURL").mockReturnValue("data:image/png;base64,annotated");
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -38,7 +35,7 @@ describe("dispatchCompositedBrowserAnnotation", () => {
     const page = view(kind);
     expect(capture(page)).toBe("unhandled");
     expect(drawImage).toHaveBeenCalledTimes(1);
-    expect(HTMLCanvasElement.prototype.toDataURL).toHaveBeenCalledTimes(1);
+    expect(canvas.toDataURL).toHaveBeenCalledTimes(1);
 
     let draft: BrowserAnnotationDraft | undefined;
     const consume = (event: Event) => {
@@ -53,7 +50,7 @@ describe("dispatchCompositedBrowserAnnotation", () => {
     }
 
     expect(drawImage).toHaveBeenCalledTimes(2);
-    expect(HTMLCanvasElement.prototype.toDataURL).toHaveBeenCalledTimes(2);
+    expect(canvas.toDataURL).toHaveBeenCalledTimes(2);
     expect(draft).toMatchObject({
       modelContext: expect.stringContaining("https://example.com/path"),
       card: {

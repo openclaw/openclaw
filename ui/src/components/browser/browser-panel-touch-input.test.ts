@@ -21,9 +21,8 @@ function pointer(type: string, id: number, x: number, y: number, pointerType: st
   return Object.assign(event, { pointerId: id, pointerType }) as PointerEvent;
 }
 
-function click(x: number, y: number) {
-  return new MouseEvent("click", { bubbles: true, clientX: x, clientY: y });
-}
+const click = (clientX: number, clientY: number) =>
+  new MouseEvent("click", { bubbles: true, clientX, clientY });
 
 function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
   const root = controller.host.renderRoot;
