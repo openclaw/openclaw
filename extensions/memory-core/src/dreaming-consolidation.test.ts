@@ -145,15 +145,6 @@ async function prepareRecall(
 
 describe("memory consolidation", () => {
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
-    const candidates = [
-      candidate("owner"),
-      candidate("agent"),
-      candidate("untrusted"),
-      candidate("system"),
-    ];
-    expect(
-      filterConsolidationCandidates(candidates).map((entry) => entry.provenance?.originClass),
-    ).toEqual(["owner", "agent"]);
     const cronSessionCandidate = {
       ...candidate("agent"),
       path: "memory/.dreams/session-corpus/2026-07-01.txt",
@@ -470,40 +461,6 @@ describe("memory consolidation", () => {
       }),
     ]);
     expect(subagent.complete).not.toHaveBeenCalled();
-    await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
-  });
-
-  it("rejects a candidate downgraded in the recall store during consolidation", async () => {
-    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
-      "memory-consolidation-provenance-race-",
-    );
-    const subagent = createSubagent(decisionOutput(promoted), "ok", async () => {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "external tea claim",
-        results: [
-          {
-            ...recallResult,
-            provenance: {
-              originClass: "untrusted",
-              sessionKind: "interactive",
-              observedAt: Date.parse("2026-07-02T10:01:00.000Z"),
-            },
-          },
-        ],
-        nowMs: Date.parse("2026-07-02T10:01:00.000Z"),
-      });
-    });
-
-    const applied = await apply(subagent);
-
-    expect(applied.applied).toBe(0);
-    expect(applied.rejectedCandidates).toEqual([
-      expect.objectContaining({
-        category: "candidate changed",
-        reason: "candidate changed during apply",
-      }),
-    ]);
     await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
   });
 

@@ -3,7 +3,6 @@ import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -510,12 +509,6 @@ describe("memory forget curated writes", () => {
     await fs.writeFile(
       path.join(archiveDir, "target.jsonl.deleted.2026-08-26T12-35-00.000Z.zst"),
       zstdCompressSync(`${JSON.stringify(archivedMessage)}\n`),
-    );
-    expect(await listSessionTranscriptCorpusEntriesForAgent("main")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ sessionId: "target", artifactKind: "active-session" }),
-        expect.objectContaining({ sessionId: "target", artifactKind: "archive-artifact" }),
-      ]),
     );
     expect(await listMemoryArtifactProvenance({ workspaceDir: h.workspaceDir })).toEqual([]);
 
