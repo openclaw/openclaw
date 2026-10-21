@@ -291,6 +291,17 @@ function mockPlanTimings(read: () => Readonly<Record<string, number>>) {
 function mockUnbuiltRuntime() {
   mockOriginal("build", { resolveVitestPretestBuildMode: () => undefined });
 }
+async function mockFastPaths(files: string[] = []) {
+  const original = await vi.importActual<FixtureModules["fast"]>(fixtureModuleIds.fast);
+  vi.resetModules();
+  mockFixture("fast", () => ({
+    ...original,
+    getUnitFastTestFiles: () => [...files],
+    getUnitFastIsolatedTestFiles: () => [],
+    getUnitFastTimerTestFiles: () => [],
+    getUnitFastTestFilesForIncludePatterns: () => [...files],
+  }));
+}
 
 describe("Control UI release-only inventories", () => {
   const sidebar = "ui/src/components/app-sidebar.stress.browser.test.ts";
@@ -1325,17 +1336,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const buildMode = vi.fn<typeof buildPrerequisites.resolveVitestPretestBuildMode>(
         () => undefined,
       );
-      const unitFastPaths = await vi.importActual<
-        typeof import("../vitest/vitest.unit-fast-paths.mjs")
-      >("../vitest/vitest.unit-fast-paths.mjs");
-      vi.resetModules();
-      mockFixture("fast", () => ({
-        ...unitFastPaths,
-        getUnitFastTestFiles: () => [fastModel],
-        getUnitFastIsolatedTestFiles: () => [],
-        getUnitFastTimerTestFiles: () => [],
-        getUnitFastTestFilesForIncludePatterns: () => [fastModel],
-      }));
+      await mockFastPaths([fastModel]);
       mockPlanShards(() => [fixtureShard("agentic", [config], configPath("full-agentic"))]);
       mockTrackedFiles((root: string) => (root === "src/agents" ? files : []));
       mockPlanTimings(() => seconds);
@@ -2359,12 +2360,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const config = configPath("infra");
       const longest = MEASURED_STORAGE_RECOVERY_TEST;
       const ordinary = "src/infra/sqlite-readonly-location.copy.test.ts";
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
-      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
-      mockTrackedFiles((root: string) => (companion && root === "src/infra" ? [ordinary] : []));
       const measurements: Record<string, number> = { "core-runtime-infra-storage-state": 1 };
-      mockPlanTimings(() => measurements);
+      mockProject("core-runtime", config, "src/infra", companion ? [ordinary] : [], measurements);
+      mockOriginal("database", { databaseWorkerCoreTestFiles: [longest] });
       mockUnbuiltRuntime();
       const {
         createNodeTestShardBundles: createPlan,
@@ -2431,13 +2429,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         (_, index) => `${root}/fixture/entry-${String(index).padStart(3, "0")}.test.ts`,
       );
       const timings: Record<string, number> = { [owner]: 240 };
-      vi.resetModules();
-      mockPlanShards(() => [fixtureShard(suite, [config])]);
-      mockTrackedFiles((candidate: string) => (candidate === root ? files : []));
+      mockProject(suite, config, root, files, timings);
       mockOriginal("inventory", {
         listWholeConfigSplitFiles: (candidate: string) => (candidate === owner ? files : undefined),
       });
-      mockPlanTimings(() => timings);
       mockUnbuiltRuntime();
       const { createNodeTestShardBundles: createPlan } = await loadPlanModule([
         "build",
@@ -3299,17 +3294,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compactNodeJobCap?: number;
     };
   }) {
-    const unitFastPaths = await vi.importActual<
-      typeof import("../vitest/vitest.unit-fast-paths.mjs")
-    >("../vitest/vitest.unit-fast-paths.mjs");
-    vi.resetModules();
-    mockFixture("fast", () => ({
-      ...unitFastPaths,
-      getUnitFastTestFiles: () => [],
-      getUnitFastIsolatedTestFiles: () => [],
-      getUnitFastTimerTestFiles: () => [],
-      getUnitFastTestFilesForIncludePatterns: () => [],
-    }));
+    await mockFastPaths();
     mockPlanShards(() => params.shards);
     mockFixture("timings", () => ({
       ...testTimings,

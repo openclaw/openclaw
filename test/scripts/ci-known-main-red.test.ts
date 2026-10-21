@@ -109,6 +109,15 @@ const completeLintReport = (message = "unused import") =>
     `${lintFile}:1:10: error: ${message} (eslint(no-unused-vars))\nFound 0 warnings and 1 error.`,
     1,
   );
+const failedJob = (name: string, step: string, base = job) => ({
+  ...base,
+  name,
+  steps: [{ name: step, conclusion: "failure" }],
+});
+const changedReport = (from: string | RegExp, to: string) => ({
+  prReport: report().replace(from, to),
+});
+const appendedReport = (text: string) => ({ prReport: `${report()}\n${text}` });
 
 function failureClassifier(
   options: {
@@ -329,74 +338,58 @@ describe("main failure attribution", () => {
     });
   });
 
-  it.each([
-    {
-      name: "matching Node assertions",
-      failure: job,
-      expected: "pre-existing",
-      reason: "Failure signatures match main; selected scope not compared",
-    },
-    {
-      name: "changed Node assertions",
-      failure: job,
-      prReport: report("startup > rejects the session"),
-      expected: "new",
-    },
-    {
-      name: "only a subset of main assertions",
-      failure: job,
-      mainReport: report() + report("startup > rejects the session"),
-      expected: "new",
-    },
-    {
-      name: "matching static types",
-      failure: typeJob,
-      mainReport: typeReport(),
-      prReport: typeReport(),
-      expected: "pre-existing",
-    },
-    {
-      name: "changed static types",
-      failure: typeJob,
-      mainReport: typeReport(),
-      prReport: typeReport(typeDiagnostic.replace("TS2367", "TS2554")),
-      expected: "new",
-    },
-    {
-      name: "matching legacy lint diagnostics",
-      failure: lintJob,
-      mainReport: lintReport,
-      prReport: lintReport,
-      expected: "pre-existing",
-    },
-    {
-      name: "a Node setup failure without signatures",
-      failure: { ...job, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
-      expected: "unknown",
-    },
-    { name: "missing assertions", failure: job, prReport: "truncated log", expected: "unknown" },
-    {
-      name: "a timeout in a signature-capable job",
-      failure: { ...job, conclusion: "timed_out" },
-      expected: "unknown",
-    },
-    {
-      name: "the same unparsed build failure",
-      failure: { ...job, name: "build-artifacts" },
-      expected: "pre-existing",
-      reason:
-        "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
-    },
-    {
-      name: "the same unparsed build timeout",
-      failure: { ...job, name: "build-artifacts", conclusion: "timed_out" },
-      expected: "pre-existing",
-      reason:
-        "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
-    },
-  ])("classifies $name as $expected", async ({ failure, expected, reason, ...options }) => {
+  it.each<[string, typeof job, string, string?, string?, string?]>([
+    [
+      "matching Node assertions",
+      job,
+      "pre-existing",
+      undefined,
+      undefined,
+      "Failure signatures match main; selected scope not compared",
+    ],
+    ["changed Node assertions", job, "new", undefined, report("startup > rejects the session")],
+    [
+      "only a subset of main assertions",
+      job,
+      "new",
+      report() + report("startup > rejects the session"),
+    ],
+    ["matching static types", typeJob, "pre-existing", typeReport(), typeReport()],
+    [
+      "changed static types",
+      typeJob,
+      "new",
+      typeReport(),
+      typeReport(typeDiagnostic.replace("TS2367", "TS2554")),
+    ],
+    ["matching legacy lint diagnostics", lintJob, "pre-existing", lintReport, lintReport],
+    [
+      "a Node setup failure without signatures",
+      failedJob(job.name, "Prepare workspace"),
+      "unknown",
+    ],
+    ["missing assertions", job, "unknown", undefined, "truncated log"],
+    ["a timeout in a signature-capable job", { ...job, conclusion: "timed_out" }, "unknown"],
+    [
+      "the same unparsed build failure",
+      { ...job, name: "build-artifacts" },
+      "pre-existing",
+      undefined,
+      undefined,
+      "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
+    ],
+    [
+      "the same unparsed build timeout",
+      { ...job, name: "build-artifacts", conclusion: "timed_out" },
+      "pre-existing",
+      undefined,
+      undefined,
+      "Job name only (signatures not compared); check failing tests against main before attribution; selected scope not compared",
+    ],
+  ])("classifies %s", async (_name, failure, expected, mainReport, prReport, reason) => {
     const classifier = failureClassifier({
-      ...options,
+      mainReport,
+      prReport,
       mainJobs: [{ ...failure, id: 20 }],
     });
     expect(await classifier.classifyJob(failure)).toMatchObject({
@@ -465,14 +458,15 @@ describe("main failure attribution", () => {
       classifier.classifyJob(job),
       classifier.classifyJob({ ...job, id: 11, name: "not-planned-on-main" }),
     ]);
-    expect(results.map((result) => result.mainRunId)).toEqual([201, 201]);
-    expect(results.map((result) => result.class)).toEqual(["pre-existing", "unknown"]);
-    expect(
-      classifier.api.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/runs")),
-    ).toHaveLength(1);
-    expect(
-      classifier.api.mock.calls.filter(([url]) => new URL(url).pathname.endsWith("/jobs")),
-    ).toHaveLength(1);
+    expect(results).toMatchObject([
+      { mainRunId: 201, class: "pre-existing" },
+      { mainRunId: 201, class: "unknown" },
+    ]);
+    for (const suffix of ["/runs", "/jobs"]) {
+      expect(
+        classifier.api.mock.calls.filter(([url]) => new URL(url).pathname.endsWith(suffix)),
+      ).toHaveLength(1);
+    }
   });
 });
 
@@ -517,14 +511,14 @@ describe("known hourly main failures", () => {
         "/actions/runs/200/attempts/1/jobs",
         "/actions/jobs/20/logs",
         "/actions/jobs/10/logs",
+        "/pulls/7",
+        "/git/ref/heads/main",
       ]) {
         expect(
           requests.filter((request) => request.endsWith(path)),
           path,
         ).toHaveLength(1);
       }
-      expect(requests.filter((request) => request.endsWith("/pulls/7"))).toHaveLength(1);
-      expect(requests.filter((request) => request.endsWith("/git/ref/heads/main"))).toHaveLength(1);
     },
   );
 
@@ -571,17 +565,14 @@ describe("known hourly main failures", () => {
       { changed: ["runtime/index.ts"], source: 'import { start } from "../../runtime";' },
     ],
     ["computed subject", { source: "const subject = await import(name);" }],
-    ["unreported failure", { prReport: report().replace("Tests 1 failed", "Tests 2 failed") }],
-    ["missing test summary", { prReport: report().replace(/Tests 1 failed[^\n]+/u, "") }],
-    ["failed suite", { prReport: `${report()}\nFailed Suites 1` }],
-    ["unhandled rejection", { prReport: `${report()}\nUnhandled Rejection` }],
-    ["extra failure annotation", { prReport: `${report()}\n##[error]worker crashed` }],
-    [
-      "missing execution receipt",
-      { prReport: report().replace(/^.*\[shard:completion\].*\n/mu, "") },
-    ],
-    ["unfinished outer plan", { prReport: report().replace('"planned":1', '"planned":2') }],
-    ["duplicate execution receipt", { prReport: `${report()}\n[shard:completion] {"version":1}` }],
+    ["unreported failure", changedReport("Tests 1 failed", "Tests 2 failed")],
+    ["missing test summary", changedReport(/Tests 1 failed[^\n]+/u, "")],
+    ["failed suite", appendedReport("Failed Suites 1")],
+    ["unhandled rejection", appendedReport("Unhandled Rejection")],
+    ["extra failure annotation", appendedReport("##[error]worker crashed")],
+    ["missing execution receipt", changedReport(/^.*\[shard:completion\].*\n/mu, "")],
+    ["unfinished outer plan", changedReport('"planned":1', '"planned":2')],
+    ["duplicate execution receipt", appendedReport('[shard:completion] {"version":1}')],
     [
       "unknown stream before summary",
       { prReport: `[shard:coverage] Error: setup failed\n${report()}` },
@@ -596,21 +587,17 @@ describe("known hourly main failures", () => {
     ],
     [
       "failure before first summary",
-      {
-        prReport: report().replace(
-          "[shard:gateway] Test Files",
-          "[shard:gateway] Error: coverage setup failed\n[shard:gateway] Test Files",
-        ),
-      },
+      changedReport(
+        "[shard:gateway] Test Files",
+        "[shard:gateway] Error: coverage setup failed\n[shard:gateway] Test Files",
+      ),
     ],
     [
       "unknown later config",
-      {
-        prReport: report().replace(
-          "[test] failed 1 Vitest shard in 7s",
-          "[test] starting test/vitest/vitest.process.config.ts\n[shard:gateway] failed to load config\n[shard:gateway] [test] failed 2 Vitest shards in 7s",
-        ),
-      },
+      changedReport(
+        "[test] failed 1 Vitest shard in 7s",
+        "[test] starting test/vitest/vitest.process.config.ts\n[shard:gateway] failed to load config\n[shard:gateway] [test] failed 2 Vitest shards in 7s",
+      ),
     ],
     [
       "unknown second child",
@@ -625,36 +612,30 @@ describe("known hourly main failures", () => {
     ],
     [
       "unreported failed config",
-      { prReport: report().replace("failed 1 Vitest shard in", "failed 2 Vitest shards in") },
+      changedReport("failed 1 Vitest shard in", "failed 2 Vitest shards in"),
     ],
     [
       "failure after invocation terminal",
-      {
-        prReport: report().replace(
-          "[test] FAILED (exit 1)",
-          "Error: report close failed\n[shard:gateway] [test] FAILED (exit 1)",
-        ),
-      },
+      changedReport(
+        "[test] FAILED (exit 1)",
+        "Error: report close failed\n[shard:gateway] [test] FAILED (exit 1)",
+      ),
     ],
     [
       "failure during summaries",
-      {
-        prReport: report().replace(
-          "[shard:gateway] Tests 1 failed",
-          "[shard:gateway] Error: coverage finalization failed\n[shard:gateway] Tests 1 failed",
-        ),
-      },
+      changedReport(
+        "[shard:gateway] Tests 1 failed",
+        "[shard:gateway] Error: coverage finalization failed\n[shard:gateway] Tests 1 failed",
+      ),
     ],
     [
       "failure after summaries",
-      {
-        prReport: report().replace(
-          "[test] failed 1 Vitest shard in 7s",
-          "Error: report finalization failed\n[shard:gateway] [test] failed 1 Vitest shard in 7s",
-        ),
-      },
+      changedReport(
+        "[test] failed 1 Vitest shard in 7s",
+        "Error: report finalization failed\n[shard:gateway] [test] failed 1 Vitest shard in 7s",
+      ),
     ],
-    ["outer failure after receipt", { prReport: `${report()}\nError: write failed` }],
+    ["outer failure after receipt", appendedReport("Error: write failed")],
     ["main has recovered", { mainConclusion: "success" }],
   ])("keeps %s blocking", async (_name, options) => {
     await expectKnown(options);
@@ -711,22 +692,10 @@ describe("known hourly main failures", () => {
 
   it.each([
     typeJob,
-    {
-      ...typeJob,
-      name: "check-prod-types",
-      steps: [{ name: "Run check shard", conclusion: "failure" }],
-    },
-    {
-      ...typeJob,
-      name: "check-test-types",
-      steps: [{ name: "Run check shard", conclusion: "failure" }],
-    },
+    failedJob("check-prod-types", "Run check shard", typeJob),
+    failedJob("check-test-types", "Run check shard", typeJob),
     lintJob,
-    {
-      ...lintJob,
-      name: "check-lint-core-1",
-      steps: [{ name: "Run hosted core lint stripe", conclusion: "failure" }],
-    },
+    failedJob("check-lint-core-1", "Run hosted core lint stripe", lintJob),
   ])("requires complete matching diagnostics for $name", async (failureJob) => {
     const lint = failureJob.name.startsWith("check-lint");
     const signatureFile = lint ? lintFile : typeFile;
@@ -749,10 +718,10 @@ describe("known hourly main failures", () => {
 
   it.each([
     { ...typeJob, name: "other-check" },
-    { ...typeJob, steps: [{ name: "Prepare workspace", conclusion: "failure" }] },
+    failedJob(typeJob.name, "Prepare workspace", typeJob),
     { ...typeJob, steps: [...typeJob.steps, { name: "Cleanup", conclusion: "failure" }] },
-    { ...lintJob, name: "check-lint", steps: [{ name: "Run check shard", conclusion: "failure" }] },
-    { ...lintJob, steps: [{ name: "Run changed lint", conclusion: "failure" }] },
+    failedJob("check-lint", "Run check shard", lintJob),
+    failedJob(lintJob.name, "Run changed lint", lintJob),
   ])("keeps unowned static execution blocking: %j", async (failureJob) => {
     const lint = failureJob.name.startsWith("check-lint");
     expect(

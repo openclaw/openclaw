@@ -282,6 +282,10 @@ ${body}
   return { binDir, realGit };
 }
 
+function proxyEnvironment(proxy: ReturnType<typeof writeGitProxy>) {
+  return { PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`, REAL_GIT: proxy.realGit };
+}
+
 function runReleaseAncestry(
   checkout: string,
   mode: "ancestor" | "merge-base",
@@ -366,8 +370,7 @@ exit "$status"`,
         MOVE_MARKER: marker,
         MOVED_TARGET: moved,
         ORIGIN: fixture.origin,
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
       }),
       "merge-base",
     );
@@ -401,8 +404,7 @@ exec "$REAL_GIT" "$@"`,
     const checkout = cloneAncestrySource(fixture, "checkout");
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
         ...(blocked === "target"
           ? {}
           : { RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source" }),
@@ -436,8 +438,7 @@ exec "$REAL_GIT" "$@"`,
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
         COUNT_MARKER: marker,
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
       }),
       "merge-base",
     );
@@ -460,16 +461,7 @@ exec "$REAL_GIT" "$@"`,
         )
       : undefined;
     const checkout = cloneAncestrySource(fixture, "checkout");
-    const result = runReleaseAncestry(
-      checkout,
-      "merge-base",
-      proxy
-        ? {
-            PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-            REAL_GIT: proxy.realGit,
-          }
-        : {},
-    );
+    const result = runReleaseAncestry(checkout, "merge-base", proxy ? proxyEnvironment(proxy) : {});
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(stalled ? 125 : 1);
     expect(result.stdout).toContain(
       stalled ? "completed without ancestry progress" : "is invalid after complete history",
@@ -929,14 +921,19 @@ runpy.run_path(os.environ["BASE_REAL_POLICY_PATH"], run_name="__main__")
   },
 );
 
+function runBase(
+  signal: AbortSignal,
+  fetchResults: FetchResult[],
+  options: Partial<Parameters<typeof runCiGitStep>[0]> = {},
+) {
+  return runCiGitStep({ signal, action: "ensure-base-commit", fetchResults, ...options });
+}
+
 linuxIt(
   "drains a timed-out exact fetch before deepening for the base",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, ["hang", 0], {
       baseAvailableAfter: 2,
-      fetchResults: ["hang", 0],
     });
     expect(report.code, report.output).toBe(0);
     expect(report.fetches.map(({ args }) => args)).toEqual([
@@ -959,13 +956,10 @@ linuxIt.for([
 ])(
   "base policy preserves $label validation and skip behavior",
   async ({ sha, code, commands, invalidRef }, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [], {
       env: { BASE_SHA: sha },
       invalidRef,
       baseAvailableAfter: 0,
-      fetchResults: [],
     });
     expectReport(report, { code, fetches: [] }, { commands });
   },
@@ -975,11 +969,8 @@ linuxIt.for([1, 2, 6, undefined])(
   "base policy preserves exact/deepen/plain-ref order (available after %s)",
   { timeout: 55_000 },
   async (baseAvailableAfter, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [0, 23, 0, 23, 0, 0], {
       baseAvailableAfter,
-      fetchResults: [0, 23, 0, 23, 0, 0],
       commandResults: {
         "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
       },
@@ -1012,12 +1003,7 @@ linuxIt.for([125, 143, "hang"] as const)(
   "base remains available after safely drained ordinary outcome %s",
   { timeout: 55_000 },
   async (failure, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
-      baseAvailableAfter: 1,
-      fetchResults: [failure],
-    });
+    const report = await runBase(signal, [failure], { baseAvailableAfter: 1 });
     expectReport(report, { code: 0 }, { fetches: 1 });
     expect(report.output).toContain("exact fetch failed");
     expect(report.output).toContain("Resolved base commit after exact fetch");
@@ -1037,11 +1023,8 @@ linuxIt.for([
   "base policy stops before availability/retry on $label",
   { timeout: 55_000 },
   async ({ result, code, ...entry }, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [result], {
       baseAvailableAfter: 1,
-      fetchResults: [result],
       realDrain: true,
       scenario: "scenario" in entry ? entry.scenario : undefined,
       cancelDuringCleanup: "cancelDuringCleanup" in entry,
@@ -1056,11 +1039,8 @@ linuxIt.for([
 linuxIt(
   "keeps the base action's 30-second fetch deadline and drains before recovery",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, ["hang"], {
       baseAvailableAfter: 1,
-      fetchResults: ["hang"],
       realClock: true,
       readyFetchClockAdvanceSeconds: 30,
     });

@@ -34,6 +34,9 @@ const fetchCase = (label: string, code: number, ...fetchResults: FetchResult[]) 
   fetchResults,
   attempts: fetchResults.length,
 });
+const cleanupFailure = (args: string[]) => ({
+  commandResults: { [args.join(" ")]: { code: "cleanup-failure" as const } },
+});
 
 function runCheckout(
   signal: AbortSignal,
@@ -904,30 +907,19 @@ posixIt(
   },
 );
 
-posixIt.for(["advisory fetch", "fetch", "rebase", "manifest", "lock", "push"] as const)(
+posixIt.for([
+  ["advisory fetch", { fetchResults: ["cleanup-failure"] }, 2],
+  ["fetch", { fetchResults: [0, "cleanup-failure"] }, 8],
+  ["rebase", { rebaseResults: ["cleanup-failure"] }, 10],
+  ...dependencyReads.map(
+    (args, index) => [index === 0 ? "manifest" : "lock", cleanupFailure(args), 11 + index] as const,
+  ),
+  ["push", { pushResults: ["cleanup-failure"] }, 13],
+] satisfies (readonly [string, Partial<Parameters<typeof runCiGitStep>[0]>, number])[])(
   "docs publication cleanup uncertainty at %s prevents abort/retry/next Git",
-  async (operation, { signal }) => {
-    const report = await runDocs(signal, docsCommit, {
-      fetchResults:
-        operation === "advisory fetch"
-          ? ["cleanup-failure"]
-          : operation === "fetch"
-            ? [0, "cleanup-failure"]
-            : [],
-      rebaseResults: operation === "rebase" ? ["cleanup-failure"] : [],
-      pushResults: operation === "push" ? ["cleanup-failure"] : [],
-      commandResults:
-        operation === "manifest" || operation === "lock"
-          ? {
-              [dependencyReads[operation === "manifest" ? 0 : 1]!.join(" ")]: {
-                code: "cleanup-failure",
-              },
-            }
-          : {},
-    });
-    expect(report.code, report.output).toBe(125);
-    const stop = { "advisory fetch": 2, fetch: 8, rebase: 10, manifest: 11, lock: 12, push: 13 };
-    expect(gitArgs(report)).toEqual([...committed, ...publishAttempt].slice(0, stop[operation]));
+  async ([_operation, options, stop], { signal }) => {
+    const report = await runDocs(signal, docsCommit, options);
+    expectGit(report, 125, [...committed, ...publishAttempt].slice(0, stop));
     expect(backoffs(report)).toEqual([]);
     expect(report.output).toContain("Git ownership/setup failed");
     expect(report.output).not.toContain("retrying");
@@ -1319,31 +1311,30 @@ posixIt.for([false, true])(
   },
 );
 
-posixIt.for(["diff", "config", "commit", "fetch", "push", "read"])(
+posixIt.for([
+  ...[0, 1, 4].map(
+    (index) =>
+      [
+        agentCommitCommands[index]![0]!,
+        cleanupFailure(agentCommitCommands[index]!),
+        agentCommitCommands.slice(0, index + 1),
+      ] as const,
+  ),
+  ["fetch", { fetchResults: ["cleanup-failure"] }, [...agentCommitCommands, agentFetch]],
+  ["push", { pushResults: ["cleanup-failure"] }, [...agentCommitCommands, agentFetch, agentPush]],
+  [
+    "read",
+    { pushResults: [23], revParseResult: "cleanup-failure" },
+    [...agentCommitCommands, agentFetch, agentPush, ["rev-parse", "origin/main"]],
+  ],
+] satisfies (readonly [string, Partial<Parameters<typeof runCiGitStep>[0]>, string[][]])[])(
   "Docs Agent commit cleanup failure at %s is terminal before retry/stale success",
-  async (operation, { signal }) => {
-    const index = operation === "diff" ? 0 : operation === "config" ? 1 : 4;
+  async ([_operation, options, commands], { signal }) => {
     const report = await runDocsAgent(signal, agentCommit, {
-      commandResults: ["diff", "config", "commit"].includes(operation)
-        ? { [agentCommitCommands[index]!.join(" ")]: { code: "cleanup-failure" } }
-        : {},
-      fetchResults: operation === "fetch" ? ["cleanup-failure"] : [],
-      pushResults: operation === "push" ? ["cleanup-failure"] : operation === "read" ? [23] : [],
-      revParseResult: operation === "read" ? "cleanup-failure" : undefined,
       revisions: { "origin/main": moved },
+      ...options,
     });
-    expectGit(
-      report,
-      125,
-      ["diff", "config", "commit"].includes(operation)
-        ? agentCommitCommands.slice(0, index + 1)
-        : [
-            ...agentCommitCommands,
-            agentFetch,
-            ...(operation === "fetch" ? [] : [agentPush]),
-            ...(operation === "read" ? [["rev-parse", "origin/main"]] : []),
-          ],
-    );
+    expectGit(report, 125, commands);
     expect(backoffs(report)).toEqual([]);
     expect(report.output).not.toMatch(/retrying|skipping stale|No docs changes/u);
   },
