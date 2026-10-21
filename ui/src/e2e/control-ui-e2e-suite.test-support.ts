@@ -181,6 +181,15 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
         } catch {
           // Preserve the route failure if diagnostics cannot be written.
         }
+        try {
+          await route.abort("failed");
+        } catch (abortError) {
+          throw new AggregateError(
+            [error, abortError],
+            "Held module fetch failed and its route could not be aborted",
+            { cause: abortError },
+          );
+        }
         throw error;
       }
     })();

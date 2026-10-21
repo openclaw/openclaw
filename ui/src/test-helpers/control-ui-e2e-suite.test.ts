@@ -162,9 +162,18 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             const invocations = scope === "context" ? contextPending : pending;
             const registration = registrations.find(({ pattern }) => pattern.test(url));
             if (!registration) throw new Error("missing held-module route: " + name);
+            const handled = state.deferred();
             const route = {
               request: () => ({ url: () => url }),
-              fallback: async () => { state.events.push("fell through " + label); },
+              fallback: async () => {
+                state.events.push("fell through " + label);
+                handled.resolve();
+              },
+              abort: async () => {
+                state.events.push("aborted " + label);
+                handled.resolve();
+                record();
+              },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
                 if (label === "fault") throw state.heldRouteFault;
@@ -184,10 +193,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
               fulfill: async () => {
                 if (pageClosed) throw state.disposalFault;
                 state.events.push("fulfilled " + label);
+                handled.resolve();
               },
             };
-            // Observe rejection immediately; teardown joins outcomes without hiding unknown faults.
-            const settled = registration.handler(route).then(
+            // Playwright joins both route handling and callback completion.
+            const settled = Promise.all([handled.promise, registration.handler(route)]).then(
               () => ({ label, status: "fulfilled" }),
               error => ({ label, status: "rejected", error }),
             );
@@ -867,6 +877,7 @@ it("reports settled held route failures through context cleanup", (context) =>
     expect(result.code, result.output).toBe(1);
     expect(result.output).toContain("synthetic held module route failure");
     expect(result.output).not.toContain("Unhandled Rejection");
+    expect(result.journal.events).toContain("aborted fault");
   }));
 
 it.for([
