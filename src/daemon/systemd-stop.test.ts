@@ -79,34 +79,30 @@ async function fixture() {
     running: () => running,
     probes: () => probes,
     elapsed: () => now,
-    stop: (mode: "standalone" | "update" = "update", custodyMs = 0) => {
-      const stop = () =>
-        stopSystemdService({
-          env,
-          stdout: new PassThrough(),
-          assertCurrent: mode === "update" ? guard : undefined,
-          warn,
-        });
-      return mode === "standalone"
-        ? stop()
-        : withGatewayServiceUpdateAuthority(() => {
-            now += custodyMs;
-          }, stop);
-    },
+    stop: (custodyMs = 0) =>
+      withGatewayServiceUpdateAuthority(
+        () => {
+          now += custodyMs;
+        },
+        () =>
+          stopSystemdService({
+            env,
+            stdout: new PassThrough(),
+            assertCurrent: guard,
+            warn,
+          }),
+      ),
   };
 }
 
-it.each(["update"] as const)(
-  "stops with a slow manager and slow custody checks (%s)",
-  async (mode) => {
-    const f = await fixture();
-    f.manager(6000);
-    await f.stop(mode, 6000);
-    expect(f.running()).toBe(false);
-    expect(f.commands).toEqual(["stop"]);
-    expect(f.guard).toHaveBeenCalledTimes(mode === "update" ? 1 : 0);
-  },
-);
+it("stops with a slow manager and slow custody checks", async () => {
+  const f = await fixture();
+  f.manager(6000);
+  await f.stop(6000);
+  expect(f.running()).toBe(false);
+  expect(f.commands).toEqual(["stop"]);
+  expect(f.guard).toHaveBeenCalledOnce();
+});
 
 it("does not spend a cached manager's inspection budget on repeated update custody checks", async () => {
   const f = await fixture();
@@ -150,12 +146,9 @@ it("refuses to stop when custody retires during manager inspection", async () =>
   expect(f.warn).not.toHaveBeenCalled();
 });
 
-it.each([
-  { scenario: "ownership refusal", retired: true },
-  { scenario: "unsettled probe", retired: true },
-])(
-  "preserves $scenario at the inspection deadline (custody retired=$retired)",
-  async ({ scenario, retired }) => {
+it.each(["ownership refusal", "unsettled probe"])(
+  "preserves %s at the inspection deadline despite retired custody",
+  async (scenario) => {
     const f = await fixture();
     f.manager(0);
     const failure =
@@ -164,11 +157,9 @@ it.each([
         : new CommandProcessCleanupError();
     vi.mocked(execFileUtf8).mockImplementationOnce(async () => {
       vi.spyOn(performance, "now").mockReturnValue(60_000);
-      if (retired) {
-        f.guard.mockImplementation(() => {
-          throw new Error("update custody retired");
-        });
-      }
+      f.guard.mockImplementation(() => {
+        throw new Error("update custody retired");
+      });
       throw failure;
     });
     await expect(f.stop()).rejects.toBe(failure);

@@ -2401,8 +2401,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/daemon/service-stop-fence.test.ts",
   "src/daemon/service-update-authority.test.ts",
   "src/daemon/service.test.ts",
-  "src/daemon/systemd-deadline-clock-step.test.ts",
-  "src/daemon/systemd-definition-loaded.test.ts",
   "src/daemon/systemd-definition-mutation.creation.test.ts",
   "src/daemon/systemd-definition-mutation.test.ts",
   "src/daemon/systemd-peer-native.test.ts",

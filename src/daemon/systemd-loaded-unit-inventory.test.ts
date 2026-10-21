@@ -103,6 +103,37 @@ function addUnit(
   units.set(name, { name, fragmentPath, state: "active", argv });
 }
 const listEntry = (name: string) => success(`${name} loaded active running Gateway\n`);
+const inspectedUnit = (
+  name: string,
+  fragmentPath = `/run/systemd/transient/${name}`,
+  argv = programArguments,
+) => ({ name, fragmentPath, commands: [{ path: argv[0], programArguments: argv }] });
+function mockCliInspection(name: string) {
+  busctl.mockImplementation(async (args) => {
+    expect(args).toContain("--auto-start=no");
+    expect(args).not.toContain("LoadUnit");
+    const property = (type: string, data: unknown) => JSON.stringify({ type, data });
+    const calls: Record<string, [string, unknown]> = {
+      GetId: ["s", [busId]],
+      GetNameOwner: ["s", [managerOwner]],
+      GetConnectionUnixUser: ["u", [0]],
+      GetUnit: ["o", ["/org/freedesktop/systemd1/unit/unit0"]],
+    };
+    const call = Object.keys(calls).find((method) => args.includes(method));
+    if (call) {
+      return success(property(...calls[call]!));
+    }
+    return success(
+      args.includes("org.freedesktop.systemd1.Unit")
+        ? [name, `/run/systemd/transient/${name}`, "active"]
+            .map((value) => property("s", value))
+            .join("\n")
+        : property("a(sasbttttuii)", [
+            ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
+          ]),
+    );
+  });
+}
 
 function withFixture(work: (home: string) => Promise<void>) {
   return withTestDir({ prefix: "openclaw-loaded-unit-" }, async (home) => {
@@ -184,18 +215,8 @@ it("keeps multiline command data separate from every loaded unit's identity", as
     ),
   );
   expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/run/systemd/transient/custom-rescue.service",
-      commands: [
-        { path: "/usr/bin/python3", programArguments: ["/usr/bin/python3", "-c", payload] },
-      ],
-    },
-    {
-      name: "openclaw-gateway.service",
-      fragmentPath: "/run/systemd/transient/openclaw-gateway.service",
-      commands: [{ path: "/usr/bin/node", programArguments }],
-    },
+    inspectedUnit("custom-rescue.service", undefined, ["/usr/bin/python3", "-c", payload]),
+    inspectedUnit("openclaw-gateway.service"),
   ]);
   expect(connect).toHaveBeenCalledOnce();
   expect(nativeBus.close).toHaveBeenCalledOnce();
@@ -247,44 +268,8 @@ it.each([
     } else {
       connect.mockRejectedValue(new ProcSafeError("helper-unavailable", "Native addon absent"));
     }
-    busctl.mockImplementation(async (args) => {
-      expect(args).toContain("--auto-start=no");
-      expect(args).not.toContain("LoadUnit");
-      const property = (type: string, data: unknown) => JSON.stringify({ type, data });
-      if (args.includes("GetId")) {
-        return success(property("s", [busId]));
-      }
-      if (args.includes("GetNameOwner")) {
-        return success(property("s", [managerOwner]));
-      }
-      if (args.includes("GetConnectionUnixUser")) {
-        return success(property("u", [0]));
-      }
-      if (args.includes("GetUnit")) {
-        return success(property("o", ["/org/freedesktop/systemd1/unit/unit0"]));
-      }
-      if (args.includes("org.freedesktop.systemd1.Unit")) {
-        return success(
-          [
-            property("s", name),
-            property("s", `/run/systemd/transient/${name}`),
-            property("s", "active"),
-          ].join("\n"),
-        );
-      }
-      return success(
-        property("a(sasbttttuii)", [
-          ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
-        ]),
-      );
-    });
-    expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-      {
-        name,
-        fragmentPath: `/run/systemd/transient/${name}`,
-        commands: [{ path: "/usr/bin/node", programArguments }],
-      },
-    ]);
+    mockCliInspection(name);
+    expect(await listLoadedSystemdUnits("system", buses)).toEqual([inspectedUnit(name)]);
     expect(connectPrivate).not.toHaveBeenCalled();
     expect(nativeBus.close).not.toHaveBeenCalled();
   },
@@ -352,11 +337,7 @@ it.each(["", "t"])("preserves the root system-manager route (forced bus=%s)", as
   addUnit("custom-rescue.service");
   systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
   expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/run/systemd/transient/custom-rescue.service",
-      commands: [{ path: "/usr/bin/node", programArguments }],
-    },
+    inspectedUnit("custom-rescue.service"),
   ]);
   if (forceBus) {
     expect(connect).toHaveBeenCalledOnce();
@@ -401,36 +382,6 @@ it.each(["off", "missing addon"])(
         new ProcSafeError("helper-unavailable", "Native addon absent"),
       );
     }
-    // The alternate broker is stable and UID 0, but its same-named unit is inactive.
-    busctl.mockImplementation(async (args) => {
-      const property = (type: string, data: unknown) => JSON.stringify({ type, data });
-      if (args.includes("GetId")) {
-        return success(property("s", [busId]));
-      }
-      if (args.includes("GetNameOwner")) {
-        return success(property("s", [managerOwner]));
-      }
-      if (args.includes("GetConnectionUnixUser")) {
-        return success(property("u", [0]));
-      }
-      if (args.includes("GetUnit")) {
-        return success(property("o", ["/org/freedesktop/systemd1/unit/unit0"]));
-      }
-      if (args.includes("org.freedesktop.systemd1.Unit")) {
-        return success(
-          [
-            property("s", name),
-            property("s", `/run/systemd/transient/${name}`),
-            property("s", "inactive"),
-          ].join("\n"),
-        );
-      }
-      return success(
-        property("a(sasbttttuii)", [
-          ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
-        ]),
-      );
-    });
     await expect(listLoadedSystemdUnits("system", buses)).rejects.toThrow(
       "selected systemd private manager requires native inspection support",
     );
@@ -537,9 +488,7 @@ it.skipIf(process.platform !== "linux")("binds removed custom-profile units", ()
       XDG_RUNTIME_DIR: home,
       ...buses,
     };
-    expect(await listLoadedSystemdUnits("user", env)).toEqual([
-      { name, fragmentPath: removedPath, commands: [{ path: "/usr/bin/node", programArguments }] },
-    ]);
+    expect(await listLoadedSystemdUnits("user", env)).toEqual([inspectedUnit(name, removedPath)]);
     expect(await discoverManagedGatewayBindings(env, { requireComplete: true })).toEqual([
       expect.objectContaining({
         env: expect.objectContaining({ OPENCLAW_SYSTEMD_UNIT: name }),

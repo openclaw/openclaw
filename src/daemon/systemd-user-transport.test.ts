@@ -219,25 +219,28 @@ it("stops probes when custody retires", async () => {
   expect(execFileUtf8).toHaveBeenCalledOnce();
 });
 
-it.each(["discovery", "connection", "query", "lost-socket"])(
+it.each(["discovery", "connection", "query", "disconnected-query", "lost-socket"])(
   "preserves private %s failures without fallback",
   async (phase) => {
     await privateSocket(home);
     env = transportEnv(home, "missing-bus");
     exec.mockResolvedValue(missing);
     const refusal =
-      phase === "lost-socket"
+      phase === "lost-socket" || phase === "disconnected-query"
         ? new Error("Original systemd manager peer inspection is unavailable.")
         : new ServiceOwnershipRefusalError("systemd-manager-changed");
     const close = vi.fn(async () => {});
-    const peer = connection(close);
+    const discoveryClose = phase === "disconnected-query" ? vi.fn(async () => {}) : close;
+    const peer = connection(discoveryClose);
     open.mockRejectedValue(refusal);
     if (phase !== "discovery") {
       open.mockResolvedValueOnce(peer);
     }
-    if (phase === "query") {
+    const querying = phase === "query" || phase === "disconnected-query";
+    if (querying) {
       open.mockResolvedValue({
         ...peer,
+        close,
         query: async () => {
           throw refusal;
         },
@@ -249,14 +252,19 @@ it.each(["discovery", "connection", "query", "lost-socket"])(
       probes = exec.mock.calls.length;
     }
     const read = phase === "discovery" ? resolveTransport(env) : readService(env);
-    if (phase === "lost-socket") {
+    if (phase === "lost-socket" || phase === "disconnected-query") {
       await expect(read).rejects.toMatchObject(unavailable);
-      expect(execFileUtf8).toHaveBeenCalledTimes(probes);
+      expect(execFileUtf8).toHaveBeenCalledTimes(phase === "lost-socket" ? probes : 1);
     } else {
       await expect(read).rejects.toBe(refusal);
     }
     expect(exec.mock.calls.some(([, args]) => args.includes("--machine"))).toBe(false);
-    expect(close).toHaveBeenCalledTimes(phase === "discovery" ? 0 : phase === "query" ? 2 : 1);
+    if (phase === "disconnected-query") {
+      expect(discoveryClose).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledOnce();
+    } else {
+      expect(close).toHaveBeenCalledTimes(phase === "discovery" ? 0 : querying ? 2 : 1);
+    }
   },
 );
 

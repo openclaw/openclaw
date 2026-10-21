@@ -51,12 +51,9 @@ const success = (stdout: string): ExecResult => ({
 });
 const property = (type: string, data: unknown) => ({ type, data });
 const reply = (type: string, data: unknown) => success(JSON.stringify(property(type, data)));
-const readLoaded = () =>
-  readSystemdServiceExecStart(env, {
-    requireEffective: true,
-    requireLoaded: true,
-    systemdReadTarget: target,
-  });
+const readEffective = (options: Parameters<typeof readSystemdServiceExecStart>[1] = {}) =>
+  readSystemdServiceExecStart(env, { requireEffective: true, ...options });
+const readLoaded = () => readEffective({ requireLoaded: true, systemdReadTarget: target });
 const expectNoLoad = () =>
   expect(systemBus.mock.calls.some(([args]) => args.includes("LoadUnit"))).toBe(false);
 const account = (username: string, uid: number) => ({
@@ -272,8 +269,7 @@ describe("system-scope effective command", () => {
   it.each([false, true])(
     "reads the selected system unit with discovered target=%s",
     async (discover) => {
-      const command = await readSystemdServiceExecStart(env, {
-        requireEffective: true,
+      const command = await readEffective({
         requireLoaded: true,
         ...(discover ? {} : { systemdReadTarget: target }),
       });
@@ -296,7 +292,7 @@ describe("system-scope effective command", () => {
     "requires the service account for strict inspection: %s",
     async (user) => {
       state.serviceUser = user;
-      const command = readSystemdServiceExecStart(env, { requireEffective: true });
+      const command = readEffective();
       if (user === "2001") {
         await expect(command).resolves.toMatchObject({ environment: { HOME: "/home/gateway" } });
       } else {
@@ -314,9 +310,7 @@ describe("system-scope effective command", () => {
   it.each(["uid", "replacement"])("rejects an unverified system manager: %s", async (fault) => {
     state.managerUid = fault === "uid" ? 2001 : 0;
     state.managerChanges = fault === "replacement";
-    await expect(
-      readSystemdServiceExecStart(env, { requireEffective: true }),
-    ).rejects.toMatchObject({
+    await expect(readEffective()).rejects.toMatchObject({
       reason: "systemd-manager-changed",
     });
   });
@@ -325,7 +319,7 @@ describe("system-scope effective command", () => {
     "honors explicit HOME removal: %s",
     async (assignment) => {
       state.unset = [assignment];
-      const command = await readSystemdServiceExecStart(env, { requireEffective: true });
+      const command = await readEffective();
       expect(command?.environment).not.toHaveProperty("HOME");
     },
   );

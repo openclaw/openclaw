@@ -4918,8 +4918,6 @@
 ["src/daemon/service.systemd-user-scope.test.ts","./inspect.js","e2d9be2f92c70fa60447669c814178de3196111241982b9e24dd74a1cacc59b1",1]
 ["src/daemon/service.systemd-user-scope.test.ts","./systemd-peer-native.js","b43a00f8c049bc1a95ae861aa0cb56ecb610e50dc683abe46820b92d3bad2117",1]
 ["src/daemon/systemd-command-query.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
-["src/daemon/systemd-deadline-clock-step.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
-["src/daemon/systemd-definition-loaded.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
 ["src/daemon/systemd-definition-mutation.creation.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
 ["src/daemon/systemd-definition-mutation.test.ts","./exec-file.js","0f8dffbd598dd442ef78d5b622d1de67888a08719bd495c9ba12e07adac73188",1]
 ["src/daemon/systemd-install-rollback.test.ts","./systemd-scope.js","e16865e56d4b3ec1d4be534d248c85b80e2279cec40a3b85a72f029c6e8fa746",1]

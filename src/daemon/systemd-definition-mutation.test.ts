@@ -18,6 +18,9 @@ const assertNoSystemOwnership = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-system.js").assertNoSystemSystemdOwnership>(),
 );
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
+const reloadUserManager = vi.hoisted(() =>
+  vi.fn<typeof import("./systemd-exec.js").reloadSystemdUserManager>(),
+);
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-system.js", async (importOriginal) => ({
@@ -28,6 +31,7 @@ vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   assertSystemdAvailable: async () => {},
   execBusctlUser: busctl,
+  reloadSystemdUserManager: reloadUserManager,
   execSystemctlUser: async () => ({ code: 0, termination: "exit", stdout: "", stderr: "" }),
 }));
 
@@ -35,7 +39,8 @@ import {
   readSystemdDefinitionMutationCapability,
   withSystemdDefinitionMutation,
 } from "./systemd-definition-mutation.js";
-import { stageSystemdService } from "./systemd-install.js";
+import { refreshLegacySystemdServiceMetadata, stageSystemdService } from "./systemd-install.js";
+import { readSystemdServiceExecStart } from "./systemd-service-files.js";
 
 // Safe fixture modes must not depend on umask; fault cases change permissions explicitly.
 async function writeFixtureFile(file: string, contents: string, options = { mode: 0o644 }) {
@@ -180,6 +185,12 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
 
   beforeEach(async () => {
     assertNoSystemOwnership.mockReset().mockResolvedValue(undefined);
+    reloadUserManager
+      .mockReset()
+      .mockImplementation(
+        (await vi.importActual<typeof import("./systemd-exec.js")>("./systemd-exec.js"))
+          .reloadSystemdUserManager,
+      );
     vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
     busctl.mockReset().mockImplementation(async (serviceEnv) => ({
       code: 1,
@@ -228,6 +239,7 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     dropInPaths: string[] = [],
     environmentFiles: Array<[string, boolean]> = [],
     isLoaded = async () => true,
+    includeLoadedLookup = false,
   ) {
     busctl.mockImplementation(async (_env, args) => {
       const loaded = await isLoaded();
@@ -235,19 +247,20 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
         code: 0,
         termination: "exit",
         stderr: "",
-        stdout: args.includes("LoadUnit")
-          ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/owned"] })
-          : args.includes("org.freedesktop.systemd1.Unit")
-            ? buildSystemdUnitPropertyOutput({
-                fragmentPath: loaded ? fragmentPath : "",
-                dropInPaths: loaded ? dropInPaths : [],
-                loadState: loaded ? "loaded" : "not-found",
-              })
-            : buildSystemdManagerPropertyOutput({
-                programArguments: ["/usr/bin/node", "gateway"],
-                environment: ["TOKEN=manager-secret-canary"],
-                environmentFiles,
-              }),
+        stdout:
+          args.includes("LoadUnit") || (includeLoadedLookup && args.includes("GetUnit"))
+            ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/owned"] })
+            : args.includes("org.freedesktop.systemd1.Unit")
+              ? buildSystemdUnitPropertyOutput({
+                  fragmentPath: loaded ? fragmentPath : "",
+                  dropInPaths: loaded ? dropInPaths : [],
+                  loadState: loaded ? "loaded" : "not-found",
+                })
+              : buildSystemdManagerPropertyOutput({
+                  programArguments: ["/usr/bin/node", "gateway"],
+                  environment: ["TOKEN=manager-secret-canary"],
+                  environmentFiles,
+                }),
       };
     });
   }
@@ -837,4 +850,180 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
       await first;
     }
   });
+
+  async function loadedDefinition() {
+    await writeFixtureFile(unitPath, baseUnit);
+    const state = { loaded: true };
+    managerDefinition(unitPath, [], [], async () => state.loaded, true);
+    return state;
+  }
+
+  async function unverifiableSystemOwner() {
+    const actual =
+      await vi.importActual<typeof import("./systemd-system.js")>("./systemd-system.js");
+    vi.mocked(execFileUtf8)
+      .mockReset()
+      .mockResolvedValue({ code: 1, termination: "exit", stdout: "", stderr: "denied" });
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      return await actual.assertNoSystemSystemdOwnership("openclaw-owned.service", 1000).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    } finally {
+      if (platform) {
+        Object.defineProperty(process, "platform", platform);
+      }
+      vi.mocked(execFileUtf8).mockReset().mockImplementation(systemdManagerVersionProbe);
+    }
+  }
+
+  it.each([false, true])(
+    "inspects loaded-only authority without loading managers (legacy=%s)",
+    async (legacy) => {
+      if (legacy) {
+        delete env.OPENCLAW_SYSTEMD_UNIT;
+        env.OPENCLAW_PROFILE = "lisa";
+        unitPath = path.join(path.dirname(unitPath), "openclaw-lisa.service");
+        // An unrelated canonical backup cannot decide the selected legacy unit's authority.
+        await fs.symlink(
+          unitPath,
+          path.join(path.dirname(unitPath), "openclaw-gateway-lisa.service.bak"),
+        );
+      }
+      await loadedDefinition();
+      const unitName = path.basename(unitPath);
+      await expect(
+        readSystemdDefinitionMutationCapability(env, {
+          requireLoaded: true,
+          timeoutMs: 1000,
+          ...(legacy ? { systemdReadTarget: { scope: "user" as const, unitName, unitPath } } : {}),
+        }),
+      ).resolves.toEqual({ kind: "writable" });
+      expect(assertNoSystemOwnership).toHaveBeenCalledWith(unitName, expect.any(Number), {
+        requireLoaded: true,
+      });
+      expect(
+        busctl.mock.calls
+          .filter(([, args]) => args.includes("GetUnit"))
+          .every(([, args]) => args.at(-1) === unitName),
+      ).toBe(true);
+      expect(busctl.mock.calls.some(([, args]) => args.includes("LoadUnit"))).toBe(false);
+      expect(busctl.mock.calls.every(([, args]) => args.includes("--auto-start=no"))).toBe(true);
+    },
+  );
+
+  it("keeps only a loaded owned unit writable when system ownership is unverifiable", async () => {
+    const unverifiable = await unverifiableSystemOwner();
+    expect(unverifiable).toMatchObject({ ownership: { status: "unverifiable" } });
+    const state = await loadedDefinition();
+    assertNoSystemOwnership.mockRejectedValue(unverifiable);
+    const capability = (requireLoaded = false) =>
+      readSystemdDefinitionMutationCapability(env, { requireLoaded, timeoutMs: 1000 });
+    await expect(capability(true)).resolves.toEqual({ kind: "writable" });
+    await expect(capability()).resolves.toEqual({
+      kind: "unknown",
+      reason: "system-ownership-unverified",
+    });
+    state.loaded = false;
+    await expect(capability(true)).resolves.toEqual({
+      kind: "unknown",
+      reason: "system-ownership-unverified",
+    });
+  });
+
+  it("admits activation past an unverifiable system probe only for a loaded owned unit", async () => {
+    const { assertNoSystemGatewayOwnershipForActivation } = await import("./systemd-scope.js");
+    const unverifiable = await unverifiableSystemOwner();
+    const state = await loadedDefinition();
+    assertNoSystemOwnership.mockRejectedValue(unverifiable);
+    const activate = () => assertNoSystemGatewayOwnershipForActivation(env, 1000);
+    await expect(activate()).resolves.toBeUndefined();
+    state.loaded = false;
+    await expect(activate()).rejects.toBe(unverifiable);
+    assertNoSystemOwnership.mockReset().mockRejectedValue(new Error("system-owned"));
+    await expect(activate()).rejects.toThrow("system-owned");
+  });
+
+  it.each(
+    [
+      { kind: "mutation", timeouts: [1_666, 1_633] },
+      { kind: "loaded", timeouts: [1_666, 2_450, 4_800] },
+      { kind: "metadata", timeouts: [5_000, 4_900, 4_800, 4_700] },
+    ].flatMap(({ kind, timeouts }) =>
+      [60_000, -60_000].map((stepMs) => ({ kind, timeouts, stepMs })),
+    ),
+  )(
+    "$kind retains its budget across $stepMs ms wall-clock step",
+    async ({ kind, timeouts, stepMs }) => {
+      reloadUserManager.mockResolvedValue(undefined);
+      const realNow = Date.now;
+      let offset = 0;
+      let monotonicNow = 0;
+      const stepClock = () => {
+        offset = stepMs;
+        monotonicNow += 100;
+      };
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+      // Filesystem scheduling must not consume this clock-contract fixture's budget.
+      vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
+      const snapshot = {
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        fragmentPath: "/etc/systemd/user/openclaw-owned.service",
+      };
+      busctl.mockImplementation(async (_serviceEnv, args) => {
+        if (kind !== "metadata") {
+          stepClock();
+        }
+        if (kind !== "loaded") {
+          return {
+            code: 1,
+            termination: "exit",
+            stdout: "",
+            stderr: "Call failed: Unit openclaw-owned.service not found.",
+          };
+        }
+        const output = args.includes("LoadUnit")
+          ? JSON.stringify({
+              type: "o",
+              data: ["/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice"],
+            })
+          : args.includes("org.freedesktop.systemd1.Unit")
+            ? buildSystemdUnitPropertyOutput(snapshot)
+            : buildSystemdManagerPropertyOutput(snapshot);
+        return { code: 0, termination: "exit", stdout: output, stderr: "" };
+      });
+      if (kind === "metadata") {
+        await writeFixtureFile(
+          unitPath,
+          `[Unit]
+Description=OpenClaw Gateway (v2026.7.1-2)
+[Service]
+ExecStart=/usr/bin/openclaw gateway run
+Environment=OPENCLAW_SERVICE_MARKER=openclaw OPENCLAW_SERVICE_KIND=gateway OPENCLAW_SERVICE_VERSION=2026.7.1-2
+`,
+          { mode: 0o600 },
+        );
+        assertNoSystemOwnership.mockImplementation(async () => stepClock());
+        await expect(refreshLegacySystemdServiceMetadata(env, 5_000)).resolves.toBe(true);
+        expect(assertNoSystemOwnership).toHaveBeenCalledTimes(3);
+        expect([
+          ...assertNoSystemOwnership.mock.calls.map((call) => call[1]),
+          ...reloadUserManager.mock.calls.map((call) => call[1]),
+        ]).toEqual(timeouts);
+      } else {
+        if (kind === "loaded") {
+          await expect(
+            readSystemdServiceExecStart(env, { requireEffective: true, timeoutMs: 5_000 }),
+          ).resolves.toMatchObject({ programArguments: snapshot.programArguments });
+        } else {
+          await withSystemdDefinitionMutation(env, env, async () => undefined, {
+            timeoutMs: 5_000,
+          });
+        }
+        expect(busctl.mock.calls.map((call) => call[2])).toEqual(timeouts);
+      }
+    },
+  );
 });

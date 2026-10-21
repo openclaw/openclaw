@@ -12,10 +12,6 @@ vi.mock("./systemd-exec.js", async (original) => ({
   execBusctlSystem: (...args: unknown[]) => busctl(undefined, ...args),
   bindSystemdManagerOwner: vi.fn(),
 }));
-vi.mock("./systemd-peer-native.js", async (original) => ({
-  ...(await original<typeof import("./systemd-peer-native.js")>()),
-  openSystemdUserManager: vi.fn(),
-}));
 
 import { execFileUtf8 } from "./exec-file.js";
 import {
@@ -33,7 +29,6 @@ import {
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
-import { openSystemdUserManager } from "./systemd-peer-native.js";
 import { readSystemdServiceExecStart } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
@@ -71,7 +66,6 @@ beforeEach(() => {
       await systemdManagerVersionProbe(command, args);
       return versionProbeResult;
     });
-  vi.mocked(openSystemdUserManager).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -152,65 +146,6 @@ it("does not infer ownership from expanded specifiers or normalized working dire
   });
   expect(hasGatewayServiceLauncherOverride(command)).toBe(false);
   expect(hasGatewayServiceEnvironmentOverride(command, ["UNIT_NAME"])).toBe(false);
-});
-
-describe("ordinary private-manager inspection", () => {
-  it("closes the captured private connection when disconnected", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(process, "geteuid").mockReturnValue(1000);
-    const home = dirs.make("openclaw-private-manager-");
-    const runtime = path.join(home, "runtime");
-    const socket = path.posix.join(runtime, "systemd/private");
-    await fs.mkdir(path.dirname(socket), { recursive: true });
-    await fs.writeFile(socket, "");
-    versionProbeResult = failure(systemdOperatorBusFixtures.stale.getUnitFileState);
-    const closeDiscovery = vi.fn(async () => {});
-    const close = vi.fn(async () => {});
-    vi.mocked(openSystemdUserManager)
-      .mockResolvedValueOnce({
-        close: closeDiscovery,
-        verify: () => {},
-        query: async (args, signatures) => {
-          expect(args).toEqual([
-            "get-property",
-            "org.freedesktop.systemd1",
-            "/org/freedesktop/systemd1",
-            "org.freedesktop.systemd1.Manager",
-            "Version",
-          ]);
-          expect(signatures).toEqual(["s"]);
-          return ["252.39"];
-        },
-      })
-      .mockResolvedValue({
-        close,
-        verify: () => {},
-        query: async () => {
-          throw new Error("native-error-secret-canary");
-        },
-      });
-    busctl.mockResolvedValue(failure(systemdOperatorBusFixtures.stale.getUnitFileState));
-    const inspected = readSystemdServiceExecStart(
-      {
-        HOME: home,
-        XDG_RUNTIME_DIR: runtime,
-        DBUS_SESSION_BUS_ADDRESS: systemdOperatorBusFixtures.stale.address,
-      },
-      {
-        requireEffective: true,
-        // This fixture selects a user manager; never discover the host's real system unit.
-        systemdReadTarget: {
-          scope: "user",
-          unitName,
-          unitPath: path.join(home, ".config/systemd/user", unitName),
-        },
-      },
-    );
-    await expect(inspected).rejects.toMatchObject({ reason: "systemd-user-bus-unavailable" });
-    expect(closeDiscovery).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    expect(busctl).not.toHaveBeenCalled();
-  });
 });
 
 describe("systemd command query legacy compatibility", () => {
