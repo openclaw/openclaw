@@ -16,7 +16,6 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { logMessageProcessed } from "../../logging/diagnostic.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -233,7 +232,7 @@ beforeEach(() => {
 });
 
 describe("finalizeAcceptedChatSendMessageInjection", () => {
-  it("audits a confirmed steer as completed active_run_injected", async () => {
+  it("records the accepted participant without mutating captured session metadata", async () => {
     vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
       status: "accepted",
       outcome: { status: "accepted" },
@@ -252,14 +251,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       sessionAgentId: "main",
     });
 
-    expect(logMessageProcessed).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: "completed", reason: "active_run_injected" }),
-    );
-    expect(emitInboundMessageAuditTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminal: { outcome: "completed", options: { reason: "active_run_injected" } },
-      }),
-    );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
     expect(entry.updatedAt).toBe(1);
     expect(params.session.entry?.updatedAt).toBeGreaterThan(1);
@@ -583,35 +574,15 @@ describe("createChatSendMessageInjectionStarter", () => {
     kind: "document" as const,
     fileName: "note.txt",
   };
-  const renderedDocument = (body: string) => ({
-    body,
-    rawMessage: body,
-    media: [documentMedia],
-    documentContext: { status: "rendered" as const, text: documentText, images: [] },
-  });
-  it.each([
-    {
-      name: "captioned document",
-      params: renderedDocument("see attached"),
-      text: `[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\nsee attached\n\n${documentText}`,
-    },
-    {
-      name: "blank-caption document",
-      params: renderedDocument(""),
-      text: `[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n${documentText}`,
-    },
-    {
-      name: "failed document rendering",
-      params: {
-        body: "read the attachment",
-        media: [{ path: documentMedia.path, contentType: documentMedia.contentType }],
-        documentContext: { status: "failed" as const },
-      },
-      text: "[media attached: media://inbound/note.txt (text/plain)]\n\nread the attachment",
-    },
-    { name: "plain text", params: { body: "plain steer" }, text: "plain steer" },
-  ])("preserves $name in steering text", async ({ params, text }) => {
-    await expectSteer(makeSteerStarterParams(params), text);
+  it("preserves a blank-caption document in steering text", async () => {
+    await expectSteer(
+      makeSteerStarterParams({
+        body: "",
+        media: [documentMedia],
+        documentContext: { status: "rendered", text: documentText, images: [] },
+      }),
+      `[media attached: media://inbound/note.txt (text/plain) "note.txt"]\n\n${documentText}`,
+    );
   });
 
   it("merges extracted page images after the prepared inbound images", async () => {

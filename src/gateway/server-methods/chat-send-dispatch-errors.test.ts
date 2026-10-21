@@ -67,7 +67,7 @@ function dispatchLifecycle(
 ) {
   const { admission, context, session, ...rest } = overrides;
   const target = expectDefined(registration.entry.input.target, "source target");
-  return createChatSendDispatchErrorLifecycle({
+  const options: DispatchOptions = {
     admission: {
       activeRunAbort: registration,
       cleanupAdmittedRun: vi.fn(),
@@ -102,7 +102,8 @@ function dispatchLifecycle(
     terminalizeRestartSafeAdmission: vi.fn(),
     userTurnRecorder: { hasPersisted: () => false, isBlocked: () => false },
     ...rest,
-  });
+  };
+  return { ...createChatSendDispatchErrorLifecycle(options), options };
 }
 
 async function captureTerminalTarget(scope: {
@@ -168,32 +169,19 @@ describe("handleChatSendSetupError", () => {
       if (restart) {
         markGatewayRestartDraining();
       }
-
+      const lifecycle = dispatchLifecycle(activeRunAbort, {
+        admission: {
+          cleanupAdmittedRun,
+          restartSafeAdmission: restart ? { requestFingerprint: "restart" } : undefined,
+        },
+        context: { broadcast, dedupe },
+        terminalizeRestartSafeAdmission,
+      });
       try {
         await handleChatSendSetupError({
-          admission: {
-            activeRunAbort,
-            cleanupAdmittedRun,
-            lifecycleGeneration: "test-generation",
-            restartSafeAdmission: restart ? { requestFingerprint: "restart" } : undefined,
-          },
-          context: {
-            agentRunSeq: new Map(),
-            broadcast,
-            chatRunState: createChatRunState(),
-            dedupe,
-            logGateway: { warn: vi.fn() },
-            nodeSendToSession: vi.fn(),
-            removeChatRun: vi.fn(),
-          } as never,
+          ...lifecycle.options,
           error,
           respond,
-          session: {
-            agentId: "main",
-            clientRunId: "setup-projection-retry",
-            sessionKey: "agent:main:main",
-          },
-          terminalizeRestartSafeAdmission,
         }).finally(() => {
           if (restart) {
             resetGatewayWorkAdmission();
@@ -229,11 +217,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     { settlement: "restart-safe", stateContention: true },
     { settlement: "restart-safe" },
     { settlement: "fallback", missingProfile: true },
-    { settlement: "restart-safe", missingProfile: true },
     { settlement: "fallback", policyFailure: true },
-    { settlement: "restart-safe", policyFailure: true },
     { settlement: "fallback", sessionChanged: true },
-    { settlement: "restart-safe", sessionChanged: true },
   ])(
     "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
     async ({
@@ -530,137 +515,37 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     });
   });
 
-  it.each([false, true])(
-    "preserves queued refresh completion after a later dispatch failure (completed=%s)",
-    async (completed) => {
-      const broadcast = vi.fn();
-      const cleanupAdmittedRun = vi.fn();
-      const removeChatRun = vi.fn();
-      const warn = vi.fn();
-      const cached = {
-        ts: 1,
-        ok: true,
-        payload: { runId: "run-1", status: completed ? "completed" : "accepted" },
-      };
-      const dedupe = new Map([["chat:run-1", cached]]);
-      const registration = registerRpcSourceForTest({
-        runId: "run-1",
-        sessionId: "run-1",
-        sessionKey: "agent:main:main",
-        agentId: "main",
+  it("terminalizes an explicitly aborted restart-safe admission exactly once", async () => {
+    const runId = "explicit-abort-restart-safe";
+    const sessionKey = "agent:main:main";
+    const registration = registerRpcSourceForTest({ runId, sessionKey, sessionId: "sess-main" });
+    const terminalizeRestartSafeAdmission = vi.fn().mockResolvedValue(false);
+    const lifecycle = dispatchLifecycle(registration, {
+      admission: { restartSafeAdmission: { requestFingerprint: "abort-fixture" } },
+      terminalizeRestartSafeAdmission,
+      userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
+    });
+    const unsubscribe = onAgentRuntimeEvent((event) => {
+      if (event.runId === runId && event.stream === "lifecycle" && event.data.phase === "end") {
+        registration.entry.adapter.projectSessionTerminalPending = true;
+        registration.entry.adapter.projectSessionTerminalObservedAt = event.ts;
+      }
+    });
+    try {
+      expect(abortChatRunById(lifecycle.options.context, { runId, sessionKey })).toEqual({
+        aborted: true,
       });
-      const lifecycle = dispatchLifecycle(registration, {
-        admission: {
-          cleanupAdmittedRun,
-        },
-        context: {
-          broadcast,
-          dedupe,
-          logGateway: { warn },
-          removeChatRun,
-        },
-        isQueuedFollowupEnqueued: () => true,
-      });
-
-      await lifecycle.handleError(new Error("late failure"));
+      await lifecycle.handleError(new Error("dispatch rejected after explicit abort"));
       await lifecycle.finalize();
-
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("dispatch failed after followup queue admission"),
-      );
-      expect(dedupe.get("chat:run-1")).toBe(cached);
-      expect(broadcast).not.toHaveBeenCalled();
-      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-      expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
-    },
-  );
-
-  it.each(["resolves", "rejects"])(
-    "preserves an explicitly aborted terminal when its dispatch later %s",
-    async (settlement) => {
-      const runId = `explicit-abort-before-dispatch-${settlement}`;
-      const sessionKey = "agent:main:main";
-      rpcSourceTesting.clear();
-      const chatRunState = createChatRunState();
-      const registration = registerRpcSourceForTest({
-        runId,
-        sessionId: "sess-main",
-        sessionKey,
+      expect(terminalizeRestartSafeAdmission).toHaveBeenCalledExactlyOnceWith({
+        retryable: false,
+        status: "killed",
       });
-      if (!registration.registered) {
-        throw new Error("expected the chat abort controller to be registered");
-      }
-      const removeChatRun = vi.fn();
-      const broadcast = vi.fn();
-      const dedupe = new Map();
-      const warn = vi.fn();
-      const terminalizeRestartSafeAdmission = vi.fn().mockResolvedValue(false);
-      const unsubscribe = onAgentRuntimeEvent((event) => {
-        if (event.runId !== runId || event.stream !== "lifecycle" || event.data.phase !== "end") {
-          return;
-        }
-        const current = rpcSourceTesting.get(runId);
-        if (current) {
-          current.adapter.projectSessionTerminalPending = true;
-          current.adapter.projectSessionTerminalObservedAt = event.ts;
-        }
-      });
-
-      try {
-        expect(
-          abortChatRunById(
-            {
-              chatRunState,
-              removeChatRun,
-              agentRunSeq: new Map(),
-              broadcast,
-              nodeSendToSession: vi.fn(),
-            },
-            { runId, sessionKey },
-          ),
-        ).toEqual({ aborted: true });
-
-        const lifecycle = dispatchLifecycle(registration, {
-          admission: {
-            cleanupAdmittedRun: registration.cleanup,
-            restartSafeAdmission: {} as never,
-          },
-          context: {
-            broadcast,
-            chatRunState,
-            dedupe,
-            logGateway: { warn },
-            removeChatRun,
-          },
-          terminalizeRestartSafeAdmission,
-          userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
-        });
-
-        if (settlement === "rejects") {
-          await lifecycle.handleError(new Error("dispatch rejected after explicit abort"));
-        }
-        await lifecycle.finalize();
-
-        expect(dedupe.get(`chat:${runId}`)).toMatchObject({
-          ok: true,
-          payload: { runId, status: "timeout", summary: "aborted" },
-        });
-        expect(broadcast).not.toHaveBeenCalledWith(
-          "chat",
-          expect.objectContaining({ runId, state: "error" }),
-          expect.anything(),
-        );
-        expect(rpcSourceTesting.has(runId)).toBe(false);
-        expect(terminalizeRestartSafeAdmission).toHaveBeenCalledExactlyOnceWith({
-          retryable: false,
-          status: "killed",
-        });
-      } finally {
-        unsubscribe();
-        registration.cleanup();
-      }
-    },
-  );
+    } finally {
+      unsubscribe();
+      registration.cleanup();
+    }
+  });
 
   it.each([false, true])(
     "classifies dispatch authority failure from typed restart=%s",

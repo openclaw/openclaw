@@ -259,10 +259,10 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("reuses the prepared generation for an equivalent config replacement", async () => {
+  test("reuses the prepared generation for equivalent config and auth revisions", async () => {
     const harness = await preparedHarness();
     const first = await harness.read();
-
+    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
     harness.setConfig({ agents: { entries: { main: {} } } });
     await harness.refresh();
     const second = await harness.read();
@@ -270,6 +270,8 @@ describe("gateway chat metadata runtime", () => {
     expect(second).toEqual(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
   test("rejects a completed catalog without its matching prepared auth generation", async () => {
@@ -281,21 +283,6 @@ describe("gateway chat metadata runtime", () => {
     await expect(harness.refresh()).rejects.toThrow(
       "prepared full model catalog omitted its auth generation",
     );
-  });
-
-  test("retains a generation while auth store revisions are unchanged", async () => {
-    const harness = createChatMetadataHarness();
-    harness.getPreparedAuthStore.mockImplementation(() => ({ version: 1, profiles: {} }));
-    await harness.runtime.refresh();
-    const first = await harness.runtime.read({ agentId: "main" });
-
-    await harness.runtime.refresh();
-    const second = await harness.runtime.read({ agentId: "main" });
-
-    expect(second).toEqual(first);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
-    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);
   });
 
   test("waits for replacement only for canonical metadata and session auth projections", async () => {

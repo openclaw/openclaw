@@ -54,7 +54,7 @@ function expectNotFound(respond: Parameters<typeof historyPayload>[0]) {
   expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
 }
 
-it("hides attempt diagnostics across hidden announce chunks while retaining partial replies", async () => {
+it("uses indexed reads across hidden announce chunks while retaining recovered and partial replies", async () => {
   await withHistoryState(async () => {
     const scope = await seed("message-recovery", 2000);
     const failure = {
@@ -67,6 +67,8 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
       __openclaw: { runId: "run-recovery" },
     };
     const messages = [
+      { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
+      { id: "previous-answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
       { id: "user", role: "user", content: "hello" },
       { id: "failed", ...failure },
       ...Array.from({ length: 99 }, (_, index) => ({
@@ -95,8 +97,25 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     await replaceMessages(scope, messages);
     const context = await createHistoryReadContext();
     const request = historyRpc(context, scope.sessionKey);
-    const lookup = (messageId: string) => request("chat.message.get", { messageId });
+    using read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
+    const lookup = async (messageId: string) => {
+      read.mockClear();
+      const sql = observeHostDataSql();
+      try {
+        const respond = await request("chat.message.get", { messageId });
+        expect(sql.queries).toEqual([]);
+        expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
+        return respond;
+      } finally {
+        sql.restore();
+      }
+    };
     expectNotFound(await lookup("failed"));
+    expectNotFound(await lookup("old-announce"));
+    expectNotFound(await lookup("old-pair"));
+    for (const id of ["question", "previous-answer"]) {
+      expectHistoryMessage(await lookup(id), { __openclaw: expect.objectContaining({ id }) });
+    }
 
     await appendTranscriptMessage(scope, {
       eventId: "answer",
@@ -120,62 +139,17 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     expectHistoryMessage(await lookup("partial"), {
       content: [{ type: "text", text: "Partial answer" }],
     });
-  });
-});
-
-it("resolves one indexed message per worker request while hiding stale announce pairs", async () => {
-  await withHistoryState(async () => {
-    const scope = await seed("indexed-message-get", 2000);
-    const messages = [
-      { id: "question", role: "user", timestamp: 1000, content: "Previous question" },
-      { id: "answer", role: "assistant", timestamp: 1000, content: "Previous answer" },
-      {
-        id: "announce",
-        role: "user",
-        timestamp: 1000,
-        content: "Worker finished",
-        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
-      },
-      { id: "stale-answer", role: "assistant", timestamp: 1000, content: "Hidden pair" },
-      { id: "current-answer", role: "assistant", timestamp: 3000, content: "Current answer" },
-    ];
-    await replaceMessages(scope, messages);
-    const context = await createHistoryReadContext();
-    const request = historyRpc(context, scope.sessionKey);
-    const read = vi.spyOn(historyWorker, "readSessionHistoryPageInWorker");
-    try {
-      const lookup = async (messageId: string) => {
-        read.mockClear();
-        let respond: Awaited<ReturnType<typeof request>>;
-        const sql = observeHostDataSql();
-        try {
-          respond = await request("chat.message.get", { messageId });
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-        expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
-        if (messageId === "announce" || messageId === "stale-answer") {
-          expectNotFound(respond);
-        } else {
-          expectHistoryMessage(respond, { __openclaw: expect.objectContaining({ id: messageId }) });
-        }
-      };
-      for (const { id } of messages) {
-        await lookup(id);
-      }
-      await appendTranscriptEvent(scope, {
-        type: "reset",
-        id: "close-interval",
-        parentId: "current-answer",
-        reason: "new",
-        timestamp: "2026-09-30T00:00:00.000Z",
-      });
-      await lookup("stale-answer");
-      await lookup("answer");
-    } finally {
-      read.mockRestore();
-    }
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "close-interval",
+      parentId: "partial",
+      reason: "new",
+      timestamp: "2026-09-30T00:00:00.000Z",
+    });
+    expectNotFound(await lookup("old-pair"));
+    expectHistoryMessage(await lookup("previous-answer"), {
+      __openclaw: expect.objectContaining({ id: "previous-answer" }),
+    });
   });
 });
 

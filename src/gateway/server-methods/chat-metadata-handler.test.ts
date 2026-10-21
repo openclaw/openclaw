@@ -261,32 +261,22 @@ function createPersonalMetadataFixture(
   } satisfies OpenClawConfig;
   setRuntimeConfigSnapshot(config);
   let currentConfig: OpenClawConfig = config;
-  const clients = new Set([client]);
   const metadata = { models: [], swarmEnabled: false };
   const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => metadata);
   const context = createDirectChatContext({
     getRuntimeConfig: () => currentConfig,
     readChatMetadata,
-    getClientConnIds: (filter) =>
-      new Set(
-        [...clients]
-          .filter((current) => !filter || filter(current))
-          .map((current) => current.connId),
-      ),
+    getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
   });
-  const request = async (
-    params: Record<string, unknown>,
-    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
-  ) => {
+  const request = async (params: Record<string, unknown>) => {
     const respond = vi.fn<RespondFn>();
-    await callMetadata({ params, context, client, respond, ...overrides });
+    await callMetadata({ params, context, client, respond });
     return respond;
   };
   return {
     owner,
     authProfileId,
     client,
-    clients,
     config,
     context,
     role,
