@@ -1547,6 +1547,7 @@ describe("createBackupArchive", () => {
       await mkdirs(path.dirname(linkedDbPath), outputDir, extractDir);
       const sqlite = requireNodeSqlite();
       const transientBlobMarker = `aliased-transient-blob-${"sensitive".repeat(32)}`;
+      createOwnedSqliteDatabase({ sqlitePath: backingDbPath, role: "global" });
       const db = new sqlite.DatabaseSync(backingDbPath);
       db.exec(`
         PRAGMA journal_mode = WAL;
@@ -1558,13 +1559,6 @@ describe("createBackupArchive", () => {
           metadata_json TEXT NOT NULL, blob BLOB NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER,
           PRIMARY KEY (plugin_id, namespace, entry_key)
         );
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL, agent_id TEXT
-        );
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
-        VALUES ('primary', 'global', 1, NULL);
-        PRAGMA user_version = 1;
         PRAGMA wal_checkpoint(TRUNCATE);
         INSERT INTO durable_state (id, value) VALUES (1, 'must-stay');
         INSERT INTO delivery_queue_entries (id) VALUES ('must-drop');
@@ -1648,19 +1642,13 @@ describe("createBackupArchive", () => {
       }
       await mkdirs(path.dirname(hardlinkedDbPath), outputDir, extractDir);
       const sqlite = requireNodeSqlite();
+      createOwnedSqliteDatabase({ sqlitePath: backingDbPath, role: "agent", agentId: "main" });
       const db = new sqlite.DatabaseSync(backingDbPath);
       db.exec(`
         PRAGMA journal_mode = WAL;
         PRAGMA wal_autocheckpoint = 0;
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL, agent_id TEXT
-        );
         CREATE TABLE durable_state (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE state_leases (scope TEXT NOT NULL, lease_key TEXT NOT NULL);
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
-        VALUES ('primary', 'agent', 1, 'main');
-        PRAGMA user_version = 1;
         PRAGMA wal_checkpoint(TRUNCATE);
         INSERT INTO durable_state (id, value) VALUES (1, 'committed-in-wal');
         INSERT INTO state_leases (scope, lease_key) VALUES ('core:test-fixture', 'write');

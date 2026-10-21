@@ -2,10 +2,14 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi, afterEach, describe } from "vitest";
-import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
-import { isolateBackupScratch, withBackupFixture } from "./backup-create-family.test-support.js";
+import {
+  createVerifiedBackup,
+  isolateBackupScratch,
+  restoreBackup,
+  withBackupFixture,
+} from "./backup-create-family.test-support.js";
 import { createBackupArchive } from "./backup-create.js";
 import { listArchiveEntryDetails } from "./backup-create.test-support.js";
 import {
@@ -84,10 +88,10 @@ it("records failed scratch cleanup without failing the published backup", async 
   });
 });
 
-it("fails closed when the backup destination does not support hard links", async () => {
+it.each(["EPERM", "EXDEV"])("fails closed without hard-link support (%s)", async (code) => {
   const publicationSpy = vi
     .spyOn(directoryDurability, "publishFileExclusive")
-    .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "EPERM" }));
+    .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code }));
   try {
     await withBackupFixture({ prefix: "openclaw-backup-no-hardlinks-" }, async (state) => {
       const outputDir = state.path("backups");
@@ -156,10 +160,7 @@ describe("backup traversal", () => {
           });
         }
         const runtime = createTestRuntime();
-        const result = await backupCreateCommand(runtime, {
-          output: state.path("backup.tar.gz"),
-          verify: true,
-        });
+        const result = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
         expect(removed).toBe(true);
         expect(result.skipped).toContainEqual(
           expect.objectContaining({ sourcePath: vanished, reason: "vanished" }),
@@ -172,10 +173,7 @@ describe("backup traversal", () => {
         expect(entries.some((entry) => entry.path.endsWith("/racing.json"))).toBe(false);
         const keep = entries.find((entry) => entry.path.endsWith("/keep.txt"));
         expect(keep).toBeDefined();
-        const restored = await backupRestoreCommand(runtime, {
-          archive: result.archivePath,
-          target: state.path("restored"),
-        });
+        const restored = await restoreBackup(state, result, runtime);
         expect(await fs.readFile(path.join(restored.targetPath, keep!.path), "utf8")).toBe(
           "durable contents",
         );
@@ -200,11 +198,7 @@ describe("backup traversal", () => {
       const sourceLink = path.join(second, "dangling-link");
       await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
       const linkpath = (await fs.readlink(sourceLink)).replaceAll(path.sep, "/");
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
+      const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       const entries = await listArchiveEntryDetails(result.archivePath);
       expect(entries.some((entry) => entry.path.endsWith("/second-workspace/keep.txt"))).toBe(true);
       for (const name of transient) {
@@ -259,14 +253,8 @@ describe("backup traversal", () => {
         return handle;
       });
       const runtime = createTestRuntime();
-      const archive = await backupCreateCommand(runtime, {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-      });
-      const restored = await backupRestoreCommand(runtime, {
-        archive: archive.archivePath,
-        target: state.path("restored"),
-      });
+      const archive = await createVerifiedBackup(state, { includeWorkspace: true }, runtime);
+      const restored = await restoreBackup(state, archive, runtime);
       const archivedEntry = (await listArchiveEntryDetails(archive.archivePath)).find((entry) =>
         entry.path.endsWith("/current.txt"),
       );
@@ -312,11 +300,7 @@ describe("backup traversal", () => {
       for (let offset = 0; offset < files.length; offset += 64) {
         await Promise.all(files.slice(offset, offset + 64).map((file) => fs.writeFile(file, "")));
       }
-      const result = await backupCreateCommand(createTestRuntime(), {
-        output: state.path("backup.tar.gz"),
-        verify: true,
-        json: true,
-      });
+      const result = await createVerifiedBackup(state, { includeWorkspace: true, json: true });
       expect(result.verified).toBe(true);
       expect(result.skippedVolatileCount).toBe(files.length);
       expect(

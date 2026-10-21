@@ -202,6 +202,12 @@ async function startRuntime(
     } satisfies GatewayStateOwnerHeartbeatData,
     parent.port2,
   );
+  const stop = async () => {
+    parent.port1.postMessage("stop");
+    await closed;
+    parent.port1.close();
+    events.port1.close();
+  };
   return {
     lastBeat,
     readEvents() {
@@ -212,12 +218,8 @@ async function startRuntime(
       }
       return messages;
     },
-    async stop() {
-      parent.port1.postMessage("stop");
-      await closed;
-      parent.port1.close();
-      events.port1.close();
-    },
+    stop,
+    [Symbol.asyncDispose]: stop,
   };
 }
 
@@ -237,16 +239,12 @@ it.each(["reparented", "unchanged ppid"])(
     const oldStamp = new Date(Date.now() - 30_000);
     fs.utimesSync(rootPath, oldStamp, oldStamp);
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-    const runtime = await startRuntime({ [rootPath]: raw });
-    try {
-      expect(runtime.readEvents()).toContain("parent-lost");
-      expect(kill).not.toHaveBeenCalled();
-      expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
-    } finally {
-      await runtime.stop();
-    }
+    await using runtime = await startRuntime({ [rootPath]: raw });
+    expect(runtime.readEvents()).toContain("parent-lost");
+    expect(kill).not.toHaveBeenCalled();
+    expect(fs.statSync(rootPath).mtimeMs).toBeGreaterThan(oldStamp.getTime());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(kill).toHaveBeenLastCalledWith(process.pid, "SIGKILL");
   },
 );
 
@@ -328,18 +326,14 @@ it.each([
     const previous = new Date(Date.now() - 300_000);
     fs.utimesSync(rootPath, previous, previous);
     const seed = BigInt((clock === "monotonic" ? 500_000 : Date.now()) - age);
-    const runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
-    try {
-      expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
-      expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
-      if (!shouldRenew) {
-        expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
-        expect(runtime.readEvents()).toEqual([
-          `${rootPath}: heartbeat clock could not be identified`,
-        ]);
-      }
-    } finally {
-      await runtime.stop();
+    await using runtime = await startRuntime({ [rootPath]: raw }, { clock: undefined, seed });
+    expect(vi.getTimerCount()).toBe(shouldRenew ? 1 : 0);
+    expect(fs.statSync(rootPath).mtimeMs).toBe(shouldRenew ? Date.now() : previous.getTime());
+    if (!shouldRenew) {
+      expect(Atomics.load(runtime.lastBeat, 0)).toBe(seed);
+      expect(runtime.readEvents()).toEqual([
+        `${rootPath}: heartbeat clock could not be identified`,
+      ]);
     }
   },
 );
@@ -395,17 +389,13 @@ it("keeps the failure deadline ahead of mtime expiry after a slow successful tou
 
 it("renews physical custody when the wall clock moves behind the last heartbeat", async () => {
   const { rootPath, locks } = lockFixture("openclaw-owner-heartbeat-clock-");
-  const runtime = await startRuntime(locks);
-  try {
-    vi.setSystemTime(Date.now() - 120_000);
-    vi.advanceTimersByTime(15_000);
-    expect(vi.getTimerCount()).toBe(1);
-    expect(Number(Atomics.load(runtime.lastBeat, 0))).toBe(Date.now());
-    expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
-    expect(runtime.readEvents()).toEqual([null, null]);
-  } finally {
-    await runtime.stop();
-  }
+  await using runtime = await startRuntime(locks);
+  vi.setSystemTime(Date.now() - 120_000);
+  vi.advanceTimersByTime(15_000);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(Number(Atomics.load(runtime.lastBeat, 0))).toBe(Date.now());
+  expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
+  expect(runtime.readEvents()).toEqual([null, null]);
 });
 
 it("bounds shared custody by the oldest mtime after clock rollback between locks", async () => {
@@ -427,20 +417,13 @@ it("bounds shared custody by the oldest mtime after clock rollback between locks
       }
     }
   });
-  const runtime = await startRuntime(locks);
-  try {
-    shiftClock = true;
-    vi.advanceTimersByTime(15_000);
-    const oldestMtime = Math.min(
-      fs.statSync(rootPath).mtimeMs,
-      fs.statSync(projectionPath).mtimeMs,
-    );
-    expect(fs.statSync(projectionPath).mtimeMs).toBeLessThan(fs.statSync(rootPath).mtimeMs);
-    expect(Number(Atomics.load(runtime.lastBeat, 0))).toBeLessThanOrEqual(oldestMtime);
-    expect(vi.getTimerCount()).toBe(1);
-  } finally {
-    await runtime.stop();
-  }
+  await using runtime = await startRuntime(locks);
+  shiftClock = true;
+  vi.advanceTimersByTime(15_000);
+  const oldestMtime = Math.min(fs.statSync(rootPath).mtimeMs, fs.statSync(projectionPath).mtimeMs);
+  expect(fs.statSync(projectionPath).mtimeMs).toBeLessThan(fs.statSync(rootPath).mtimeMs);
+  expect(Number(Atomics.load(runtime.lastBeat, 0))).toBeLessThanOrEqual(oldestMtime);
+  expect(vi.getTimerCount()).toBe(1);
 });
 
 it("never publishes renewed custody after a partial failure across clock rollback", async () => {
@@ -448,7 +431,7 @@ it("never publishes renewed custody after a partial failure across clock rollbac
     "openclaw-owner-heartbeat-captured-clock-",
     true,
   );
-  const runtime = await startRuntime(locks);
+  await using runtime = await startRuntime(locks);
   const initialBeat = Atomics.load(runtime.lastBeat, 0);
   const projectionInode = fs.statSync(projectionPath).ino;
   const touch = fs.futimesSync;
@@ -459,17 +442,13 @@ it("never publishes renewed custody after a partial failure across clock rollbac
     touch(fd, atime, mtime);
   });
   vi.setSystemTime(Date.now() - 120_000);
-  try {
-    vi.advanceTimersByTime(15_000);
-    expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
-    expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(runtime.readEvents()).toContain(
-      `${projectionPath}: utimes renewal failed: synthetic projection renewal failure`,
-    );
-  } finally {
-    await runtime.stop();
-  }
+  vi.advanceTimersByTime(15_000);
+  expect(fs.statSync(rootPath).mtimeMs).toBe(Date.now());
+  expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(runtime.readEvents()).toContain(
+    `${projectionPath}: utimes renewal failed: synthetic projection renewal failure`,
+  );
 });
 
 it("fences state admission with a visible reason when renewal still fails after the deadline", async () => {
@@ -622,15 +601,11 @@ it("keeps renewing the root when a projection disappears during its heartbeat", 
     }
     touch(fd, atime, mtime);
   });
-  const runtime = await startRuntime(locks);
-  try {
-    expect(() => vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_STALE_MS + 2_000)).not.toThrow();
-    expect(fs.existsSync(projectionPath)).toBe(false);
-    expect(Atomics.load(runtime.lastBeat, 0)).toBeGreaterThan(0n);
-    expect(vi.getTimerCount()).toBe(1);
-    expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
-    expect(runtime.readEvents().every((event) => event === null)).toBe(true);
-  } finally {
-    await runtime.stop();
-  }
+  await using runtime = await startRuntime(locks);
+  expect(() => vi.advanceTimersByTime(GATEWAY_OWNER_HEARTBEAT_STALE_MS + 2_000)).not.toThrow();
+  expect(fs.existsSync(projectionPath)).toBe(false);
+  expect(Atomics.load(runtime.lastBeat, 0)).toBeGreaterThan(0n);
+  expect(vi.getTimerCount()).toBe(1);
+  expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
+  expect(runtime.readEvents().every((event) => event === null)).toBe(true);
 });

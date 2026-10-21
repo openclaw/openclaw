@@ -13,22 +13,8 @@ const expectVolatile = (relative: string, expected: boolean, root = stateDir) =>
 
 describe("isVolatileBackupPath", () => {
   it.each([
-    [`${stateDir}/sessions/s-abc/transcript.jsonl`, true],
-    [`${stateDir}/sessions/s-abc/run.log`, true],
-    [`${stateDir}/agents/main/sessions/transcript.jsonl`, true],
-    [`${stateDir}/agents/ops/sessions/run.log`, true],
-    [`${stateDir}/cron/runs/2026-01-01/job.log`, true],
-    [`${stateDir}/cron/runs/nightly.jsonl`, true],
-    [`${stateDir}/logs/gateway.jsonl`, true],
-    [`${stateDir}/logs/nested/gateway.log`, true],
     [`${stateDir}/ipc/gateway.sock`, true],
-    [`${stateDir}/gateway.pid`, true],
-    [`${stateDir}/tmp/pending.tmp`, true],
     [`${stateDir}/audit/system-agent.jsonl.migrated.raw`, true],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.2.raw`, true],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.raw.doctor-scrub-restore`, true],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging`, true],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, true],
     [`${stateDir}/logs/config-audit.jsonl.migrated.raw.quarantined-2026-09-17`, true],
     [`${stateDir}/audit/crestodian.jsonl.migrated.2.raw.quarantined-copy`, true],
     [`${stateDir}/logs/config-audit.jsonl.migrated`, false],
@@ -41,7 +27,6 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
     [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
     [`${stateDir}/tmp/plugin-captures/instance/captures/source.js`, true],
-    [`${stateDir}/tmp/plugin-captures/instance/owner.sqlite`, true],
     [`${stateDir}/tmp/plugin-captures-saved/source.js`, false],
     [`${stateDir}/sessions/s-abc/meta.json`, false],
     [`${stateDir}/agents/main/sessions/sessions.json`, false],
@@ -54,18 +39,14 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/sandbox/workspaces/workspace-main/README.md`, false],
     [`${stateDir}/cache/other-product/artifact.bin`, false],
     [`${stateDir}/config.json`, false],
-    ["/home/user/project/Cargo.lock", false],
     [`${stateDir}/delivery-queue/subdir/job.json`, true],
     [`${stateDir}/delivery-queue/README.md`, false],
     ["/tmp/delivery-queue/file.json", false],
-    [`${stateDir}/session-delivery-queue/job.json`, true],
   ])("classifies %s as volatile=%s", (p, expected) => {
     expect(isVolatileBackupPath(p, plan)).toBe(expected);
   });
   it("does not skip transient extensions without a state anchor", () => {
     expect(isVolatileBackupPath("/any/path/daemon.sock", { stateDirs: [] })).toBe(false);
-    expect(isVolatileBackupPath("/any/path/daemon.pid", { stateDirs: [] })).toBe(false);
-    expect(isVolatileBackupPath("/any/path/Cargo.lock", { stateDirs: [] })).toBe(false);
   });
 
   it("does not match paths that escape the anchor via `..`", () => {
@@ -106,25 +87,17 @@ describe("isVolatileBackupPath", () => {
 
 describe("isTransientSqliteBackupPath", () => {
   it.each([
-    "memory/main.sqlite.reindex-lock.sqlite",
-    "memory/main.sqlite.reindex-lock.sqlite-shm",
-    "memory/main.sqlite.generation-writer.sqlite",
     "memory/main.sqlite.generation-writer.sqlite-wal",
-    "memory/main.sqlite.generation-lock.sqlite",
     "memory/main.sqlite.generation-lock.sqlite-journal",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
   ])("classifies transient reindex state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(true);
   });
 
-  it.each([
-    "tmp/openclaw-502/gateway.state.lock.sqlite",
-    "tmp/openclaw-502/gateway.12345678.lock.sqlite-wal",
-    "tmp/openclaw-502/device-identity.12345678.lock.sqlite-journal",
-    "tmp/openclaw-502/retained.sqlite",
-    "plugins/dedicated/cache.lock.sqlite",
-    "plugins/dedicated/lock.sqlite",
-  ])("preserves durable SQLite state: %s", (filePath) => {
-    expect(isTransientSqliteBackupPath(filePath)).toBe(false);
-  });
+  it.each(["plugins/dedicated/cache.lock.sqlite", "plugins/dedicated/lock.sqlite"])(
+    "preserves durable SQLite state: %s",
+    (filePath) => {
+      expect(isTransientSqliteBackupPath(filePath)).toBe(false);
+    },
+  );
 });

@@ -315,7 +315,7 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
   expect(report).toMatchObject({ reclaimed: [retired], active: [] });
 });
 
-it("preserves unexpected contents and symbolic links instead of adopting them as scratch", async () => {
+it("preserves unknown contents, legacy scratch, rollback directories and symbolic links", async () => {
   const root = dirs.make("backup-scratch-unknown-");
   const unknown = await createScratch(root);
   unknown.release();
@@ -323,14 +323,25 @@ it("preserves unexpected contents and symbolic links instead of adopting them as
   await fs.writeFile(archive, "published backup");
   const linked = path.join(root, "openclaw-backup-linked");
   await fs.symlink(unknown.directory, linked, linkType);
+  const legacy = path.join(root, "openclaw-backup-Legacy");
+  const rollback = path.join(root, ".openclaw.package-backup-123-456");
+  for (const directory of [legacy, rollback]) {
+    await fs.mkdir(directory);
+    await fs.writeFile(path.join(directory, "archive.tar.gz"), "preserved archive");
+  }
   const report = await inspect(root);
   expect(report.reclaimed).toEqual([]);
-  expect(report.warnings).toHaveLength(2);
+  expect(report.warnings).toHaveLength(3);
   expect(report.warnings).toEqual(
-    expect.arrayContaining([expect.stringContaining(archive), expect.stringContaining(linked)]),
+    expect.arrayContaining(
+      [archive, linked, legacy].map((entry) => expect.stringContaining(entry)),
+    ),
   );
   await expectContents(archive, "published backup");
   await expect(fs.lstat(linked)).resolves.toSatisfy((entry) => entry.isSymbolicLink());
+  for (const directory of [legacy, rollback]) {
+    await expectContents(path.join(directory, "archive.tar.gz"), "preserved archive");
+  }
 });
 
 it.each(["admitted", "creating"] as const)(
@@ -407,41 +418,6 @@ it.each(["admitted", "creating"] as const)(
     }
   },
 );
-
-it("reclaims abandoned archives while a live transaction protects its files", async () => {
-  const payloadName = "archive.tar.gz";
-  const root = dirs.make("backup-scratch-lifetime-");
-  const abandoned = await createScratch(root);
-  const active = await createScratch(root);
-  const legacy = path.join(root, "openclaw-backup-Legacy");
-  const rollback = path.join(root, ".openclaw.package-backup-123-456");
-  for (const directory of [abandoned.directory, active.directory, legacy, rollback]) {
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, payloadName), "synthetic backup input");
-  }
-  abandoned.release();
-  try {
-    const inspection = await inspect(root, false);
-    expect(inspection.reclaimed).toEqual([]);
-    expect(inspection.unchecked).toEqual(
-      expect.arrayContaining([active.directory, abandoned.directory]),
-    );
-    await expectContents(path.join(abandoned.directory, payloadName), "synthetic backup input");
-
-    const repair = await inspect(root);
-    expect(repair).toMatchObject({
-      reclaimed: [abandoned.directory],
-      active: [active.directory],
-      warnings: [expect.stringContaining(legacy)],
-    });
-    await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
-    for (const directory of [active.directory, legacy, rollback]) {
-      await expectContents(path.join(directory, payloadName), "synthetic backup input");
-    }
-  } finally {
-    await finishScratch(active);
-  }
-});
 
 it("retries retirement after failed payload cleanup", async () => {
   const root = dirs.make("backup-scratch-retry-");
