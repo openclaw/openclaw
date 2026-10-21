@@ -14,23 +14,13 @@ type TestMessageOverrides = {
   selfLid?: string;
 };
 
-const makeMsg = ({ body = "", mentionedJids, ...identity }: TestMessageOverrides) => {
-  const conversationId = "120363401234567890@g.us";
-  return createTestWebInboundMessage({
-    event: { id: "m1" },
+const makeMsg = ({ body = "", mentionedJids, ...identity }: TestMessageOverrides) =>
+  createTestWebInboundMessage({
     payload: { body },
-    platform: {
-      chatJid: conversationId,
-      recipientJid: "15551234567@s.whatsapp.net",
-      ...identity,
-    },
-    admission: {
-      conversation: { kind: "group", id: conversationId },
-      senderAccess: { reasonCode: "group_policy_allowed" },
-    },
+    platform: identity,
+    admission: { conversation: { kind: "group", id: "120363401234567890@g.us" } },
     group: { mentions: { jids: mentionedJids } },
   });
-};
 
 describe("isBotMentioned", () => {
   it("detects an explicit group @mention even when self is in allowFrom (#49317)", () => {
