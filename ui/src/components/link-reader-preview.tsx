@@ -169,19 +169,6 @@ export async function requestReaderPreview(
     }
     return { ...cached.preview, stale: true };
   }
-  if (preview.stale && isCurrent()) {
-    // One awaited refresh joins the server's stale-while-revalidate work; no polling.
-    try {
-      preview = parsePreviewResponse(
-        target,
-        await client.request(method, { ...params, refresh: true }, { signal }),
-      );
-    } catch (error) {
-      if (signal.aborted) {
-        throw error;
-      }
-    }
-  }
   // A reader-first entry owns newer header facts, not the plugin's compact projection.
   const header = cached?.enrichment ? cached.preview : undefined;
   return header

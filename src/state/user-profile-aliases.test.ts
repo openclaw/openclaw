@@ -12,7 +12,10 @@ import {
   readUserProfileAliasRevision,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
+import {
+  readUserProfileEmailBindings,
+  readUserProfileSnapshotCommand,
+} from "./user-profile-identity.read.js";
 import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
@@ -256,6 +259,18 @@ describe("profile alias reader lifecycle", () => {
       expect(f.aliases("missing")).toEqual(new Set(["missing"]));
       if (db) {
         expect(tableExists(db, "user_profiles")).toBe(false);
+        const execute = vi.spyOn(db, "exec");
+        expect(readUserProfileSnapshotCommand(db, { type: "userProfiles.catalog" })).toEqual({
+          type: "userProfiles.catalog",
+          profiles: [],
+          emailBindings: [],
+        });
+        expect(
+          execute.mock.calls
+            .map(([sql]) => sql)
+            .filter((sql) => /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/iu.test(sql)),
+        ).toEqual([]);
+        execute.mockRestore();
       } else {
         expect(fs.existsSync(f.options.path)).toBe(false);
       }

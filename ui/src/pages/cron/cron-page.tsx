@@ -1,5 +1,6 @@
 import { createEffect, createMemo } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -11,13 +12,19 @@ import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
 import { CronView } from "./view.tsx";
 
+export const header = true;
+
+export function renderSolid(props: SolidRouteProps) {
+  return <CronPage routeSearch={typeof props.data === "string" ? props.data : ""} />;
+}
+
 export function CronPageContent(props: { page: ReturnType<typeof createCronPage> }) {
   const revision = () => i18nRevision() + props.page.revision();
   const viewProps = createMemo(() => {
     revision();
     return buildCronViewProps(props.page);
   });
-  const header = () => {
+  const pageHeader = () => {
     revision();
     const page = props.page;
     return {
@@ -30,10 +37,10 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
     <>
       <HubPageHeader
         active="cron"
-        subtitle={header().filtered ? t("cron.list.sessionFilter") : undefined}
+        subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
         docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
         actions={
-          header().filtered ? (
+          pageHeader().filtered ? (
             <a
               class="btn"
               href={pathForRoute("cron", props.page.context().basePath)}
@@ -48,9 +55,9 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
             </a>
           ) : (
             <AgentScopeControl
-              agents={header().agents}
+              agents={pageHeader().agents}
               selection={props.page.context().agentSelection}
-              selectedId={header().selectedAgentId}
+              selectedId={pageHeader().selectedAgentId}
             />
           )
         }

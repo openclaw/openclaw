@@ -88,6 +88,11 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+A successful foreground update hands completion to the replacement Gateway.
+Automatic history reconciliation preserves that handoff while startup verifies
+the running build. If the replacement never starts, `openclaw update repair`
+can recover the abandoned handoff explicitly.
+
 Handoff repair uses recorded boot sessions and process creation times to exclude
 prior-boot families and unrelated processes with reused parent PIDs. On Windows,
 a legacy handoff without a boot identity also qualifies as prior-boot when its
@@ -709,6 +714,10 @@ its `--timeout` option cannot increase this cap.
 
 Plugin rehearsal copies are temporary and rebuilt after interruption. Copying
 uses up to four concurrent file copies and avoids a disk flush for every file.
+Failures to remove private candidate copies or Git inspection worktrees are
+warnings that identify the cleanup path and error class. They preserve the
+original candidate result and the installed runtime's recovery verdict.
+Unverified process cleanup still requires its recovery owner.
 If a copy fails, active copies finish before cleanup; link publication and
 verification run only after all file copies succeed. Each private copy or inspection
 uses one generous absolute allowance derived from its inventoried size, with the

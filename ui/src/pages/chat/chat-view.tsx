@@ -66,6 +66,7 @@ type ChatViewInput = {
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
+  getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
@@ -234,6 +235,7 @@ function ChatComposerView(input: ChatViewInput) {
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
+      getScrollToLatestElement={input.getScrollToLatestElement}
       progressCard={
         input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
       }
@@ -396,6 +398,17 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     };
   };
   const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
+  let scrollToLatestButton: HTMLButtonElement | undefined;
+  const bindScrollToLatestButton = (element: HTMLButtonElement) => {
+    scrollToLatestButton = element;
+    return () => {
+      if (scrollToLatestButton === element) {
+        scrollToLatestButton = undefined;
+      }
+    };
+  };
+  const getScrollToLatestElement = () =>
+    scrollToLatestButton?.isConnected ? scrollToLatestButton : null;
   let replacementComposer: HTMLElement | undefined;
   const registerReplacementComposer = (element: HTMLElement) => {
     replacementComposer = element;
@@ -450,6 +463,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     application,
     bindTranscriptViewport,
     getTranscriptElement,
+    getScrollToLatestElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -589,6 +603,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       <div class="chat-scroll-to-bottom-wrap">
                         <button
                           class="chat-scroll-to-bottom"
+                          ref={elementRef(bindScrollToLatestButton)}
                           data-visible={input.props.showNewMessages ? "true" : "false"}
                           type="button"
                           inert={!input.props.showNewMessages}
