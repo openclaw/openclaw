@@ -356,7 +356,13 @@ async function eligiblePaths() {
       "--ignored",
       "--exclude-from=" + includePath,
     ])) {
-      if (ignored.has(candidate)) addSelected(candidate);
+      if (ignored.has(candidate)) {
+        // .worktreeinclude is an explicit admission decision. Retain new
+        // cache-root selections before the build-cache filter runs so worker
+        // edits under these roots remain visible to reconciliation.
+        rememberBuildCacheInputs([candidate]);
+        addSelected(candidate);
+      }
     }
   }
   for (const priorManifestDigest of priorManifestDigests) {

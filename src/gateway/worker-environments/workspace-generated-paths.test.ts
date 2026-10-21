@@ -423,3 +423,31 @@ it("retains host-admitted cache inputs after an initial base-only worker setup",
   expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
   expect(manifest.entries.some((entry) => entry.path === "source.txt")).toBe(true);
 });
+
+it("retains new cache inputs selected by worktreeinclude after the base", async () => {
+  const { workspace, readManifest, runManifest } = await createScriptWorkspace(
+    tempDirs.make("workspace-include-admission-"),
+  );
+  const selected = ".artifacts/build-cache-inputs/compiler-input.json";
+  const generated = ".artifacts/build-cache-inputs/generated/output.js";
+  await writeWorkspaceFiles(workspace, {
+    ".gitignore": ".artifacts/build-cache-inputs/\n",
+    ".worktreeinclude": `${selected}\n`,
+    "source.txt": "source\n",
+  });
+  const baseCommit = await initializeScriptGitWorkspace(workspace, ".");
+  const initial = await runManifest([baseCommit, "eligible"]);
+  expect(initial.code, initial.stderr).toBe(0);
+
+  // The worker creates a new cache-root input after the base; it is ignored by
+  // Git but explicitly selected by .worktreeinclude.
+  await writeWorkspaceFiles(workspace, {
+    [selected]: "worker compiler input\n",
+    [generated]: "disposable cache\n",
+  });
+  const captured = await runManifest([baseCommit, "eligible", initial.stdout.trim().slice(7)]);
+  expect(captured.code, captured.stderr).toBe(0);
+  const manifest = await readManifest(captured.stdout.trim());
+  expect(manifest.entries.some((entry) => entry.path === selected)).toBe(true);
+  expect(manifest.entries.some((entry) => entry.path === generated)).toBe(false);
+});
