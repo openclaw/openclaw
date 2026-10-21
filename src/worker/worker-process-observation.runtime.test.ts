@@ -9,6 +9,7 @@ import {
   testWorkerDescriptor,
 } from "../node-host/node-worker-supervisor.test-support.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
+import type { WorkerProcessOperation } from "./worker-process-observation.js";
 import { parseWorkerProcessMessage, type WorkerProcessMessage } from "./worker-process-protocol.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -68,6 +69,21 @@ it.each([true, false])(
       return result.promise;
     };
     const running = runWorkerCommand({ input, output, managed: true });
+    const binding = {
+      type: "process",
+      environmentId: descriptor.admission.environmentId,
+      sessionId: descriptor.admission.sessionId,
+      ownerEpoch: descriptor.admission.ownerEpoch,
+    };
+    const observe = (
+      requestId: string,
+      operation: WorkerProcessOperation,
+      ownerEpoch = binding.ownerEpoch,
+    ) => request(requestId, { ...binding, requestId, operation, ownerEpoch });
+    const expectChanges = async (count: number) => {
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(changes).toHaveLength(processChanges ? count : 0);
+    };
     try {
       expect(
         await request("turn", {
@@ -77,17 +93,7 @@ it.each([true, false])(
           ...(processChanges ? { processChanges: true } : {}),
         }),
       ).toMatchObject({ type: "result", retainWorker: true });
-      const binding = {
-        type: "process",
-        environmentId: descriptor.admission.environmentId,
-        sessionId: descriptor.admission.sessionId,
-        ownerEpoch: descriptor.admission.ownerEpoch,
-      };
-      const list = await request("list", {
-        ...binding,
-        requestId: "list",
-        operation: { action: "list" },
-      });
+      const list = await observe("list", { action: "list" });
       expect(list).toMatchObject({
         type: "process-result",
         result: {
@@ -99,53 +105,36 @@ it.each([true, false])(
         throw new Error("Expected process list");
       }
       const row = list.result.processes[0]!;
-      expect(
-        await request("stale", {
-          ...binding,
-          ownerEpoch: binding.ownerEpoch + 1,
-          requestId: "stale",
-          operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
-        }),
-      ).toMatchObject({ error: expect.stringContaining("owner changed") });
+      const stop: WorkerProcessOperation = {
+        action: "stop",
+        processId: row.processId,
+        instanceId: row.instanceId,
+      };
+      expect(await observe("stale", stop, binding.ownerEpoch + 1)).toMatchObject({
+        error: expect.stringContaining("owner changed"),
+      });
       expect(cancel).not.toHaveBeenCalled();
-      expect(
-        await request("stop", {
-          ...binding,
-          requestId: "stop",
-          operation: { action: "stop", processId: row.processId, instanceId: row.instanceId },
-        }),
-      ).toMatchObject({ result: { requested: true } });
+      expect(await observe("stop", stop)).toMatchObject({ result: { requested: true } });
       expect(cancel).toHaveBeenCalledExactlyOnceWith(record.id, "manual-cancel");
       expect(runWorkerDescriptor).toHaveBeenCalledOnce();
       expect(record.pendingOutput).toEqual([{ stream: "stdout", text: "Build is running\n" }]);
       expect(record.terminalPollObserved).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 1 : 0);
-      expect(
-        await request("stopping", {
-          ...binding,
-          requestId: "stopping",
-          operation: { action: "list" },
-        }),
-      ).toMatchObject({
+      await expectChanges(1);
+      expect(await observe("stopping", { action: "list" })).toMatchObject({
         result: { processes: [{ processId: record.id, status: "running", canStop: false }] },
       });
       appendOutput(record, "stdout", "Build output after the turn\n");
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 2 : 0);
+      await expectChanges(2);
       const other = createProcessSessionFixture({ id: "another-owner", backgrounded: true });
       other.scopeKey = "worker:another-session";
       other.agentId = record.agentId;
       addSession(other);
       appendOutput(other, "stdout", "Unrelated output\n");
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 2 : 0);
+      await expectChanges(2);
       appendOutput(record, "stdout", "Build progressed after the turn\n");
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 3 : 0);
+      await expectChanges(3);
       markExited(record, 0, null, "completed");
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(changes).toHaveLength(processChanges ? 4 : 0);
+      await expectChanges(4);
     } finally {
       markExited(record, 0, null, "completed");
       input.end();

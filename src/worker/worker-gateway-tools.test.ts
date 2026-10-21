@@ -17,6 +17,11 @@ import { createToolSurfacePresentationForTest } from "../agents/tool-surface-pla
 import { workerSessionToolErrorResult } from "../gateway/worker-environments/worker-session-tool-result.js";
 import { createWorkerGatewayToolProxies } from "./worker-gateway-tools.js";
 
+type GatewayClient = Parameters<typeof createWorkerGatewayToolProxies>[1];
+function response<T>(payload: T, id = "response-1") {
+  return { type: "res", id, ok: true, payload } as const;
+}
+
 function fixture() {
   const surface: WorkerToolSurface = {
     generation: "generation-1",
@@ -42,22 +47,10 @@ function fixture() {
     details: { status: "sent" },
   };
   const client = {
-    invokeGatewayTool: vi.fn<
-      Parameters<typeof createWorkerGatewayToolProxies>[1]["invokeGatewayTool"]
-    >(async () => ({
-      type: "res",
-      id: "response-1",
-      ok: true,
-      payload: result,
-    })),
-    cancelGatewayTool: vi.fn<
-      Parameters<typeof createWorkerGatewayToolProxies>[1]["cancelGatewayTool"]
-    >(async () => ({
-      type: "res",
-      id: "cancel-1",
-      ok: true,
-      payload: { cancelled: true },
-    })),
+    invokeGatewayTool: vi.fn<GatewayClient["invokeGatewayTool"]>(async () => response(result)),
+    cancelGatewayTool: vi.fn<GatewayClient["cancelGatewayTool"]>(async () =>
+      response({ cancelled: true }, "cancel-1"),
+    ),
   };
   return { surface, result, client };
 }
@@ -74,7 +67,7 @@ describe("worker Gateway tool transport", () => {
     Object.freeze(surface.tools[0]!.definition);
     client.invokeGatewayTool.mockImplementationOnce(async (_params, options) => {
       options?.onUpdate?.({ content: [{ type: "text", text: "working" }] });
-      return { type: "res", id: "response-1", ok: true, payload: result };
+      return response(result);
     });
     const tools = createWorkerGatewayToolProxies(surface, client);
     expect(JSON.stringify(toToolDefinitions(tools))).toBe(
@@ -116,7 +109,7 @@ describe("worker Gateway tool transport", () => {
       generation: surface.generation,
       toolCallId: "call-abort",
     });
-    pending.resolve({ type: "res", id: "response-late", ok: true, payload: result });
+    pending.resolve(response(result, "response-late"));
     await expect(execution).rejects.toThrow("turn closed");
     await expect(tool!.execute("already-closed", {}, signal.signal)).rejects.toThrow("turn closed");
     expect(client.invokeGatewayTool).toHaveBeenCalledTimes(1);
@@ -158,24 +151,18 @@ describe("worker Gateway tool transport", () => {
       resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
     );
     const message = "Automation not found: foreign-job";
-    client.invokeGatewayTool.mockResolvedValueOnce({
-      type: "res",
-      id: "denied",
-      ok: true,
-      payload: workerSessionToolErrorResult(new Error(message)),
-    });
+    client.invokeGatewayTool.mockResolvedValueOnce(
+      response(workerSessionToolErrorResult(new Error(message)), "denied"),
+    );
     await expect(runtime.call("sessions_send", {})).resolves.toMatchObject({
       result: workerSessionToolErrorResult(new Error(message)),
     });
     await expect(runtime.callValue("sessions_send", {})).resolves.toEqual(result.details);
 
     // An error-shaped success is still a contract violation, not an explicit failure.
-    client.invokeGatewayTool.mockResolvedValueOnce({
-      type: "res",
-      id: "malformed-success",
-      ok: true,
-      payload: { content: [], details: { status: "error", error: message } },
-    });
+    client.invokeGatewayTool.mockResolvedValueOnce(
+      response({ content: [], details: { status: "error", error: message } }, "malformed-success"),
+    );
     const failure = await runtime.callValue("sessions_send", {}).catch((error: unknown) => error);
     expect(getToolContractFailureCode(failure)).toBe("output_contract");
     expect(client.invokeGatewayTool).toHaveBeenCalledTimes(3);

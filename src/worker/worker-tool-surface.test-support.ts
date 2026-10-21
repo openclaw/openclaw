@@ -37,14 +37,9 @@ export function createWorkerToolSurfaceForTest(params: {
     agentId: assignment.agentId,
     modelProvider: assignment.modelRef.provider,
     modelId: assignment.modelRef.model,
-    ...(assignment.permissionMode
-      ? {
-          sessionPermissionPolicy: {
-            mode: assignment.permissionMode,
-            root: assignment.workspaceDir,
-          },
-        }
-      : {}),
+    sessionPermissionPolicy: assignment.permissionMode
+      ? { mode: assignment.permissionMode, root: assignment.workspaceDir }
+      : undefined,
   });
   const definitions = new Map(
     createWorkerPlacementTools({

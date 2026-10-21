@@ -76,14 +76,9 @@ export async function bindWorkerFixtureTurnSource(
           agentId: assignment.agentId,
           modelProvider: assignment.modelRef.provider,
           modelId: assignment.modelRef.model,
-          ...(assignment.permissionMode
-            ? {
-                sessionPermissionPolicy: {
-                  mode: assignment.permissionMode,
-                  root: assignment.workspaceDir,
-                },
-              }
-            : {}),
+          sessionPermissionPolicy: assignment.permissionMode
+            ? { mode: assignment.permissionMode, root: assignment.workspaceDir }
+            : undefined,
         });
         const tools = createWorkerPlacementTools({
           policy,
@@ -95,9 +90,7 @@ export async function bindWorkerFixtureTurnSource(
           sessionKey: `worker:${claim.sessionId}`,
           sessionId: claim.sessionId,
           runId: claim.runId,
-        }).filter((tool) =>
-          assignment.toolAuthority.allowedToolNames.some((name) => name === tool.name),
-        );
+        }).filter((tool) => assignment.toolAuthority.allowedToolNames.includes(tool.name));
         for (const tool of tools) {
           bindAgentToolExecutionLocation(tool, { kind: "placement" });
         }

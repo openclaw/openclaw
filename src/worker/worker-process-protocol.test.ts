@@ -52,16 +52,12 @@ describe("worker process protocol", () => {
     expect(() => parseWorkerProcessRequest(request)).toThrow("invalid managed worker request");
   });
 
-  it.each([
-    {
-      name: "fenced result",
-      value: inheritedRecord(
-        { status: "fenced" },
-        { reason: "credential-replaced", unexpected: true },
+  it("rejects an inherited discriminator for a fenced result", () => {
+    expect(
+      parseWorkerRuntimeResult(
+        inheritedRecord({ status: "fenced" }, { reason: "credential-replaced", unexpected: true }),
       ),
-    },
-  ])("rejects an inherited discriminator for a $name", ({ value }) => {
-    expect(parseWorkerRuntimeResult(value)).toBeNull();
+    ).toBeNull();
   });
 });
 
@@ -75,18 +71,16 @@ it("accepts bounded process observation frames and rejects mixed owner operation
     operation: { action: "list" },
   };
   expect(parseWorkerProcessRequest(request)).toEqual(request);
-  expect(() => parseWorkerProcessRequest({ ...request, turnId: "another-turn" })).toThrow();
-  expect(() =>
-    parseWorkerProcessRequest({ ...request, operation: { action: "stop", processId: "build" } }),
-  ).toThrow();
-  expect(() =>
-    parseWorkerProcessRequest(
-      inheritedRecord(
-        { environmentId: request.environmentId },
-        { ...request, environmentId: undefined },
-      ),
+  for (const invalid of [
+    { ...request, turnId: "another-turn" },
+    { ...request, operation: { action: "stop", processId: "build" } },
+    inheritedRecord(
+      { environmentId: request.environmentId },
+      { ...request, environmentId: undefined },
     ),
-  ).toThrow();
+  ]) {
+    expect(() => parseWorkerProcessRequest(invalid)).toThrow();
+  }
   const response = {
     type: "process-result",
     requestId: "read-1",

@@ -13,7 +13,7 @@ import {
   type NativeInferenceStartup,
 } from "./native-inference-startup.js";
 import { nativeWorkerTestEntrypoint } from "./native-worker-entrypoints.test-support.js";
-import { serializeWorkerProcessInput } from "./worker-process-protocol.js";
+import { serializeWorkerProcessInput, type WorkerProcessInput } from "./worker-process-protocol.js";
 import { workerBackgroundExecEntrypoints } from "./worker-runtime-background-exec-entrypoints.test-support.js";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -40,7 +40,7 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
         workerBackgroundExecEntrypoints.providerModelMetadata,
         workerBackgroundExecEntrypoints.stringCoerceRuntime,
       ],
-      (prefix) => makeTempDir(prefix),
+      makeTempDir,
       { mode: "link" },
     );
     const home = makeTempDir("oc-native-child-");
@@ -115,40 +115,26 @@ export function createWorkerProcessTestHarness(makeTempDir: (prefix: string) => 
           await withinTest(exited, cleanupSignal);
         } catch {
           child.kill("SIGKILL");
-          await exited;
         }
-      } else {
-        await exited;
       }
+      await exited;
     };
     children.push(close);
     await secretDelivery?.deliverTo(child);
-    stdin.write(
-      serializeWorkerProcessInput({
-        type: "turn",
-        turnId: descriptor.assignment.turnId,
-        descriptor,
-      }),
-    );
+    const send = (message: WorkerProcessInput) => stdin.write(serializeWorkerProcessInput(message));
+    const turnId = descriptor.assignment.turnId;
+    send({ type: "turn", turnId, descriptor });
     return {
       child,
       exited,
       close,
-      cancel: () =>
-        stdin.write(
-          serializeWorkerProcessInput({ type: "cancel", turnId: descriptor.assignment.turnId }),
-        ),
+      cancel: () => send({ type: "cancel", turnId }),
       finish: async () => {
         try {
           return await withinTest(exited, signal);
         } catch (error) {
           throw new Error(
-            JSON.stringify({
-              error: String(error),
-              stdout,
-              stderr,
-              ...diagnostics?.(),
-            }),
+            JSON.stringify({ error: String(error), stdout, stderr, ...diagnostics?.() }),
             { cause: error },
           );
         }
