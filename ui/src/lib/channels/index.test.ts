@@ -509,7 +509,8 @@ describe("channels controller DM pairing", () => {
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("refresh unavailable");
+    await expect(channels.state.pairingRead?.completion).resolves.toBe("refresh unavailable");
+    expect(channels.state.pairingError).toBeNull();
     channels.dispose();
   });
 
@@ -536,7 +537,10 @@ describe("channels controller DM pairing", () => {
     } as never);
 
     const staleRefresh = channels.refreshPairing();
-    await vi.waitFor(() => expect(listCount).toBe(1));
+    const staleReceipt = channels.state.pairingRead!;
+    await channels.refreshPairing();
+    expect(channels.state.pairingRead).toBe(staleReceipt);
+    expect(listCount).toBe(1);
     const approval = channels.approvePairing({
       channel: "whatsapp",
       accountId: "personal",
@@ -544,7 +548,9 @@ describe("channels controller DM pairing", () => {
       notify: false,
       bootstrapCommandOwner: false,
     });
+    await expect(staleReceipt.completion).resolves.toBeNull();
     await vi.waitFor(() => expect(listCount).toBe(2));
+    expect(channels.state.pairingRead).not.toBe(staleReceipt);
     freshList.resolve(emptyPairing);
     await approval;
 
@@ -554,6 +560,46 @@ describe("channels controller DM pairing", () => {
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
     channels.dispose();
   });
+
+  it.each(["disconnect", "authorization", "dispose"] as const)(
+    "settles a retired pairing read before its transport responds after %s",
+    async (change) => {
+      const pending = createDeferred<ChannelsPairingListResult>();
+      const request = vi.fn().mockReturnValue(pending.promise);
+      const client = { request };
+      let snapshot = {
+        client,
+        phase: "connected" as "connected" | "reconnecting",
+        hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+      };
+      const { gateway, publish } = createChannelGatewayFixture(() => snapshot);
+      const channels = createChannelCapability(gateway);
+      const refresh = channels.refreshPairing();
+      const receipt = channels.state.pairingRead!;
+      let settled = false;
+      void receipt.completion.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      if (change === "disconnect") {
+        snapshot = { ...snapshot, phase: "reconnecting" };
+        publish();
+      } else if (change === "authorization") {
+        snapshot = { ...snapshot, hello: { auth: { role: "operator", scopes: [] } } };
+        publish();
+      } else {
+        channels.dispose();
+      }
+      await expect(receipt.completion).resolves.toBeNull();
+      expect(channels.state.pairingLoading).toBe(false);
+      pending.resolve(pendingPairing);
+      await refresh;
+      expect(channels.state.pairingSnapshot).toBeNull();
+      channels.dispose();
+    },
+  );
 
   it("retains sender metadata on disconnect and clears it on pairing-scope changes", () => {
     const client = { request: vi.fn() };

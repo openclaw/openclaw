@@ -6,6 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -230,6 +231,7 @@ it.runIf(process.platform === "darwin")(
     const child = await holdStore(env);
     let released: Promise<void> | undefined;
     try {
+      await prepareStartupClientCredentials({ env });
       expect(
         await runClientCredentialOperationAsync(env, {
           kind: "identity.read",
@@ -254,7 +256,7 @@ it.runIf(process.platform === "darwin")(
         }),
       ).rejects.toThrow("did not reply");
       await released;
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(
         runClientCredentialOperation(env, {
           kind: "token.read",

@@ -33,6 +33,7 @@ export function createChannelsViewProps(
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,

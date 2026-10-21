@@ -1,8 +1,6 @@
-/**
- * Shared before_tool_call state for adjusted tool params.
- * The adapter and wrapper both consult this map so later execution can use the
- * normalized payload selected by hook processing.
- */
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+
+/** Detached execution facts; internal readers borrow the same snapshot. */
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
@@ -17,6 +15,25 @@ export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: str
   return params.toolCallId;
 }
 
+/** Detach before mutable execution; mutable hook/middleware inputs get their own copies. */
+export function recordAdjustedParamsForToolCall(
+  toolCallId: string | undefined,
+  params: unknown,
+  runId?: string,
+): void {
+  if (!toolCallId) {
+    return;
+  }
+  let snapshot: unknown;
+  try {
+    snapshot = structuredClone(params);
+  } catch {
+    return;
+  }
+  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), snapshot);
+  pruneMapToMaxSize(adjustedParamsByToolCallId, 1024);
+}
+
 /** Consume and remove hook-adjusted params for a completed tool call. */
 export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
   const key = buildAdjustedParamsKey({ runId, toolCallId });
@@ -25,11 +42,9 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
   return params;
 }
 
-/** Snapshot hook-adjusted params without consuming later outcome bookkeeping. */
+/** Borrow execution facts without consuming later outcome bookkeeping. */
 export function peekAdjustedParamsForToolCall(toolCallId: string, runId?: string): unknown {
-  const key = buildAdjustedParamsKey({ runId, toolCallId });
-  const params = adjustedParamsByToolCallId.get(key);
-  return params === undefined ? undefined : structuredClone(params);
+  return adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
 }
 
 /** Consume whether policy prevented the target tool from starting. */

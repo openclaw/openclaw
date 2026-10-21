@@ -4,7 +4,8 @@ import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 

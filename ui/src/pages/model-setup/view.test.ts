@@ -127,6 +127,68 @@ describe("renderModelSetup", () => {
     expect(withUsableOllama.querySelector('[data-prepare-choice="ollama"]')).toBeNull();
   });
 
+  it.each([
+    { family: "candidate", selector: '[data-candidate-kind="codex-cli"]' },
+    { family: "featured sign-in", selector: '[data-auth-choice="openai-oauth"]' },
+    { family: "additional sign-in", selector: '[data-auth-choice="other-device"]' },
+    { family: "prepare", selector: '[data-prepare-choice="ollama"]' },
+    { family: "recommendation", selector: '[data-recommended-install="ollama"]' },
+  ])("retains the $family control and reads its new rescan data", ({ family, selector }) => {
+    const result = structuredClone(detected);
+    if (family === "candidate") {
+      result.candidates.push({
+        ...result.candidates[0]!,
+        label: "Utility choice",
+        modelTarget: "utility",
+      });
+    } else if (family === "recommendation") {
+      result.candidates = [];
+      result.authOptions = [];
+    }
+    const onChoose = vi.fn();
+    const viewProps = props({
+      page: { phase: "ready", result },
+      moreSignInOpen: true,
+      onActivateCandidate: onChoose,
+      onStartAuth: onChoose,
+      onStartPrepare: onChoose,
+    });
+    const container = mount(viewProps);
+    const rows = [...container.querySelectorAll(selector)];
+    const control = rows[0]!.querySelector<HTMLButtonElement | HTMLAnchorElement>("button, a")!;
+    control.focus();
+    const rescanned = structuredClone(result);
+    const updated =
+      family === "candidate"
+        ? rescanned.candidates[0]!
+        : family === "prepare"
+          ? rescanned.prepareOptions![0]!
+          : family === "recommendation"
+            ? rescanned.recommendedInstalls![0]!
+            : rescanned.authOptions!.find((option) =>
+                family === "featured sign-in" ? option.featured : !option.featured,
+              )!;
+    updated.label = "Updated choice";
+    if (family === "recommendation") {
+      rescanned.recommendedInstalls![0]!.website = "https://example.com/install";
+    }
+    viewProps.page = { phase: "ready", result: rescanned };
+    renderSetup(viewProps, container);
+
+    const refreshedRows = [...container.querySelectorAll(selector)];
+    expect(refreshedRows).toHaveLength(family === "candidate" ? 2 : 1);
+    rows.forEach((row, index) => expect(refreshedRows[index]).toBe(row));
+    expect(refreshedRows[0]!.querySelector("button, a")).toBe(control);
+    expect(text(refreshedRows[0]!)).toContain("Updated choice");
+    expect(document.activeElement).toBe(control);
+    if (control instanceof HTMLAnchorElement) {
+      expect(control.href).toBe("https://example.com/install");
+    } else {
+      control.click();
+      expect(onChoose).toHaveBeenCalledExactlyOnceWith(updated);
+    }
+  });
+
   it("renders recommended install cards only when candidates and sign-ins are empty", () => {
     const container = mount(
       props({

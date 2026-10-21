@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, For, onSettled, Show } from "solid-js";
 import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type {
   McpAppDiscoveredEntrypoint,
@@ -47,14 +47,11 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
   const context = useApplication();
   const [expanded, setExpanded] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  const [onboardingRevision, setOnboardingRevision] = createSignal(0, { ownedWrite: true });
+  const [onboardingBusy, setOnboardingBusy] = createOptimistic(false);
   let active = true;
+  // Admission stays synchronous; the optimistic flag only drives presentation.
   let onboardingPending = false;
-  const onboardingBusy = () => {
-    onboardingRevision();
-    return onboardingPending;
-  };
-  onCleanup(() => {
+  onSettled(() => () => {
     active = false;
   });
   const target = () => ({
@@ -120,21 +117,35 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
       setError(t("mcpApp.errors.mountUnavailable"));
     }
   }
+  const performOnboarding = action(function* (request: () => Promise<unknown>) {
+    setOnboardingBusy(true);
+    yield request();
+  });
   async function onboard(pluginId: string) {
     const client = context.gateway.snapshot.client;
     if (!client || !catalog().available || onboardingPending) {
       return;
     }
     const selected = target();
+    const current = () => {
+      const destination = target();
+      return (
+        active &&
+        context.gateway.snapshot.client === client &&
+        destination.sessionKey === selected.sessionKey &&
+        destination.agentId === selected.agentId
+      );
+    };
     onboardingPending = true;
-    setOnboardingRevision((value) => value + 1);
     try {
-      await client.request("mcp.app.onboard", {
-        ...selected,
-        pluginId,
-        idempotencyKey: generateUUID(),
-      });
-      if (!active || context.gateway.snapshot.client !== client) {
+      await performOnboarding(() =>
+        client.request("mcp.app.onboard", {
+          ...selected,
+          pluginId,
+          idempotencyKey: generateUUID(),
+        }),
+      );
+      if (!current()) {
         return;
       }
       const route = sessionNavigationTarget({
@@ -145,14 +156,11 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
       });
       context.navigate("chat", route.options);
     } catch (failure) {
-      if (active && context.gateway.snapshot.client === client) {
+      if (current()) {
         setError(formatUiError(failure));
       }
     } finally {
       onboardingPending = false;
-      if (active) {
-        setOnboardingRevision((value) => value + 1);
-      }
     }
   }
   return (
@@ -226,14 +234,14 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                             </span>
                           </button>
                           <Show when={quickAction()}>
-                            {(action) => (
+                            {(shortcut) => (
                               <button
                                 class="btn btn--sm"
                                 type="button"
                                 disabled={!catalog().available}
                                 onClick={() => open(row().server, row().entry, false, true)}
                               >
-                                {action().title}
+                                {shortcut().title}
                               </button>
                             )}
                           </Show>

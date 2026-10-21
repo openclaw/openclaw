@@ -53,13 +53,18 @@ job. Open the page that matches your task.
 Storage-engine PRs, scheduled main runs, and manual CI validations include three hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 They run in parallel with separate databases and unchanged three-worker test limits,
-with a 30-minute job budget each. The conformance runner uses the shared weighted
-allocator and committed `config/postgres-conformance-timings.json` measurements;
-weights distribute work but never select the test inventory. Unknown targets receive
-a default weight. Inspect any assignment with `--shard 1/3 --list` (or `2/3`, `3/3`).
-Refresh weights from successful natural runs as the suite changes, using the median
-observed target duration so one slow run does not dictate the split. Rebalancing
-the existing three shards adds no jobs or per-job setup.
+with a 30-minute job budget each. The conformance runner models sequential configuration processes, three parallel file
+workers within each process, and the shared runtime preparation paid by each job.
+Committed `config/postgres-conformance-timings.json` measurements price file work,
+configuration startup, and preparation; they never select the test inventory.
+Cold file scheduling follows Vitest's file-size order. The allocator minimizes
+predicted tail time, then total work, so preparation consumers can share one job.
+Unknown targets retain a default weight. Inspect any assignment with
+`--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
+runs as the suite changes. The latest two file samples track recent workload
+changes; configuration and preparation costs use observed medians. These are
+estimates, including inferred import/hook costs from verbose logs, not exact
+per-file profiler measurements. Rebalancing adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 

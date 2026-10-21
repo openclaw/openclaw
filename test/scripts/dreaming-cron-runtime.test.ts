@@ -16,11 +16,11 @@ function grantRevision(value: object) {
 function fixture() {
   const heartbeat = {
     id: "heartbeat",
-    enabled: true,
-    description: "Heartbeat",
+    enabled: false,
+    description: "Migrated automation",
     schedule: { everyMs: 1_800_000, kind: "every" },
     state: {},
-    wakeMode: "next-heartbeat",
+    wakeMode: "now",
   };
   const dreaming = { ...heartbeat, id: "dreaming", enabled: false };
   const row = (definition: typeof heartbeat, ordinal: number, timestamp: number) => {
@@ -49,23 +49,22 @@ function fixture() {
     { ...row({ ...heartbeat, id: "inactive" }, 19, 1000), store_key: "inactive" },
   ];
   const after = structuredClone(before);
-  for (const entry of after.slice(0, 2)) {
-    const isDreaming = entry.job_id === "dreaming";
-    const definition = isDreaming
-      ? {
-          ...dreaming,
-          enabled: true,
-          schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
-          wakeMode: "now",
-        }
-      : { ...heartbeat, enabled: false };
+  for (const entry of after.slice(1, 2)) {
+    const definition = {
+      ...dreaming,
+      enabled: true,
+      schedule: { expr: "17 12 20 10 *", kind: "cron", tz: "UTC" },
+      wakeMode: "now",
+    };
     const { enabled: _enabled, state: _state, ...grant } = definition;
     const timestamp = Math.max(entry.runtime_updated_at_ms, 2000);
     Object.assign(entry, {
       enabled: definition.enabled ? 1 : 0,
       job_json: JSON.stringify(definition),
       state_json: JSON.stringify({
-        ...(isDreaming ? { consecutiveErrors: 0, scheduleErrorCount: 0, nextRunAtMs: 3000 } : {}),
+        consecutiveErrors: 0,
+        scheduleErrorCount: 0,
+        nextRunAtMs: 3000,
         scheduleActivatedAtMs: 2000,
       }),
       schedule_identity: JSON.stringify({
@@ -77,7 +76,7 @@ function fixture() {
       updated_at: timestamp,
       runtime_updated_at_ms: timestamp,
       grant_definition_updated_at: timestamp,
-      grant_definition_generation: isDreaming ? 4 : 3,
+      grant_definition_generation: 4,
       grant_definition_revision: grantRevision(grant),
     });
   }
@@ -94,12 +93,13 @@ function fixture() {
 }
 
 describe("dreaming runtime persistence assertion", () => {
-  it("accepts sparse ordinals, untouched bytes, and only the two config-owner mutations", () => {
+  it("accepts sparse ordinals, untouched bytes, and only the dreaming-owner mutation", () => {
     const { runtime, rows } = fixture();
-    expect(() => assertRuntimePersistence(runtime, rows, "heartbeat")).not.toThrow();
+    expect(() => assertRuntimePersistence(runtime, rows)).not.toThrow();
   });
 
   it.each<[string, (rows: ReturnType<typeof fixture>["rows"]) => unknown]>([
+    ["migrated automation rewritten by startup", (rows) => Object.assign(rows[0], { enabled: 1 })],
     ["whole-store ordinal compaction", (rows) => Object.assign(rows[2], { sort_order: 2 })],
     ["authored timestamp projection", (rows) => Object.assign(rows[2], { updated_at: 1010 })],
     [
@@ -121,6 +121,6 @@ describe("dreaming runtime persistence assertion", () => {
   ])("rejects %s", (_name, corrupt) => {
     const { runtime, rows } = fixture();
     corrupt(rows);
-    expect(() => assertRuntimePersistence(runtime, rows, "heartbeat")).toThrow();
+    expect(() => assertRuntimePersistence(runtime, rows)).toThrow();
   });
 });

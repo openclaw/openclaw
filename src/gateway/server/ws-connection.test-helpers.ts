@@ -1,6 +1,3 @@
-/**
- * Shared WebSocket connection fixtures for gateway server tests.
- */
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import { expect, vi } from "vitest";
@@ -13,24 +10,16 @@ import { GatewayClientRegistry } from "./client-registry.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
+type SendCallback = (error?: Error) => void;
 
 export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
 export function createGatewayWsTestLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
 export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAuth {
-  return {
-    mode: "token",
-    allowTailscale: false,
-    token,
-  };
+  return { mode: "token", allowTailscale: false, token };
 }
 
 export function createGatewayWsTestRequestContext(
@@ -66,11 +55,7 @@ export function createGatewayWsTestSocket(
     readyState: 1,
     bufferedAmount: 0,
     send: vi.fn(
-      (
-        data: string | Buffer,
-        options?: { binary: false } | ((err?: Error) => void),
-        cb?: (err?: Error) => void,
-      ) => {
+      (data: string | Buffer, options?: { binary: false } | SendCallback, cb?: SendCallback) => {
         params.onSend?.(String(data));
         (typeof options === "function" ? options : cb)?.();
       },
@@ -159,11 +144,5 @@ export function attachGatewayWsForTest(params: {
   expect(onConnection).toBeTypeOf("function");
   onConnection?.(socket, upgradeReq);
 
-  return {
-    clients,
-    listeners,
-    socket,
-    upgradeReq,
-    wss,
-  };
+  return { clients, listeners, socket, upgradeReq, wss };
 }

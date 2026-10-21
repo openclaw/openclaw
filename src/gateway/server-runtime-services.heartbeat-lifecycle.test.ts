@@ -90,10 +90,10 @@ it.each(["stop", "replace"] as const)(
       }
       release.resolve();
       await vi.dynamicImportSettled();
-      if (action === "stop") {
-        await expect(result).resolves.toEqual({ status: "skipped", reason: "disabled" });
-      } else {
-        await expect(result).resolves.toEqual({ status: "ran", durationMs: 1 });
+      await expect(result).resolves.toEqual(
+        action === "stop" ? disabled : { status: "ran", durationMs: 1 },
+      );
+      if (action === "replace") {
         expect(replacement).not.toHaveBeenCalled();
         const next = request();
         await vi.advanceTimersByTimeAsync(1);

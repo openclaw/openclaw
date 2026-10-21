@@ -295,7 +295,6 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               modelPolicy: { allow: [modelRef] },
               models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 600,

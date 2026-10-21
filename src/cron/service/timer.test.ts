@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState as createCronServiceStateBase } from "../../cron/service/state.js";
@@ -33,11 +33,17 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 let storePath: string;
 let enqueueSystemEvent = vi.fn();
 let requestHeartbeat = vi.fn();
+let runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
+  status: "ok",
+}));
 let states: ReturnType<typeof createCronServiceStateBase>[];
 beforeEach(async () => {
   ({ storePath } = await makeStorePath());
   enqueueSystemEvent = vi.fn();
   requestHeartbeat = vi.fn();
+  runSessionEvent = vi.fn<NonNullable<StateDeps["runSessionEvent"]>>(async () => ({
+    status: "ok",
+  }));
   states = [];
 });
 
@@ -52,6 +58,7 @@ function createCronServiceState(
     scheduler: createTestGatewayScheduler(),
     enqueueSystemEvent,
     requestHeartbeat,
+    runSessionEvent,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     cronEnabled: true,
     log: logger,
@@ -101,7 +108,7 @@ describe("cron service timer seam coverage", () => {
     const state = createCronServiceState();
 
     await start(state);
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(runSessionEvent).not.toHaveBeenCalled();
     const stored = await loadCronStore(storePath);
     expect(stored.jobs).toHaveLength(2);
     for (const job of stored.jobs) {
@@ -117,10 +124,10 @@ describe("cron service timer seam coverage", () => {
       });
       await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     }
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(2);
+    expect(runSessionEvent).toHaveBeenCalledTimes(2);
   });
 
-  it("persists the next schedule and hands off next-heartbeat main jobs", async () => {
+  it("persists the next schedule after the main-session run settles", async () => {
     const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
     delete jobWithoutExplicitOwner.sessionKey;
     await writeJobs(jobWithoutExplicitOwner);
@@ -132,17 +139,14 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: "ops",
-      contextKey: "cron:main-heartbeat-job",
-    });
-    expect(requestHeartbeat).toHaveBeenCalledWith({
-      source: "cron",
-      intent: "event",
-      reason: "cron:main-heartbeat-job",
-      agentId: "ops",
-      heartbeat: { target: "last" },
-    });
+    expect(runSessionEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "heartbeat seam tick",
+        job: expect.objectContaining({ id: "main-heartbeat-job", sessionTarget: "main" }),
+      }),
+    );
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const persistedState = (await readJob()).state;
     expect(persistedState).toMatchObject({
@@ -172,7 +176,11 @@ describe("cron service timer seam coverage", () => {
       fire: true;
       state: { revision: number };
     }>();
-    const evaluateCronTrigger = vi.fn(() => evaluation.promise);
+    const evaluationEntered = createDeferred();
+    const evaluateCronTrigger = vi.fn(() => {
+      evaluationEntered.resolve();
+      return evaluation.promise;
+    });
     const runCommandJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
     const runScriptJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
     const runIsolatedAgentJob = vi.fn(() => Promise.resolve({ status: "ok" as const }));
@@ -191,6 +199,11 @@ describe("cron service timer seam coverage", () => {
 
     const result = executeJobCore(state, job, controller.signal);
     try {
+      await awaitGateBeforeSettlement(
+        evaluationEntered.promise,
+        result,
+        "Cron did not enter trigger evaluation",
+      );
       expect(evaluateCronTrigger).toHaveBeenCalledOnce();
       controller.abort(new Error("operator cancelled the scheduled run"));
       evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
@@ -205,7 +218,7 @@ describe("cron service timer seam coverage", () => {
       // Abort before releasing evaluation so failed assertions cannot start payload work.
       controller.abort(new Error("operator cancelled the scheduled run"));
       evaluation.resolve({ kind: "evaluated", fire: true, state: { revision: 2 } });
-      await result;
+      await result.catch(() => undefined);
     }
   });
 
@@ -277,11 +290,21 @@ describe("cron service timer seam coverage", () => {
           delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
         },
       );
+      const enqueueSessionEvent = vi.fn();
+      const expectedTarget = {
+        agentId: "ops",
+        sessionKey,
+        sessionId: "ops-telegram-session",
+        generation: "original",
+        deliveryContext,
+      };
       const { state } = scriptFixture(
         { status: "ok", notify, wake },
         {
           resolveDefaultAgentId: () => "other",
           resolveSessionStorePath: () => sessionStorePath,
+          captureSessionEventTarget: async () => expectedTarget,
+          enqueueSessionEvent,
         },
       );
       const job = {
@@ -290,26 +313,18 @@ describe("cron service timer seam coverage", () => {
         sessionKey,
       };
       await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
-      expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
         notify ?? "script job script job completed",
-        {
-          agentId: "ops",
-          contextKey: "cron:script-job:script-wake",
-          ...(target === "main" ? { deliveryContext } : {}),
-        },
+        expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),
       );
-      expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith({
-        source: "notifications-event",
-        intent: "immediate",
-        reason: "wake",
-        agentId: "ops",
-      });
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeat).not.toHaveBeenCalled();
     },
   );
 
   it("delivers nothing and enqueues nothing when notify and wake are absent", async () => {
-    const resolveDefaultAgentId = vi.fn(() => undefined);
-    const { state } = scriptFixture(
+    const enqueueSessionEvent = vi.fn<NonNullable<StateDeps["enqueueSessionEvent"]>>();
+    const { state, runScriptJob } = scriptFixture(
       {
         status: "ok",
         stateChanged: true,
@@ -317,7 +332,7 @@ describe("cron service timer seam coverage", () => {
         delivered: false,
         deliveryAttempted: false,
       },
-      { defaultAgentId: undefined, resolveDefaultAgentId },
+      { defaultAgentId: undefined, resolveDefaultAgentId: () => undefined, enqueueSessionEvent },
     );
 
     await expect(
@@ -325,8 +340,16 @@ describe("cron service timer seam coverage", () => {
         ...createDueScriptJob({ now, sessionTarget: "main" }),
         agentId: undefined,
       }),
-    ).resolves.toMatchObject({ status: "ok", scriptStateChanged: true });
-    expect(resolveDefaultAgentId).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({
+      status: "ok",
+      scriptStateChanged: true,
+      scriptState: { revision: 2 },
+      delivered: false,
+      deliveryAttempted: false,
+    });
+    expect(runScriptJob).toHaveBeenCalledOnce();
+    expect(runSessionEvent).not.toHaveBeenCalled();
+    expect(enqueueSessionEvent).not.toHaveBeenCalled();
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });

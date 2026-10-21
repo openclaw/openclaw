@@ -5,6 +5,7 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
@@ -158,12 +159,7 @@ export class NodeWorkerWorkspaceQuiescence {
       recoveryTimeoutMs,
       { message: "workspace quiescence recovery timed out; custody remains retained" },
     );
-    const failures = outcomes.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "workspace quiescence recovery failed");
-    }
+    throwSettledAggregate(outcomes, "workspace quiescence recovery failed");
   }
 
   private assertActive(lease: Lease, releasing = false): void {

@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { migratePortableIdentityColumnsV22 } from "../../state/openclaw-state-db-schema-v22-columns.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -7,8 +9,27 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js"
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildAcpDatabaseSessionKey, upsertAcpSessionMetaRow } from "./session-meta-keys.js";
+import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionCommand } from "./session-meta-read.worker.js";
 import { bindAcpSessionMeta } from "./session-meta-write.kernel.js";
+
+function row(sessionKey: string, meta: SessionAcpMeta, agentId = "coder") {
+  return bindAcpSessionMeta({
+    sessionKey: buildAcpDatabaseSessionKey(sessionKey, agentId),
+    lifecycleRevision: "revision",
+    updatedAt: 100,
+    meta,
+  });
+}
+const resultFields = { session_id: "revision", updated_at: 100, agent: "harness-agent" };
+function resume(db: EngineConnection, resumeSessionId: string, backendId?: string) {
+  return readAcpSessionCommand(db, {
+    type: "acpSessions.resume",
+    agentId: "coder",
+    resumeSessionId,
+    backendId,
+  }).rows;
+}
 
 it("matches migrated string identities using index searches, including malformed and non-string identities", () => {
   const db = new DatabaseSync(":memory:");
@@ -18,56 +39,30 @@ it("matches migrated string identities using index searches, including malformed
       includeEndMarker: false,
     });
     db.exec(schema);
-    let random = 485;
-    const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
-    const fixtures = Array.from({ length: 128 }, (_, i) => {
-      const agentId = next() % 7 === 0 ? "other" : "coder";
-      const backend = next() % 5 === 0 ? "other" : " FIXTURE ";
-      const first = `id-${next() % 17}`;
-      const second = `id-${next() % 19}`;
-      return {
-        sessionKey: `agent:coder:acp:${String(i).padStart(3, "0")}`,
-        agentId,
-        backend,
-        identity:
-          i === 0
-            ? "malformed"
-            : JSON.stringify({
-                agentSessionId: i === 1 ? 42 : `\u00a0 ${first}\t`,
-                acpxSessionId: second,
-              }),
-        matches: i === 0 ? [] : i === 1 ? [second] : [first, second],
-      };
-    });
+    const identities: [string, string[]][] = [
+      ["malformed", []],
+      ['{"agentSessionId":42,"acpxSessionId":"second"}', ["second"]],
+      ['{"agentSessionId":"\u00a0 first\\t","acpxSessionId":"second"}', ["first", "second"]],
+      ['{"agentSessionId":" first ","agentSessionId":"last"}', ["first"]],
+      ['{"agentSessionId":true,"agentSessionId":"last"}', []],
+      ['{"agentSessionId":42,"acpxSessionId":"42"}', ["42"]],
+      ['{"agentSessionId":"nul\\u0000tail"}', ["nul\u0000tail"]],
+      ['{"agentSessionId":"first","acpxSessionId":"first"}', ["first"]],
+    ];
+    const fixtures = identities.map(([identity], index) => ({
+      identity,
+      sessionKey: `agent:coder:acp:${index}`,
+      agentId: "coder",
+      backend: " FIXTURE ",
+    }));
     fixtures.push(
-      ...[
-        { identity: '{"agentSessionId":" first ","agentSessionId":"last"}', matches: ["first"] },
-        { identity: '{"agentSessionId":true,"agentSessionId":"last"}', matches: [] },
-        { identity: '{"agentSessionId":42,"acpxSessionId":"42"}', matches: ["42"] },
-        { identity: '{"agentSessionId":"nul\\u0000tail"}', matches: ["nul\u0000tail"] },
-      ].map((fixture, index) => ({
-        identity: fixture.identity,
-        matches: fixture.matches,
-        sessionKey: `agent:coder:acp:extra-${index}`,
-        agentId: "coder",
-        backend: "fixture",
-      })),
+      { ...fixtures[2]!, sessionKey: "agent:coder:acp:other-agent", agentId: "other" },
+      { ...fixtures[2]!, sessionKey: "agent:coder:acp:other-backend", backend: "other" },
     );
+    const meta = createAcpMeta({ agent: "harness-agent" });
     for (const fixture of fixtures.toReversed()) {
       upsertAcpSessionMetaRow(db, {
-        ...bindAcpSessionMeta({
-          sessionKey: buildAcpDatabaseSessionKey(fixture.sessionKey, fixture.agentId),
-          lifecycleRevision: "revision",
-          updatedAt: 100,
-          meta: {
-            backend: fixture.backend,
-            agent: "harness-agent",
-            runtimeSessionName: "fixture",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 100,
-          },
-        }),
+        ...row(fixture.sessionKey, { ...meta, backend: fixture.backend }, fixture.agentId),
         identity_json: fixture.identity,
       });
     }
@@ -82,36 +77,11 @@ it("matches migrated string identities using index searches, including malformed
       return prepare(query);
     });
     try {
-      for (const resumeSessionId of [
-        "42",
-        "first",
-        "last",
-        "1",
-        "nul\u0000tail",
-        "absent",
-        ...Array.from({ length: 19 }, (_, i) => `id-${i}`),
-      ]) {
-        const expected = fixtures
-          .filter((fixture) => {
-            if (fixture.agentId !== "coder" || fixture.backend.trim().toLowerCase() !== "fixture") {
-              return false;
-            }
-            return fixture.matches.includes(resumeSessionId);
-          })
-          .map(({ sessionKey }) => ({
-            sessionKey,
-            session_id: "revision",
-            updated_at: 100,
-            agent: "harness-agent",
-          }));
-        expect(
-          readAcpSessionCommand(db, {
-            type: "acpSessions.resume",
-            agentId: "coder",
-            backendId: "fixture",
-            resumeSessionId,
-          }).rows,
-        ).toEqual(expected);
+      for (const id of ["42", "first", "second", "last", "1", "nul\u0000tail", "absent"]) {
+        const expected = identities.flatMap(([, matches], index) =>
+          matches.includes(id) ? [{ sessionKey: `agent:coder:acp:${index}`, ...resultFields }] : [],
+        );
+        expect(resume(db, id, "fixture")).toEqual(expected);
       }
     } finally {
       spy.mockRestore();
@@ -119,7 +89,7 @@ it("matches migrated string identities using index searches, including malformed
     const plan = db
       .prepare(`EXPLAIN QUERY PLAN ${selectSql}`)
       .all("absent", "absent")
-      .map((row) => row.detail);
+      .map((entry) => entry.detail);
     expect(
       plan.filter((detail) => String(detail).includes("SEARCH acp_sessions USING INDEX")),
     ).toHaveLength(2);
@@ -135,17 +105,10 @@ it("adds resume indexes to populated same-version state without changing canonic
     const initial = openOpenClawStateDatabase(options);
     upsertAcpSessionMetaRow(
       initial.db,
-      bindAcpSessionMeta({
-        sessionKey: buildAcpDatabaseSessionKey("agent:coder:acp:existing", "coder"),
-        lifecycleRevision: "revision",
-        updatedAt: 100,
-        meta: {
-          backend: "fixture",
+      row(
+        "agent:coder:acp:existing",
+        createAcpMeta({
           agent: "coder",
-          runtimeSessionName: "fixture",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
           identity: {
             state: "resolved",
             source: "ensure",
@@ -153,8 +116,8 @@ it("adds resume indexes to populated same-version state without changing canonic
             agentSessionId: "resume",
             acpxSessionId: "acpx",
           },
-        },
-      }),
+        }),
+      ),
     );
     const rows = initial.db.prepare("SELECT * FROM acp_sessions").all();
     const version = initial.db.prepare("PRAGMA user_version").get();
@@ -172,19 +135,8 @@ it("adds resume indexes to populated same-version state without changing canonic
         )
         .all(),
     ).toHaveLength(2);
-    expect(
-      readAcpSessionCommand(reopened.db, {
-        type: "acpSessions.resume",
-        agentId: "coder",
-        resumeSessionId: "resume",
-      }).rows,
-    ).toEqual([
-      {
-        sessionKey: "agent:coder:acp:existing",
-        session_id: "revision",
-        updated_at: 100,
-        agent: "coder",
-      },
+    expect(resume(reopened.db, "resume")).toEqual([
+      { sessionKey: "agent:coder:acp:existing", ...resultFields, agent: "coder" },
     ]);
   });
 });

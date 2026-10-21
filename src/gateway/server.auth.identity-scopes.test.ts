@@ -395,7 +395,7 @@ test.each([
         await expectWriteDenied(ws, "agent:main:denied");
       }
       expect(responseAuth(connected)?.deviceToken).toBe(undefined);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       if (!scenario.assignedRole) {
         const upgrade = await rpcReq(ws, "device.scopes.requestUpgrade", {
           scopes: ["operator.read", "operator.write", "operator.admin"],
@@ -431,7 +431,7 @@ test.each([
           payload: { status: "approved", scopes: [...UPGRADE_SCOPES, "operator.talk"].toSorted() },
         });
         expect(result.payload?.deviceToken).toBeTypeOf("string");
-        expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(false);
+        expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
       }
     } finally {
       invalidateOperatorRolePolicy(profile.id);
@@ -535,7 +535,7 @@ test("adds a case-insensitive trusted-proxy email grant without changing pairing
         { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": "Admin@Example.com" },
       );
       expectScopes(connected, ["operator.write", "operator.admin"]);
-      expect((await rpcReq(ws, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
       const browse = await rpcReq<{ path?: string }>(ws, "fs.listDir", {
         path: outsideWorkspace,
       });

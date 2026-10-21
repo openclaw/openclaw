@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SecretRef } from "../config/types.secrets.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { describeSecretResolutionError } from "./resolve-errors.js";
 import { resolveSecretRefString } from "./resolve.js";
@@ -9,11 +10,26 @@ import { isRetryableSecretDegradationReason } from "./runtime-degraded-state.js"
 import { writeSecretStoreEntry } from "./store/secret-store.js";
 
 const roots: string[] = [];
+const storedRef: SecretRef = { source: "store", provider: "default", id: "STORED_API_KEY" };
+const providerConfig = (alias: string, source: "env" | "store") => ({
+  secrets: { providers: { [alias]: { source } } },
+});
 
-async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
+async function createStateEnv(withSecret = false): Promise<NodeJS.ProcessEnv> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-resolve-store-"));
   roots.push(root);
-  return { OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+  if (withSecret) {
+    await writeSecretStoreEntry({
+      scope: { kind: "team" },
+      name: storedRef.id,
+      value: "resolved-store-secret",
+      kind: "secret",
+      updatedBy: "test",
+      database: { env },
+    });
+  }
+  return env;
 }
 
 afterEach(async () => {
@@ -23,45 +39,18 @@ afterEach(async () => {
 
 describe("store SecretRef resolution", () => {
   it("resolves the store default when an env provider uses the same alias", async () => {
-    const env = await createStateEnv();
-    await writeSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "STORED_API_KEY",
-      value: "resolved-store-secret",
-      kind: "secret",
-      updatedBy: "test",
-      database: { env },
-    });
-
+    const env = await createStateEnv(true);
     await expect(
-      resolveSecretRefString(
-        { source: "store", provider: "default", id: "STORED_API_KEY" },
-        {
-          config: { secrets: { providers: { default: { source: "env" } } } },
-          env,
-        },
-      ),
+      resolveSecretRefString(storedRef, { config: providerConfig("default", "env"), env }),
     ).resolves.toBe("resolved-store-secret");
   });
 
   it("resolves an explicitly configured store provider alias", async () => {
-    const env = await createStateEnv();
-    await writeSecretStoreEntry({
-      scope: { kind: "team" },
-      name: "STORED_API_KEY",
-      value: "resolved-store-secret",
-      kind: "secret",
-      updatedBy: "test",
-      database: { env },
-    });
-
+    const env = await createStateEnv(true);
     await expect(
       resolveSecretRefString(
-        { source: "store", provider: "teamstore", id: "STORED_API_KEY" },
-        {
-          config: { secrets: { providers: { teamstore: { source: "store" } } } },
-          env,
-        },
+        { ...storedRef, provider: "teamstore" },
+        { config: providerConfig("teamstore", "store"), env },
       ),
     ).resolves.toBe("resolved-store-secret");
   });
@@ -69,10 +58,8 @@ describe("store SecretRef resolution", () => {
   it("rejects a non-default store alias configured for another source", async () => {
     await expect(
       resolveSecretRefString(
-        { source: "store", provider: "envmain", id: "STORED_API_KEY" },
-        {
-          config: { secrets: { providers: { envmain: { source: "env" } } } },
-        },
+        { ...storedRef, provider: "envmain" },
+        { config: providerConfig("envmain", "env") },
       ),
     ).rejects.toMatchObject({
       code: "SECRET_PROVIDER_INVALID",
@@ -86,7 +73,7 @@ describe("store SecretRef resolution", () => {
       resolveSecretRefString(
         { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         {
-          config: { secrets: { providers: { default: { source: "store" } } } },
+          config: providerConfig("default", "store"),
           env: { OPENAI_API_KEY: "resolved-env-secret" },
         },
       ),
@@ -96,7 +83,7 @@ describe("store SecretRef resolution", () => {
   it("maps a missing name to a retryable not-found degradation", async () => {
     const env = await createStateEnv();
     const error = await resolveSecretRefString(
-      { source: "store", provider: "default", id: "MISSING_API_KEY" },
+      { ...storedRef, id: "MISSING_API_KEY" },
       { config: {}, env },
     ).catch((caught: unknown) => caught);
 
@@ -110,10 +97,9 @@ describe("store SecretRef resolution", () => {
     const env = await createStateEnv();
     await fs.mkdir(path.dirname(env.OPENCLAW_STATE_DIR as string), { recursive: true });
     await fs.writeFile(env.OPENCLAW_STATE_DIR as string, "not a directory", "utf8");
-    const error = await resolveSecretRefString(
-      { source: "store", provider: "default", id: "STORED_API_KEY" },
-      { config: {}, env },
-    ).catch((caught: unknown) => caught);
+    const error = await resolveSecretRefString(storedRef, { config: {}, env }).catch(
+      (caught: unknown) => caught,
+    );
 
     expect(error).toMatchObject({ code: "SECRET_PROVIDER_UNAVAILABLE", source: "store" });
     expect(describeSecretResolutionError(error)).toBe("secret provider failed");

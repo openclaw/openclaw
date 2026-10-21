@@ -213,7 +213,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   userId: string;
   accountId: string;
   threadBindings: ThreadBindingManager;
-  preferFollowUp: boolean;
   safeInteractionCall: SafeDiscordInteractionCall;
 }) {
   const route = await resolveDiscordModelPickerRoute(params);
@@ -228,7 +227,6 @@ export async function replyWithDiscordModelPickerProviders(params: {
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope(params),
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
-    limit: 5,
   });
   const parsedCurrentRef = splitDiscordModelRef(currentModel);
   const initialProvider =
@@ -264,7 +262,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
   };
 
   const delivered = await params.safeInteractionCall("model picker reply", async () => {
-    await params.interaction[params.preferFollowUp ? "followUp" : "reply"](payload);
+    await params.interaction.followUp(payload);
   });
   if (delivered !== null) {
     await recordDeliveredCommandExchange({

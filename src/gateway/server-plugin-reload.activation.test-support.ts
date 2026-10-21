@@ -7,6 +7,7 @@ import {
   reloadFailure,
   heldWork,
   probeHttpRoute,
+  rejectWith,
 } from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   createRecoveryChannelManager,
@@ -125,9 +126,7 @@ export async function verifyPreparedSidecarRecovery(
 export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtureFactory) {
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    initialStop: async () => {
-      throw new Error("fixture service could not close");
-    },
+    initialStop: rejectWith(new Error("fixture service could not close")),
   });
   await expect(fixture.reload()).rejects.toMatchObject(reloadFailure("drain"));
   expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();

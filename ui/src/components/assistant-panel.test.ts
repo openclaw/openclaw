@@ -126,6 +126,9 @@ function session(
 ): GatewaySessionRow {
   return { key, agentId, kind: key === "global" ? "global" : "direct", updatedAt: 0, ...fields };
 }
+function openReview(dock: AssistantDock, agentId = "research") {
+  dock.openSession({ sessionKey: `agent:${agentId}:review`, agentId, label: "Review" }, {});
+}
 function deferHomeIntent() {
   let intent: SessionNavigationIntent | undefined;
   const receive = (event: Event) => {
@@ -351,14 +354,11 @@ describe("assistant panel", () => {
   });
 
   it("retains plugin intent across context replacement and retires it on element removal", async () => {
-    const { context, panel, provider } = await mountPanel();
-    panel.custodianSuppressed = false;
-    panel.pageRouteId = "plugin";
-    await panel.updateComplete;
-    context.assistantDock.openSession(
-      { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
-      {},
-    );
+    const { context, panel, provider } = await mountPanel({
+      custodianSuppressed: false,
+      pageRouteId: "plugin",
+    });
+    openReview(context.assistantDock);
     await panel.updateComplete;
     const assistantDock = new AssistantDock();
     const replacementContext = { ...context, assistantDock };
@@ -390,10 +390,7 @@ describe("assistant panel", () => {
       custodianSuppressed: false,
       pageRouteId: "plugin-settings",
     });
-    context.assistantDock.openSession(
-      { sessionKey: "agent:main:review", agentId: "main", label: "Review" },
-      {},
-    );
+    openReview(context.assistantDock, "main");
     publishPluginHelpContext(context, {}, plugin("example"), { overview: true, installed: true });
     await panel.updateComplete;
     expect(context.assistantDock.openSessionKey).toBe("agent:main:review");
@@ -420,10 +417,7 @@ describe("assistant panel", () => {
     );
     await vi.dynamicImportSettled();
     await panel.updateComplete;
-    expect(home(panel)).toMatchObject({
-      sessionKey: "global",
-      agentId: "research",
-    });
+    expect(home(panel)).toMatchObject({ sessionKey: "global", agentId: "research" });
     await update(panel, { pageAgentId: "research" });
     expect(panel.assistantPanelOpen).toBe(false);
     await update(panel, { pageAgentId: "main" });
@@ -714,9 +708,7 @@ describe("assistant panel", () => {
 
     panel.remove();
     const { panel: restored, provider, context } = await mountPanel();
-    restored.custodianSuppressed = false;
-    restored.pageRouteId = "updates";
-    await restored.updateComplete;
+    await update(restored, { custodianSuppressed: false, pageRouteId: "updates" });
     expect(restored.assistantPanelOpen).toBe(false);
     provider.setContext({ ...context });
     await restored.updateComplete;
@@ -727,8 +719,7 @@ describe("assistant panel", () => {
     provider.setContext({ ...context });
     await restored.updateComplete;
     expect(restored.assistantPanelOpen).toBe(true);
-    restored.pageRouteId = "agents-home";
-    await restored.updateComplete;
+    await update(restored, { pageRouteId: "sessions" });
     expect(restored.assistantPanelOpen).toBe(true);
   });
 
@@ -805,10 +796,7 @@ describe("assistant panel", () => {
             {},
           ),
         ).toThrow("conversation dock is unavailable");
-        currentContext.assistantDock.openSession(
-          { sessionKey: "agent:research:review", agentId: "research", label: "Review" },
-          {},
-        );
+        openReview(currentContext.assistantDock);
         await panel.updateComplete;
         expect(home(panel)?.sessionKey).toBe("agent:research:review");
       }

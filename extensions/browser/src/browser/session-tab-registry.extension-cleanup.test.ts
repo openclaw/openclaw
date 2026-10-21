@@ -111,14 +111,19 @@ describe("durable extension session tab cleanup", () => {
   it("retires cold activity after terminal cleanup and preserves retryable owners", async () => {
     const closed = await trackColdSiblings("NATIVE-CLOSED");
     const retryable = await trackColdSiblings("NATIVE-RETRYABLE");
+    cdpMocks.closeTrackedCdpTarget.mockImplementation(async ({ nativeTargetId }) =>
+      nativeTargetId === closed.params.targetId
+        ? { status: "closed" }
+        : { status: "unavailable", reason: "target-lookup-failed" },
+    );
     await expect(
       closeTrackedBrowserTabsForSessions({
         sessionKeys: [closed.params.sessionKey, retryable.params.sessionKey],
         now: 3_000,
-        closeDurableTab: async (tab) =>
-          tab.nativeTargetId === closed.params.targetId
-            ? { status: "closed" }
-            : { status: "unavailable", reason: "target-lookup-failed" },
+        getResolvedBrowserConfig: () => ({
+          ...resolved,
+          extensionRelayInternalTokens: { chrome: "process-only-test-credential" },
+        }),
       }),
     ).resolves.toBe(2);
     expect(openStore().entries()).toHaveLength(2);

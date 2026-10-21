@@ -1,32 +1,29 @@
-// Codex supervision MCP tests cover the retired Supervisor command bridge.
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { acquireStandalonePluginToolRegistry } from "../plugins/tools.js";
 import {
   createCodexSupervisionToolsMcpServer,
   serveCodexSupervisionToolsMcp,
 } from "./codex-supervision-tools-serve.js";
 
-const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
-  vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
-);
-const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
-const getRuntimeConfigMock = vi.hoisted(() =>
-  vi.fn<() => import("../config/config.js").OpenClawConfig>(() => ({})),
-);
+const { acquireRegistry, resolveTools, getConfig } = vi.hoisted(() => ({
+  acquireRegistry: vi.fn<typeof acquireStandalonePluginToolRegistry>(),
+  resolveTools: vi.fn<() => AnyAgentTool[]>(() => []),
+  getConfig: vi.fn<() => OpenClawConfig>(() => ({})),
+}));
 
 // mock-isolation: MCP supervision fixtures provide config without starting a real config owner.
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: getRuntimeConfigMock,
-  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfigMock(),
+  getRuntimeConfig: getConfig,
+  captureRuntimeConfigAsyncReader: () => async () => getConfig(),
 }));
-vi.mock("../plugins/tools.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/tools.js")>();
-  return {
-    ...actual,
-    acquireStandalonePluginToolRegistry: acquireStandalonePluginToolRegistryMock,
-  };
-});
+vi.mock("../plugins/tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/tools.js")>()),
+  acquireStandalonePluginToolRegistry: acquireRegistry,
+}));
 vi.mock("./tools-stdio-server.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./tools-stdio-server.js")>();
   const serve: typeof actual.serveRegisteredToolsMcpServer = async (params) => {
@@ -34,8 +31,7 @@ vi.mock("./tools-stdio-server.js", async (importOriginal) => {
     const host = new LegacyPluginSdkResourceHost();
     const acquisition = await host.run(params.acquireRegistry);
     try {
-      const server = params.createServer(acquisition.resolveTools(), host);
-      await server.close();
+      await params.createServer(acquisition.resolveTools(), host).close();
     } finally {
       await acquisition.release();
       await host.close();
@@ -52,60 +48,44 @@ const TOOL_NAMES = [
   "codex_session_interrupt",
 ] as const;
 
-function createTools(): AnyAgentTool[] {
-  return TOOL_NAMES.map(
-    (name) =>
-      ({
-        name,
-        label: name,
-        description: name,
-        parameters: { type: "object", properties: {} },
-        execute: vi.fn(),
-      }) as unknown as AnyAgentTool,
-  );
-}
+const createTools = (): AnyAgentTool[] =>
+  TOOL_NAMES.map((name) => ({
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({}),
+    execute: vi.fn<AnyAgentTool["execute"]>(),
+  }));
 
 describe("createCodexSupervisionToolsMcpServer", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
-    acquireStandalonePluginToolRegistryMock.mockReset().mockImplementation(async () => ({
-      resolveTools: resolvePluginToolsMock,
+    acquireRegistry.mockReset().mockImplementation(async () => ({
+      resolveTools,
       release: async () => {},
     }));
-    getRuntimeConfigMock.mockReset().mockReturnValue({});
-    resolvePluginToolsMock.mockReset();
-    resolvePluginToolsMock.mockReturnValue([]);
+    getConfig.mockReset().mockReturnValue({});
+    resolveTools.mockReset().mockReturnValue(createTools());
   });
 
   it("fails closed when the external Codex plugin tools are unavailable", () => {
-    expect(() =>
-      createCodexSupervisionToolsMcpServer({
-        tools: [],
-      }),
-    ).toThrow("Install or update @openclaw/codex");
+    const createMissing = () => createCodexSupervisionToolsMcpServer({ tools: [] });
+    expect(createMissing).toThrow("Install or update @openclaw/codex");
   });
 
   it("lists official tools through the trusted standalone owner context", async () => {
-    resolvePluginToolsMock.mockReturnValue(createTools());
     await serveCodexSupervisionToolsMcp();
     const server = createCodexSupervisionToolsMcpServer({ tools: createTools() });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client(
-      { name: "codex-supervision-owner-test", version: "0.0.0" },
-      { capabilities: {} },
-    );
+    const identity = { name: "codex-supervision-owner-test", version: "0.0.0" };
+    const client = new Client(identity, { capabilities: {} });
 
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      const listed = await client.listTools();
-      expect(listed.tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
-      expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          context: expect.objectContaining({ senderIsOwner: true }),
-        }),
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(TOOL_NAMES);
+      expect(acquireRegistry).toHaveBeenCalledWith(
+        expect.objectContaining({ context: expect.objectContaining({ senderIsOwner: true }) }),
       );
     } finally {
       await client.close();
@@ -114,44 +94,31 @@ describe("createCodexSupervisionToolsMcpServer", () => {
   });
 
   it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
-    resolvePluginToolsMock.mockReturnValue(createTools());
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
 
+    const appServer = { transport: "websocket", url: "ws://127.0.0.1:4500" };
     const config = {
       plugins: {
         allow: [" CODEX "],
         deny: ["CoDeX"],
-        entries: {
-          " CODEX ": {
-            config: {
-              appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-              supervision: { enabled: false },
-            },
-          },
-        },
+        entries: { " CODEX ": { config: { appServer, supervision: { enabled: false } } } },
       },
     };
-    getRuntimeConfigMock.mockReturnValue(config);
+    const original = structuredClone(config);
+    getConfig.mockReturnValue(config);
     await serveCodexSupervisionToolsMcp();
 
-    const context = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context;
-    expect(context?.config?.plugins).toMatchObject({
-      allow: ["codex"],
-      deny: [],
-      entries: {
-        codex: {
-          enabled: true,
-          config: {
-            appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-            supervision: { enabled: true, allowRawTranscripts: true, allowWriteControls: true },
-          },
-        },
+    const plugins = acquireRegistry.mock.calls[0]?.[0]?.context.config?.plugins;
+    expect(plugins).toMatchObject({ allow: ["codex"], deny: [] });
+    expect(plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: {
+        appServer: original.plugins.entries[" CODEX "].config.appServer,
+        supervision: { enabled: true, allowRawTranscripts: true, allowWriteControls: true },
       },
     });
-    expect(context?.config?.plugins?.entries).not.toHaveProperty(" CODEX ");
-    expect(config.plugins.entries[" CODEX "].config.supervision.enabled).toBe(false);
-    expect(config.plugins.allow).toEqual([" CODEX "]);
-    expect(config.plugins.deny).toEqual(["CoDeX"]);
+    expect(plugins?.entries).not.toHaveProperty(" CODEX ");
+    expect(config).toEqual(original);
   });
 });

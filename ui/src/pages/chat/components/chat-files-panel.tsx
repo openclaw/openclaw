@@ -1,14 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import {
-  For,
-  Show,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  refresh,
-  untrack,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled, refresh, untrack } from "solid-js";
 import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
@@ -20,6 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { i18n } from "../../../i18n/index.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { projectI18n, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -301,7 +293,6 @@ defineSolidBridge<Props, Methods>(
             {(preview) => {
               // Registration and cleanup follow the keyed row's lifetime, not its current data.
               const initialPreviewId = untrack(() => preview().id);
-              onCleanup(() => pages.delete(initialPreviewId));
               const entry = () => {
                 rendered();
                 return preview();
@@ -314,7 +305,12 @@ defineSolidBridge<Props, Methods>(
               };
               return (
                 <div
-                  ref={(element) => pages.set(initialPreviewId, element)}
+                  ref={[
+                    elementRef((element) => {
+                      pages.set(initialPreviewId, element);
+                      return () => pages.delete(initialPreviewId);
+                    }),
+                  ]}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id || entry().catalogVisible === true}

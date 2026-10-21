@@ -78,7 +78,6 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
           skipBootstrap: true,
           contextInjection: "continuation-skip",
           model: { primary: model.modelRef, fallbacks: [] },
-          heartbeat: { every: "0m" },
         },
       },
       models: {

@@ -70,7 +70,7 @@ const SINKS: ReadonlyArray<readonly [string, string, string, string?]> = [
   ["zalouser/src/monitor", "channelIngress: accessDecision", coreBuilder],
   [
     "src/channels/direct-dm",
-    "channelIngress: params.channelIngress",
+    "channelIngress: boundParams.channelIngress",
     "const injectedBuilder = params.channelRuntime?.inbound?.buildContext",
   ],
   [

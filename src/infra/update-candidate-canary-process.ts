@@ -11,6 +11,7 @@ import { signalProcessTree } from "../process/kill-tree.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { UPDATE_CANARY_PROGRESS_PREFIX } from "./update-candidate-canary-progress.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+import { warnOnUpdateCleanupFailure } from "./update-maintenance.js";
 import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -272,6 +273,6 @@ export async function stopCanary(params: {
         { cause: cleanupError },
       );
     }
-    throw cleanupError;
+    await warnOnUpdateCleanupFailure(cleanupError, params.root, console.warn);
   }
 }

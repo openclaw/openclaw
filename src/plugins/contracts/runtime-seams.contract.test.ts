@@ -1,4 +1,3 @@
-// Runtime seam contract tests cover allowed plugin runtime entrypoints and import boundaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,27 +18,22 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   }),
 }));
 
-const originalBundledEnv = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);
+const originalEnv = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR", "OPENCLAW_STATE_DIR"]);
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const originalStateEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
 
-function createInstalledRuntimePluginDir(
-  pluginId: string,
-  marker: string,
-): {
-  bundledDir: string;
-  stateDir: string;
-  pluginRoot: string;
-} {
-  const bundledDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `openclaw-runtime-contract-bundled-${pluginId}-`),
+function tempDir(kind: string, pluginId: string) {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `openclaw-runtime-contract-${kind}-${pluginId}-`),
   );
-  const stateDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), `openclaw-runtime-contract-state-${pluginId}-`),
-  );
-  tempDirs.push(bundledDir, stateDir);
+  tempDirs.push(dir);
+  return dir;
+}
+
+function createInstalledRuntimePluginDir(pluginId: string, marker: string) {
+  const bundledDir = tempDir("bundled", pluginId);
+  const stateDir = tempDir("state", pluginId);
   const pluginRoot = path.join(stateDir, "extensions", pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
   fs.writeFileSync(
@@ -47,33 +41,20 @@ function createInstalledRuntimePluginDir(
     `export const marker = ${JSON.stringify(marker)};\n`,
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({
-      name: `@openclaw/${pluginId}`,
-      version: "0.0.0",
-      type: "module",
-      openclaw: {
-        extensions: ["./runtime-api.js"],
-        channel: { id: pluginId },
-      },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: pluginId,
-      channels: [pluginId],
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-    "utf8",
-  );
-  return {
-    bundledDir,
-    stateDir,
-    pluginRoot,
-  };
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(pluginRoot, name), JSON.stringify(value), "utf8");
+  writeJson("package.json", {
+    name: `@openclaw/${pluginId}`,
+    version: "0.0.0",
+    type: "module",
+    openclaw: { extensions: ["./runtime-api.js"], channel: { id: pluginId } },
+  });
+  writeJson("openclaw.plugin.json", {
+    id: pluginId,
+    channels: [pluginId],
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
+  return { bundledDir, stateDir, pluginRoot };
 }
 
 afterEach(() => {
@@ -81,8 +62,7 @@ afterEach(() => {
   facadeRuntime.resetFacadeRuntimeStateForTest();
   vi.restoreAllMocks();
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  originalBundledEnv.restore();
-  originalStateEnv.restore();
+  originalEnv.restore();
   if (originalGlobalFetch) {
     (globalThis as Record<string, unknown>).fetch = originalGlobalFetch;
   } else {
@@ -102,15 +82,7 @@ describe("shared runtime seam contracts", () => {
     );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    setRuntimeConfigSnapshot({
-      plugins: {
-        entries: {
-          [pluginId]: {
-            enabled: true,
-          },
-        },
-      },
-    });
+    setRuntimeConfigSnapshot({ plugins: { entries: { [pluginId]: { enabled: true } } } });
     facadeRuntime.resetFacadeRuntimeStateForTest();
 
     const location = {

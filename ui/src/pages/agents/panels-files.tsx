@@ -14,7 +14,7 @@ import { pathDisplayName } from "../../lib/path-display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { AgentFilePreview } from "./agent-file-preview.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
-import { hasAgentFileContent } from "./files.ts";
+import { hasAgentFileContent, isAgentFileDirty } from "./files.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -99,7 +99,7 @@ export function AgentFiles(
   };
   const baseContent = () => editor()?.content ?? "";
   const draft = createMemo(() => editor()?.draft ?? baseContent());
-  const isDirty = createMemo(() => hasContent() && (!hasBase() || draft() !== baseContent()));
+  const isDirty = createMemo(() => isAgentFileDirty(editor()));
 
   return (
     <>

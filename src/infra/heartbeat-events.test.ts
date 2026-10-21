@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitHeartbeatEvent,
+  emitLegacyHeartbeatCronOutcome,
   getLastHeartbeatEvent,
   heartbeatNotifications,
   resetHeartbeatEventsForTest,
@@ -36,6 +37,50 @@ describe("heartbeat events", () => {
     resetHeartbeatEventsForTest();
     vi.useRealTimers();
   });
+
+  it.each([
+    {
+      status: "ok" as const,
+      completionStatus: "succeeded" as const,
+      delivered: true,
+      expected: "sent",
+    },
+    {
+      status: "ok" as const,
+      completionStatus: "succeeded" as const,
+      delivered: false,
+      expected: "ok-empty",
+    },
+    {
+      status: "error" as const,
+      completionStatus: "failed" as const,
+      delivered: false,
+      expected: "failed",
+    },
+    {
+      status: "ok" as const,
+      completionStatus: "unknown" as const,
+      delivered: false,
+      expected: "skipped",
+    },
+  ])(
+    "projects receipt settlement into the existing $expected diagnostic",
+    ({ expected, ...outcome }) => {
+      emitLegacyHeartbeatCronOutcome({
+        jobId: "converted",
+        action: "finished",
+        ...outcome,
+        summary: "Synthetic automation result",
+        durationMs: 12,
+      });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: expected,
+        preview: "Synthetic automation result",
+        durationMs: 12,
+        silent: !outcome.delivered,
+      });
+    },
+  );
 
   it("adds a delivery-disabled message to target-none events without changing the reason", () => {
     const listener = vi.fn();

@@ -437,7 +437,7 @@ export function prepareProjectedSessionList(params: {
         projection.physicalPaths,
       )
     : undefined;
-  const presentation = prepareSessionRowPublication(projection, now)(client, projectRun);
+  const { presentation } = prepareSessionRowPublication(projection, now)(client, projectRun);
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
     now,
@@ -604,6 +604,16 @@ export async function listProjectedSessions(params: {
           let materializedRowCount = 0;
           projection.setArchivePageSize(selection.entries.length);
           const sessions: GatewaySessionRow[] = [];
+          const rowOptions = [false, true].map((includeTranscriptFields) =>
+            [false, true].map((isSentinel) => ({
+              includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+              includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+              includeActivitySummary: opts.includeActivitySummary === true,
+              rowMode: opts.rowMode,
+              omitSentinelChildren: opts.activeOnly && isSentinel,
+              childArchiveFilter: opts.archived ?? false,
+            })),
+          );
           for (let index = 0; index < selection.entries.length; index++) {
             const [key] = selection.entries[index]!;
             const target = getTarget(key);
@@ -611,6 +621,7 @@ export async function listProjectedSessions(params: {
               continue;
             }
             const includeTranscriptFields =
+              (!opts.includeDerivedTitles && !opts.includeLastMessage) ||
               index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
             const { row: sharedRow, record } = presentation.snapshot(
               {
@@ -618,14 +629,9 @@ export async function listProjectedSessions(params: {
                 key: target.key,
                 storePath: target.storeTarget.storePath,
               },
-              {
-                includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
-                includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
-                includeActivitySummary: opts.includeActivitySummary === true,
-                rowMode: opts.rowMode,
-                omitSentinelChildren: opts.activeOnly && sentinel(target.key),
-                childArchiveFilter: opts.archived ?? false,
-              },
+              rowOptions[Number(includeTranscriptFields)]![
+                opts.activeOnly && sentinel(target.key) ? 1 : 0
+              ]!,
             );
             if (!sharedRow || !record) {
               continue;

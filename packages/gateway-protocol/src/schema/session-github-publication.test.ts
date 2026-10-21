@@ -25,7 +25,7 @@ const request = (operation: string) => ({ sessionKey, action: operation });
 describe("session GitHub publication protocol", () => {
   it("binds review requests to the current PR without freeform text", () => {
     const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
-    action.accepts(review);
+    action.accepts(review, { ...review, requestId: undefined });
     action.rejects(
       ...[
         { body: "@clawsweeper stop" },
@@ -34,7 +34,6 @@ describe("session GitHub publication protocol", () => {
         { repository: "other/repo" },
         { url: "https://github.com/other/repo/pull/1" },
         { mergeMethod: "squash" },
-        { requestId: undefined },
         { expectedHeadCommit: undefined },
       ].map(withOverrides(review)),
     );
@@ -89,6 +88,26 @@ describe("session GitHub publication protocol", () => {
         { admin: true },
         { mergeMethod: "admin" },
       ].map(withOverrides(inspect)),
+    );
+  });
+  it("admits an explicit own-PR inspection URL without publication or authority fields", () => {
+    const inspection = {
+      ...request("inspect_pr"),
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
+    };
+    action.accepts(inspection);
+    action.rejects(
+      ...[
+        { pullRequestUrl: undefined },
+        { pullRequestUrl: "" },
+        { publishingSessionKey: "child" },
+        { expectedHeadCommit: head },
+        { requestId },
+        { title: "Write" },
+        { token: "synthetic" },
+        { profileId: "other" },
+        { mergeMethod: "merge" },
+      ].map(withOverrides(inspection)),
     );
   });
   it("accepts typed unavailability rather than arbitrary diagnostics", () => {

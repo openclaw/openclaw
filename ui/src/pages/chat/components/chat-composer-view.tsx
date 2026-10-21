@@ -330,7 +330,9 @@ export function renderChatComposerView(
           </Show>
         </div>
         <Show when={props.mobileComposer && props.mobileActivityPills}>
-          {(activities) => <ChatActivityPills {...activities()} />}
+          {(activities) => (
+            <ChatActivityPills {...activities()} onLayout={props.onActivityPillsLayout} />
+          )}
         </Show>
         {props.mobileApprovalContent}
       </div>

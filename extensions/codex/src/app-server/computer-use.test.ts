@@ -246,21 +246,11 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/read");
   });
 
-  it("auto-registers the first installed bundled marketplace", async () => {
-    const root = tempDirs.make("openclaw-codex-bundled-marketplace-");
-    const bundledPath = (appName: string) =>
-      path.join(root, appName, "Contents/Resources/plugins/openai-bundled");
-    const chatGptMarketplacePath = bundledPath("ChatGPT.app");
-    const legacyCodexMarketplacePath = bundledPath("Codex.app");
-    fs.mkdirSync(chatGptMarketplacePath, { recursive: true });
-    fs.mkdirSync(legacyCodexMarketplacePath, { recursive: true });
-    const request = createBundledMarketplaceComputerUseRequest(chatGptMarketplacePath);
-
-    const status = await ensureCodexComputerUse({
-      pluginConfig: autoInstall,
-      request,
-      defaultBundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-    });
+  it("auto-registers the managed bundled marketplace", async () => {
+    const { ensure, request, managedMarketplacePath } = createManagedMarketplaceHarness(
+      tempDirs.make("openclaw-codex-bundled-marketplace-"),
+    );
+    const status = await ensure();
 
     expectStatusFields(status, {
       ready: true,
@@ -268,7 +258,7 @@ describe("Codex Computer Use setup", () => {
       marketplaceName: "openai-bundled",
       message: "Computer Use is ready.",
     });
-    expect(request).toHaveBeenCalledWith("marketplace/add", { source: chatGptMarketplacePath });
+    expect(request).toHaveBeenCalledWith("marketplace/add", { source: managedMarketplacePath });
   });
 
   it("migrates the legacy bundled marketplace source through Codex", async () => {

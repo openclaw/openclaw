@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
@@ -134,26 +134,7 @@ function renderSessionPlacementPicker(
   finish: (target: SessionMoveTarget | null) => void,
   inline = false,
 ) {
-  const [catalogRevision, reload] = createSignal(0);
-  const loaded = createMemo<Catalog | string | null>(
-    () => {
-      catalogRevision();
-      return options
-        .loadCatalog()
-        .catch((error: unknown) =>
-          formatUiError(error, t("sessionsView.moveSessionCatalogFailed")),
-        );
-    },
-    { loadingValue: null },
-  );
-  const loadError = createMemo(() => {
-    const value = loaded();
-    return typeof value === "string" ? value : null;
-  });
-  const catalog = createMemo(() => {
-    const value = loaded();
-    return value && typeof value !== "string" ? value : { profiles: [], devices: [] };
-  });
+  const catalog = createMemo(() => options.loadCatalog());
   const [selected, select] = createSignal<SessionMoveTarget | null>(null);
   const [machineRevision, setMachineRevision] = createSignal(0);
   const sourceTarget = options.source?.target;
@@ -263,8 +244,7 @@ function renderSessionPlacementPicker(
     );
   });
   const selectable = () =>
-    loaded() !== null &&
-    !loadError() &&
+    selected() !== null &&
     !unchanged() &&
     rows().some((row) => row.key === selectedKey() && !row.disabledReason);
   const sourceLabel = createMemo(() => {
@@ -347,6 +327,25 @@ function renderSessionPlacementPicker(
       onChange={() => setMachineRevision((value) => value + 1)}
     />
   );
+  const SourceRow = (props: { label: string | undefined }) => (
+    <Show when={props.label}>
+      <div class="session-move__from">
+        <span>{t("sessionsView.moveFrom")}</span>
+        <span class="session-move__origin">
+          {sourceTarget?.kind === "profile" ? (
+            <CloudProfileIcon
+              profile={
+                options.source?.providerId ? { providerId: options.source.providerId } : undefined
+              }
+            />
+          ) : (
+            <Icon name={sourceTarget?.kind === "device" ? "monitor" : "server"} />
+          )}
+          <span title={props.label}>{props.label}</span>
+        </span>
+      </div>
+    </Show>
+  );
   return (
     <form
       class={["session-move", { "session-move--inline": inline }]}
@@ -378,45 +377,29 @@ function renderSessionPlacementPicker(
         onKeyDown={navigate}
       >
         <div class="session-move__body">
-          <Show when={sourceLabel()}>
-            <div class="session-move__from">
-              <span>{t("sessionsView.moveFrom")}</span>
-              <span class="session-move__origin">
-                {sourceTarget?.kind === "profile" ? (
-                  <CloudProfileIcon
-                    profile={
-                      options.source?.providerId
-                        ? { providerId: options.source.providerId }
-                        : undefined
-                    }
-                  />
-                ) : (
-                  <Icon name={sourceTarget?.kind === "device" ? "monitor" : "server"} />
-                )}
-                <span title={sourceLabel()}>{sourceLabel()}</span>
-              </span>
-            </div>
-          </Show>
+          <Errored fallback={(_error) => <SourceRow label={options.source?.label} />}>
+            <Loading fallback={<SourceRow label={options.source?.label} />}>
+              <SourceRow label={sourceLabel()} />
+            </Loading>
+          </Errored>
           <p class="session-move__description">
             {t(`sessionsView.${options.mode}SessionDescription`, { session: options.sessionLabel })}
           </p>
           <div role="radiogroup" aria-label={t(`sessionsView.${options.mode}SessionTitle`)}>
-            <Show
-              when={loaded() !== null}
-              fallback={
-                <div class="session-move__status" role="status">
-                  {t("common.loading")}
+            <Errored
+              fallback={(error, reset) => (
+                <div class="session-move__status" role="alert">
+                  <p>{formatUiError(error(), t("sessionsView.moveSessionCatalogFailed"))}</p>
+                  <button type="button" class="btn" onClick={reset}>
+                    {t("common.retry")}
+                  </button>
                 </div>
-              }
+              )}
             >
-              <Show
-                when={!loadError()}
+              <Loading
                 fallback={
-                  <div class="session-move__status" role="alert">
-                    <p>{loadError()}</p>
-                    <button type="button" class="btn" onClick={() => reload((value) => value + 1)}>
-                      {t("common.retry")}
-                    </button>
+                  <div class="session-move__status" role="status">
+                    {t("common.loading")}
                   </div>
                 }
               >
@@ -437,8 +420,8 @@ function renderSessionPlacementPicker(
                   registerButton={registerButton}
                   renderConfig={options.allowMachineOverrides === false ? undefined : config}
                 />
-              </Show>
-            </Show>
+              </Loading>
+            </Errored>
           </div>
           <p
             class={["session-move__notice", { "session-move__notice--warning": warning }]}
@@ -503,7 +486,7 @@ function DestinationGroup(props: {
       }
     });
   };
-  onCleanup(() => animation?.cancel());
+  onSettled(() => () => animation?.cancel());
   return (
     <Show when={props.rows.length > 0}>
       <section class="session-move__group" aria-label={props.label}>
@@ -574,7 +557,7 @@ function DestinationGroup(props: {
                     <span class="session-move__radio" aria-hidden="true" />
                   </button>
                   <Show when={configuration()}>
-                    {(renderConfig) => renderConfig()(row().profile!)}
+                    {(renderConfig) => <>{renderConfig()(row().profile!)}</>}
                   </Show>
                 </div>
               );

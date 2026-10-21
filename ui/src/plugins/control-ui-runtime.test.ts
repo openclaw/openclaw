@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { PluginsControlUiCatalog } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../api/gateway.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -13,10 +14,10 @@ import {
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
-import { initializeControlUiPlugin } from "./control-ui-loader.ts";
+import * as controlUiLoader from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
-vi.mock("./control-ui-loader.ts", () => ({ initializeControlUiPlugin: vi.fn() }));
+vi.spyOn(controlUiLoader, "initializeControlUiPlugin").mockResolvedValue(undefined);
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
 vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./control-ui-distribution.ts")>()),
@@ -50,7 +51,7 @@ afterEach(() => {
     runtime.dispose();
   }
   packaged.length = 0;
-  vi.mocked(initializeControlUiPlugin).mockReset();
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockReset().mockResolvedValue(undefined);
   vi.unstubAllGlobals();
 });
 const configForRuntime = (
@@ -89,6 +90,111 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   styles: [],
 });
 
+it.each([false, true])(
+  "reports one completed catalog without delaying healthy plugins (superseded: %s)",
+  async (superseded) => {
+    const pending = [createDeferred(), createDeferred()];
+    const started = [createDeferred(), createDeferred()];
+    const ready = createDeferred();
+    const descriptors = [
+      pluginDescriptor("one", `${assetPath()}index.js`),
+      {
+        ...pluginDescriptor(),
+        pluginId: "peer",
+        entryUrl: "/__openclaw__/plugins/control-ui/peer/one/index.js",
+      },
+    ];
+    let attempts = 0;
+    let reportFailure: Error | undefined;
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "plugins.controlUi.list") {
+        return catalog(descriptors);
+      }
+      if (reportFailure) {
+        throw reportFailure;
+      }
+      return { ok: true };
+    });
+    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
+    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+      async (getContext, runtime, owner) => {
+        if (owner.descriptor.pluginId === "peer") {
+          const attempt = attempts++;
+          started[attempt]!.resolve();
+          await pending[attempt]!.promise;
+        }
+        const host = createControlUiPluginHost(getContext, runtime, owner);
+        host.ui.registerNavigation({ id: "page", label: "Page", page: { id: "page" } });
+        return Object.assign(owner, { host });
+      },
+    );
+    const runtime = runtimeFor(context);
+    runtime.subscribe(() => {
+      if (runtime.registrations("navigation").some((entry) => entry.pluginId === "review")) {
+        ready.resolve();
+      }
+    });
+    const reports = () =>
+      request.mock.calls.filter(([method]) => method === "plugins.controlUi.report");
+    try {
+      runtime.start();
+      const initialRefresh = runtime.refresh();
+      await Promise.race([
+        Promise.all([ready.promise, started[0]!.promise]),
+        initialRefresh.then(() => {
+          throw new Error(
+            `Activation settled before peers started: ${JSON.stringify(runtime.errors)}`,
+          );
+        }),
+      ]);
+      const healthy = runtime.registrations("navigation")[0]!;
+      expect(runtime.isLoading("review")).toBe(false);
+      expect(runtime.isLoading("peer")).toBe(true);
+      expect(reports()).toEqual([]);
+      if (superseded) {
+        const refresh = runtime.refresh();
+        await started[1]!.promise;
+        pending[1]!.resolve();
+        await refresh;
+      } else {
+        pending[0]!.resolve();
+        await initialRefresh;
+      }
+      expect(runtime.registrations("navigation")).toHaveLength(2);
+      expect(healthy.signal.aborted).toBe(false);
+      expect(reports()).toEqual([
+        [
+          "plugins.controlUi.report",
+          {
+            reports: [
+              { pluginId: "review", revision: "one", status: "activated" },
+              { pluginId: "peer", revision: "one", status: "activated" },
+            ],
+          },
+        ],
+      ]);
+      reportFailure = new Error("Activation receipt unavailable");
+      await runtime.refresh();
+      expect(runtime.errors).toEqual([
+        { pluginId: "review", message: "Activation receipt unavailable" },
+        { pluginId: "peer", message: "Activation receipt unavailable" },
+      ]);
+      expect(healthy.signal.aborted).toBe(false);
+      reportFailure = new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Activation report is for an inactive browser revision",
+        details: { rejectedPluginIds: ["peer"] },
+      });
+      await runtime.refresh();
+      expect(runtime.errors).toEqual([
+        { pluginId: "peer", message: "Activation report is for an inactive browser revision" },
+      ]);
+    } finally {
+      pending.forEach((activation) => activation.resolve());
+    }
+  },
+);
+
 it.each(["cross-origin", "authenticated HTTP", "pending import"])(
   "loads only the matching distribution and retires same-revision eligibility loss: %s",
   async (scenario) => {
@@ -108,7 +214,7 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
     };
     const pending = createDeferred();
     const started = createDeferred();
-    const owners: Parameters<typeof initializeControlUiPlugin>[2][] = [];
+    const owners: Parameters<typeof controlUiLoader.initializeControlUiPlugin>[2][] = [];
     const reports: unknown[] = [];
     const refresh = vi.fn(async () => ({ pluginAssetsRequireAuth: true, pluginFrameGrants: [] }));
     const client = {
@@ -123,20 +229,22 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
     };
     const context = connectedContext(client, configForRuntime(refresh));
     vi.stubGlobal("isSecureContext", false);
-    vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
-      owners.push(owner);
-      expect(controlUiPluginAssetUrls(owner.descriptor, "")).toEqual(distribution);
-      started.resolve();
-      if (scenario === "pending import") {
-        await pending.promise;
-        if (!runtime.isCurrent(owner)) {
-          return undefined;
+    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+      async (getContext, runtime, owner) => {
+        owners.push(owner);
+        expect(controlUiPluginAssetUrls(owner.descriptor, "")).toEqual(distribution);
+        started.resolve();
+        if (scenario === "pending import") {
+          await pending.promise;
+          if (!runtime.isCurrent(owner)) {
+            return undefined;
+          }
         }
-      }
-      const host = createControlUiPluginHost(getContext, runtime, owner);
-      host.ui.registerNavigation({ id: "board", label: "Workboard", page: { id: "board" } });
-      return Object.assign(owner, { host });
-    });
+        const host = createControlUiPluginHost(getContext, runtime, owner);
+        host.ui.registerNavigation({ id: "board", label: "Workboard", page: { id: "board" } });
+        return Object.assign(owner, { host });
+      },
+    );
     const runtime = runtimeFor(context);
     try {
       runtime.start();
@@ -151,9 +259,9 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
       expect(owners[0]?.abort.signal.aborted).toBe(true);
       expect(runtime.registrations("navigation")).toEqual([]);
       expect(owners).toHaveLength(1);
-      expect(reports).toContainEqual(
-        expect.objectContaining({ status: "failed", pluginId: "workboard" }),
-      );
+      expect(reports).toContainEqual({
+        reports: [expect.objectContaining({ status: "failed", pluginId: "workboard" })],
+      });
       if (scenario !== "authenticated HTTP") {
         expect(refresh).not.toHaveBeenCalled();
       }
@@ -252,14 +360,18 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
       method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
     );
     const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
-    vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
-      activationStarted.resolve();
-      await activation.promise;
-      if (outcome === "activation-failed") {
-        throw new Error("Plugin activation failed");
-      }
-      return Object.assign(owner, { host: createControlUiPluginHost(getContext, runtime, owner) });
-    });
+    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+      async (getContext, runtime, owner) => {
+        activationStarted.resolve();
+        await activation.promise;
+        if (outcome === "activation-failed") {
+          throw new Error("Plugin activation failed");
+        }
+        return Object.assign(owner, {
+          host: createControlUiPluginHost(getContext, runtime, owner),
+        });
+      },
+    );
     const runtime = runtimeFor(context);
     runtime.subscribe(() => {
       if (runtime.registryStatus !== "pending") {
@@ -284,7 +396,7 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
       expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
       if (outcome === "catalog-failed") {
         expect(runtime.errors).toEqual([{ pluginId: "host", message: "Catalog unavailable" }]);
-        expect(initializeControlUiPlugin).not.toHaveBeenCalled();
+        expect(controlUiLoader.initializeControlUiPlugin).not.toHaveBeenCalled();
         expect(request.mock.calls).toEqual([["plugins.controlUi.list", {}]]);
         expect(runtime.isLoading("review")).toBe(false);
         response = createDeferred<PluginsControlUiCatalog>();
@@ -299,6 +411,50 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
     }
   },
 );
+
+it("publishes a new revision for plugin-owned navigation mutations before notifying readers", async () => {
+  const navigation = { id: "board", label: "Workboard", page: { id: "board" } };
+  const completed = createDeferred();
+  const context = connectedContext(
+    {
+      gatewayUrl: localGateway(),
+      request: async (method) =>
+        method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
+    },
+    configForRuntime(),
+  );
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+    async (getContext, runtime, owner) => {
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      host.ui.registerNavigation(navigation);
+      return Object.assign(owner, { host });
+    },
+  );
+  const runtime = runtimeFor(context);
+  expect(runtime.revision).toBe(0);
+  runtime.subscribe(() => {
+    if (runtime.registryStatus === "complete") {
+      completed.resolve();
+    }
+  });
+  runtime.start();
+  await completed.promise;
+  const registration = runtime.registrations("navigation")[0]!;
+  const previousRevision = runtime.revision;
+  const observed: { revision: number; label: string | undefined }[] = [];
+  runtime.subscribe(() =>
+    observed.push({
+      revision: runtime.revision,
+      label: runtime.registrations("navigation")[0]?.value.label,
+    }),
+  );
+
+  navigation.label = "Updated board";
+  registration.host.ui.invalidate();
+
+  expect(runtime.registrations("navigation")[0]?.value).toBe(navigation);
+  expect(observed).toEqual([{ revision: previousRevision + 1, label: "Updated board" }]);
+});
 
 it.each([
   {
@@ -371,10 +527,12 @@ it.each([
       .filter(([method]) => method === "plugins.controlUi.report")
       .map(([, params]) => params);
     expect(reports).toEqual(
-      error ? [{ pluginId: "review", revision: "one", status: "failed", error }] : [],
+      error
+        ? [{ reports: [{ pluginId: "review", revision: "one", status: "failed", error }] }]
+        : [],
     );
     expect(refresh).toHaveBeenCalledTimes(remote ? 0 : 2);
-    expect(initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
+    expect(controlUiLoader.initializeControlUiPlugin).toHaveBeenCalledTimes(loads ? 1 : 0);
     expect(runtime.registrations("pages")).toEqual([]);
     expect(runtime.isLoading("review")).toBe(false);
     expect(runtime.registryStatus).toBe("complete");
@@ -428,16 +586,18 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       resourceBasePath: "",
       config: configForRuntime(),
     } as unknown as ApplicationContext;
-    vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
-      const host = createControlUiPluginHost(getContext, runtime, owner);
-      host.ui.registerReplacement({
-        id: "composer",
-        label: owner.descriptor.revision,
-        surface: "composer",
-        mount: () => undefined,
-      });
-      return Object.assign(owner, { host });
-    });
+    vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+      async (getContext, runtime, owner) => {
+        const host = createControlUiPluginHost(getContext, runtime, owner);
+        host.ui.registerReplacement({
+          id: "composer",
+          label: owner.descriptor.revision,
+          surface: "composer",
+          mount: () => undefined,
+        });
+        return Object.assign(owner, { host });
+      },
+    );
     const runtime = runtimeFor(context);
     const hello = {
       ...GATEWAY_STORE_TEST_HELLO,

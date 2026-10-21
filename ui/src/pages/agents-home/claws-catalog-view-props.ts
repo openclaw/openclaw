@@ -13,8 +13,9 @@ export type ClawsCatalogViewProps = {
   selected: ClawCatalogEntry | null;
   pageMode: boolean;
   detail: ClawCatalogDetail | null;
-  detailLoading: boolean;
-  detailError: string | null;
+  /** Read only inside the detail contents Loading/Errored slot. */
+  readDetail: () => ClawCatalogDetail | null;
+  detailRequest: Promise<ClawCatalogDetail | null> | undefined;
   installedPluginPackages: ReadonlySet<string>;
   addError: string | null;
   applying: boolean;

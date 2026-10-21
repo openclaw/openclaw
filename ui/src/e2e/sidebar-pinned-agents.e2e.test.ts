@@ -1,7 +1,11 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,6 +18,7 @@ import {
   sidebarSession,
   style,
 } from "./sidebar-contract.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Pinned agent sidebar" });
 const agentsList: AgentsListResult = {
@@ -206,6 +211,101 @@ async function checkAccessiblePins(page: Page, width: number) {
 suite.define(() => {
   it("loads saved agent and session pins alongside existing session rows", () =>
     suite.withPage({ locale: "en-US", viewport: { width: 1280, height: 900 } }, checkSavedPins));
+  it("creates a Claw from a pinned agent row in its existing main chat", async () => {
+    await suite.withPage(
+      { locale: "en-US", colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+        await page.addInitScript(
+          (key) =>
+            localStorage.setItem(
+              key,
+              JSON.stringify({ sidebarAgentsMode: "roster", pinnedAgentIds: ["main"] }),
+            ),
+          settingsKey,
+        );
+        const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+        const draftId = "ec8f46b0-4ca3-4991-8a73-dfdcc8764087";
+        const gateway = await installMockGateway(page, {
+          sessionKey: "agent:main:main",
+          sessions: [sessionRow("agent:main:main", "Harbor chat", 30)],
+          featureMethods: ["claws.drafts.create", "chat.send"],
+          methodResponses: {
+            "agents.list": agentsList,
+            "config.get": {
+              config,
+              sourceConfig: config,
+              resolved: config,
+              raw: JSON.stringify(config),
+              hash: "pinned-claw-creator-config",
+              path: "/tmp/openclaw-pinned-claw-creator.json",
+              valid: true,
+              issues: [],
+            },
+            "chat.startup": {
+              agentsList,
+              messages: [],
+              metadata: { models: [] },
+              sessionId: "main-session",
+              thinkingLevel: null,
+            },
+            "claws.drafts.create": {
+              draftId,
+              prompt:
+                "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+            },
+            "chat.send": { status: "started", runId: "claw-authoring-run" },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForControlUiRoute(page, { routeId: "chat" });
+        const sidebar = page.locator("openclaw-app-sidebar:visible");
+        const pinnedAgent = sidebar.locator('[data-pinned-agent="main"]');
+        await pinnedAgent.waitFor();
+        await page.mouse.move(-1, -1);
+        await captureSidebarUiProof(suite, page, "claw-creator-pinned-before.png", pinnedAgent);
+
+        const trigger = pinnedAgent.getByRole("button", { name: "Options for Harbor" });
+        await page.mouse.move(-1, -1);
+        await trigger.focus();
+        await trigger.press("Enter");
+        const menu = sidebar.getByRole("menu", { name: "Options for Harbor" });
+        const createClawItem = menu.getByRole("menuitem", { name: "Create Claw" });
+        await createClawItem.waitFor();
+        expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Create Claw"]);
+        await captureSidebarUiProof(suite, page, "claw-creator-pinned-menu-after.png", menu);
+
+        await createClawItem.click();
+        await gateway.waitForRequest("claws.drafts.create");
+        await gateway.waitForRequest("chat.send");
+        const createRequest = await gateway.getRequests("claws.drafts.create");
+        expect(createRequest[0]?.params).toEqual({ agentId: "main" });
+        const sendRequest = await gateway.getRequests("chat.send");
+        expect(sendRequest[0]?.params).toMatchObject({
+          sessionKey: "agent:main:main",
+          message: "$create-claw Create a Claw from this agent and turn it into a shareable Claw.",
+          workContext: {
+            page: "claw-create",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            detail: { draftId },
+          },
+          deliver: false,
+        });
+        expect(sendRequest[0]?.params).not.toHaveProperty("parentSessionKey");
+        expect(await sidebar.locator('[data-pinned-agent="main"]').count()).toBe(1);
+        await expect
+          .poll(() =>
+            page.evaluate((key) => {
+              const value = JSON.parse(localStorage.getItem(key) ?? "{}");
+              return value.pinnedAgentIds;
+            }, settingsKey),
+          )
+          .toEqual(["main"]);
+      },
+    );
+  });
+
   it.each([1440, 1366, 768, 390])(
     "keeps row actions and pinned cards accessible at %s px",
     (width) =>

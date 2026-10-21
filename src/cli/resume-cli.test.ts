@@ -91,6 +91,43 @@ afterEach(() => {
 });
 
 describe("runResumeCommand", () => {
+  it.each(["cancelled", "empty"])("does not launch the TUI for a %s picker", async (scenario) => {
+    const client = createGatewayClient(
+      scenario === "empty" ? [] : [{ key: "agent:main:alpha", displayName: "Alpha planning" }],
+    );
+    mocks.selectStyled.mockResolvedValue(Symbol("cancel"));
+    const result = runResumeCommand(undefined, {});
+    if (scenario === "empty") {
+      await expect(result).rejects.toThrow(
+        "No recent sessions found. Run `openclaw sessions` to inspect sessions or `openclaw tui` to start one.",
+      );
+      expect(mocks.selectStyled).not.toHaveBeenCalled();
+    } else {
+      await result;
+      expect(mocks.selectStyled).toHaveBeenCalledOnce();
+    }
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
+  it("reports ambiguous sessions without choosing a candidate or launching the TUI", async () => {
+    const client = createGatewayClient([
+      { key: "agent:main:alpha", displayName: "Alpha planning" },
+      { key: "agent:main:beta", displayName: "Beta planning" },
+    ]);
+    await runResumeCommand("planning", {});
+    expect(mocks.error.mock.calls).toEqual([
+      ['Session query "planning" is ambiguous. Candidates:'],
+      ["  Alpha planning (alpha) [agent:main:alpha]"],
+      ["  Beta planning (beta) [agent:main:beta]"],
+      ["Use a longer name or the exact session key."],
+    ]);
+    expect(mocks.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(client.stop).toHaveBeenCalledOnce();
+    expect(mocks.selectStyled).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+  });
+
   it.each([["an explicit URL", undefined, "wss://other.example/ws"]])(
     "rejects a handoff combined with %s",
     async (_name, query, url) => {

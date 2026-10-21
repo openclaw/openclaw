@@ -165,9 +165,12 @@ const securityResponse=()=>{
     reply(endpoint.includes("/attempts/")?{...publisher,run_attempt:1}:publisher);
   } else if(endpoint.startsWith("repos/fixture/repo/contents/")) {
     const path=endpoint.slice("repos/fixture/repo/contents/".length).split("?")[0];
-    const bytes=fs.readFileSync(process.env.FIXTURE_SCRIPTS+"/../"+path);
+    const revision=new URLSearchParams(endpoint.split("?")[1]).get("ref");
+    const bytes=execFileSync("git",["--git-dir="+process.env.FIXTURE_REMOTE,"show",revision+":"+path],{env:process.env});
     const sha=createHash("sha1").update("blob "+bytes.length+"\0").update(bytes).digest("hex");
-    reply({type:"file",path,sha:config.fault==="changed-publisher-source"?"0".repeat(40):sha});
+    reply({type:"file",path,sha:config.fault==="changed-publisher-source"&&path!==publisher.path?"0".repeat(40):sha,
+      encoding:config.fault==="malformed-workflow"?"utf8":"base64",
+      content:config.fault==="changed-workflow-bytes"?Buffer.from("different bytes").toString("base64"):bytes.toString("base64")});
   } else if(endpoint.startsWith("repos/fixture/repo/compare/")) {
     reply({base_commit:{sha:source},merge_base_commit:{sha:config.fault==="untrusted-publisher-source"?"0".repeat(40):source},status:endpoint.includes("..."+source+"?")?"identical":"ahead"});
   } else if(endpoint==="repos/fixture/repo/pulls/152415") {
