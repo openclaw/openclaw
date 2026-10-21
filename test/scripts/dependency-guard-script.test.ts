@@ -20,6 +20,7 @@ import {
   renderRemovalOnlyDependencyComment,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
+import { loadSecurityReviewPolicy } from "../../scripts/github/security-review-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const headSha = "a".repeat(40);
@@ -34,6 +35,7 @@ const contentsPath = `${repoPath}/contents`;
 const manifestPath = `${contentsPath}/package.json`;
 const contributorPermission = `${repoPath}/collaborators/contributor/permission`;
 const maintainerPermission = `${repoPath}/collaborators/maintainer/permission`;
+const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function comparison(base = staleSha, mergeBase = base) {
@@ -211,11 +213,35 @@ function expectGuardState(result: ReturnType<typeof runDependencyGuard>, state: 
 }
 
 describe("dependency guard script", () => {
+  it("does not transfer command approval to a duplicate PR with the same head", () => {
+    const result = runDependencyGuard({
+      [`GET ${issuePath}/comments`]: [approvalNotice, approval],
+      [`GET ${statusPath}`]: [
+        {
+          context: "openclaw/ci-gate",
+          description: "PR #8: Security review has not completed",
+          creator: { login: "github-actions[bot]", type: "Bot" },
+        },
+      ],
+      "GET /repos/openclaw/openclaw/pulls/8": { ...pullRequest, number: 8 },
+    });
+    expect(result.status).toBe(1);
+    expect(result.statuses.map((call) => call.body?.state)).not.toContain("success");
+    expect(result.statuses.at(-1)?.body?.state).toBe("failure");
+  });
+
   it("requires current maintainer authority for dependency approval", () => {
+    const early = "2025-12-31T00:00:00Z";
     const securityCommand = "/allow-security-sensitive-change";
     const cases: Array<[string, boolean, Partial<typeof approval> | null]> = [
       ["maintain", true, null],
+      ["admin", true, null],
       ["maintain", true, {}],
+      ["admin", true, {}],
+      ["write", false, {}],
+      ["maintain", false, { created_at: early, updated_at: early }],
+      ["maintain", false, { updated_at: "2026-01-01T00:00:02Z" }],
+      ["maintain", false, { user: { ...approval.user, type: "Bot" } }],
       ["maintain", false, { body: securityCommand }],
       ["maintain", true, { body: `${securityCommand}\n${approval.body}` }],
     ];
@@ -465,7 +491,45 @@ describe("dependency guard script", () => {
     expect(enforcement.stdout).toContain("Automatic lockfile cleanup is best effort.");
   });
 
+  it("does not approve or autoscrub grandfathered lockfile PRs in any mode", () => {
+    const cases = ["detect", "autoscrub", "enforce"];
+    for (const mode of cases) {
+      const result = runDependencyGuard(
+        {
+          [`GET ${pullPath}`]: { ...pullRequest, created_at: "2025-11-01T00:00:00Z" },
+          [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+          [`GET ${repoPath}/compare/${rolloutSha}...${headSha}`]: {
+            ...comparison(rolloutSha, staleSha),
+            status: "diverged",
+          },
+        },
+        mode,
+      );
+      expectGuard(result, []);
+      expect(result.stdout).toContain("grandfathered");
+      expect(result.calls.every((call) => call.method === "GET")).toBe(true);
+    }
+  });
+
+  it("detects dependency guard file surfaces", () => {
+    expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
+    expect(isDependencyFile("package.json")).toBe(false);
+    expect(isDependencyFile("ui/package.json")).toBe(false);
+    expect(isDependencyFile("packages/core/package.json")).toBe(false);
+    expect(isDependencyFile("qa/convex-credential-broker/package.json")).toBe(false);
+    expect(isDependencyFile("package-lock.json")).toBe(true);
+    expect(isDependencyFile("tools/nested/pnpm-lock.yaml")).toBe(true);
+    expect(isDependencyFile("src/index.ts")).toBe(false);
+    expect(isPackageLockfile("pnpm-lock.yaml")).toBe(true);
+    expect(isPackageLockfile("package-lock.json")).toBe(true);
+    expect(isPackageLockfile("package.json")).toBe(false);
+  });
+
   it("compares package manifest fields that can affect dependency resolution", () => {
+    expect(isDependencyManifest("package.json")).toBe(true);
+    expect(isDependencyManifest("extensions/slack/package.json")).toBe(true);
+    expect(isDependencyManifest("qa/convex-credential-broker/package.json")).toBe(true);
+    expect(isDependencyManifest("src/index.ts")).toBe(false);
     expect(
       dependencyFieldChanges(
         { scripts: { test: "old" }, dependencies: { a: "1" } },

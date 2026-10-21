@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Readable } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -25,11 +25,8 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
-import {
-  createManagedServiceChildMock,
-  createReadyManagedServiceChild,
-} from "./update-managed-service-handoff-command.test-support.js";
 import { createManagedServiceBoundaryParent } from "./update-managed-service-handoff-process.test-support.js";
+import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 
@@ -37,6 +34,17 @@ const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDirMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
+
+function createSpawnMock() {
+  return Object.assign(new EventEmitter(), {
+    pid: process.pid,
+    exitCode: null,
+    signalCode: null,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    unref: vi.fn(),
+  });
+}
 
 async function waitForHandoffLine(output: Readable | null, expected: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -139,9 +147,17 @@ beforeEach(async () => {
   const coordinatorDir = await fs.realpath(tempDirs.make("openclaw-handoff-coordinator-"));
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   spawnMock.mockReset();
-  spawnMock.mockImplementation((_command: string, args: string[]) =>
-    createReadyManagedServiceChild(args, mockedHandoffLeaseCleanups),
-  );
+  spawnMock.mockImplementation((_command: string, args: string[]) => {
+    const child = createSpawnMock();
+    process.nextTick(() => {
+      signalMockManagedUpdateHandoffReady({
+        child,
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
+        cleanups: mockedHandoffLeaseCleanups,
+      });
+    });
+    return child;
+  });
 });
 
 afterEach(async () => {
@@ -161,7 +177,7 @@ function writeRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFixtu
   executeSqliteQuerySync(
     db,
     stateDb.insertInto("gateway_restart_sentinel").values({
-      sentinel_key: "current",
+      sentinel_key: record.kind === "revision-floor" ? "revision-floor" : "current",
       version: 1,
       kind: record.kind,
       status: record.status,
@@ -187,7 +203,7 @@ function replaceRestartSentinelRow(env: NodeJS.ProcessEnv, sentinel: SentinelFix
   writeRestartSentinelRow(env, sentinel);
 }
 
-function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
+function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): unknown {
   using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
@@ -195,7 +211,7 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv): unknown {
     stateDb
       .selectFrom("gateway_restart_sentinel")
       .select(["version", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", "current"),
+      .where("sentinel_key", "=", key),
   );
   return row
     ? { version: row.version, payload: JSON.parse(row.payload_json), revision: row.updated_at_ms }
@@ -268,9 +284,7 @@ async function runOwnershipHelper(params: {
       continuationMessage: "continue after restart",
     },
   });
-  const mockedLauncher = spawnMock.mock.results.at(-1)?.value as ReturnType<
-    typeof createManagedServiceChildMock
-  >;
+  const mockedLauncher = spawnMock.mock.results.at(-1)?.value as ReturnType<typeof createSpawnMock>;
   mockedLauncher.emit("exit", 0, null);
 
   const [, args, spawnOptions] = spawnMock.mock.calls.at(-1) as unknown as [
@@ -652,7 +666,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
     );
   });
 
-  it.each(["continuation", "empty routing"] as const)(
+  it.each(["continuation", "stats", "empty routing"] as const)(
     "uses canonical sentinel rows without overwriting invalid metadata (%s)",
     async (shape) => {
       let before: unknown;
@@ -671,6 +685,7 @@ describe("managed service update handoff state ownership and sentinel persistenc
               stats: {
                 handoffId: "handoff-typed-row",
                 reason: "managed-service-handoff-started",
+                ...(shape === "stats" ? { durationMs: "invalid" } : {}),
               },
             }),
           );
@@ -737,4 +752,19 @@ describe("managed service update handoff state ownership and sentinel persistenc
       expect(readRestartSentinelPayload(env)).toMatchObject(newerSentinel);
     },
   );
+
+  it("advances the durable revision floor even when it is ahead of the clock", async () => {
+    const futureRevision = Date.now() + 60_000;
+    const { env } = await runOwnershipHelper({
+      handoffId: "handoff-future-revision",
+      sentinel: {
+        ...pendingSentinel("handoff-future-revision", { kind: "revision-floor", ts: 123 }),
+        revision: futureRevision,
+      },
+    });
+
+    expect(readRestartSentinelPayload(env, "revision-floor")).toMatchObject({
+      revision: futureRevision + 1,
+    });
+  });
 });

@@ -19,7 +19,8 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: scopedTargets,
 }));
 
-const { resolveQueuedReplyExecutionConfig } = await import("./agent-runner-utils.js");
+const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
+  await import("./agent-runner-utils.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
 
@@ -117,5 +118,22 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     expect(baseCall.config).toBe(runtimeConfig);
     expect(baseCall.commandName).toBe("reply");
     expectScope(runtimeConfig);
+  });
+
+  it("does not replace an already resolved run config with a stale runtime snapshot", () => {
+    const withKey = (
+      apiKey: string | { source: "env"; provider: string; id: string },
+    ): OpenClawConfig => ({
+      models: { providers: { openai: { baseUrl: "https://unused.invalid", apiKey, models: [] } } },
+    });
+    const unresolvedConfig = withKey({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+    const staleRuntimeConfig = withKey("stale-runtime-key");
+    const scopedResolvedConfig = { ...withKey("fresh-scoped-key"), tools: { updatePlan: true } };
+    setRuntimeConfigSnapshot(staleRuntimeConfig, unresolvedConfig);
+
+    expect(resolveQueuedReplyRuntimeConfig(structuredClone(unresolvedConfig))).toBe(
+      staleRuntimeConfig,
+    );
+    expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
   });
 });

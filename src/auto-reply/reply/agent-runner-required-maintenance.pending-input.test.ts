@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { promisify } from "node:util";
@@ -33,7 +33,6 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { memoryModel, writeMemoryModelChunk } from "./agent-runner-memory.test-support.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { createReplyParams } from "./agent-runner-steer-adoption.test-support.js";
 import {
@@ -55,6 +54,31 @@ const priorInputTokens = 45_000;
 
 const providerText = (content: unknown) =>
   extractTextFromChatContent(content, { joinWith: "\n", normalizeText: (text) => text }) ?? "";
+
+function writeChunk(
+  response: ServerResponse,
+  delta: object,
+  finish_reason: string | null = null,
+  promptTokens?: number,
+) {
+  response.write(
+    `data: ${JSON.stringify({
+      id: "synthetic-completion",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "test-model",
+      choices: [{ index: 0, delta, finish_reason }],
+      usage:
+        promptTokens === undefined
+          ? undefined
+          : {
+              prompt_tokens: promptTokens,
+              completion_tokens: 50,
+              total_tokens: promptTokens + 50,
+            },
+    })}\n\n`,
+  );
+}
 
 it.each([
   ["one archive", [[2_000, priorInputTokens]], 0],
@@ -115,10 +139,9 @@ it.each([
                 ? "NO_REPLY"
                 : "## Decisions\nKeep documentation clear.\n## Open TODOs\nRespond to the current user.\n## Constraints/Rules\nPreserve approved input.\n## Pending user asks\nContinue the current task.\n## Exact identifiers\narchive-marker";
             response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
-            writeMemoryModelChunk(response, {
-              id: "synthetic-completion",
-              completionTokens: 50,
-              delta: writeCheckpoint
+            writeChunk(
+              response,
+              writeCheckpoint
                 ? {
                     role: "assistant",
                     tool_calls: [
@@ -137,14 +160,13 @@ it.each([
                     ],
                   }
                 : { role: "assistant", content: text },
-            });
-            writeMemoryModelChunk(response, {
-              id: "synthetic-completion",
-              completionTokens: 50,
-              delta: {},
-              finishReason: writeCheckpoint ? "tool_calls" : "stop",
-              promptTokens: foreground ? 18_000 : 22_000,
-            });
+            );
+            writeChunk(
+              response,
+              {},
+              writeCheckpoint ? "tool_calls" : "stop",
+              foreground ? 18_000 : 22_000,
+            );
             response.end("data: [DONE]\n\n");
           })
           .catch((error: unknown) => {
@@ -183,7 +205,18 @@ it.each([
               api: "openai-completions",
               apiKey: "synthetic-test-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
-              models: [memoryModel("test-model", contextTokens, { name: "Synthetic model" })],
+              models: [
+                {
+                  id: "test-model",
+                  name: "Synthetic model",
+                  reasoning: false,
+                  input: ["text"],
+                  contextWindow: contextTokens,
+                  contextTokens,
+                  maxTokens: 8_192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
             },
           },
         },

@@ -1,6 +1,5 @@
-import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import {
   appendFile,
   chmod,
@@ -17,7 +16,6 @@ import {
 import net from "node:net";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { desktopReadinessLines } from "../../scripts/lib/desktop-readiness-proof.mts";
 import {
   type DesktopProofSourceStatus,
   desktopProofAssets,
@@ -47,7 +45,6 @@ import {
   observeDesktopEndpointPackets,
   observeDesktopProofRfbLifecycle,
 } from "../../ui/src/e2e/desktop-resize-real.test-support.ts";
-import { testing, type GatewayReadinessDiagnostic } from "../helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingNativeRuntimeEntrypoints } from "./tooling-native-runtime.test-support.js";
@@ -146,63 +143,30 @@ function sourceAdmissionFixture(status: string, tracked: string[]) {
 const rawTestReport = (
   message = "AssertionError: private-token",
   metadata: Record<string, unknown> = {},
-  passed = false,
 ) => ({
   success: true,
   numTotalTests: 1,
-  numFailedTests: passed ? 0 : 1,
-  numFailedTestSuites: passed ? 0 : 1,
+  numFailedTests: 1,
+  numFailedTestSuites: 1,
   snapshot: { private: "secret" },
   testResults: [
     {
       name: "/private/workspace/ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-      status: passed ? "passed" : "failed",
+      status: "failed",
       message: "",
       assertionResults: [
         {
           title: "private-title",
           fullName: "private-title",
-          status: passed ? "passed" : "failed",
+          status: "failed",
           location: { line: 120, column: 3 },
           meta: { desktopProofPhase: "node-admission", password: "private-token", ...metadata },
-          failureMessages: passed ? [] : [message],
+          failureMessages: [message],
         },
       ],
     },
   ],
 });
-function readinessFixture() {
-  const diagnostics: GatewayReadinessDiagnostic[] = [];
-  return {
-    wait: (fetchImpl: typeof fetch, timeout = 25, stdout: string[] = [], stderr: string[] = []) =>
-      testing.waitForGatewayReady(
-        Object.assign(new EventEmitter(), {
-          pid: 12345,
-          exitCode: null as number | null,
-          signalCode: null as NodeJS.Signals | null,
-        }),
-        stdout,
-        stderr,
-        12345,
-        timeout,
-        fetchImpl,
-        undefined,
-        (entry) => diagnostics.push(entry),
-      ),
-    evidence(failure?: unknown) {
-      const artifact = desktopProofTestReport(
-        rawTestReport(
-          failure instanceof Error ? failure.toString() : undefined,
-          { desktopProofPhase: "gateway-start", desktopGatewayReadiness: diagnostics },
-          !failure,
-        ),
-      );
-      const entries = artifact.files[0]!.assertions[0]!.gatewayReadiness!;
-      expect(entries, "public artifact must retain readiness evidence").toHaveLength(1);
-      return { artifact, entries, entry: entries[0]! };
-    },
-  };
-}
 const viewerFailure = {
   expected: size,
   lastFramebuffer: { width: 900, height: 500 },
@@ -236,107 +200,6 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
   pixels: { distinctSampledColors: 100 },
   provenance: { privatePath: "/private/fixture" },
   hello: { token: "private-token" },
-});
-
-it("retains timeout probes, timing, and redacted Gateway logs when cleanup also fails", async () => {
-  const fixture = readinessFixture();
-  const cleanup = new Error("fixture cleanup also failed");
-  const credential = "ghp_abcdefghijklmnopqrstuvwxyz1234567890ABCD";
-  const fetchImpl = vi.fn<typeof fetch>(() => new Promise(() => {}));
-  const failure = await withDesktopProofCleanup(
-    () =>
-      fixture.wait(
-        fetchImpl,
-        25,
-        ["[gateway] waiting for startup-sidecars\nmodel: fixture-private-model\n"],
-        [`Authorization: Bearer ${credential}\nError opening /private/fixture/state.sqlite\n`],
-      ),
-    () => Promise.reject(cleanup),
-    () => {},
-  ).catch((error: unknown) => error);
-  const { artifact, entries, entry } = fixture.evidence(failure);
-  expect(entry).toMatchObject({
-    probe: "GET /readyz",
-    outcome: "timeout",
-    attempts: 1,
-    omittedProbes: 0,
-    probes: [{ attempt: 1, phase: "headers", outcome: "timeout", error: "timeout" }],
-    child: { exitCode: null, signalCode: null },
-    logs: { stdout: ["[gateway] waiting for startup-sidecars", "[model diagnostic omitted]"] },
-  });
-  expect(entry.deadlineMs - entry.startedAtMs).toBe(25);
-  expect(entry.elapsedMs).toBeGreaterThanOrEqual(25);
-  expect(entry.probes[0]!.deadlineMs).toBe(entry.deadlineMs);
-  expect(entry.probes[0]!.elapsedMs).toBeGreaterThanOrEqual(1);
-  const text = JSON.stringify(artifact);
-  expect(text).not.toContain(credential);
-  expect(text).not.toMatch(/\/private\/fixture|state\.sqlite|fixture-private-model|"pid"/u);
-  expect(desktopReadinessLines("node", entries)[0]).toContain(
-    "test-node gateway-start timeout elapsed=",
-  );
-  expect(desktopReadinessLines("node", entries).join("\n")).toContain(
-    "waiting for startup-sidecars",
-  );
-  assert(failure instanceof AggregateError);
-  expect(failure.cause).toBe(failure.errors[0]);
-  expect(failure.errors[0].message).toContain("timeout waiting for gateway readiness");
-  expect(failure.errors[1]).toBe(cleanup);
-});
-
-it("refuses a probe after the startup budget expires", async () => {
-  const fixture = readinessFixture();
-  const fetchImpl = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
-    .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
-  const ticks = [1_000, 1_024];
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => ticks.shift() ?? 1_026);
-  let failure: unknown;
-  try {
-    failure = await fixture.wait(fetchImpl).catch((error: unknown) => error);
-  } finally {
-    clock.mockRestore();
-  }
-  const { entry } = fixture.evidence(failure);
-  expect(fetchImpl).not.toHaveBeenCalled();
-  expect(failure).toBeInstanceOf(Error);
-  expect(String(failure)).toContain("timeout waiting for gateway readiness");
-  expect(entry).toMatchObject({
-    outcome: "timeout",
-    startedAtMs: 1_000,
-    deadlineMs: 1_025,
-    attempts: 0,
-    probes: [],
-    omittedProbes: 0,
-  });
-});
-
-it("records every completed probe and one success timing line", async () => {
-  const fixture = readinessFixture();
-  const fetchImpl = vi
-    .fn<typeof fetch>()
-    .mockRejectedValueOnce(new Error("private transport detail"))
-    .mockResolvedValueOnce(
-      new Response('{"ready":false,"failing":["startup-sidecars"]}', { status: 503 }),
-    )
-    .mockResolvedValueOnce(new Response('{"ready":true,"failing":[]}', { status: 200 }))
-    .mockResolvedValueOnce(new Response('{"ok":true,"status":"started"}', { status: 200 }));
-  await fixture.wait(fetchImpl, 60_000);
-  const { artifact, entries, entry } = fixture.evidence();
-  expect(entry).toMatchObject({ outcome: "ready", attempts: 3, omittedProbes: 0, logs: null });
-  expect(entry.deadlineMs - entry.startedAtMs).toBe(60_000);
-  expect(entry.probes[0]!.deadlineMs).toBe(entry.deadlineMs);
-  const outcomes = entry.probes.map((probe) => probe.outcome);
-  expect(outcomes).toEqual(["fetch-failed", "not-ready", "ready"]);
-  const notReady = entry.probes[1];
-  expect(notReady).toMatchObject({ status: 503, ready: false, failing: ["startup-sidecars"] });
-  expect(
-    entry.probes.every((probe) => probe.deadlineMs >= probe.startedAtMs && probe.elapsedMs >= 0),
-  ).toBe(true);
-  expect(desktopReadinessLines("ssh", entries)).toEqual([
-    `[desktop-resize-proof] test-ssh gateway-start ready elapsed=${entry.elapsedMs}ms`,
-  ]);
-  expect(JSON.stringify(artifact)).not.toContain("private transport detail");
 });
 
 it("binds real-client callbacks to the exact socket and preserves recovery callbacks after factory restoration", async () => {

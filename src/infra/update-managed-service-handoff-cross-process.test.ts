@@ -1,8 +1,9 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync } from "node:sqlite";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import {
@@ -18,16 +19,15 @@ import {
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import {
-  createManagedServiceChildMock,
-  createReadyManagedServiceChild,
-} from "./update-managed-service-handoff-command.test-support.js";
-import {
   scopeWrapperSource,
   useHandoffFixtureReceipts,
   waitForOrphanExit,
 } from "./update-managed-service-handoff-cross-process.test-support.js";
 import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
-import { writeConcurrentManagedHandoffParams } from "./update-managed-service-handoff.test-support.js";
+import {
+  signalMockManagedUpdateHandoffReady,
+  writeConcurrentManagedHandoffParams,
+} from "./update-managed-service-handoff.test-support.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -37,8 +37,25 @@ const mockedHandoffLeaseCleanups = new Set<() => void>();
 const receipts = useHandoffFixtureReceipts();
 type ConcurrentParams = Parameters<typeof writeConcurrentManagedHandoffParams>[0];
 
+function createChild() {
+  return Object.assign(new EventEmitter(), {
+    pid: process.pid,
+    exitCode: null,
+    signalCode: null,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    unref: vi.fn(),
+  });
+}
+
 function createReadyChild(_command: string, args: string[]) {
-  return createReadyManagedServiceChild(args, mockedHandoffLeaseCleanups);
+  const child = createChild();
+  process.nextTick(signalMockManagedUpdateHandoffReady, {
+    child,
+    paramsPath: readManagedHandoffArtifacts(args).paramsPath,
+    cleanups: mockedHandoffLeaseCleanups,
+  });
+  return child;
 }
 
 vi.mock("node:child_process", async () => {
@@ -224,7 +241,7 @@ function driveHandoffProtocol(
 
 describe("managed service update handoff cross-process lease", () => {
   it("joins the durable owner reported by a replacement helper", async () => {
-    const child = createManagedServiceChildMock();
+    const child = createChild();
     spawnMock.mockReturnValueOnce(child);
     process.nextTick(() => {
       child.stdout.write("HANDOFF_BUSY active-handoff\n");
@@ -240,9 +257,15 @@ describe("managed service update handoff cross-process lease", () => {
     expect(result).not.toHaveProperty("pid");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "claims and reclaims its exact dead helper independently of the live systemd scope launcher",
-    async ({ signal }) => {
+  it.runIf(process.platform !== "win32").for([
+    { label: "its exact dead helper", replacement: "exact", reclaimed: true },
+    { label: "a mismatched owner", replacement: "owner", reclaimed: false },
+    { label: "a mismatched helper identity", replacement: "identity", reclaimed: false },
+    { label: "another live process", replacement: "live", reclaimed: false },
+    { label: "an unknown malformed process identity", replacement: "unknown", reclaimed: false },
+  ] as const)(
+    "claims a separate systemd scope helper and fences cancellation against $label",
+    async ({ replacement, reclaimed }, { signal }) => {
       const { spawn } =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       const { cancelManagedServiceUpdateHandoff, claimManagedServiceUpdateHandoff } =
@@ -266,10 +289,11 @@ describe("managed service update handoff cross-process lease", () => {
         return child;
       });
 
-      const handoffId = `scope-wrapper-${path.basename(tmpDir)}`;
+      const handoffId = `scope-wrapper-${replacement}-${path.basename(tmpDir)}`;
       let launcher: import("node:child_process").ChildProcess | undefined;
       let helperPid = 0;
       let leaseDatabasePath: string | undefined;
+      let leaseOwner = handoffId;
       try {
         const started = await startHandoff(tmpDir, handoffId, {
           restartDrainTimeoutMs: 5_000,
@@ -300,6 +324,7 @@ describe("managed service update handoff cross-process lease", () => {
           handoffId,
           installRoot: started.installRoot,
         };
+        let originalRow: { owner: string; payload_json: string };
         {
           using leaseDatabase = new DatabaseSync(leaseDatabasePath);
           const current = leaseDatabase
@@ -312,6 +337,7 @@ describe("managed service update handoff cross-process lease", () => {
           if (!current) {
             throw new Error("expected the nested handoff helper to own its durable lease");
           }
+          originalRow = current;
           const helperIdentity = JSON.parse(current.payload_json) as {
             executor: { pid: number; startIdentity: string };
           };
@@ -335,12 +361,36 @@ describe("managed service update handoff cross-process lease", () => {
           expect(isPidAlive(helperPid)).toBe(false);
           expect(isPidAlive(started.pid)).toBe(true);
           expect(claimManagedServiceUpdateHandoff(identity)).toBe(false);
+
+          let payload = current.payload_json;
+          if (replacement === "owner") {
+            leaseOwner = `${handoffId}-foreign`;
+          } else if (replacement === "identity" || replacement === "live") {
+            const executor =
+              replacement === "identity"
+                ? {
+                    pid: helperPid,
+                    startIdentity: `${helperIdentity.executor.startIdentity}-mismatched`,
+                  }
+                : { pid: process.pid, startIdentity: currentStartIdentity() };
+            payload = JSON.stringify({ ...helperIdentity, version: 2, executor });
+          } else if (replacement === "unknown") {
+            payload = JSON.stringify({ version: 1, pid: helperPid, startIdentity: null });
+          }
+          if (replacement !== "exact") {
+            leaseDatabase
+              .prepare(
+                "UPDATE managed_update_handoffs SET owner = ?, payload_json = ? WHERE install_root = ? AND owner = ?",
+              )
+              .run(leaseOwner, payload, helperParams.updateLeaseKey, handoffId);
+            originalRow = { owner: leaseOwner, payload_json: payload };
+          }
         }
 
         await expect(cancelManagedServiceUpdateHandoff(identity)).resolves.toBe(
-          "restored-in-process",
+          reclaimed ? "restored-in-process" : false,
         );
-        expect(readLease(helperParams)).toBeUndefined();
+        expect(readLease(helperParams)).toEqual(reclaimed ? undefined : originalRow!);
       } finally {
         if (helperPid > 0 && isPidAlive(helperPid)) {
           process.kill(helperPid, "SIGKILL");
@@ -352,7 +402,7 @@ describe("managed service update handoff cross-process lease", () => {
         if (leaseDatabasePath) {
           deleteLease(
             { updateLeaseDatabasePath: leaseDatabasePath, updateLeaseKey: tmpDir },
-            handoffId,
+            leaseOwner,
           );
         }
       }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createStructuredOutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import type * as SessionStoreRuntime from "openclaw/plugin-sdk/session-store-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -81,140 +82,172 @@ const visibleDelivery = () => ({
 });
 
 describeTelegramDispatch("dispatchTelegramMessage transcript delivery", () => {
-  it("stores accepted finals without competing mirrors", async () => {
-    const { root, scope, transcript, cleanup } = await transcriptFixture("dispatch-transcript");
-    const otherScope = {
-      ...scope,
-      sessionId: "unrelated-session",
-      sessionKey: "agent:default:telegram:direct:999",
-    };
-    const store = await vi.importActual<typeof SessionStoreRuntime>(
-      "openclaw/plugin-sdk/session-store-runtime",
-    );
-    const actualDraft = await vi.importActual<typeof TelegramDraft>("./draft-stream.js");
-    const actualDelivery = await vi.importActual<typeof TelegramDelivery>(
-      "./bot/delivery.replies.js",
-    );
-    const actualEdit = await vi.importActual<typeof TelegramSendEdit>("./send-edit.js");
-    const pendingMirrors: Promise<unknown>[] = [];
-    appendAssistantMirrorMessageByIdentity.mockImplementation((params) => {
-      const pending = transcript.appendAssistantMirrorMessageByIdentity(
-        params as SessionTranscriptRuntime.SessionTranscriptAssistantMirrorAppendParams,
+  it.each(["ordinary", "command"] as const)(
+    "stores accepted %s finals without competing mirrors",
+    async (kind) => {
+      const { root, scope, transcript, cleanup } = await transcriptFixture("dispatch-transcript");
+      const otherScope = {
+        ...scope,
+        sessionId: "unrelated-session",
+        sessionKey: "agent:default:telegram:direct:999",
+      };
+      const store = await vi.importActual<typeof SessionStoreRuntime>(
+        "openclaw/plugin-sdk/session-store-runtime",
       );
-      pendingMirrors.push(pending);
-      return pending;
-    });
-    editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
-    let answer: TelegramDraftStream | undefined;
-    createTelegramDraftStream.mockImplementation((params) => {
-      const stream = actualDraft.createTelegramDraftStream(params);
-      answer ??= stream;
-      return stream;
-    });
-    const visible = new Map<number, string>();
-    const bot = createBot();
-    const chat = { id: 123, type: "private" as const, first_name: "Fixture" };
-    let nextMessageId = 2001;
-    vi.spyOn(bot.api, "sendMessage").mockImplementation(async (_chatId, text) => {
-      const message_id = nextMessageId++;
-      visible.set(message_id, text);
-      return { chat, message_id, text, date: 1 };
-    });
-    vi.spyOn(bot.api, "editMessageText").mockImplementation(async (_chatId, messageId, text) => {
-      assert(typeof text === "string", "Expected a text edit, not a rich-message edit");
-      visible.set(messageId, text);
-      return { chat, message_id: messageId, text, date: 1, edit_date: 2 };
-    });
-    vi.spyOn(bot.api, "deleteMessage").mockImplementation(async (_chatId, messageId) => {
-      visible.delete(messageId);
-      return true;
-    });
-    const clock = vi.spyOn(Date, "now");
-    const sourceMessageIds: string[] = [];
-    try {
-      for (const session of [scope, otherScope]) {
-        const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
-        await patchSessionEntry({ ...session, fallbackEntry: entry, update: () => entry });
-      }
-      clock.mockReturnValue(Date.now());
-      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
-        const { dispatcherOptions, replyOptions } = params;
-        await replyOptions?.onPartialReply?.({ text: "Final answer" });
-        await answer?.flush();
-        const runId = `run-${sourceMessageIds.length}`;
-        replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
-        const manager = SessionManager.open(scope, root);
-        const sourceAssistant = { ...assistant("Final answer"), __openclaw: { runId } };
-        sourceMessageIds.push(manager.appendMessage(sourceAssistant));
-        manager.appendMessage(user("Queued input"));
-        await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
-        await dispatcherOptions.deliver(
-          { text: "Tool output must not become a final mirror" },
-          { kind: "tool" },
+      const actualDraft = await vi.importActual<typeof TelegramDraft>("./draft-stream.js");
+      const actualDelivery = await vi.importActual<typeof TelegramDelivery>(
+        "./bot/delivery.replies.js",
+      );
+      const actualEdit = await vi.importActual<typeof TelegramSendEdit>("./send-edit.js");
+      const pendingMirrors: Promise<unknown>[] = [];
+      appendAssistantMirrorMessageByIdentity.mockImplementation((params) => {
+        const pending = transcript.appendAssistantMirrorMessageByIdentity(
+          params as SessionTranscriptRuntime.SessionTranscriptAssistantMirrorAppendParams,
         );
-        return { queuedFinal: true, counts: { block: 0, final: 1, tool: 1 } };
+        pendingMirrors.push(pending);
+        return pending;
       });
-      for (const inboundId of [456, 457]) {
-        SessionManager.open(scope, root).appendMessage(user("Repeat the answer"));
-        answer = undefined;
-        await dispatchWithContext({
-          context: createContext({
-            msg: { chat, message_id: inboundId } as TelegramMessageContext["msg"],
-            threadSpec: { scope: "none", id: undefined },
-            replyThreadId: undefined,
-            ctxPayload: {
-              SessionKey: identity.sessionKey,
-              MessageSid: String(inboundId),
-              ChatType: "direct",
-            } as TelegramMessageContext["ctxPayload"],
-          }),
-          bot,
-          streamMode: "partial",
-          moduleMocks: {
-            ...telegramDepsForTest,
-            resolveStorePath: () => scope.storePath,
-            getSessionEntryAsync: store.getSessionEntryAsync,
-            deliverReplies: actualDelivery.deliverReplies,
-            deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
-          },
+      editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
+      let answer: TelegramDraftStream | undefined;
+      createTelegramDraftStream.mockImplementation((params) => {
+        const stream = actualDraft.createTelegramDraftStream(params);
+        answer ??= stream;
+        return stream;
+      });
+      const visible = new Map<number, string>();
+      const bot = createBot();
+      const chat = { id: 123, type: "private" as const, first_name: "Fixture" };
+      let nextMessageId = 2001;
+      vi.spyOn(bot.api, "sendMessage").mockImplementation(async (_chatId, text) => {
+        const message_id = nextMessageId++;
+        visible.set(message_id, text);
+        return { chat, message_id, text, date: 1 };
+      });
+      vi.spyOn(bot.api, "editMessageText").mockImplementation(async (_chatId, messageId, text) => {
+        assert(typeof text === "string", "Expected a text edit, not a rich-message edit");
+        visible.set(messageId, text);
+        return { chat, message_id: messageId, text, date: 1, edit_date: 2 };
+      });
+      vi.spyOn(bot.api, "deleteMessage").mockImplementation(async (_chatId, messageId) => {
+        visible.delete(messageId);
+        return true;
+      });
+      const clock = vi.spyOn(Date, "now");
+      const sourceMessageIds: string[] = [];
+      try {
+        for (const session of [scope, otherScope]) {
+          const entry = { sessionId: session.sessionId, updatedAt: Date.now() };
+          await patchSessionEntry({ ...session, fallbackEntry: entry, update: () => entry });
+        }
+        clock.mockReturnValue(Date.now());
+        dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+          const { dispatcherOptions, replyOptions } = params;
+          await replyOptions?.onPartialReply?.({ text: "Final answer" });
+          await answer?.flush();
+          if (kind === "command") {
+            return dispatchThroughSharedOwner({
+              ...params,
+              replyResolver: async () => ({ text: "Final answer" }),
+            });
+          }
+          const runId = `run-${sourceMessageIds.length}`;
+          replyOptions?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
+          const manager = SessionManager.open(scope, root);
+          const sourceAssistant = { ...assistant("Final answer"), __openclaw: { runId } };
+          sourceMessageIds.push(manager.appendMessage(sourceAssistant));
+          manager.appendMessage(user("Queued input"));
+          await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+          await dispatcherOptions.deliver(
+            { text: "Tool output must not become a final mirror" },
+            { kind: "tool" },
+          );
+          return { queuedFinal: true, counts: { block: 0, final: 1, tool: 1 } };
         });
+        for (const inboundId of [456, 457]) {
+          SessionManager.open(scope, root).appendMessage(user("Repeat the answer"));
+          answer = undefined;
+          await dispatchWithContext({
+            cfg:
+              kind === "command"
+                ? { session: { store: scope.storePath }, agents: { entries: { default: {} } } }
+                : undefined,
+            context: createContext({
+              msg: { chat, message_id: inboundId } as TelegramMessageContext["msg"],
+              threadSpec: { scope: "none", id: undefined },
+              replyThreadId: undefined,
+              ctxPayload: {
+                SessionKey: identity.sessionKey,
+                MessageSid: String(inboundId),
+                ChatType: "direct",
+                ...(kind === "command"
+                  ? {
+                      Body: "/status",
+                      BodyForCommands: "/status",
+                      Provider: "telegram",
+                      Surface: "telegram",
+                      OriginatingChannel: "telegram",
+                      From: "telegram:123",
+                      To: "telegram:123",
+                    }
+                  : {}),
+              } as TelegramMessageContext["ctxPayload"],
+            }),
+            bot,
+            streamMode: "partial",
+            moduleMocks: {
+              ...telegramDepsForTest,
+              resolveStorePath: () => scope.storePath,
+              getSessionEntryAsync: store.getSessionEntryAsync,
+              deliverReplies: actualDelivery.deliverReplies,
+              deliverStructuredReplies: actualDelivery.deliverStructuredReplies,
+            },
+          });
+          await Promise.all(pendingMirrors);
+        }
+        const entries = await transcript.readVisibleSessionTranscriptMessageEntries(scope);
+        const mirrors = entries.filter(
+          (
+            entry,
+          ): entry is typeof entry & {
+            message: Extract<typeof entry.message, { role: "assistant" }>;
+          } => entry.message.role === "assistant" && entry.message.model === "delivery-mirror",
+        );
+        expect(mirrors.map(({ message }) => message.content)).toEqual(
+          kind === "command"
+            ? []
+            : [[{ type: "text", text: "Final answer" }], [{ type: "text", text: "Final answer" }]],
+        );
+        expect(await transcript.readVisibleSessionTranscriptMessageEntries(otherScope)).toEqual([]);
+        if (kind === "ordinary") {
+          expect(mirrors[0]?.idempotencyKey).not.toBe(mirrors[1]?.idempotencyKey);
+          expect(mirrors.map(({ message }) => message)).toMatchObject(
+            sourceMessageIds.map((sourceAssistantMessageId) => ({
+              openclawDeliveryMirror: { sourceAssistantMessageId },
+            })),
+          );
+        } else {
+          expect(entries.filter((entry) => entry.message.role === "assistant")).toHaveLength(2);
+          expect(
+            entries.filter((entry) => JSON.stringify(entry.message).includes("/status")),
+          ).toHaveLength(2);
+        }
+        expect([...visible.values()]).toEqual(["Final answer", "Final answer"]);
+        const finalHooks = emitTelegramMessageSentHooks.mock.calls.filter(
+          ([event]) => event.content === "Final answer",
+        );
+        expect(finalHooks).toHaveLength(2);
+        expect(finalHooks[0]?.[0]).toMatchObject({
+          content: "Final answer",
+          success: true,
+          sessionKeyForInternalHooks: scope.sessionKey,
+        });
+      } finally {
+        clock.mockRestore();
         await Promise.all(pendingMirrors);
+        await cleanup();
       }
-      const entries = await transcript.readVisibleSessionTranscriptMessageEntries(scope);
-      const mirrors = entries.filter(
-        (
-          entry,
-        ): entry is typeof entry & {
-          message: Extract<typeof entry.message, { role: "assistant" }>;
-        } => entry.message.role === "assistant" && entry.message.model === "delivery-mirror",
-      );
-      expect(mirrors.map(({ message }) => message.content)).toEqual([
-        [{ type: "text", text: "Final answer" }],
-        [{ type: "text", text: "Final answer" }],
-      ]);
-      expect(await transcript.readVisibleSessionTranscriptMessageEntries(otherScope)).toEqual([]);
-      expect(mirrors[0]?.idempotencyKey).not.toBe(mirrors[1]?.idempotencyKey);
-      expect(mirrors.map(({ message }) => message)).toMatchObject(
-        sourceMessageIds.map((sourceAssistantMessageId) => ({
-          openclawDeliveryMirror: { sourceAssistantMessageId },
-        })),
-      );
-      expect([...visible.values()]).toEqual(["Final answer", "Final answer"]);
-      const finalHooks = emitTelegramMessageSentHooks.mock.calls.filter(
-        ([event]) => event.content === "Final answer",
-      );
-      expect(finalHooks).toHaveLength(2);
-      expect(finalHooks[0]?.[0]).toMatchObject({
-        content: "Final answer",
-        success: true,
-        sessionKeyForInternalHooks: scope.sessionKey,
-      });
-    } finally {
-      clock.mockRestore();
-      await Promise.all(pendingMirrors);
-      await cleanup();
-    }
-  });
+    },
+  );
   it("recovers persisted delivery facts without replacing the current-message target", async () => {
     const { root, scope, entry, cleanup } = await transcriptFixture("persisted-recovery");
     const prefix = "The persisted answer continues after this sufficiently long stable opening";

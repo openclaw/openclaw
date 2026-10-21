@@ -2542,6 +2542,7 @@
       "test/scripts/dependency-guard-script.test.ts": 3,
       "test/scripts/dependency-ownership-surface-report.test.ts": 1,
       "test/scripts/dependency-vulnerability-gate.test.ts": 1,
+      "test/scripts/desktop-readiness-proof.test.ts": 1,
       "test/scripts/desktop-resize-proof.test.ts": 1,
       "test/scripts/detect-private-keys.test.ts": 1,
       "test/scripts/dev-tooling-safety.test.ts": 6,

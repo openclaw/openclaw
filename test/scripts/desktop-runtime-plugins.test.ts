@@ -191,11 +191,7 @@ it("lets a desktop stage only Codex without requiring other plugins' builds", ()
     pluginIds: ["codex"],
   });
   git(root, "tag", "v2026.10.2");
-  const before = readFileSync(path.join(root, "dist/build-info.json"));
-  const plan = planDesktopRuntimePlugins(root, { pluginIds: ["codex"] });
-  expect(plan.pluginIds).toEqual([]);
-  stampDesktopRuntimePlugins(root, plan);
-  expect(readFileSync(path.join(root, "dist/build-info.json"))).toEqual(before);
+  expect(planDesktopRuntimePlugins(root, { pluginIds: ["codex"] }).pluginIds).toEqual([]);
 });
 
 it.each([false, true])("excludes core dependencies from the 300 MiB budget (%s)", (inCore) => {
@@ -213,6 +209,16 @@ it.each([false, true])("excludes core dependencies from the 300 MiB budget (%s)"
   if (!inCore) {
     expect(plan.releaseTag).toBeNull();
   }
+});
+
+it("preserves exact release artifacts without source dependencies", () => {
+  const { root } = fixture();
+  git(root, "tag", "v2026.10.2");
+  const before = readFileSync(path.join(root, "dist/build-info.json"));
+  const plan = planDesktopRuntimePlugins(root);
+  stampDesktopRuntimePlugins(root, plan);
+  expect(plan.pluginIds).toEqual([]);
+  expect(readFileSync(path.join(root, "dist/build-info.json"))).toEqual(before);
 });
 
 it("rejects artifacts built at a different source commit", () => {

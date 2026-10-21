@@ -58,12 +58,6 @@ let state: OpenClawTestState;
 const pending: Promise<unknown>[] = [];
 const releases: Array<() => void> = [];
 const realOpen = openNodeSqliteDatabase;
-const failureOf = (error: unknown) => error;
-const wait = <T>(promise: Promise<T>, message: string) => withTestTimeout(promise, 10_000, message);
-function expectRevoked(error: unknown) {
-  expect(error).toBeInstanceOf(Error);
-  expect(String(error)).toMatch(/revoked|closed/);
-}
 
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -142,7 +136,10 @@ async function blockArchives() {
 }
 
 it("keeps native page cleanup outside archive admission", async () => {
-  const options = { agentId: "main", env: state.env };
+  const options = {
+    agentId: "main",
+    env: state.env,
+  };
   const database = openOpenClawAgentDatabase(options);
   const nativeReclaim = vi.spyOn(database.walMaintenance, "reclaimFreePages");
   const schemaLease = acquireStateDatabaseSchemaLease(database.path);
@@ -169,7 +166,11 @@ it("keeps native page cleanup outside archive admission", async () => {
   const work = own(maintenance.run(run));
   void work.catch(pageComplete.reject);
   try {
-    await wait(pageComplete.promise, "Native page cleanup waited for archive admission");
+    await withTestTimeout(
+      pageComplete.promise,
+      10_000,
+      "Native page cleanup waited for archive admission",
+    );
     expect(nativeReclaim).toHaveBeenCalledOnce();
     expect(archiveRead).toBe(false);
     release.resolve();
@@ -200,19 +201,20 @@ it("retires a queued archive removal without waiting for unrelated archive work"
   }));
   const work = fixture.prune();
   void work.catch(queued.reject);
-  await wait(queued.promise, "Archive removal did not reach admission");
+  await withTestTimeout(queued.promise, 10_000, "Archive removal did not reach admission");
   const retirement = own(
     drainAgentDatabaseResources(
       { path: fixture.options.path, agentId: fixture.options.agentId },
       async () => undefined,
     ),
   );
-  await wait(retirement, "Retirement waited on queued archive removal");
+  await withTestTimeout(retirement, 10_000, "Retirement waited on queued archive removal");
   release.resolve();
-  const failure = await work.catch(failureOf);
+  const failure: unknown = await work.catch((error: unknown) => error);
   await blocker;
   fixture.expectUnchanged();
-  expectRevoked(failure);
+  expect(failure).toBeInstanceOf(Error);
+  expect(String(failure)).toMatch(/revoked|closed/);
 });
 
 async function publishedArchive(content = "synthetic retained archive payload") {
@@ -331,7 +333,9 @@ it("lets foreground writes settle while archive pruning scans physical usage", a
   );
   await withinTest(foreground, signal);
   release.resolve();
-  await expect(withinTest(work, signal)).resolves.toMatchObject({ removedFiles: 1 });
+  await expect(withinTest(work, signal)).resolves.toMatchObject({
+    removedFiles: 1,
+  });
 });
 
 it("enforces a physical archive budget without ordinary host SQLite calls", async () => {
@@ -389,65 +393,92 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
 
 it("rejects another agent's archive without changing its canonical row or file", async () => {
   const fixture = await publishedArchive();
-  const failure = await fixture.prune(0, { ...fixture.options, agentId: "other" }).catch(failureOf);
+  const failure: unknown = await fixture
+    .prune(0, { ...fixture.options, agentId: "other" })
+    .catch((error: unknown) => error);
   fixture.expectUnchanged();
   const recovered = await fixture.prune(0);
   expect(recovered).toMatchObject({ removedFiles: 1 });
-  expect([fixture.readArchive(), fs.existsSync(fixture.archivePath)]).toEqual([undefined, false]);
+  expect(fixture.readArchive()).toBeUndefined();
+  expect(fs.existsSync(fixture.archivePath)).toBe(false);
   expect(failure).toBeInstanceOf(Error);
   expect(String(failure)).toContain("main");
   expect(String(failure)).toContain("other");
 });
 
-it("native page reclamation defers without waiting for a pinned writer", () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-  database.db.exec("PRAGMA wal_autocheckpoint = 0");
-  expect(seedFreePages(database, "checkpoint-proof", 4 * 1024 * 1024)).toBe(true);
-  const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
-  const peer = realOpen(database.path);
-  let restoreCheckpoint: (() => void) | undefined;
-  try {
-    const db = requireNativeSqliteDatabase(database.db);
-    const prepare = db.prepare.bind(db);
-    let checkpointObserved = false;
-    const checkpoint = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
-        const get = statement.get.bind(statement);
-        statement.get = () => {
-          const row = get();
-          checkpointObserved = true;
-          peer.exec("BEGIN IMMEDIATE");
-          return row;
-        };
+it.each(["reader", "writer"] as const)(
+  "native page reclamation defers without waiting for a pinned %s",
+  (peerKind) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    database.db.exec("PRAGMA wal_autocheckpoint = 0");
+    expect(seedFreePages(database, "checkpoint-proof", 4 * 1024 * 1024)).toBe(true);
+    const busyTimeout = database.db.prepare("PRAGMA busy_timeout").get();
+    const peer = realOpen(database.path, { readOnly: peerKind === "reader" });
+    let restoreCheckpoint: (() => void) | undefined;
+    try {
+      if (peerKind === "reader") {
+        peer.exec("BEGIN");
+        peer.prepare("SELECT COUNT(*) FROM cache_entries").get();
+        database.db
+          .prepare("INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES (?, ?, ?, ?)")
+          .run("checkpoint-proof", "new-frame", Buffer.from("retained"), 2);
+      } else {
+        const db = requireNativeSqliteDatabase(database.db);
+        const prepare = db.prepare.bind(db);
+        let checkpointObserved = false;
+        const checkpoint = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+          const statement = prepare(sql);
+          if (sql === "PRAGMA wal_checkpoint(TRUNCATE);" && !checkpointObserved) {
+            const get = statement.get.bind(statement);
+            statement.get = () => {
+              const row = get();
+              checkpointObserved = true;
+              peer.exec("BEGIN IMMEDIATE");
+              return row;
+            };
+          }
+          return statement;
+        });
+        restoreCheckpoint = () => checkpoint.mockRestore();
       }
-      return statement;
-    });
-    restoreCheckpoint = () => checkpoint.mockRestore();
-    const before = freePages(database);
-    expect(before).toBeGreaterThan(512);
-    const startedAt = performance.now();
-    database.walMaintenance.reclaimFreePages();
-    expect(performance.now() - startedAt).toBeLessThan(1_000);
-    expect(peer.isTransaction).toBe(true);
-    expect(freePages(database)).toBe(before);
-    expect(database.db.isTransaction).toBe(false);
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-    peer.exec("ROLLBACK");
-    for (let remaining = freePages(database); remaining > 0; remaining = freePages(database)) {
-      database.walMaintenance.reclaimFreePages();
-      expect(freePages(database)).toBeLessThan(remaining);
-    }
-    expect(freePages(database)).toBe(0);
-    expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
-  } finally {
-    restoreCheckpoint?.();
-    if (peer.isTransaction) {
+      const before = freePages(database);
+      expect(before).toBeGreaterThan(512);
+      const startedAt = performance.now();
+      const blocked = database.walMaintenance.reclaimFreePages();
+      expect(performance.now() - startedAt).toBeLessThan(1_000);
+      expect(peer.isTransaction).toBe(true);
+      expect(freePages(database)).toBe(before);
+      if (peerKind === "reader") {
+        expect(blocked).toMatchObject({ checkpointCalls: 2, checkpointIncomplete: 1 });
+      } else {
+        expect(database.db.isTransaction).toBe(false);
+      }
+      expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
       peer.exec("ROLLBACK");
+      for (let remaining = freePages(database); remaining > 0; remaining = freePages(database)) {
+        database.walMaintenance.reclaimFreePages();
+        expect(freePages(database)).toBeLessThan(remaining);
+      }
+      expect(freePages(database)).toBe(0);
+      if (peerKind === "reader") {
+        expect(
+          database.db
+            .prepare("SELECT blob FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("checkpoint-proof", "new-frame")?.blob,
+        ).toEqual(new Uint8Array(Buffer.from("retained")));
+        expect(database.walMaintenance.checkpoint()).toBe(true);
+        expect(fs.statSync(database.path + "-wal").size).toBe(0);
+      }
+      expect(database.db.prepare("PRAGMA busy_timeout").get()).toEqual(busyTimeout);
+    } finally {
+      restoreCheckpoint?.();
+      if (peer.isTransaction) {
+        peer.exec("ROLLBACK");
+      }
+      peer.close();
     }
-    peer.close();
-  }
-});
+  },
+);
 
 it("bounds broker page reclamation and stops when its owner is revoked between units", async () => {
   const options = { agentId: "main", env: state.env };
@@ -517,7 +548,11 @@ it.each([
     return result;
   });
   const work = fixture.prune();
-  await wait(entered.promise, "Archive operation did not reach its held boundary");
+  await withTestTimeout(
+    entered.promise,
+    10_000,
+    "Archive operation did not reach its held boundary",
+  );
   const later = own(
     runExclusiveSqliteSessionWrite(
       fixture.options,
@@ -578,7 +613,8 @@ it.each([
       expect(fs.readFileSync(fixture.archivePath)).toEqual(fixture.archivedBytes);
     }
     if (outcome === "revoked") {
-      expectRevoked(failure);
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).toMatch(/revoked|closed/);
     } else if (phase === "after-unlink") {
       expect(String(failure)).toContain(
         "SQLite session archive changed during pruning; retry cleanup.",
@@ -596,7 +632,10 @@ it("preserves an unpublished canonical archive whose owner appears after legacy 
   const sessionsDir = path.dirname(archivePath);
   const archiveName = path.basename(archivePath);
   fixture.removeRow();
-  const canonicalArchive = { ...originalArchive, published_at: null };
+  const canonicalArchive = {
+    ...originalArchive,
+    published_at: null,
+  };
   let readingLegacyInventory = false;
   let inserted = false;
   const pruneLegacy = diskBudget.pruneSessionTranscriptArchivesToHighWater;
@@ -635,6 +674,7 @@ it("preserves an unpublished canonical archive whose owner appears after legacy 
   const result = await fixture.prune();
   expect(inserted).toBe(true);
   expect(fixture.readArchive()).toEqual(canonicalArchive);
+  expect(fs.existsSync(archivePath)).toBe(true);
   expect(fs.readFileSync(archivePath)).toEqual(archivedBytes);
   expect(result.removedFiles).toBe(0);
 });
@@ -695,7 +735,9 @@ it("excludes peer publication until atomic legacy removal settles", async () => 
     expect(fixture.readArchive()).toBeUndefined();
     expect(fs.existsSync(fixture.archivePath)).toBe(false);
     expect(result.removedFiles).toBe(1);
-    expect([attempted, filePresentAtGrant, peerEntered]).toEqual([true, true, false]);
+    expect(attempted).toBe(true);
+    expect(filePresentAtGrant).toBe(true);
+    expect(peerEntered).toBe(false);
     expect(refusal).toMatchObject({ errcode: 5 });
     assert(fixture.originalArchive.published_at !== null);
     fs.writeFileSync(fixture.archivePath, fixture.archivedBytes);
