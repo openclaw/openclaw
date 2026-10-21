@@ -13,7 +13,7 @@ describe("doctor finalize config flow", () => {
   ] as const)(
     "finalizes %s against the original revision",
     async (_name, repair, pending, accepted, write, useCandidate) => {
-      const cfg = { channels: { signal: { enabled: true } } };
+      const cfg = {};
       const candidate = { channels: { signal: { enabled: false } } };
       const snapshot = { path: "/config.json", hash: "source-hash", raw: null };
       const hint = 'Run "openclaw doctor --fix" to apply these changes.';
@@ -39,11 +39,7 @@ describe("doctor finalize config flow", () => {
         confirmedConfigSource: { path: "/config.json", hash: "source-hash" },
       });
       expect(confirm).toHaveBeenCalledTimes(!repair && pending ? 1 : 0);
-      if (!accepted) {
-        expect(note).toHaveBeenCalledWith(hint, "Doctor");
-      } else {
-        expect(note).not.toHaveBeenCalled();
-      }
+      expect(note.mock.calls).toEqual(accepted ? [] : [[hint, "Doctor"]]);
     },
   );
 

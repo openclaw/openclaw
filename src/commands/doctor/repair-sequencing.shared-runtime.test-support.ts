@@ -21,28 +21,25 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
       "preserves a live shared runtime reader through Doctor ($selector, same install: $sameInstall)",
       async ({ selector, sameInstall }) => {
         const tempDir = tempDirs.make("openclaw-doctor-shared-runtime-");
-        const stateA = path.join(tempDir, ".openclaw");
-        const stateB = path.join(tempDir, ".openclaw-peer");
-        const packageRoot = path.join(tempDir, "prefix-a", "node_modules", "openclaw");
-        const readerPackageRoot = sameInstall
+        const inTemp = (...parts: string[]) => path.join(tempDir, ...parts);
+        const stateA = inTemp(".openclaw");
+        const stateB = inTemp(".openclaw-peer");
+        const packageRoot = inTemp("prefix-a", "node_modules", "openclaw");
+        const readerRoot = sameInstall
           ? packageRoot
-          : path.join(tempDir, "prefix-b", "node_modules", "openclaw");
-        const sharedBase = path.join(
-          tempDir,
+          : inTemp("prefix-b", "node_modules", "openclaw");
+        const sharedBase = inTemp(
           selector === "STATE_DIRECTORY"
             ? "shared/plugin-runtime-deps"
             : ".openclaw-install-stage-shared",
         );
         // Stable v2026.4.29 buckets are keyed by version and install path, not by
         // profile/database. Doctor cannot authorize deletion for another consumer.
-        const packageHash = createHash("sha256")
-          .update(readerPackageRoot)
-          .digest("hex")
-          .slice(0, 12);
+        const packageHash = createHash("sha256").update(readerRoot).digest("hex").slice(0, 12);
         const bucket = path.join(sharedBase, `openclaw-2026.4.29-${packageHash}`);
         const dependency = path.join(bucket, "node_modules", "fixture-runtime-dependency");
         const mirror = path.join(bucket, "dist", "extensions", "fixture-reader");
-        const alias = path.join(path.dirname(readerPackageRoot), "fixture-runtime-dependency");
+        const alias = path.join(path.dirname(readerRoot), "fixture-runtime-dependency");
         const unknownFile = path.join(sharedBase, "unknown-consumer", "keep.txt");
         const databasePath = (stateDir: string) => path.join(stateDir, "state", "openclaw.sqlite");
         const runtimeEnv = (stateDir: string) => ({
@@ -52,10 +49,13 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
           OPENCLAW_STATE_DIR: stateDir,
           [selector]: selector === "STATE_DIRECTORY" ? path.dirname(sharedBase) : sharedBase,
         });
-        const writeFixture = async (directory: string, name: string, content: string) => {
+        const writeFiles = async (directory: string, files: Record<string, string>) => {
           await fs.mkdir(directory, { recursive: true });
-          await fs.writeFile(path.join(directory, name), content);
+          for (const [name, content] of Object.entries(files)) {
+            await fs.writeFile(path.join(directory, name), content);
+          }
         };
+        const packageJson = (version: string) => JSON.stringify({ name: "openclaw", version });
         for (const stateDir of [stateA, stateB]) {
           await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
           const database = new DatabaseSync(databasePath(stateDir));
@@ -69,29 +69,22 @@ export function registerSharedRuntimeReaderDoctorTests(): void {
           `);
           database.close();
         }
-        for (const installRoot of new Set([packageRoot, readerPackageRoot])) {
-          await writeFixture(
-            installRoot,
-            "package.json",
-            '{"name":"openclaw","version":"2026.4.29"}\n',
-          );
+        for (const installRoot of new Set([packageRoot, readerRoot])) {
+          await writeFiles(installRoot, { "package.json": packageJson("2026.4.29") });
         }
-        for (const [directory, name, content] of [
-          [dependency, "package.json", '{"main":"index.cjs"}\n'],
-          [dependency, "index.cjs", 'exports.value = "dependency-ready";\n'],
-          [dependency, "late.cjs", 'exports.value = "dependency-survived";\n'],
-          [
-            mirror,
-            "index.cjs",
+        await writeFiles(dependency, {
+          "package.json": '{"main":"index.cjs"}\n',
+          "index.cjs": 'exports.value = "dependency-ready";\n',
+          "late.cjs": 'exports.value = "dependency-survived";\n',
+        });
+        await writeFiles(mirror, {
+          "index.cjs":
             'exports.value = "mirror-ready"; exports.readLater = () => require("./late.cjs").value;\n',
-          ],
-          [mirror, "late.cjs", 'exports.value = "mirror-survived";\n'],
-          [path.dirname(unknownFile), "keep.txt", "another consumer's files\n"],
-        ] as const) {
-          await writeFixture(directory, name, content);
-        }
+          "late.cjs": 'exports.value = "mirror-survived";\n',
+        });
+        await writeFiles(path.dirname(unknownFile), { "keep.txt": "another consumer's files\n" });
         await fs.symlink(dependency, alias, "junction");
-        const readerFile = path.join(tempDir, "runtime-reader.cjs");
+        const readerFile = inTemp("runtime-reader.cjs");
         await fs.writeFile(
           readerFile,
           `const { DatabaseSync } = require("node:sqlite");
@@ -116,16 +109,13 @@ process.on("message", (message) => {
 process.send({ kind: "ready", version: version(), dependency: fromInstall("fixture-runtime-dependency").value, mirror: mirror.value });
 `,
         );
-        const reader = fork(
-          readerFile,
-          [databasePath(stateB), readerPackageRoot, path.join(mirror, "index.cjs")],
-          {
-            cwd: stateB,
-            execArgv: [],
-            env: runtimeEnv(stateB),
-            stdio: ["ignore", "ignore", "ignore", "ipc"],
-          },
-        );
+        const readerArgs = [databasePath(stateB), readerRoot, path.join(mirror, "index.cjs")];
+        const reader = fork(readerFile, readerArgs, {
+          cwd: stateB,
+          execArgv: [],
+          env: runtimeEnv(stateB),
+          stdio: ["ignore", "ignore", "ignore", "ipc"],
+        });
         const closed = once(reader, "close");
         const nextMessage = () =>
           Promise.race([
@@ -134,17 +124,16 @@ process.send({ kind: "ready", version: version(), dependency: fromInstall("fixtu
               throw new Error(`runtime reader exited before replying: ${code}/${signal}`);
             }),
           ]);
-        try {
-          await expect(nextMessage()).resolves.toEqual({
-            kind: "ready",
+        const expectMessage = (message: Promise<unknown>, kind: string, suffix: string) =>
+          expect(message).resolves.toEqual({
+            kind,
             version: 8,
-            dependency: "dependency-ready",
-            mirror: "mirror-ready",
+            dependency: `dependency-${suffix}`,
+            mirror: `mirror-${suffix}`,
           });
-          await fs.writeFile(
-            path.join(packageRoot, "package.json"),
-            '{"name":"openclaw","version":"2026.8.1"}\n',
-          );
+        try {
+          await expectMessage(nextMessage(), "ready", "ready");
+          await fs.writeFile(path.join(packageRoot, "package.json"), packageJson("2026.8.1"));
           await runDoctorRepairSequence({
             state: { cfg: {}, candidate: {}, pendingChanges: false, fixHints: [] },
             doctorFixCommand: "openclaw doctor --fix",
@@ -152,12 +141,7 @@ process.send({ kind: "ready", version: version(), dependency: fromInstall("fixtu
           });
           const response = nextMessage();
           reader.send("read");
-          await expect(response).resolves.toEqual({
-            kind: "read",
-            version: 8,
-            dependency: "dependency-survived",
-            mirror: "mirror-survived",
-          });
+          await expectMessage(response, "read", "survived");
           expect((await fs.lstat(alias)).isSymbolicLink()).toBe(true);
           expect(await fs.readFile(unknownFile, "utf8")).toBe("another consumer's files\n");
         } finally {
