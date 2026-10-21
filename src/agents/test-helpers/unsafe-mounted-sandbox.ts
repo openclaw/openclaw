@@ -1,8 +1,7 @@
-/** Simulates a bridge exposing host paths outside the workspace for boundary tests. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import type { SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { createAgentToolsSandboxContext } from "./agent-tools-sandbox-context.js";
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
@@ -55,17 +54,15 @@ export function createUnsafeMountedSandbox(params: {
     return { hostPath, relativePath, containerPath };
   };
 
-  const bridge: SandboxFsBridge = createSandboxFsBridgeFromResolver(resolvePath, [
-    { hostRoot: root, containerRoot: workspaceContainerRoot },
-    { hostRoot: agentHostRoot, containerRoot: "/agent" },
-    ...(skillsHostRoot ? [{ hostRoot: skillsHostRoot, containerRoot: skillsContainerRoot }] : []),
-  ]);
   return createAgentToolsSandboxContext({
+    ...params,
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    workspaceAccess: params.workspaceAccess ?? "rw",
-    fsBridge: bridge,
+    fsBridge: createSandboxFsBridgeFromResolver(resolvePath, [
+      { hostRoot: root, containerRoot: workspaceContainerRoot },
+      { hostRoot: agentHostRoot, containerRoot: "/agent" },
+      ...(skillsHostRoot ? [{ hostRoot: skillsHostRoot, containerRoot: skillsContainerRoot }] : []),
+    ]),
   });
 }
 

@@ -1,6 +1,9 @@
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "../prepared-model-catalog-owner.js";
-import { createCatalogFixture } from "../prepared-model-catalog-worker.test-support.js";
+import {
+  catalogInput,
+  createCatalogFixture,
+} from "../prepared-model-catalog-worker.test-support.js";
 import { startSerializedSnapshotBuildBatch } from "../prepared-model-runtime.build.js";
 import { retainPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
 import { addCredentialOnlyProviderFixture } from "./prepared-model-catalog-credential-only.test-support.js";
@@ -32,19 +35,13 @@ export function createStaticCatalogSnapshotFixture(params: {
       ...options,
       receiptBroadcastName: params.receiptBroadcastName?.(),
     });
-    const { agentDir, workspaceDir, env } = fixture;
     const config = options?.credentialOnlySyntheticAuth
       ? addCredentialOnlyProviderFixture(fixture)
       : fixture.config;
-    const input = {
-      agentId: "main",
-      agentDir,
-      inheritedAuthDir: agentDir,
-      workspaceDir,
+    const input = catalogInput(fixture, {
       config,
-      env,
       ...(options?.readOnly ? { readOnly: true } : {}),
-    };
+    });
     const retirement = new AbortController();
     const isCurrent = () => !retirement.signal.aborted;
     const supersede = () => retirement.abort();
@@ -55,7 +52,7 @@ export function createStaticCatalogSnapshotFixture(params: {
             options.metadataWorkspace === "activation"
               ? { ...config, plugins: { ...config.plugins, entries: {} } }
               : config,
-          env,
+          env: fixture.env,
         })
       : undefined;
     const providedMetadataSnapshot =
