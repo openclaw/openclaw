@@ -129,7 +129,8 @@ export async function showSessionWorkerStopDialog(options: {
           confirming = true;
           setPending(true);
           try {
-            if ((yield options.confirm()) === "close") {
+            // Owner publications must not join the dialog's held transition and block navigation.
+            if ((yield Promise.resolve().then(options.confirm)) === "close") {
               finish();
             }
           } finally {

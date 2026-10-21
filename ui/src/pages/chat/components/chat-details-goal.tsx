@@ -58,9 +58,12 @@ function GoalEditDialog(props: {
     }
     submitting = true;
     setPending(true);
+    const objective = input.value;
+    const submitOwner = props.submit;
     let submissionError: string | null;
     try {
-      submissionError = yield props.submit(input.value);
+      // Keep owner publications outside the dialog's held transition so navigation can retire it.
+      submissionError = yield Promise.resolve().then(() => submitOwner(objective));
     } catch (cause) {
       submissionError = formatUiError(cause);
     }

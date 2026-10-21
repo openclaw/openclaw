@@ -26,8 +26,8 @@ it("blocks duplicate confirmation and dismissal until a worker stop settles, the
     const cancel = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancel);
 
-    expect(confirm).toHaveBeenCalledOnce();
     expect(cancel.defaultPrevented).toBe(true);
+    await waitForSolid(() => expect(confirm).toHaveBeenCalledOnce());
     flush();
     expect(submit.disabled).toBe(true);
     expect(submit.getAttribute("aria-busy")).toBe("true");
