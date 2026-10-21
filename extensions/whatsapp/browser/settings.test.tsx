@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { settingsViews } from "./index.tsx";
 
 const cleanups: Array<() => void> = [];
+const emptyLogin = { message: null, qrDataUrl: null, connected: null, busy: false };
 afterEach(() => {
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
@@ -24,23 +25,16 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     connectionEpoch: 1,
     locale: "en",
     presented: true,
-    login: { message: null, qrDataUrl: null, connected: null, busy: false },
+    login: emptyLogin,
     ...patch,
   };
   const abort = new AbortController();
   const unavailable = () => {
     throw new Error("WhatsApp uses native Settings markup");
   };
-  const start = vi.fn<(force: boolean) => Promise<void>>().mockResolvedValue();
-  const wait = vi.fn<() => Promise<void>>().mockResolvedValue();
   const logout = vi.fn<() => Promise<void>>().mockResolvedValue();
-  const confirm = vi
-    .fn<NonNullable<ControlUiChannelSettingsContext["confirm"]>>()
-    .mockResolvedValue(false);
   const configDispose = vi.fn();
-  const mountConfig = vi.fn(() => configDispose);
-  const formatPhoneNumber = vi.fn((value: string) => `display:${value}`);
-  const context: ControlUiChannelSettingsContext = {
+  const context = {
     signal: abort.signal,
     props: snapshot,
     components: {
@@ -52,16 +46,22 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
       mountLobster: unavailable,
     },
     request: unavailable,
-    mountConfig,
+    mountConfig: vi.fn(() => configDispose),
     refresh: vi.fn().mockResolvedValue(undefined),
     formatRelativeTimestamp: () => "recently",
     formatError: String,
     formatExternalText: String,
-    formatPhoneNumber,
+    formatPhoneNumber: (value: string) => `display:${value}`,
     formatDuration: () => "1m",
-    confirm,
-    login: { start, wait, captureLogout: () => ({ accountId: "work/account", logout }) },
-  };
+    confirm: vi
+      .fn<NonNullable<ControlUiChannelSettingsContext["confirm"]>>()
+      .mockResolvedValue(false),
+    login: {
+      start: vi.fn<(force: boolean) => Promise<void>>().mockResolvedValue(),
+      wait: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      captureLogout: () => ({ accountId: "work/account", logout }),
+    },
+  } satisfies ControlUiChannelSettingsContext;
   const container = document.createElement("div");
   document.body.append(container);
   const mounted = settingsViews[0]!.mount(container, context);
@@ -70,10 +70,9 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     mounted.dispose();
   });
   flush();
+  const buttons = () => [...container.querySelectorAll("button")];
   const button = (label: string) => {
-    const node = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent?.trim() === label,
-    );
+    const node = buttons().find((candidate) => candidate.textContent?.trim() === label);
     if (!node) {
       throw new Error(`Missing ${label}`);
     }
@@ -83,16 +82,14 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     [...container.querySelectorAll("dt")].find((node) => node.textContent === label)
       ?.nextElementSibling?.textContent;
   return {
+    ...context,
+    ...context.login,
     container,
+    buttons,
     button,
     fact,
-    start,
-    wait,
     logout,
-    confirm,
-    mountConfig,
     configDispose,
-    formatPhoneNumber,
     update(nextPatch: Partial<ControlUiChannelSettingsSnapshot>) {
       snapshot = { ...snapshot, ...nextPatch };
       mounted.update(snapshot);
@@ -104,22 +101,14 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
 
 it("keeps QR/relink actions and busy state tied to the shared login snapshot", () => {
   const f = fixture();
-  expect([...f.container.querySelectorAll("button")].map((node) => node.textContent)).toEqual([
-    "Show QR",
-    "Logout",
-    "Refresh",
-  ]);
+  const qrLogin = { ...emptyLogin, qrDataUrl: "data:image/png;base64,fixture" };
+  expect(f.buttons().map((node) => node.textContent)).toEqual(["Show QR", "Logout", "Refresh"]);
   expect(f.button("Show QR").classList.contains("primary")).toBe(true);
   f.button("Show QR").click();
   expect(f.start).toHaveBeenCalledWith(false);
   f.update({
     status: { linked: true },
-    login: {
-      message: "Scan now",
-      qrDataUrl: "data:image/png;base64,fixture",
-      busy: false,
-      connected: false,
-    },
+    login: { ...qrLogin, message: "Scan now", connected: false },
   });
   expect(f.container.querySelector("img")?.getAttribute("alt")).toBe("WhatsApp QR");
   expect(f.container.querySelector('[role="status"]')?.textContent).toBe("Scan now");
@@ -127,14 +116,7 @@ it("keeps QR/relink actions and busy state tied to the shared login snapshot", (
   expect(f.start).toHaveBeenLastCalledWith(true);
   f.button("Wait for scan").click();
   expect(f.wait).toHaveBeenCalledOnce();
-  f.update({
-    login: {
-      message: null,
-      qrDataUrl: "data:image/png;base64,fixture",
-      busy: true,
-      connected: null,
-    },
-  });
+  f.update({ login: { ...qrLogin, busy: true } });
   for (const label of ["Relink", "Wait for scan", "Logout"]) {
     expect(f.button(label).disabled).toBe(true);
   }
