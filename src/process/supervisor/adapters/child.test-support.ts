@@ -14,16 +14,15 @@ export function createStubChild(pid = 1234) {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  Object.defineProperty(child, "stdio", {
-    value: [child.stdin, child.stdout, child.stderr],
-    configurable: true,
-  });
-  Object.defineProperty(child, "pid", { value: pid, configurable: true });
-  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
-  Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
-  Object.defineProperty(child, "signalCode", { value: null, configurable: true, writable: true });
-  Object.defineProperty(child, "channel", { value: {}, configurable: true });
-  Object.defineProperty(child, "connected", { value: true, configurable: true, writable: true });
+  const define = (key: keyof ChildProcess, value: unknown, writable = true) =>
+    Object.defineProperty(child, key, { value, writable, configurable: true });
+  define("stdio", [child.stdin, child.stdout, child.stderr], false);
+  define("pid", pid, false);
+  define("killed", false);
+  define("exitCode", null);
+  define("signalCode", null);
+  define("channel", {}, false);
+  define("connected", true);
   const killMock = vi.fn(() => true);
   const sendMock = vi.fn((_message: unknown, ...args: unknown[]) => {
     const callback = args.findLast((value) => typeof value === "function") as
@@ -33,7 +32,7 @@ export function createStubChild(pid = 1234) {
     return true;
   });
   const disconnectMock = vi.fn(() => {
-    Object.defineProperty(child, "connected", { value: false, configurable: true, writable: true });
+    define("connected", false);
     child.emit("disconnect");
   });
   child.kill = killMock as ChildProcess["kill"];
@@ -43,44 +42,24 @@ export function createStubChild(pid = 1234) {
     child.emit("close", code, signal);
   };
   const emitExit = (code: number | null, signal: NodeJS.Signals | null = null) => {
-    Object.defineProperty(child, "exitCode", { value: code, configurable: true, writable: true });
-    Object.defineProperty(child, "signalCode", {
-      value: signal,
-      configurable: true,
-      writable: true,
-    });
+    define("exitCode", code);
+    define("signalCode", signal);
     child.emit("exit", code, signal);
   };
   return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
 }
 
-type SpawnAndWaitParams = {
-  argv?: string[];
-  options?: {
-    detached?: boolean;
-    env?: NodeJS.ProcessEnv | Record<string, string>;
-    stdio?: string[];
-    windowsHide?: boolean;
-    windowsVerbatimArguments?: boolean;
-  };
-};
+type SpawnAndWaitParams = Parameters<typeof import("../../spawn-utils.js").spawnAndWait>[0];
 
 export function firstSpawnAndWaitParams(mock: Mock): SpawnAndWaitParams {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected spawnAndWait call");
-  }
-  const [params] = call;
+  const params = firstMockArg(mock, "spawnAndWait");
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
     throw new Error("expected spawnAndWait params to be an object");
   }
   return params;
 }
 
-export function firstMockArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-): unknown {
+export function firstMockArg<T>(mock: { mock: { calls: readonly T[][] } }, label: string) {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error(`expected ${label} call`);
