@@ -34,6 +34,7 @@ const modalButton = (text: string) =>
   )!;
 
 it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
+  const warnings = vi.spyOn(console, "warn");
   const { sidebar, context, provider } = await mountRoster(roster, reply());
   sidebar.sidebarAgentsMode = "roster";
   await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
@@ -46,6 +47,11 @@ it("pins an agent into a menu-less gallery above the roster and preserves the ot
   expect(context.navigation.snapshot.pinnedAgentIds).toEqual(["main"]);
   expect(loadSettings().pinnedAgentIds).toEqual(["main"]);
   expect(document.activeElement?.getAttribute("data-agent-id")).toBe("main");
+  expect(
+    warnings.mock.calls.filter(
+      ([message]) => typeof message === "string" && message.includes("[NO_OWNER_EFFECT]"),
+    ),
+  ).toEqual([]);
   provider.remove();
   const remounted = await mountRoster(roster, reply());
   remounted.sidebar.sidebarAgentsMode = "roster";

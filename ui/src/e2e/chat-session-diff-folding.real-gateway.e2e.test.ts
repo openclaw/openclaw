@@ -326,7 +326,7 @@ suite.define(() => {
         );
         const refreshStart = await page.evaluate(() => performance.now());
         await panel.getByRole("button", { name: "Refresh changes" }).click();
-        await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
+        await expect.poll(() => fileToggle.locator(".chat-diffstat__add").textContent()).toBe("+3");
         expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
         await fileToggle.click();
         try {
