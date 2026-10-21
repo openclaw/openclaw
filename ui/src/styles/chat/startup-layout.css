@@ -1250,7 +1250,25 @@ openclaw-chat-sidebar-region,
 /* Share the inspector's curve: reserving its column must not jump the transcript
    to the destination before the surface arrives. No text scaling or remount. */
 .sidebar-region--desktop .chat-main__conversation {
+  /* The frame clips the pane; the scrollport may extend through the Details gutter. */
+  overflow: visible;
   transition: inset-inline-end var(--chat-details-motion);
+}
+
+/* Keep the scrollbar at the frame edge while the reading column, composer,
+   and transcript controls retain their clearance from the floating inspector. */
+.sidebar-region--desktop .chat-thread-viewport {
+  width: calc(100% + var(--chat-details-space, 0px));
+}
+
+.sidebar-region--desktop .chat-thread:not(.chat-thread--route-loading) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--chat-details-space, 0px);
+  align-content: start;
+}
+
+.sidebar-region--desktop .chat-thread-inner {
+  grid-column: 1;
 }
 
 .sidebar-region--desktop [data-details-instant] > .chat-main__conversation,
