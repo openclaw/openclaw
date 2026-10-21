@@ -38,7 +38,7 @@ JSON mode.
 ## Notes
 
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
-- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only. Plugin installation and auto-enable writes preserve the authored references without persisting runtime defaults.
+- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only. Plugin installation writes preserve the authored references without persisting runtime defaults; a lookup does not write plugin auto-enable to config.
 - WhatsApp group listing is live. Gateway lookups reuse its owned connection. A standalone command opens the linked session only when no other process owns that account. Otherwise it reports that live groups are unavailable.
 - An already-installed channel plugin can lack directory support. In that case the command reports the unsupported operation. It does not try to reinstall or upgrade the plugin to add support.
 

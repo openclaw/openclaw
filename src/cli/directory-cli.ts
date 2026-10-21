@@ -17,7 +17,6 @@ import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
@@ -96,15 +95,10 @@ export function registerDirectoryCli(program: Command) {
     if (!writeSnapshot) {
       return null;
     }
-    const autoEnabled = applyPluginAutoEnable({
-      config: writeSnapshot.snapshot.sourceConfig,
-      env: process.env,
-    });
-    const sourceConfig = autoEnabled.config;
     const explicitChannel = opts.channel?.trim();
     const resolvedExplicit = explicitChannel
       ? await resolveInstallableChannelPlugin({
-          cfg: sourceConfig,
+          cfg: writeSnapshot.snapshot.sourceConfig,
           runtime: defaultRuntime,
           rawChannel: explicitChannel,
           allowInstall: true,
@@ -112,10 +106,10 @@ export function registerDirectoryCli(program: Command) {
           supports: (plugin) => Boolean(plugin.directory),
         })
       : null;
-    if (resolvedExplicit?.configChanged || autoEnabled.changes.length > 0) {
-      // Commit install records and enablement before directory calls consume the new runtime.
+    if (resolvedExplicit?.configChanged) {
+      // Commit install records before directory calls consume the new runtime.
       await commitConfigWithPendingPluginInstalls({
-        sourceConfig: resolvedExplicit?.cfg ?? sourceConfig,
+        sourceConfig: resolvedExplicit.cfg,
         baseHash: writeSnapshot.snapshot.hash,
         writeOptions: writeSnapshot.writeOptions,
       });

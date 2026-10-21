@@ -267,16 +267,20 @@ describe("registerDirectoryCli", () => {
     expect(runtimeState.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("uses the auto-enabled config snapshot for omitted channel selection", async () => {
-    const autoEnabledConfig = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
-    const self = vi.fn().mockResolvedValue({ id: "self-2", name: "WhatsApp Bot" });
+  it.each([
+    ["omitted", ["self", "--json"]],
+    ["explicit", ["self", "--channel", "whatsapp", "--json"]],
+  ])("does not persist plugin auto-enable during an %s-channel lookup", async (_label, args) => {
+    const sourceConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      channels: { whatsapp: {} },
+    };
+    configSnapshot(sourceConfig);
     mocks.applyPluginAutoEnable.mockReturnValue({
-      config: autoEnabledConfig,
-      changes: ["whatsapp"],
+      config: { ...sourceConfig, plugins: { entries: { codex: { enabled: true } } } },
+      changes: ["codex"],
     });
-    mocks.replaceConfigFile.mockImplementationOnce(async () => {
-      mocks.loadConfig.mockReturnValue(autoEnabledConfig);
-    });
+    const self = vi.fn().mockResolvedValue({ id: "self-2", name: "WhatsApp Bot" });
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "whatsapp",
       plugin: {
@@ -286,25 +290,12 @@ describe("registerDirectoryCli", () => {
       configured: ["whatsapp"],
       source: "single-configured",
     });
+    installDirectory({ self }, "whatsapp");
 
-    await runDirectory(["self", "--json"]);
+    await runDirectory(args);
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: { channels: {} },
-      env: process.env,
-    });
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
-      cfg: autoEnabledConfig,
-      channel: null,
-      accountResolution: "read_only",
-    });
-    expect(self).toHaveBeenCalledTimes(1);
-    expect(firstRecordArg(self).cfg).toBe(autoEnabledConfig);
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledConfig,
-      baseHash: "config-1",
-      writeOptions: {},
-    });
+    expect(self).toHaveBeenCalledOnce();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("inspects an implicit channel before resolving only that account's secrets", async () => {
