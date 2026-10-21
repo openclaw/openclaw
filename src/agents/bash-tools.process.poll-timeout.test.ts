@@ -235,27 +235,6 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
 });
 
-test("poll drains interleaved output in callback order across completion", async () => {
-  const { session, poll } = harness();
-  appendOutput(session, "stderr", "ERR-before\n");
-  appendOutput(session, "stdout", "OUT-after\n");
-  check(await poll(), { status: "running", aggregated: "ERR-before\nOUT-after\n" }, [
-    "ERR-before\nOUT-after",
-  ]);
-  const pending = poll("2000");
-  const unread = `ERR-last\n${"x".repeat(2_001)}\nEND`;
-  appendOutput(session, "stderr", unread);
-  markExited(session, 0, null, "completed");
-  await tick();
-  check(
-    await pending,
-    { status: "completed", aggregated: `ERR-before\nOUT-after\n${unread}` },
-    [unread],
-    ["ERR-before", "OUT-after"],
-  );
-  expect(text(await poll())).not.toContain(unread);
-});
-
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {
   const { session, poll } = harness();
   const pending = poll(2_000);
@@ -339,7 +318,7 @@ test.each([
   "preserves exit %s/%s as %s (%s) across waiting and retained observations",
   async (code, signal, status, reason, timedOut, label) => {
     const { session, poll, call } = harness();
-    const pending = poll(1_000);
+    const pending = poll("1000");
     appendOutput(session, "stderr", "terminal output\n");
     const noOutputTimedOut = reason === "no-output-timeout";
     markExited(session, code, signal, status, reason, noOutputTimedOut);

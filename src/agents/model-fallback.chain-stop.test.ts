@@ -13,6 +13,10 @@ import { FailoverError } from "./failover-error.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { type ModelFallbackStepHandler, runFallbackAttempt } from "./model-fallback-attempt.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
+import {
+  logModelFallbackDecision,
+  type ModelFallbackDecisionParams,
+} from "./model-fallback-observation.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
@@ -46,6 +50,8 @@ let previousConsole: typeof loggingState.rawConsole;
 beforeAll(() => logPaths.setup());
 afterAll(() => logPaths.cleanup());
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-06-16T00:00:00Z") });
+  activeSessionId = `session-${++testSequence}`;
   capture = createDiagnosticLogRecordCapture();
   previousConsole = loggingState.rawConsole;
   warn.mockClear();
@@ -64,6 +70,7 @@ afterEach(async () => {
   loggingState.rawConsole = previousConsole;
   setLoggerOverride(null);
   resetLogger();
+  vi.useRealTimers();
 });
 function fallbackRecords() {
   return capture.records.filter(
@@ -290,4 +297,85 @@ it("sanitizes compact stop diagnostics without exposing error details", async ()
   expect(line).not.toContain(error.message);
   expect(line).not.toContain("private cause");
   expect(JSON.stringify(fallbackRecords())).not.toContain("private diagnostic message");
+});
+
+let activeSessionId = "session-0";
+let testSequence = 0;
+const primary = { provider: "modelstudio", model: "glm-5" };
+const fallback = { provider: "minimax", model: "MiniMax-M2.7-highspeed" };
+
+function logFailure(overrides: Partial<ModelFallbackDecisionParams> = {}) {
+  return logModelFallbackDecision({
+    decision: "candidate_failed",
+    runId: "run-1",
+    sessionId: activeSessionId,
+    requestedProvider: primary.provider,
+    requestedModel: primary.model,
+    candidate: { ...primary, routeOrigin: "requested", routeResolution: "raw" },
+    attempt: 1,
+    reason: "auth",
+    status: 401,
+    code: "invalid_token",
+    error: "HTTP 401: invalid access token or token expired",
+    nextCandidate: { ...fallback, routeOrigin: "configured-fallback", routeResolution: "resolved" },
+    ...overrides,
+  });
+}
+
+function loggedPayloads() {
+  return fallbackRecords().map((record) => record.attributes ?? {});
+}
+
+it.each(["candidate_failed", "candidate_succeeded"] as const)(
+  "keeps %s error details in the returned step, not routine diagnostics",
+  async (decision) => {
+    const marker = "synthetic-private-tool-output";
+    const step = logFailure({
+      decision,
+      error: marker,
+      previousAttempts: [{ provider: "prior", model: "prior", error: marker, reason: "auth" }],
+    });
+    expect(step?.fallbackStepFromFailureDetail).toBe(marker);
+    await capture.flush();
+    expect(fallbackRecords()).not.toHaveLength(0);
+    expect(JSON.stringify(fallbackRecords())).not.toContain(marker);
+    expect(loggedPayloads()[0]).toMatchObject({ status: 401, code: "invalid_token" });
+  },
+);
+
+it("coalesces duplicate auth failures while preserving fallback step fields", async () => {
+  const firstStep = logFailure({ runId: "run-1" });
+  const secondStep = logFailure({ runId: "run-2" });
+  const thirdStep = logFailure({ runId: "run-3" });
+
+  expect(firstStep).toMatchObject({
+    fallbackStepFromModel: "modelstudio/glm-5",
+    fallbackStepToModel: "minimax/MiniMax-M2.7-highspeed",
+    fallbackStepFromFailureReason: "auth",
+  });
+  expect([secondStep, thirdStep]).toEqual([firstStep, firstStep]);
+  await capture.flush();
+  expect(fallbackRecords()).toHaveLength(1);
+  expect(loggedPayloads()[0]).toMatchObject({
+    candidateRouteOrigin: "requested",
+    candidateRouteResolution: "raw",
+    nextCandidateRouteOrigin: "configured-fallback",
+    nextCandidateRouteResolution: "resolved",
+  });
+
+  vi.setSystemTime(Date.now() + 30_000);
+  logFailure({ runId: "run-4" });
+
+  await capture.flush();
+  expect(fallbackRecords()).toHaveLength(2);
+  expect(loggedPayloads()[1]).toMatchObject({ suppressedDuplicateCount: 2 });
+  expect(String(loggedPayloads()[1]?.consoleMessage)).toContain("2 duplicates suppressed");
+});
+
+it("keeps no-session runs visible by scoping coalescing to the run id", async () => {
+  logFailure({ sessionId: undefined, runId: "run-1" });
+  logFailure({ sessionId: undefined, runId: "run-2" });
+
+  await capture.flush();
+  expect(fallbackRecords()).toHaveLength(2);
 });

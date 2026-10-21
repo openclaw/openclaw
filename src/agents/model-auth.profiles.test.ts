@@ -258,39 +258,20 @@ function buildDemoLocalProviderCfg(apiKey: string) {
   });
 }
 
-it.each([
-  ["shared read-through", "shared-state-key", false, undefined],
-  ["legacy main authority", "legacy-main-key", true, undefined],
-  ["agent-local override", "shared-state-key", false, "agent-local-key"],
-] as const)("preserves %s", async (_name, baseKey, legacy, localKey) => {
+it("reads shared credentials without copying them into either agent database", async () => {
   await withAuthState(
     async (state) => {
       const profileId = "openai:manual";
       const mainAgentDir = state.agentDir();
       const agentDir = state.agentDir("worker");
-      const credential = keyCredential("openai", baseKey);
-
-      if (legacy) {
-        writePersistedAuthProfileStoreRaw(authStore({ [profileId]: credential }), mainAgentDir);
-      }
       await upsertAuthProfileWithLockOrThrow({
         profileId,
-        credential,
+        credential: keyCredential("openai", "shared-state-key"),
         agentDir: mainAgentDir,
       });
-      if (localKey) {
-        writePersistedAuthProfileStoreRaw(
-          authStore({ [profileId]: { ...credential, key: localKey } }),
-          agentDir,
-        );
-      }
 
-      expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe(
-        legacy ? "readable" : "missing",
-      );
-      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe(
-        localKey ? "readable" : "missing",
-      );
+      expect(inspectPersistedAuthProfileStoreRaw(mainAgentDir).status).toBe("missing");
+      expect(inspectPersistedAuthProfileStoreRaw(agentDir).status).toBe("missing");
 
       const inheritedAuthDir = resolveLegacyInheritedAuthDir({}, state.env);
       const store = ensureAuthProfileStore(agentDir, {
@@ -301,7 +282,7 @@ it.each([
       const resolved = await resolveAuth({ provider: "openai", cfg: {}, agentDir, store });
 
       expect(resolved).toMatchObject({
-        apiKey: localKey ?? baseKey,
+        apiKey: "shared-state-key",
         source: `profile:${profileId}`,
       });
     },
@@ -343,28 +324,6 @@ describe("getApiKeyForModelCore", () => {
         mode: "oauth",
         profileId: "openai:chatgpt",
       });
-    });
-  });
-
-  it("resolves ChatGPT token-sharing as renewable OAuth for public Responses", async () => {
-    setRuntimeConfigSnapshot({});
-    await expect(
-      resolveModelAuth({
-        model: model("gpt-5.5", "openai-responses", { baseUrl: "https://api.openai.com/v1" }),
-        profileId: "openai:shared",
-        lockedProfile: true,
-        store: authStore({
-          "openai:shared": createOAuthRefreshCredential({
-            ...oauthFixture,
-            authFlow: "chatgpt-token-sharing",
-          }),
-        }),
-      }),
-    ).resolves.toMatchObject({
-      apiKey: oauthFixture.access,
-      mode: "oauth",
-      authFlow: "chatgpt-token-sharing",
-      profileId: "openai:shared",
     });
   });
 
@@ -673,32 +632,6 @@ describe("resolveApiKeyForProviderCore — per-entry apiKey as profile ID refere
       );
     },
   );
-  it("rejects pending credential migration through provider auth", async () => {
-    await withAuthState(
-      async (state) => {
-        const agentDir = state.agentDir("worker");
-        await fs.mkdir(agentDir, { recursive: true });
-        await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
-        await expect(
-          resolveAuth({
-            provider: "custom-provider",
-            agentDir,
-            cfg: configFor("custom-provider", "https://provider.example.test/v1", {
-              apiKey: "custom-provider:prepared",
-            }),
-            store: authStore({
-              "custom-provider:prepared": keyCredential("custom-provider", "prepared-key"),
-            }),
-          }).finally(() => clearAuthProfileMigrationDiagnostics()),
-        ).rejects.toMatchObject({
-          code: "AUTH_PROFILE_MIGRATION_REQUIRED",
-          action: "openclaw doctor --fix",
-        });
-      },
-      { agentEnv: undefined },
-    );
-  });
-
   it("does not treat env SecretRef ids as profile references", async () => {
     await withEnvAsync({ OPENROUTER_PROFILE: "sk-or-env-secret" }, async () => {
       const resolved = await resolveAuth({

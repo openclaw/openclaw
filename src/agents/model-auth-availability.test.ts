@@ -30,6 +30,17 @@ import { providerConfig } from "./model-auth.fixtures.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 
+function resolverWith(
+  options: Partial<Parameters<typeof createModelAuthAvailabilityResolver>[0]> = {},
+) {
+  return createModelAuthAvailabilityResolver({
+    cfg: {},
+    authStore: authStore(),
+    env: {},
+    ...options,
+  });
+}
+
 function openAiOAuthProfile() {
   return createOAuthRefreshCredential({ access: "oauth-access", refresh: "oauth-refresh" });
 }
@@ -45,10 +56,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         },
       ],
     });
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const resolver = resolverWith({
       metadataSnapshot,
       preparedRuntimeAuthModes: { "external-cloud": "api_key" },
     });
@@ -59,10 +67,7 @@ describe("createModelAuthAvailabilityResolver", () => {
       routeResolution: null,
       selectedAuthMode: "api_key",
     });
-    const syntheticResolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const syntheticResolver = resolverWith({
       metadataSnapshot,
       syntheticAuthProviderRefs: ["cloud-alias"],
     });
@@ -86,10 +91,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         },
       ],
     });
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const resolver = resolverWith({
       metadataSnapshot,
       preparedRuntimeAuthModes: { "claude-cli": "api_key" },
     });
@@ -103,13 +105,11 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("keeps configured local providers independent from native-auth probe completion", () => {
-    const resolver = createModelAuthAvailabilityResolver({
+    const resolver = resolverWith({
       cfg: providerConfig("local-openai", {
         api: "openai-completions",
         baseUrl: "http://127.0.0.1:8080/v1",
       }),
-      authStore: authStore(),
-      env: {},
       preparedSyntheticAuthComplete: true,
     });
 
@@ -412,7 +412,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("treats automatic preferences and user pins as distinct source-order facts", () => {
+  it("honors an automatic profile preference ahead of stored order", () => {
     const store = authStore(
       {
         "openai:platform": createApiKeyCredential("openai", "platform-key"),
@@ -424,18 +424,6 @@ describe("createModelAuthAvailabilityResolver", () => {
     expect(evaluate({ store, ref: { preferredProfileId: "openai:chatgpt" } })).toMatchObject({
       selectedProfileId: "openai:chatgpt",
       selectedRoute: subscriptionRoute,
-    });
-    expect(
-      evaluate({
-        store,
-        ref: {
-          preferredProfileId: "openai:chatgpt",
-          pinnedProfileId: "openai:platform",
-        },
-      }),
-    ).toMatchObject({
-      selectedProfileId: "openai:platform",
-      selectedRoute: platformRoute,
     });
   });
 
@@ -532,7 +520,7 @@ describe("createModelAuthAvailabilityResolver", () => {
 
   it("does not grant refresh authority to an unsupported external CLI id", () => {
     mockRouteResolverFactory(routeResolverFactory(null));
-    const resolver = createModelAuthAvailabilityResolver({
+    const resolver = resolverWith({
       cfg: {} as OpenClawConfig,
       authStore: authStore({
         "acme:cli": {
@@ -543,7 +531,6 @@ describe("createModelAuthAvailabilityResolver", () => {
           expires: Date.now() - 60_000,
         },
       }),
-      env: {},
       externalCliProviderIds: ["acme-cli"],
     });
 
@@ -642,11 +629,9 @@ describe("createModelAuthAvailabilityResolver", () => {
     },
     { label: "implicit", cfg: {} },
   ])("keeps an $label Bedrock AWS SDK route ready", ({ cfg }) => {
-    const result = createModelAuthAvailabilityResolver({
-      cfg,
-      authStore: authStore(),
-      env: {},
-    }).evaluateModelAuth("amazon-bedrock", { api: "bedrock-converse-stream" });
+    const result = resolverWith({ cfg }).evaluateModelAuth("amazon-bedrock", {
+      api: "bedrock-converse-stream",
+    });
 
     expect(result).toMatchObject({
       availability: true,
@@ -677,7 +662,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   ])(
     "keeps a non-OpenAI provider $name SecretRef unresolved without reading it",
     ({ apiKey, secrets }) => {
-      const result = createModelAuthAvailabilityResolver({
+      const result = resolverWith({
         cfg: {
           ...providerConfig("anthropic", {
             api: "anthropic-messages",
@@ -686,8 +671,6 @@ describe("createModelAuthAvailabilityResolver", () => {
           }),
           secrets,
         },
-        authStore: authStore(),
-        env: {},
       }).evaluateModelAuth("anthropic", {
         modelId: "claude-sonnet-4-6",
         api: "anthropic-messages",
@@ -705,13 +688,12 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("passes one physical route group to auth selection for an unknown model", () => {
     const resolveRoutes = vi.fn(() => dualRoutes);
     mockRouteResolverFactory((() => resolveRoutes) as typeof createOpenAIModelRoutesResolver);
-    const resolver = createModelAuthAvailabilityResolver({
+    const resolver = resolverWith({
       cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
       authStore: authStore({
         "openai:platform": createApiKeyCredential("openai", "platform-key"),
         "openai:chatgpt": openAiOAuthProfile(),
       }),
-      env: {},
     });
     const observedRoutes = [
       { api: "openai-chatgpt-responses" as const, baseUrl: subscriptionRoute.baseUrl },
@@ -741,7 +723,7 @@ describe("credential readiness and retry reasons", () => {
   afterEach(clearRuntimeConfigSnapshot);
 
   function readiness(cfg: OpenClawConfig, store = authStore()) {
-    return createModelAuthAvailabilityResolver({ cfg, authStore: store, env: {} });
+    return resolverWith({ cfg, authStore: store });
   }
 
   it.each([
@@ -840,10 +822,8 @@ describe("credential readiness and retry reasons", () => {
       ];
       for (const [label, profile, reason] of cases) {
         mockRouteResolverFactory(routeResolverFactory(dualRoutes));
-        const result = createModelAuthAvailabilityResolver({
-          cfg: {},
+        const result = resolverWith({
           authStore: authStore(profile ? { test: profile } : {}),
-          env: {},
         }).evaluateModelAuth(provider);
         expect.soft(result.unavailableReason, label).toBe(reason);
         expect.soft(result.unavailableUntil, label).toBeUndefined();

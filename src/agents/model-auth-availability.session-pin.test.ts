@@ -288,7 +288,12 @@ describe("session account pin admission", () => {
             "openai:platform": apiKey("openai", "fixture-key"),
             "openai:chatgpt": oauth({ access: "fixture-access", refresh: "fixture-refresh" }),
           }),
-        }).evaluateModelAuth("openai", { modelId: "gpt-5.5", pinnedProfileId: pinnedProfile }),
+        }).evaluateModelAuth("openai", {
+          modelId: "gpt-5.5",
+          pinnedProfileId: pinnedProfile,
+          preferredProfileId:
+            pinnedProfile === "openai:platform" ? "openai:chatgpt" : "openai:platform",
+        }),
       ).toMatchObject({
         availability: true,
         selectedProfileId: pinnedProfile,

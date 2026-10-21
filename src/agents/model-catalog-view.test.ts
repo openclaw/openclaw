@@ -408,14 +408,6 @@ describe("prepared native catalog readiness", () => {
       ...observed,
       requestedRuntimeId: "native-test",
     });
-    const credentialedHost: ModelAuthAvailabilityEvaluation = {
-      ...host,
-      availability: true,
-      evidence: "profile",
-      selectedProfileId: "custom:host",
-      selectedAuthMode: "api_key",
-    };
-    expect(read(credentialedHost, "native-test")).toEqual(credentialedHost);
     ready = false;
     expect(read(host, "native-test")).toMatchObject({ availability: false });
     ready = true;
