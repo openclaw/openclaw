@@ -37,74 +37,62 @@ const callbackContext = ["message", "error", "exit"].map((event) => ({
   event,
   context: "constructor-A",
 }));
+const nativeExit = {
+  value: 42,
+  nativeJoined: true,
+  nestedSqliteReleased: true,
+  promiseCallbackRanWhileBlocked: false,
+};
 const cases = [
   {
     ending: "resource-idle-broker",
-    expected: {
-      ...resourceCustody,
-      independentCustodyPreserved: true,
-      idleBrokerJoined: true,
-      sourceReusable: true,
-    },
+    ...resourceCustody,
+    independentCustodyPreserved: true,
+    idleBrokerJoined: true,
+    sourceReusable: true,
   },
   {
     ending: "callback-context",
-    expected: {
-      directSeen: callbackContext,
-      retainedSeen: callbackContext,
-      diagnosticsPreserved: true,
-      joined: true,
-    },
+    directSeen: callbackContext,
+    retainedSeen: callbackContext,
+    diagnosticsPreserved: true,
+    joined: true,
   },
-  {
-    ending: "native-resource",
-    expected: resourceCustody,
-  },
+  { ending: "native-resource", ...resourceCustody },
   {
     ending: "explicit-unbound",
-    expected: {
-      ambientReleased: true,
-      value: 42,
-      nativeJoined: true,
-      idleReused: true,
-      shutdownJoined: true,
-    },
+    ambientReleased: true,
+    value: 42,
+    nativeJoined: true,
+    idleReused: true,
+    shutdownJoined: true,
   },
-  ...(["terminate", "natural-exit"] as const).map((ending) => ({
-    ending,
-    expected: {
-      value: 42,
-      nativeJoined: true,
-      nestedSqliteReleased: true,
-      promiseCallbackRanWhileBlocked: false,
-    },
-  })),
+  { ending: "terminate", ...nativeExit },
+  { ending: "natural-exit", ...nativeExit },
   {
     ending: "generation",
-    expected: {
-      order: [
-        "operation",
-        "owner-close-start",
-        "queued-worker-started",
-        "worker-usable-during-close",
-        "native-joined",
-        "sibling-owner-close",
-        "sibling-native-joined",
-        "release",
-      ],
-      nativeJoined: true,
-      siblingJoined: true,
-      supervisorJoined: true,
-      directoryReleased: true,
-      terminalSamplesRejected: true,
-    },
+    order: [
+      "operation",
+      "owner-close-start",
+      "queued-worker-started",
+      "worker-usable-during-close",
+      "native-joined",
+      "sibling-owner-close",
+      "sibling-native-joined",
+      "release",
+    ],
+    nativeJoined: true,
+    siblingJoined: true,
+    supervisorJoined: true,
+    directoryReleased: true,
+    terminalSamplesRejected: true,
   },
 ] as const;
 
 describe("retained native worker lifecycle", () => {
   it.each(cases)(
     "preserves native custody during $ending",
-    async ({ ending, expected }) => {
+    async ({ ending, ...expected }) => {
       expect(await runFixture(ending)).toEqual({ ending, ...expected });
     },
     20_000,

@@ -15,6 +15,15 @@ type NativeControl = {
   throwIfCancelled: () => void;
 };
 
+type Outcome = PromiseSettledResult<number> | undefined;
+
+function assertRejected(result: Outcome, expected: Error | string) {
+  assert.equal(result?.status, "rejected");
+  if (result?.status === "rejected") {
+    assert.equal(typeof expected === "string" ? result.reason.code : result.reason, expected);
+  }
+}
+
 if (!isMainThread) {
   serveWorkerTasks<number>(async (input, _channel, control?: NativeControl) => {
     if (input === "successor") {
@@ -88,11 +97,7 @@ if (!isMainThread) {
   });
   try {
     if (ending === "exit") {
-      const result = await outcome;
-      assert.equal(result?.status, "rejected");
-      if (result?.status === "rejected") {
-        assert.equal(result.reason.code, "unavailable");
-      }
+      assertRejected(await outcome, "unavailable");
       assert.equal(firstTerminatedWorker().threadId, -1);
       await pool.run("successor", {});
       console.log(JSON.stringify({ ending, exitJoined: true }));
@@ -144,14 +149,7 @@ if (!isMainThread) {
       }
       const result = await outcome;
       const settledAt = performance.now();
-      assert.equal(result?.status, "rejected");
-      if (result?.status === "rejected") {
-        if (ending === "timeout") {
-          assert.equal(result.reason.code, "timeout");
-        } else {
-          assert.equal(result.reason, reason);
-        }
-      }
+      assertRejected(result, ending === "timeout" ? "timeout" : reason);
       assert.equal(firstTerminatedWorker().threadId, -1, "cancellation must join native exit");
       assert.equal(Atomics.load(gate, 2), outsideNative ? 0 : 1, "native call completion");
       assert.equal(Atomics.load(gate, 3), 0, "cancellation must stop the next page");
