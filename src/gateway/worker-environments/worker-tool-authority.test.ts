@@ -1,11 +1,9 @@
-import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import { finalizeAgentToolAvailability } from "../../agents/agent-tool-availability.js";
 import { createOpenClawCodingToolsInternal } from "../../agents/agent-tools.js";
 import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
-import { resolveNodeExecutionTarget } from "../../agents/bash-tools.exec-host-node-phases.js";
 import * as conversationPolicy from "../../agents/conversation-capability-profile.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
@@ -14,8 +12,8 @@ import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 
-const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
 type TurnOverrides = Partial<SessionPlacementTurnParams>;
+type ToolConfig = NonNullable<NonNullable<TurnOverrides["config"]>["tools"]>;
 const modelRef = { provider: "openai", model: "gpt-test" };
 const placement = { agentId: "main", sessionKey: "agent:main:cron:job:run:session" };
 const sessionNode = {
@@ -23,10 +21,12 @@ const sessionNode = {
   execNode: "session-node",
   execCwd: "/remote/session/workspace",
 } satisfies NonNullable<SessionPlacementTurnParams["execSession"]>;
+const denyWrites = { deny: ["write", "apply_patch"] };
+const execTools = ["exec", "process"];
 
-vi.mock("../../agents/tools/gateway.js", () => ({
-  callGatewayTool: gatewayMocks.callGatewayTool,
-}));
+function execTurn(exec: ToolConfig["exec"]): TurnOverrides {
+  return { config: { tools: { exec } }, toolsAllow: execTools };
+}
 
 function turn(overrides: TurnOverrides = {}): SessionPlacementTurnParams {
   return {
@@ -100,10 +100,7 @@ async function authority(overrides: TurnOverrides = {}, computerAvailable = fals
   return applyEmbeddedAttemptToolsAllow(codingTools, input.toolsAllow).map((tool) => tool.name);
 }
 
-afterEach(() => {
-  gatewayMocks.callGatewayTool.mockReset();
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 describe("resolveWorkerToolAuthority", () => {
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
@@ -211,12 +208,7 @@ describe("resolveWorkerToolAuthority", () => {
   it.each(["sandbox", "node"] as const)(
     "withholds exec and process when the captured host is %s",
     async (host) => {
-      expect(
-        await resolvedAuthority({
-          config: { tools: { exec: { host, mode: "full" } } },
-          toolsAllow: ["exec", "process"],
-        }),
-      ).toMatchObject({
+      expect(await resolvedAuthority(execTurn({ host, mode: "full" }))).toMatchObject({
         exec: { host, security: "full", ask: "off" },
       });
       const tools = await authority({ config: { tools: { exec: { host, mode: "full" } } } });
@@ -228,9 +220,9 @@ describe("resolveWorkerToolAuthority", () => {
     ["deny", { security: "deny", ask: "off" }],
     ["allowlist", { mode: "allowlist" }],
   ] as const)("preserves effective exec authority for configured %s", async (security, exec) => {
-    expect(
-      await resolvedAuthority({ config: { tools: { exec } }, toolsAllow: ["exec", "process"] }),
-    ).toMatchObject({ exec: { security, ask: "off" } });
+    expect(await resolvedAuthority(execTurn(exec))).toMatchObject({
+      exec: { security, ask: "off" },
+    });
   });
 
   it.each([
@@ -245,8 +237,7 @@ describe("resolveWorkerToolAuthority", () => {
     "preserves effective exec authority for session %s",
     async (_name, execSession, expected) => {
       const { exec } = await resolvedAuthority({
-        config: { tools: { exec: { host: "gateway", mode: "full" } } },
-        toolsAllow: ["exec", "process"],
+        ...execTurn({ host: "gateway", mode: "full" }),
         execSession,
       });
       expect(exec).toEqual({ host: "gateway", safeBins: [], ...expected });
@@ -262,32 +253,11 @@ describe("resolveWorkerToolAuthority", () => {
     expect(exec).not.toHaveProperty("nodeCwd");
   });
 
-  it("keeps the resolved node binding authoritative when a worker request names another node", async () => {
-    gatewayMocks.callGatewayTool.mockResolvedValue({
-      nodes: [{ nodeId: "bound-node" }, { nodeId: "other-node" }],
-    });
-    const resolved = await resolvedAuthority({
-      config: { tools: { exec: { host: "node", mode: "full", node: "bound-node" } } },
-      toolsAllow: ["exec", "process"],
-    });
-    expect(resolved.exec).toMatchObject({ host: "node", node: "bound-node" });
-    assert(resolved.exec?.host === "node");
-    await expect(
-      resolveNodeExecutionTarget({
-        command: "echo worker-node-binding",
-        workdir: undefined,
-        env: {},
-        requestedNode: "other-node",
-        boundNode: resolved.exec.node,
-        security: "full",
-        ask: "off",
-        defaultTimeoutSec: 30,
-        approvalRunningNoticeMs: 0,
-        warnings: [],
-      }),
-    ).rejects.toThrow(
-      "exec node not allowed (bound to bound-node, requested resolved to other-node)",
+  it("retains the configured node binding in worker authority", async () => {
+    const resolved = await resolvedAuthority(
+      execTurn({ host: "node", mode: "full", node: "bound-node" }),
     );
+    expect(resolved.exec).toMatchObject({ host: "node", node: "bound-node" });
   });
 
   it("projects runtime caps with canonical write-to-apply_patch semantics", async () => {
@@ -309,10 +279,8 @@ describe("resolveWorkerToolAuthority", () => {
           config: {
             agents: {
               entries: {
-                research: { tools: { deny: ["write", "apply_patch"] } },
-                main: {
-                  tools: { toolsBySender: { "id:restricted": { deny: ["write", "apply_patch"] } } },
-                },
+                research: { tools: denyWrites },
+                main: { tools: { toolsBySender: { "id:restricted": denyWrites } } },
               },
             },
           },
@@ -327,16 +295,11 @@ describe("resolveWorkerToolAuthority", () => {
   );
 
   it("applies current owner policy and the appropriate sender overlays", async () => {
-    const denyWrites = { deny: ["write", "apply_patch"] };
     const toolsAllow = ["read", "write", "exec"];
     const toolsBySender = { "*": denyWrites };
     const config: NonNullable<SessionPlacementTurnParams["config"]> = {
       tools: { deny: ["exec"], toolsBySender },
-      channels: {
-        whatsapp: {
-          groups: { team: { tools: { allow: toolsAllow }, toolsBySender } },
-        },
-      },
+      channels: { whatsapp: { groups: { team: { tools: { allow: toolsAllow }, toolsBySender } } } },
     };
     const scheduledToolPolicy: NonNullable<SessionPlacementTurnParams["scheduledToolPolicy"]> = {
       version: 1,

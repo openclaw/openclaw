@@ -72,6 +72,33 @@ function seedPrevious() {
 const user = (content: string, timestamp = 0) => makeAgentUserMessage({ content, timestamp });
 const assistant = (text: string, timestamp = 0) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp });
+const runtimeContext = (customType = "openclaw.runtime-context"): AgentMessage => ({
+  role: "custom",
+  customType,
+  content: "runtime context",
+  display: false,
+  details:
+    customType === "openclaw.system-update"
+      ? { kind: "runtime-context", turnScoped: true }
+      : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+  timestamp: 1,
+});
+function toolActivity(id: string, text: string, isError = false): AgentMessage[] {
+  return [
+    makeAgentAssistantMessage({
+      content: [{ type: "toolCall", id, name: "exec", arguments: { command: "effect-once" } }],
+      stopReason: "toolUse",
+    }),
+    {
+      role: "toolResult",
+      toolCallId: id,
+      toolName: "exec",
+      content: [{ type: "text", text }],
+      isError,
+      timestamp: 2,
+    },
+  ];
+}
 
 const prior = [
   { role: "user", text: "previous request" },
@@ -304,40 +331,10 @@ describe("worker detached model-context branch parity", () => {
               if (candidate === 1) {
                 const messages: AgentMessage[] = [];
                 if (customType) {
-                  messages.push({
-                    role: "custom",
-                    customType,
-                    content: "runtime context",
-                    display: false,
-                    details:
-                      customType === "openclaw.system-update"
-                        ? { kind: "runtime-context", turnScoped: true }
-                        : { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-                    timestamp: 1,
-                  });
+                  messages.push(runtimeContext(customType));
                 }
                 if (withToolActivity) {
-                  messages.push(
-                    makeAgentAssistantMessage({
-                      content: [
-                        {
-                          type: "toolCall",
-                          id: "effect",
-                          name: "exec",
-                          arguments: { command: "effect-once" },
-                        },
-                      ],
-                      stopReason: "toolUse",
-                    }),
-                    {
-                      role: "toolResult",
-                      toolCallId: "effect",
-                      toolName: "exec",
-                      content: [{ type: "text", text: "effect completed" }],
-                      isError: false,
-                      timestamp: 2,
-                    },
-                  );
+                  messages.push(...toolActivity("effect", "effect completed"));
                 }
                 messages.push(
                   makeAgentAssistantMessage({
@@ -406,14 +403,7 @@ describe("worker detached model-context branch parity", () => {
     const admittedLeaf = inputRecorder.getAdmissionReceipt()?.entryId;
     expect(admittedLeaf).toEqual(expect.any(String));
     const writer = await SessionManager.openAsync(sessionTarget);
-    const context: AgentMessage = {
-      role: "custom",
-      customType: "openclaw.runtime-context",
-      content: "runtime context",
-      display: false,
-      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
-      timestamp: 1,
-    };
+    const context = runtimeContext();
     await writer.appendMessageAsync(context);
     if (suffix !== "context-only") {
       await writer.appendMessageAsync(attachSessionTranscriptRunId(assistant("own output"), runId));
@@ -440,28 +430,10 @@ describe("worker detached model-context branch parity", () => {
     const originalLeaf = original.getAdmissionReceipt()?.entryId;
     expect(originalLeaf).toEqual(expect.any(String));
     const manager = await SessionManager.openAsync(sessionTarget);
-    await manager.appendMessageAsync(
-      makeAgentAssistantMessage({
-        content: [
-          {
-            type: "toolCall",
-            id: "interrupted",
-            name: "exec",
-            arguments: { command: "effect-once" },
-          },
-        ],
-        stopReason: "toolUse",
-      }),
-    );
     const unknown = "The node disconnected; outcome unknown. Verify state before retrying.";
-    await manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "interrupted",
-      toolName: "exec",
-      content: [{ type: "text", text: unknown }],
-      isError: true,
-      timestamp: 2,
-    });
+    for (const message of toolActivity("interrupted", unknown, true)) {
+      await manager.appendMessageAsync(message);
+    }
     const committedLeaf = await manager.appendMessageAsync(assistant("Preserved partial reply", 3));
     expect(committedLeaf).not.toBe(originalLeaf);
     const stale = await launchProbe("original-recorder-borrowed", {
