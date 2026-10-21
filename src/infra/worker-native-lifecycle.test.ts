@@ -27,45 +27,36 @@ async function runFixture(ending: Ending): Promise<unknown> {
   return JSON.parse(stdout);
 }
 
-const resourceCustody = {
-  firstCloseRejected: true,
-  sameOwnerRetried: true,
-  childClosedBeforeStopped: true,
-  sqliteReusable: true,
-};
+const trueFields = (keys: string) => Object.fromEntries(keys.split(" ").map((key) => [key, true]));
+const resourceCustody = trueFields(
+  "firstCloseRejected sameOwnerRetried childClosedBeforeStopped sqliteReusable",
+);
 const callbackContext = ["message", "error", "exit"].map((event) => ({
   event,
   context: "constructor-A",
 }));
 const nativeExit = {
   value: 42,
-  nativeJoined: true,
-  nestedSqliteReleased: true,
+  ...trueFields("nativeJoined nestedSqliteReleased"),
   promiseCallbackRanWhileBlocked: false,
 };
 const cases = [
   {
     ending: "resource-idle-broker",
     ...resourceCustody,
-    independentCustodyPreserved: true,
-    idleBrokerJoined: true,
-    sourceReusable: true,
+    ...trueFields("independentCustodyPreserved idleBrokerJoined sourceReusable"),
   },
   {
     ending: "callback-context",
     directSeen: callbackContext,
     retainedSeen: callbackContext,
-    diagnosticsPreserved: true,
-    joined: true,
+    ...trueFields("diagnosticsPreserved joined"),
   },
   { ending: "native-resource", ...resourceCustody },
   {
     ending: "explicit-unbound",
-    ambientReleased: true,
     value: 42,
-    nativeJoined: true,
-    idleReused: true,
-    shutdownJoined: true,
+    ...trueFields("ambientReleased nativeJoined idleReused shutdownJoined"),
   },
   { ending: "terminate", ...nativeExit },
   { ending: "natural-exit", ...nativeExit },
@@ -81,11 +72,9 @@ const cases = [
       "sibling-native-joined",
       "release",
     ],
-    nativeJoined: true,
-    siblingJoined: true,
-    supervisorJoined: true,
-    directoryReleased: true,
-    terminalSamplesRejected: true,
+    ...trueFields(
+      "nativeJoined siblingJoined supervisorJoined directoryReleased terminalSamplesRejected",
+    ),
   },
 ] as const;
 

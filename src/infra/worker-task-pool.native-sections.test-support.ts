@@ -5,15 +5,11 @@ import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread, threadId, Worker, workerData } from "node:worker_threads";
 import { deflateSync } from "node:zlib";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 export type NativeCancellation = "abort" | "timeout" | "close";
-
-type NativeControl = {
-  runNativeSection: <T>(operation: () => T | Promise<T>) => Promise<T>;
-  throwIfCancelled: () => void;
-};
 
 type Outcome = PromiseSettledResult<number> | undefined;
 
@@ -25,7 +21,7 @@ function assertRejected(result: Outcome, expected: Error | string) {
 }
 
 if (!isMainThread) {
-  serveWorkerTasks<number>(async (input, _channel, control?: NativeControl) => {
+  serveWorkerTasks<number>(async (input, _channel, control?: WorkerTaskControl) => {
     if (input === "successor") {
       return threadId;
     }
@@ -76,10 +72,10 @@ if (!isMainThread) {
     maxPendingTasks: 2,
   });
   const terminate = mock.method(Worker.prototype, "terminate");
-  const firstTerminatedWorker = () => {
+  const assertJoined = () => {
     const worker = terminate.mock.calls[0]?.this;
     assert.ok(worker instanceof Worker);
-    return worker;
+    assert.equal(worker.threadId, -1, "cancellation must join native exit before replacement");
   };
   if (ending === "timeout") {
     mock.timers.enable({ apis: ["setTimeout"] });
@@ -98,7 +94,7 @@ if (!isMainThread) {
   try {
     if (ending === "exit") {
       assertRejected(await outcome, "unavailable");
-      assert.equal(firstTerminatedWorker().threadId, -1);
+      assertJoined();
       await pool.run("successor", {});
       console.log(JSON.stringify({ ending, exitJoined: true }));
     } else {
@@ -107,15 +103,10 @@ if (!isMainThread) {
       let successorStarted = false;
       const successor = pool.run(() => {
         successorStarted = true;
-        assert.equal(
-          firstTerminatedWorker().threadId,
-          -1,
-          "replacement must follow native worker exit",
-        );
+        assertJoined();
         return "successor";
       }, {});
       const successorOutcome = Promise.allSettled([successor]);
-      const cancelledAt = performance.now();
       let closed: Promise<void> | undefined;
       let closeSettled = false;
       if (ending === "abort") {
@@ -142,30 +133,20 @@ if (!isMainThread) {
         assert.equal(pool.getSnapshot().pendingTasks, ending === "close" ? 1 : 2);
       }
 
-      const releasedAt = performance.now();
       if (!outsideNative) {
         Atomics.store(gate, 1, 1);
         Atomics.notify(gate, 1);
       }
       const result = await outcome;
-      const settledAt = performance.now();
       assertRejected(result, ending === "timeout" ? "timeout" : reason);
-      assert.equal(firstTerminatedWorker().threadId, -1, "cancellation must join native exit");
+      assertJoined();
       assert.equal(Atomics.load(gate, 2), outsideNative ? 0 : 1, "native call completion");
       assert.equal(Atomics.load(gate, 3), 0, "cancellation must stop the next page");
       const [next] = await successorOutcome;
       assert.equal(next?.status, ending === "close" ? "rejected" : "fulfilled");
       assert.equal(successorStarted, ending !== "close");
       await closed;
-      console.log(
-        JSON.stringify({
-          ending,
-          outsideNative,
-          cancelled: true,
-          cancelToSettlementMs: settledAt - cancelledAt,
-          ...(outsideNative ? {} : { nativeReleaseToSettlementMs: settledAt - releasedAt }),
-        }),
-      );
+      console.log(JSON.stringify({ ending, outsideNative, cancelled: true }));
     }
   } finally {
     Atomics.store(gate, 1, 1);

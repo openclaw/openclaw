@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createInterface } from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
@@ -16,7 +17,6 @@ export function createNativeWorkerResource(
   assert.ok(typeof input.databasePath === "string");
   assert.ok(ownerPort);
   const sendOwner = ownerPort.postMessage.bind(ownerPort);
-  const sendTarget = port.postMessage.bind(port);
   sendOwner({ type: "constructed", brokerPid: process.pid });
   let attempts = 0;
   const permission = createDeferredCore();
@@ -59,11 +59,7 @@ export function createNativeWorkerResource(
   port.on("message", (message) => {
     assert.ok(isRecord(message));
     assert.equal(child, undefined, "one native child belongs to this resource owner");
-    const owned = spawn(
-      process.execPath,
-      [
-        "--eval",
-        `const { DatabaseSync } = require("node:sqlite");
+    const script = `const { DatabaseSync } = require("node:sqlite");
          const db = new DatabaseSync(${JSON.stringify(databasePath)});
          db.exec("PRAGMA journal_mode=WAL; CREATE TABLE proof(value); INSERT INTO proof VALUES(1)");
          db.exec("BEGIN IMMEDIATE; INSERT INTO proof VALUES(2)");
@@ -74,11 +70,8 @@ export function createNativeWorkerResource(
          });
          setTimeout(() => process.exit(97), ${childWatchdogMs}).unref();
          const bootstrapKeys = ["OPENCLAW_SPAWN_RESOURCE_ENDPOINT", "OPENCLAW_SPAWN_RESOURCE_SECRET", "OPENCLAW_SPAWN_RESOURCE_GENERATION"];
-         process.stdout.write("environment:" + JSON.stringify(bootstrapKeys.filter(key => Object.hasOwn(process.env, key))) + "\\n");
-         process.stdout.write("ready\\n");`,
-      ],
-      { stdio: "pipe", windowsHide: true },
-    );
+         process.stdout.write(JSON.stringify(bootstrapKeys.filter(key => Object.hasOwn(process.env, key))) + "\\n");`;
+    const owned = spawn(process.execPath, ["--eval", script], { stdio: "pipe", windowsHide: true });
     child = owned;
     if (owned.pid !== undefined) {
       sendOwner({ type: "child", pid: owned.pid });
@@ -92,18 +85,10 @@ export function createNativeWorkerResource(
         closed.reject(new Error(`Native SQLite child exited with code ${code}`));
       }
     });
-    let output = "";
-    let ready = false;
-    owned.stdout.on("data", (chunk: Buffer) => {
-      output += chunk.toString("utf8");
-      if (!ready && output.includes("ready\n")) {
-        ready = true;
-        const environment = output.split("\n").find((line) => line.startsWith("environment:"));
-        assert.ok(environment);
-        const keys: unknown = JSON.parse(environment.slice("environment:".length));
-        sendOwner({ type: "child-environment", keys });
-        sendTarget({ ready: true, pid: owned.pid });
-      }
+    createInterface({ input: owned.stdout }).once("line", (line) => {
+      const keys: unknown = JSON.parse(line);
+      sendOwner({ type: "child-environment", keys });
+      port.postMessage({ ready: true, pid: owned.pid });
     });
     owned.stderr.on("data", (chunk: Buffer) => process.stderr.write(chunk));
   });
