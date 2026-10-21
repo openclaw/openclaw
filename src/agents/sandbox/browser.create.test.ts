@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync } from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createSandboxBrowserTestHarness } from "./browser.create.test-helpers.js";
 import {
@@ -26,7 +26,6 @@ describe("ensureSandboxBrowser create args", () => {
     requireDockerCreateArgs,
     snapshotDockerCreateEnvEntries,
     requireDockerCreateEnvEntries,
-    requireValue,
     latestBridgeResolved,
     envValue,
     bridgeFixture,
@@ -130,7 +129,7 @@ describe("ensureSandboxBrowser create args", () => {
           throw new Error("docker name conflict");
         }
         created = true;
-        const envEntries = requireValue(
+        const envEntries = expectDefined(
           snapshotDockerCreateEnvEntries(args),
           "docker create environment file",
         );
@@ -209,7 +208,7 @@ describe("ensureSandboxBrowser create args", () => {
     const common = { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } };
 
     await ensureTestSandboxBrowser(common);
-    const initialBridge = await requireValue(
+    const initialBridge = await expectDefined(
       bridgeMocks.startBrowserBridgeServer.mock.results[0],
       "bridge startup",
     ).value;
@@ -266,7 +265,6 @@ describe("ensureSandboxBrowser create args", () => {
   );
 
   it("keeps a stalled CDP request inside the browser startup deadline", async () => {
-    const sockets = new Set<Socket>();
     const requestReceived = createDeferredCore();
     const responseClosed = createDeferredCore();
     const probeAdmitted = createDeferredCore();
@@ -289,114 +287,96 @@ describe("ensureSandboxBrowser create args", () => {
       }
     };
     let requestPath: string | undefined;
-    const server = createServer((req, res) => {
-      requestPath = req.url;
-      req.resume();
-      res.on("close", () => responseClosed.resolve());
-      requestReceived.resolve();
-      // Accept the actual CDP request but never send response headers.
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const cdpPort = (server.address() as AddressInfo).port;
-    dockerMocks.readDockerPort.mockImplementation(async (_containerName: string, port: number) =>
-      port === 9222 ? cdpPort : port === 6080 ? 49101 : null,
-    );
-    bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
-      probeAdmitted.resolve();
-      await params.onEnsureAttachTarget?.({});
-      throw new Error("expected CDP startup to time out before bridge creation");
-    });
-
-    const cfg = buildConfig(false);
-    cfg.browser.autoStartTimeoutMs = 250;
-    let settled = false;
-    const errors: unknown[] = [];
-    let startupResult: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
-    try {
-      // Keep the production deadline clock still while native HTTP establishes
-      // the fixture's stalled request. Advance that same 250ms deadline only
-      // after real request admission; never replace fetch or its abort signal.
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const startup = ensureTestSandboxBrowser({ cfg });
-      startupResult = startup.then(
-        () => {
-          settled = true;
-          return { ok: true as const };
-        },
-        (error: unknown) => {
-          settled = true;
-          return { ok: false as const, error };
-        },
-      );
-      const earlySettlement = startupResult.then((result) => {
-        throw result.ok
-          ? new Error("Sandbox browser startup completed before the stalled request")
-          : result.error;
-      });
-      // Do not charge mount/container preparation to the network-admission
-      // guard, or hide an actual startup error behind an absent request.
-      await Promise.race([probeAdmitted.promise, earlySettlement]);
-      await waitForNetwork(
-        Promise.race([requestReceived.promise, earlySettlement]),
-        "CDP request was not received",
-      );
-
-      expect(requestPath).toBe("/json/version");
-      await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs - 1);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await waitForNetwork(
-        startupResult,
-        "CDP startup did not settle at its deadline",
-      );
-      if (result.ok) {
-        throw new Error("expected stalled CDP startup to fail");
-      }
-      expect(result.error).toBeInstanceOf(Error);
-      expect((result.error as Error).message).toContain(
-        `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
-      );
-      expect(dockerMocks.execDocker).toHaveBeenCalledWith(
-        ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
-        { allowFailure: true },
-      );
-      await waitForNetwork(responseClosed.promise, "Aborted CDP response did not close");
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      if (startupResult && !settled) {
-        await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs);
-        await waitForNetwork(startupResult, "CDP startup did not settle during fixture cleanup");
-      }
-    } catch (error) {
-      errors.push(error);
-    } finally {
-      vi.useRealTimers();
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+    await withServer(
+      (req, res) => {
+        requestPath = req.url;
+        req.resume();
+        res.on("close", () => responseClosed.resolve());
+        requestReceived.resolve();
+        // Accept the actual CDP request but never send response headers.
+      },
+      async (baseUrl) => {
+        const cdpPort = Number(new URL(baseUrl).port);
+        dockerMocks.readDockerPort.mockImplementation(
+          async (_containerName: string, port: number) =>
+            port === 9222 ? cdpPort : port === 6080 ? 49101 : null,
+        );
+        bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+          probeAdmitted.resolve();
+          await params.onEnsureAttachTarget?.({});
+          throw new Error("expected CDP startup to time out before bridge creation");
         });
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "CDP test and fixture cleanup failed");
-    }
+
+        const cfg = buildConfig(false);
+        cfg.browser.autoStartTimeoutMs = 250;
+        let settled = false;
+        const errors: unknown[] = [];
+        let startupResult: Promise<unknown> | undefined;
+        try {
+          // Keep the production deadline clock still while native HTTP establishes
+          // the fixture's stalled request. Advance that same 250ms deadline only
+          // after real request admission; never replace fetch or its abort signal.
+          vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+          startupResult = ensureTestSandboxBrowser({ cfg })
+            .then(
+              () => new Error("Sandbox browser startup completed before the stalled request"),
+              (error: unknown) => error,
+            )
+            .finally(() => {
+              settled = true;
+            });
+          const earlySettlement = startupResult.then((error) => {
+            throw error;
+          });
+          // Do not charge mount/container preparation to the network-admission
+          // guard, or hide an actual startup error behind an absent request.
+          await Promise.race([probeAdmitted.promise, earlySettlement]);
+          await waitForNetwork(
+            Promise.race([requestReceived.promise, earlySettlement]),
+            "CDP request was not received",
+          );
+
+          expect(requestPath).toBe("/json/version");
+          await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs - 1);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          const result = await waitForNetwork(
+            startupResult,
+            "CDP startup did not settle at its deadline",
+          );
+          expect(result).toBeInstanceOf(Error);
+          expect((result as Error).message).toContain(
+            `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+          );
+          expect(dockerMocks.execDocker).toHaveBeenCalledWith(
+            ["rm", "-f", "openclaw-sbx-browser-session-test-0661d10a"],
+            { allowFailure: true },
+          );
+          await waitForNetwork(responseClosed.promise, "Aborted CDP response did not close");
+        } catch (error) {
+          errors.push(error);
+        }
+        try {
+          if (startupResult && !settled) {
+            await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs);
+            await waitForNetwork(
+              startupResult,
+              "CDP startup did not settle during fixture cleanup",
+            );
+          }
+        } catch (error) {
+          errors.push(error);
+        } finally {
+          vi.useRealTimers();
+        }
+        if (errors.length === 1) {
+          throw errors[0];
+        }
+        if (errors.length > 1) {
+          throw new AggregateError(errors, "CDP test and fixture cleanup failed");
+        }
+      },
+    );
   });
 
   it("passes explicit cdpSourceRange as an additional relay filter", async () => {

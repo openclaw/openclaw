@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
@@ -176,7 +177,7 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
   }
 
   function requireDockerCreateArgs(): string[] {
-    return requireValue(
+    return expectDefined(
       findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create"),
       "docker create args",
     );
@@ -188,18 +189,11 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
   }
 
   function requireDockerCreateEnvEntries(): string[] {
-    return requireValue(capturedDockerCreateEnvEntries, "docker create environment file");
-  }
-
-  function requireValue<T>(value: T | null | undefined, label: string): T {
-    if (value === null || value === undefined) {
-      throw new Error(`expected ${label}`);
-    }
-    return value;
+    return expectDefined(capturedDockerCreateEnvEntries, "docker create environment file");
   }
 
   function envValue(key: string, entries = requireDockerCreateEnvEntries()) {
-    const value = requireValue(
+    const value = expectDefined(
       entries.find((entry) => entry.startsWith(`${key}=`)),
       key,
     );
@@ -207,7 +201,7 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
   }
 
   function reuseCreatedBrowser() {
-    const entry = requireValue(
+    const entry = expectDefined(
       registryMocks.updateBrowserRegistry.mock.calls.at(-1)?.[0],
       "browser registry entry",
     );
@@ -228,7 +222,7 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
   }
 
   function latestBridgeResolved(): Record<string, unknown> {
-    return requireValue(
+    return expectDefined(
       bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0].resolved,
       "resolved browser config",
     );
@@ -288,7 +282,6 @@ export function createSandboxBrowserTestHarness(scopeKey = "session:test") {
     requireDockerCreateArgs,
     snapshotDockerCreateEnvEntries,
     requireDockerCreateEnvEntries,
-    requireValue,
     latestBridgeResolved,
     envValue,
     reuseCreatedBrowser,

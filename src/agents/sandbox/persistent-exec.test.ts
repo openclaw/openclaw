@@ -243,6 +243,13 @@ async function fixture() {
   const owner = createSandboxPersistentExecOwner({ scheduler });
   const controller = new AbortController();
   const releaseAuthority = vi.fn();
+  const expectCustody = async (record: Partial<SandboxPersistentExecRecord>) => {
+    expect(await store.list()).toEqual([expect.objectContaining(record)]);
+  };
+  const expectReleased = async () => {
+    expect(await store.list()).toEqual([]);
+    expect(releaseAuthority).toHaveBeenCalledOnce();
+  };
   const input: StartInput = {
     ownerKey: `cron:${source.storeKey}:${job.id}`,
     source,
@@ -314,6 +321,8 @@ async function fixture() {
     exited,
     start,
     seedCustody,
+    expectCustody,
+    expectReleased,
   };
 }
 
@@ -321,20 +330,14 @@ it("records custody before allocation and the exact private container before STA
   const f = await fixture();
   f.prepare.mockImplementationOnce(async ({ attemptId }) => {
     f.receipt.attemptId = attemptId;
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ attemptId, phase: "reserved", receipt: null }),
-    ]);
+    await f.expectCustody({ attemptId, phase: "reserved", receipt: null });
     expect(f.preparation.start).not.toHaveBeenCalled();
     return f.preparation;
   });
   f.preparation.start.mockImplementationOnce(async (admit) => {
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "prepared", receipt: f.receipt }),
-    ]);
+    await f.expectCustody({ phase: "prepared", receipt: f.receipt });
     await admit();
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "running", receipt: f.receipt }),
-    ]);
+    await f.expectCustody({ phase: "running", receipt: f.receipt });
   });
   const run = await f.start();
   expect(f.prepare).toHaveBeenCalledWith(
@@ -342,8 +345,7 @@ it("records custody before allocation and the exact private container before STA
   );
   expect(f.preparation.start).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
+  await f.expectReleased();
 });
 
 it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as const)(
@@ -449,7 +451,7 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       await expect(run.waitForExtinction?.()).rejects.toThrow(
         ending === "checkpoint retry" ? "conflict" : "runtime resume failed",
       );
-      expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "stopped" })]);
+      await f.expectCustody({ phase: "stopped" });
       expect(projection.assertCurrent).toThrow("authority changed");
       if (ending === "checkpoint retry") {
         expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("human edit\n");
@@ -471,10 +473,9 @@ it.each(["stop", "exit", "retirement", "checkpoint retry", "resume retry"] as co
       await run.waitForExtinction?.();
     }
     expect(await fs.readFile(path.join(canonical, "source.txt"), "utf8")).toBe("stream edit\n");
-    expect(await f.store.list()).toEqual([]);
+    await f.expectReleased();
     expect(paused).toBe(false);
     expect(f.preparation.start).toHaveBeenCalledOnce();
-    expect(f.releaseAuthority).toHaveBeenCalledOnce();
   },
 );
 
@@ -507,8 +508,7 @@ it.each(["caller", "retirement"] as const)(
     }
     expect(f.preparation.start).not.toHaveBeenCalled();
     expect(f.preparation.stop).toHaveBeenCalledTimes(1);
-    expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
-    expect(await f.store.list()).toEqual([]);
+    await f.expectReleased();
   },
 );
 
@@ -542,9 +542,7 @@ it.each(["caller", "retirement"] as const)(
       cancellation === "caller" ? "stream stop requested" : "has been cancelled",
     );
     await entered.promise;
-    expect(await f.store.list()).toEqual([
-      expect.objectContaining({ phase: "running", receipt: f.receipt }),
-    ]);
+    await f.expectCustody({ phase: "running", receipt: f.receipt });
     const retiring =
       cancellation === "retirement"
         ? settleSandboxPersistentExecsForRetirement({ containerName: f.registry.containerName })
@@ -557,8 +555,7 @@ it.each(["caller", "retirement"] as const)(
       await expect(retiring).resolves.toEqual({ unresolved: [], localOwnerKeys: [] });
     }
     expect(f.preparation.stop).toHaveBeenCalledOnce();
-    expect(f.releaseAuthority).toHaveBeenCalledOnce();
-    expect(await f.store.list()).toEqual([]);
+    await f.expectReleased();
   },
 );
 
@@ -613,7 +610,7 @@ it("keeps live custody acquired while orphan discovery is pending", async () => 
   });
   await f.owner.recover();
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
-  expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "reserved" })]);
+  await f.expectCustody({ phase: "reserved" });
 });
 
 it.each([
@@ -676,18 +673,14 @@ it("retains stopped custody through checkpoint failure and registry replacement 
   };
   await replaceRegistry(replacement);
   await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
   expect(withSettledLocalWorkspaceProjectionPath).not.toHaveBeenCalled();
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockRejectedValueOnce(
     new Error("checkpoint unavailable"),
   );
   await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledWith(
     expect.objectContaining({
       projectionPath: f.registry.workspaceDir,
@@ -703,9 +696,7 @@ it("retains stopped custody through checkpoint failure and registry replacement 
     },
   );
   await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
   await replaceRegistry(f.registry);
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
@@ -714,9 +705,7 @@ it("retains stopped custody through checkpoint failure and registry replacement 
     },
   );
   await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "stopped", receipt: f.receipt }),
-  ]);
+  await f.expectCustody({ phase: "stopped", receipt: f.receipt });
   await f.owner.recover();
   await f.owner.recover();
   expect(await f.store.list()).toEqual([]);
@@ -729,9 +718,7 @@ it("retains uncertain stop custody and refuses a replacement until the same owne
   const run = await f.start();
   f.preparation.stop.mockRejectedValue(new Error("daemon unavailable"));
   await expect(run.waitForExtinction?.()).rejects.toThrow("daemon unavailable");
-  expect(await f.store.list()).toEqual([
-    expect.objectContaining({ phase: "uncertain", receipt: f.receipt }),
-  ]);
+  await f.expectCustody({ phase: "uncertain", receipt: f.receipt });
   expect(f.finalize).not.toHaveBeenCalled();
   await expect(f.start({ releaseAuthority: vi.fn() })).rejects.toThrow("daemon unavailable");
   expect(f.prepare).toHaveBeenCalledTimes(1);
@@ -739,12 +726,11 @@ it("retains uncertain stop custody and refuses a replacement until the same owne
   f.preparation.stop.mockResolvedValue(stopped(f.receipt));
   await f.owner.recover();
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
+  await f.expectReleased();
   expect(f.preparation.stop).toHaveBeenCalledTimes(3);
   expect(stopDockerPersistentExec).not.toHaveBeenCalled();
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
 });
 
 it.each(["source", "registry", "parent container"] as const)(
@@ -807,10 +793,10 @@ it("joins an in-flight authority check and workspace finalization before releasi
   const settlement = run.waitForExtinction?.();
   try {
     expect(f.preparation.stop).not.toHaveBeenCalled();
-    expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "running" })]);
+    await f.expectCustody({ phase: "running" });
     checked.resolve();
     await finalizing.promise;
-    expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "stopped" })]);
+    await f.expectCustody({ phase: "stopped" });
     expect(f.releaseAuthority).not.toHaveBeenCalled();
   } finally {
     checked.resolve();
@@ -822,10 +808,9 @@ it("joins an in-flight authority check and workspace finalization before releasi
     }
   }
   await run.waitForExtinction?.();
-  expect(await f.store.list()).toEqual([]);
+  await f.expectReleased();
   expect(f.preparation.stop).toHaveBeenCalledTimes(1);
   expect(withSettledLocalWorkspaceProjectionPath).toHaveBeenCalledOnce();
   expect(f.finalize).not.toHaveBeenCalled();
-  expect(f.releaseAuthority).toHaveBeenCalledTimes(1);
   expect(f.scheduler.nextWakeAtMs).toBeNull();
 });

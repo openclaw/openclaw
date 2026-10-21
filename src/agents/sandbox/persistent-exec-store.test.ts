@@ -299,14 +299,7 @@ it("retains cleanup through registry writes and deletion, then reopens without a
   const prepared = accepted(
     await store.transition({ ...expected(reserved), phase: "prepared", receipt }, assertCurrent),
   );
-  const entry = {
-    containerName: reservation.containerName,
-    backendId: "docker",
-    sessionKey: "agent:main",
-    image: "fixture:image",
-    createdAtMs: 1,
-    lastUsedAtMs: 1,
-  };
+  const { workspaceDir: _workspaceDir, ...entry } = registryEntry;
   await updateRegistry(entry);
   await updateRegistry({ ...entry, lastUsedAtMs: 2 });
   await removeRegistryEntry(entry.containerName);
