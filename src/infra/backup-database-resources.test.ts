@@ -4,9 +4,11 @@ import { expect, it } from "vitest";
 import { createBackupResourcePlan } from "../commands/backup-resource-inventory.js";
 import { resolveActivatedPluginBackupInventory } from "../plugins/manifest-backup-resources.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { expectDatabaseRows } from "./backup-create-family.test-support.js";
+import {
+  declarePluginSqliteResources,
+  expectDatabaseRows,
+} from "./backup-create-family.test-support.js";
 import {
   createBackupSqliteSnapshotPlan,
   discoverBackupDatabasePaths,
@@ -20,25 +22,10 @@ it("captures every retained account and token database under a disabled plugin's
   await withOpenClawTestState(
     { scenario: "minimal", prefix: "declared-state-roots-" },
     async (state) => {
-      await fs.mkdir(state.path("plugin"));
-      const fixture = createColdPluginFixture({
-        rootDir: state.path("plugin"),
-        pluginId: "account-owner",
-        manifest: {
-          backupResources: [
-            {
-              disposition: "include",
-              scope: "state",
-              relativePath: "matrix",
-              databaseFamily: "state",
-            },
-          ],
-        },
+      const config = await declarePluginSqliteResources(state, "matrix", {
+        enabled: false,
+        databaseFamily: "state",
       });
-      const config = {
-        plugins: { enabled: false, load: { paths: [fixture.rootDir] } },
-      };
-      await state.writeConfig(config);
       const files = [
         "active/server__user/1111111111111111",
         "active/server__user/2222222222222222",

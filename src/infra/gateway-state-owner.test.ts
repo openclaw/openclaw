@@ -36,6 +36,19 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
+function gatewayOwner(databasePath: string, root: string) {
+  return acquireGatewayStateOwner({
+    databasePath,
+    payload: {
+      pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
+      createdAt: new Date().toISOString(),
+      configPath: path.join(root, "openclaw.json"),
+      role: "gateway",
+    },
+  });
+}
+
 describe("Gateway state ownership", () => {
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
@@ -223,16 +236,7 @@ describe("Gateway state ownership", () => {
   it("retains accepted nested maintenance after the root stops lending", async () => {
     await withTempDir("openclaw-state-owner-", async (root) => {
       const databasePath = path.join(root, "state", "openclaw.sqlite");
-      const owner = acquireGatewayStateOwner({
-        databasePath,
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
-          role: "gateway",
-        },
-      });
+      const owner = gatewayOwner(databasePath, root);
       const accepted = tryBorrowGatewayStateOwner(databasePath);
       if (!accepted) {
         owner.release();
@@ -368,16 +372,7 @@ describe("Gateway state ownership", () => {
   it("reports a read-detected owner loss with one restart instruction", async () => {
     await withTempDir("openclaw-owner-read-loss-", async (root) => {
       const databasePath = path.join(root, "state", "openclaw.sqlite");
-      const owner = acquireGatewayStateOwner({
-        databasePath,
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          createdAt: new Date().toISOString(),
-          configPath: path.join(root, "openclaw.json"),
-          role: "gateway",
-        },
-      });
+      const owner = gatewayOwner(databasePath, root);
       const original = fs.readFileSync(owner.path);
       try {
         fs.writeFileSync(owner.path, "replacement");

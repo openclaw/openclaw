@@ -184,23 +184,16 @@ it("cleans up scratch and preserves its original native token-open failure", asy
       return directory;
     },
   );
-  let scratch: Awaited<ReturnType<typeof createScratch>> | undefined;
-  try {
-    const outcome = await createScratch(root).then(
-      (value) => ({ scratch: value }),
-      (failure: unknown) => ({ failure }),
-    );
-    scratch = "scratch" in outcome ? outcome.scratch : undefined;
-    const failure = "failure" in outcome ? outcome.failure : undefined;
-    expect(nativeFailure).toBeInstanceOf(Error);
-    expect(failure).toBe(nativeFailure);
-    expect(scratch).toBeUndefined();
-    await expect(fs.readdir(root)).resolves.toEqual([]);
-  } finally {
-    if (scratch) {
-      await expect(finishScratch(scratch, () => {})).resolves.toBeUndefined();
-    }
-  }
+  const outcome = await createScratch(root).then(
+    async (scratch) => {
+      await finishScratch(scratch, () => {});
+      return scratch;
+    },
+    (failure: unknown) => failure,
+  );
+  expect(nativeFailure).toBeInstanceOf(Error);
+  expect(outcome).toBe(nativeFailure);
+  await expect(fs.readdir(root)).resolves.toEqual([]);
 });
 
 it.each([
@@ -318,9 +311,8 @@ it("preserves retired scratch for maintenance instead of admitting it", async ()
     return acquire(directory, mode, options);
   });
   await expect(createScratch(root)).rejects.toBeInstanceOf(tokens.SqliteStagingRetiredError);
-  const report = await maintainBackupScratch({ roots: [root], repair: true });
-  expect(report.reclaimed).toEqual([retired]);
-  expect(report.active).toEqual([]);
+  const report = await inspect(root);
+  expect(report).toMatchObject({ reclaimed: [retired], active: [] });
 });
 
 it("preserves unexpected contents and symbolic links instead of adopting them as scratch", async () => {
@@ -437,9 +429,11 @@ it("reclaims abandoned archives while a live transaction protects its files", as
     await expectContents(path.join(abandoned.directory, payloadName), "synthetic backup input");
 
     const repair = await inspect(root);
-    expect(repair.reclaimed).toEqual([abandoned.directory]);
-    expect(repair.active).toEqual([active.directory]);
-    expect(repair.warnings).toEqual([expect.stringContaining(legacy)]);
+    expect(repair).toMatchObject({
+      reclaimed: [abandoned.directory],
+      active: [active.directory],
+      warnings: [expect.stringContaining(legacy)],
+    });
     await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
     for (const directory of [active.directory, legacy, rollback]) {
       await expectContents(path.join(directory, payloadName), "synthetic backup input");
