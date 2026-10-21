@@ -52,19 +52,22 @@ beforeAll(async () => {
               protocol: request.headers["mcp-protocol-version"],
             });
           }
-          return response.writeHead(request.method === "DELETE" ? deleteStatus : 405).end();
+          response.writeHead(request.method === "DELETE" ? deleteStatus : 405).end();
+          return;
         }
         void (async () => {
           const message = (await readJson(request)) as { id?: string | number; method: string };
           if (message.method === "notifications/initialized") {
-            return response.writeHead(202).end();
+            response.writeHead(202).end();
+            return;
           }
           if (message.method === "initialize") {
             response.setHeader("mcp-session-id", SESSION_ID);
           }
           const result = rpcResults[message.method];
           if (!Object.hasOwn(rpcResults, message.method)) {
-            return response.writeHead(400).end();
+            response.writeHead(400).end();
+            return;
           }
           response.setHeader("content-type", "application/json");
           response.end(

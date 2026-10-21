@@ -9,7 +9,7 @@ import { renderAppearance } from "./config-view.test-support.tsx";
 
 const catalog = (...themes: ThemeCatalogEntry[]) => ({ error: null, themes });
 const theme = (
-  id: string,
+  id: ThemeCatalogEntry["id"],
   name: string,
   overrides: Partial<ThemeCatalogEntry> = {},
 ): ThemeCatalogEntry => ({

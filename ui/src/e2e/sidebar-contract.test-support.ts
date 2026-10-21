@@ -3,9 +3,9 @@ import { expect } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 
-export const sidebarSession = <Label extends string | undefined>(
+export const sidebarSession = (
   key: string,
-  label: Label,
+  label: string | undefined,
   fields: Partial<GatewaySessionRow> & { updatedAt: number },
 ) => ({ key, label, kind: "direct", ...fields }) satisfies GatewaySessionRow;
 

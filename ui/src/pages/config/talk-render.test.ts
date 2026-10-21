@@ -14,6 +14,7 @@ type TalkProps = Parameters<typeof Talk>[0];
 const modelPicker = (container: HTMLElement) =>
   expectDefined(
     container.querySelector<SelectPicker>("openclaw-select-picker.model-picker__select"),
+    "Missing model picker",
   );
 
 function renderFixture(

@@ -73,6 +73,7 @@ const rowFor = (container: HTMLElement, title: string) =>
     getQueriesForElement(container)
       .getAllByText(title, { selector: ".settings-row__title" })[0]!
       .closest<HTMLElement>(".settings-row"),
+    `Missing settings row: ${title}`,
   );
 
 const selectedSegment = (container: HTMLElement) =>
@@ -80,9 +81,10 @@ const selectedSegment = (container: HTMLElement) =>
 
 it("defaults phases on unless explicitly disabled", () => {
   const container = renderInto({ enabled: true, phases: { deep: { enabled: false } } });
-  const { getByText } = getQueriesForElement(container);
+  const queries = getQueriesForElement(container);
   const checked = (title: string) =>
-    getByText(title, { selector: ".settings-section__heading" })
+    queries
+      .getByText(title, { selector: ".settings-section__heading" })
       .closest(".settings-section")
       ?.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked;
   expect(["Light phase", "Deep phase", "REM phase"].map(checked)).toEqual([true, false, true]);
@@ -108,7 +110,10 @@ it("shows the advanced execution model as the inherited model default", async ()
 
   expect(row.textContent).toContain("Default: openai/gpt-5.6");
   expect(row.querySelector('[role="option"][data-value="anthropic/claude-sonnet"]')).not.toBeNull();
-  const custom = expectDefined(row.querySelector<HTMLInputElement>(".model-picker__custom"));
+  const custom = expectDefined(
+    row.querySelector<HTMLInputElement>(".model-picker__custom"),
+    "Missing custom model input",
+  );
   expect(custom.hidden).toBe(false);
   editNumber(custom, "vendor/model with spaces", true);
   expect(onPatch).toHaveBeenCalledWith(["model"], "vendor/model with spaces");

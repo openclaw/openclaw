@@ -73,7 +73,7 @@ export function createUpdatesViewDom() {
   const [current, publish] = createSignal<UpdatesViewProps | undefined>(undefined, {
     equals: false,
   });
-  const { container, queryAllByText } = mountSolid(() =>
+  const view = mountSolid(() =>
     createComponent(Show, {
       get when() {
         return current() !== undefined;
@@ -87,15 +87,15 @@ export function createUpdatesViewDom() {
   );
   const row = (title: string) =>
     expectDefined(
-      queryAllByText(title, { selector: ".settings-row__title" })[0]?.closest<HTMLElement>(
-        ".settings-row",
-      ),
+      view
+        .queryAllByText(title, { selector: ".settings-row__title" })[0]
+        ?.closest<HTMLElement>(".settings-row"),
       `Missing settings row: ${title}`,
     );
   return {
-    container,
+    container: view.container,
     row,
-    automaticUpdatesControl() {
+    automaticUpdatesControl: () => {
       const automaticRow = row("Automatic updates");
       return {
         row: automaticRow,
@@ -105,7 +105,7 @@ export function createUpdatesViewDom() {
         ),
       };
     },
-    mountUpdates(props: UpdatesViewProps) {
+    mountUpdates: (props: UpdatesViewProps) => {
       publish(props);
       flush();
     },

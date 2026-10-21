@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   other,
@@ -15,7 +16,7 @@ const mine = () =>
 it.each(["visible", "bounded"])(
   "keeps solo legacy sessions and settles when their participants are %s",
   async (participants) => {
-    const legacy = {
+    const legacy: GatewaySessionRow = {
       key: "agent:main:legacy",
       agentId: "main",
       kind: "direct" as const,

@@ -82,7 +82,8 @@ it("main reports tracked violations with paths relative to cwd", () => {
   const rootDir = createRepository({ "src/conflict.ts": conflict });
   const scriptPath = path.resolve(__dirname, "../../scripts/check-no-conflict-markers.mjs");
   const result = spawnSync(process.execPath, [scriptPath], { cwd: rootDir, encoding: "utf8" });
-  expect(result).toMatchObject({ error: undefined, status: 1 });
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(1);
   expect(result.stderr).toContain("Found unresolved merge conflict markers:");
   expect(result.stderr).toContain("- src/conflict.ts:1,3,5");
 });

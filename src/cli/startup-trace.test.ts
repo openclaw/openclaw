@@ -18,7 +18,8 @@ function readTimelineEvents(timelinePath: string): Record<string, unknown>[] {
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const timelineEvent = (type: string, name: string, fields = {}) =>
   expect.objectContaining({ type, name: `entry.${name}`, phase: "cli.startup", ...fields });
-const messages = () => vi.mocked(process.stderr.write).mock.calls.map(([line]) => String(line));
+const stderrWrite = vi.fn<typeof process.stderr.write>(() => true);
+const messages = () => stderrWrite.mock.calls.map(([line]) => String(line));
 const makeTrace = (args: string[], source: "entry" | "cli.main" = "entry") =>
   createGatewayDispatchStartupTrace(["node", "openclaw", ...args], source);
 
@@ -33,7 +34,8 @@ function timelineFixture(diagnostics: string) {
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", "0");
-  vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  stderrWrite.mockClear();
+  vi.spyOn(process.stderr, "write").mockImplementation(stderrWrite);
 });
 afterEach(() => {
   flushDiagnosticsTimeline();

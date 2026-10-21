@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type * as Handoff from "./update-managed-service-handoff.js";
 
-export const {
+const {
   cancelManagedServiceUpdateHandoffMock,
   checkTelemetryUpdateMock,
   detectRespawnSupervisorMock,
@@ -87,3 +87,16 @@ vi.mock("./update-managed-service-handoff.js", async () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
   transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
 }));
+
+export {
+  cancelManagedServiceUpdateHandoffMock,
+  checkTelemetryUpdateMock,
+  detectRespawnSupervisorMock,
+  getRuntimeConfigMock,
+  runUpdateFailureTriageMock,
+  refreshRemoteModelCatalogMock,
+  scheduleGatewayRestartMock,
+  startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoffMock,
+  versionMock,
+};
