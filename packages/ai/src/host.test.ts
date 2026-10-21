@@ -5,6 +5,18 @@ import { createApiRegistry, type ApiRegistry } from "./api-registry.js";
 import type { AiTransformTransportMessages } from "./host.js";
 
 const CUSTOM_API = "openclaw-openai-chatgpt-responses-transport";
+const makeModel = <T extends Api>(api: T, provider: string, baseUrl: string): Model<T> => ({
+  id: "text-only",
+  name: "Text Only",
+  api,
+  provider,
+  baseUrl,
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8_192,
+  maxTokens: 1_024,
+});
 
 function registerCustomApi(registry: ApiRegistry, api: Api, _streamFn: StreamFn): boolean {
   if (registry.getApiProvider(api)) {
@@ -33,18 +45,11 @@ describe("AI transport host configuration", () => {
     configureAiTransportHost({});
 
     const registry = createApiRegistry();
-    const sourceModel: Model<"openai-chatgpt-responses"> = {
-      id: "gpt-test",
-      name: "GPT Test",
-      api: "openai-chatgpt-responses",
-      provider: "openai",
-      baseUrl: "https://chatgpt.com/backend-api",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8_192,
-      maxTokens: 1_024,
-    };
+    const sourceModel = makeModel(
+      "openai-chatgpt-responses",
+      "openai",
+      "https://chatgpt.com/backend-api",
+    );
     const preparedModel = prepareModelForSimpleCompletion({
       apiRegistry: registry,
       model: sourceModel,
@@ -75,18 +80,7 @@ describe("AI transport host configuration", () => {
   it("uses package transcript normalization until the embedding host overrides it", async () => {
     const { configureAiTransportHost, getAiTransportHost } = await import("./host.js");
     configureAiTransportHost({});
-    const model: Model<"anthropic-messages"> = {
-      id: "claude-text-only",
-      name: "Claude Text Only",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 8_192,
-      maxTokens: 1_024,
-    };
+    const model = makeModel("anthropic-messages", "anthropic", "https://api.anthropic.com");
     const messages = [
       {
         role: "user" as const,

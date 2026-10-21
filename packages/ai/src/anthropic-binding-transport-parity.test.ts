@@ -5,6 +5,24 @@ import {
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
 
+const bindingBeta = "thinking-binding-controls-2026-08-01";
+const disabledThinking = { type: "disabled" as const };
+const budgetThinking = { type: "enabled" as const, budget_tokens: 1024 };
+
+function withTransformations(start?: unknown[], delta?: unknown[], nestedDelta = false) {
+  return anthropicEvents.map((event) => {
+    if (event.type === "message_start" && start) {
+      return Object.assign({}, event, {
+        message: Object.assign({}, event.message, { input_transformations: start }),
+      });
+    }
+    const transformations = { input_transformations: delta };
+    return event.type === "message_delta" && delta
+      ? Object.assign({}, event, nestedDelta ? { message: transformations } : transformations)
+      : event;
+  });
+}
+
 describe("Anthropic thinking-binding transport parity", () => {
   registerParityHostLifecycle();
 
@@ -18,22 +36,12 @@ describe("Anthropic thinking-binding transport parity", () => {
     { name: "Kimi", model: { provider: "kimi-coding" }, enabled: false },
     { name: "budget thinking", model: { id: "claude-sonnet-4-5" }, enabled: false },
     { name: "disabled thinking", reasoning: "off" as const, enabled: false },
-    {
-      name: "hook-disabled thinking",
-      thinkingOverride: { type: "disabled" as const },
-      enabled: false,
-    },
-    {
-      name: "hook-budget thinking",
-      thinkingOverride: { type: "enabled" as const, budget_tokens: 1024 },
-      enabled: false,
-    },
+    { name: "hook-disabled thinking", thinkingOverride: disabledThinking, enabled: false },
+    { name: "hook-budget thinking", thinkingOverride: budgetThinking, enabled: false },
   ])("gates thinking-binding controls equally for $name", async ({ enabled, ...options }) => {
     for (const implementation of ["provider", "transport"] as const) {
       const { payload, headers } = await captureAnthropicRequest(implementation, options);
-      expect(
-        headers.get("anthropic-beta")?.includes("thinking-binding-controls-2026-08-01") ?? false,
-      ).toBe(enabled);
+      expect(headers.get("anthropic-beta")?.includes(bindingBeta) ?? false).toBe(enabled);
       expect(headers.get("anthropic-beta")).not.toBe("");
       expect(payload.thinking).toEqual(
         enabled
@@ -53,7 +61,7 @@ describe("Anthropic thinking-binding transport parity", () => {
         ?.split(",")
         .map((beta) => beta.trim());
       expect(betas?.filter((beta) => beta === "synthetic-beta")).toHaveLength(1);
-      expect(betas).toContain("thinking-binding-controls-2026-08-01");
+      expect(betas).toContain(bindingBeta);
     }
   });
 
@@ -76,17 +84,11 @@ describe("Anthropic thinking-binding transport parity", () => {
         reason: index % 2 ? "model_binding_mismatch" : "prefix_binding_mismatch",
         path: `messages.${index}.content.0`,
       }));
-      const events = anthropicEvents.map((event) => {
-        if (event.type === "message_start" && location !== "delta") {
-          return Object.assign({}, event, {
-            message: Object.assign({}, event.message, { input_transformations: transformations }),
-          });
-        }
-        if (event.type === "message_delta" && location !== "start") {
-          return Object.assign({}, event, { message: { input_transformations: transformations } });
-        }
-        return event;
-      });
+      const events = withTransformations(
+        location !== "delta" ? transformations : undefined,
+        location !== "start" ? transformations : undefined,
+        true,
+      );
       for (const implementation of ["provider", "transport"] as const) {
         const { warnings } = await captureAnthropicRequest(implementation, { events });
         expect(warnings).toHaveLength(1);
@@ -100,29 +102,18 @@ describe("Anthropic thinking-binding transport parity", () => {
   );
 
   it("ignores unknown thinking transformations and replaces start telemetry at final delta", async () => {
-    const events = anthropicEvents.map((event) => {
-      if (event.type === "message_start") {
-        return Object.assign({}, event, {
-          message: Object.assign({}, event.message, {
-            input_transformations: [
-              {
-                type: "thinking_dropped",
-                reason: "prefix_binding_mismatch",
-                path: "messages.1.content.0",
-              },
-            ],
-          }),
-        });
-      }
-      return event.type === "message_delta"
-        ? Object.assign({}, event, {
-            input_transformations: [
-              { type: "future", reason: "prefix_binding_mismatch", path: "messages.1.content.0" },
-              { type: "thinking_dropped", reason: "future", path: "messages.1.content.0" },
-            ],
-          })
-        : event;
-    });
+    const drop = {
+      type: "thinking_dropped",
+      reason: "prefix_binding_mismatch",
+      path: "messages.1.content.0",
+    };
+    const events = withTransformations(
+      [drop],
+      [
+        { ...drop, type: "future" },
+        { ...drop, reason: "future" },
+      ],
+    );
     for (const implementation of ["provider", "transport"] as const) {
       expect((await captureAnthropicRequest(implementation, { events })).warnings).toEqual([]);
     }

@@ -6,6 +6,15 @@ import {
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
 
+const clearingEdit = (trigger = 60_000, clearAtLeast = 12_500, exclude_tools: string[] = []) => ({
+  type: "clear_tool_uses_20250919",
+  trigger: { type: "input_tokens", value: trigger },
+  keep: { type: "tool_uses", value: 3 },
+  clear_at_least: { type: "input_tokens", value: clearAtLeast },
+  exclude_tools,
+  clear_tool_inputs: false,
+});
+
 describe("Anthropic server context management parity", () => {
   registerParityHostLifecycle();
 
@@ -19,22 +28,7 @@ describe("Anthropic server context management parity", () => {
         ...options,
         cacheTtlPruning: {},
       });
-      expect(payload.context_management).toEqual(
-        enabled
-          ? {
-              edits: [
-                {
-                  type: "clear_tool_uses_20250919",
-                  trigger: { type: "input_tokens", value: 60_000 },
-                  keep: { type: "tool_uses", value: 3 },
-                  clear_at_least: { type: "input_tokens", value: 12_500 },
-                  exclude_tools: [],
-                  clear_tool_inputs: false,
-                },
-              ],
-            }
-          : undefined,
-      );
+      expect(payload.context_management).toEqual(enabled ? { edits: [clearingEdit()] } : undefined);
       expect(
         headers.get("anthropic-beta")?.includes("context-management-2025-06-27") ?? false,
       ).toBe(enabled);
@@ -60,12 +54,7 @@ describe("Anthropic server context management parity", () => {
         cacheTtlPruning: {},
       });
       expect(payload.context_management).toEqual({
-        edits: [
-          expect.objectContaining({
-            trigger: { type: "input_tokens", value: 50_000 },
-            clear_at_least: { type: "input_tokens", value: 12_500 },
-          }),
-        ],
+        edits: [expect.objectContaining(clearingEdit(50_000))],
       });
       expect(headers.get("anthropic-beta")).toContain("context-management-2025-06-27");
       expect(headers.get("anthropic-beta") ?? "").not.toContain("thinking-binding-controls");
@@ -94,14 +83,7 @@ describe("Anthropic server context management parity", () => {
       });
       expect(payload.context_management).toEqual({
         edits: [
-          {
-            type: "clear_tool_uses_20250919",
-            trigger: { type: "input_tokens", value: 300_000 },
-            keep: { type: "tool_uses", value: 3 },
-            clear_at_least: { type: "input_tokens", value: 50_000 },
-            exclude_tools: ["exec", "retired_tool", "search", "write"],
-            clear_tool_inputs: false,
-          },
+          clearingEdit(300_000, 50_000, ["exec", "retired_tool", "search", "write"]),
           {
             type: "compact_20260112",
             trigger: { type: "input_tokens", value: 650_000 },
@@ -127,25 +109,20 @@ describe("Anthropic server context management parity", () => {
   });
 
   it("logs bounded aggregate clearing counts from the final message delta", async () => {
+    const applied_edits = [
+      ...[
+        [8, 50_000],
+        [2, 5_000],
+      ].map(([cleared_tool_uses, cleared_input_tokens]) => ({
+        type: "clear_tool_uses_20250919",
+        cleared_tool_uses,
+        cleared_input_tokens,
+      })),
+      { type: "future", content: "must not log" },
+    ];
     const events = anthropicEvents.map((event) =>
       event.type === "message_delta"
-        ? Object.assign({}, event, {
-            context_management: {
-              applied_edits: [
-                {
-                  type: "clear_tool_uses_20250919",
-                  cleared_tool_uses: 8,
-                  cleared_input_tokens: 50_000,
-                },
-                {
-                  type: "clear_tool_uses_20250919",
-                  cleared_tool_uses: 2,
-                  cleared_input_tokens: 5_000,
-                },
-                { type: "future", content: "must not log" },
-              ],
-            },
-          })
+        ? Object.assign({}, event, { context_management: { applied_edits } })
         : event,
     );
     for (const implementation of ["provider", "transport"] as const) {
