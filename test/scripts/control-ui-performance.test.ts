@@ -11,7 +11,6 @@ import {
   evaluateControlUiPerformanceBudgets as evaluateBudgets,
   extractControlUiStartupAssetPaths as extractStartupAssets,
   formatControlUiPerformanceReport as formatReport,
-  runControlUiPerformanceCheck as checkPerformance,
 } from "../../scripts/check-control-ui-performance.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -184,19 +183,6 @@ describe("Control UI performance budgets", () => {
     }
   });
 
-  const looseBudgets = {
-    startupJsRequests: 10,
-    chatBootJsRequests: 35,
-    newBootJsRequests: 35,
-    chatBootJsGzipBytes: 100_000,
-    newBootJsGzipBytes: 100_000,
-    startupCssRequests: 10,
-    startupJsGzipBytes: 100_000,
-    startupCssGzipBytes: 100_000,
-    largestJsGzipBytes: 100_000,
-    largestCssGzipBytes: 100_000,
-  };
-
   const startupBaseline = (startupJsGzipBytes: number) => ({
     startupJsGzipBytes,
     reason: "test baseline",
@@ -266,35 +252,26 @@ describe("Control UI performance budgets", () => {
     );
     writeAsset("chat-d.js", 180, 50, 40);
     const smaller = collectMetrics(distDir);
-    expect(formatReport(smaller, looseBudgets, null, 512, metrics)).toContain(
+    expect(formatReport(smaller, undefined, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
     );
   });
 
-  it("returns actionable violations and includes them in the report", () => {
+  it("returns actionable custom-budget violations", () => {
     const { distDir } = createStartupFixture();
     const metrics = collectMetrics(distDir);
     const budgets = {
-      ...looseBudgets,
+      ...CONTROL_UI_PERFORMANCE_BUDGETS,
       startupJsRequests: 0,
-      startupCssRequests: 1,
       startupJsGzipBytes: 30,
-      startupCssGzipBytes: 20,
       largestJsGzipBytes: 35,
-      largestCssGzipBytes: 20,
     };
-
     expect(evaluateBudgets(metrics, budgets).map((entry) => entry.metric)).toEqual([
       "startup JS requests",
       "startup JS gzip",
       "largest JS gzip",
     ]);
-    expectReportText(
-      formatReport(metrics, budgets),
-      "startup JS gzip: 40 B exceeds 30 B",
-      "route boot accounting: unavailable (build has no route preload templates)",
-    );
-    expect(metrics.routeBoot).toBeNull();
+    expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
   it("rejects the renderer in route boot preloads", () => {
@@ -327,7 +304,13 @@ describe("Control UI performance budgets", () => {
     const report = jsonCli(createCliFixture(46_097));
     expect(report.violations).toEqual([]);
     expect(report.warnings).toEqual([expect.stringContaining("CSS")]);
-    expectReportText(report.report, "46097 B", "5103 B");
+    expect(report.metrics.routeBoot).toBeNull();
+    expectReportText(
+      report.report,
+      "46097 B",
+      "5103 B",
+      "route boot accounting: unavailable (build has no route preload templates)",
+    );
   });
 
   it.each<[string, number, number, number, number, string | null]>([
@@ -517,19 +500,6 @@ describe("Control UI performance budgets", () => {
     }
   });
 
-  it("fails closed when the startup baseline is malformed", () => {
-    const { distDir } = createStartupFixture();
-    const baselinePath = path.join(distDir, "baseline.json");
-    fs.writeFileSync(baselinePath, '{"startupJsGzipBytes":"not-a-number"}\n');
-
-    expect(() => checkPerformance(distDir, looseBudgets, baselinePath)).toThrow(
-      /Cannot read Control UI startup budget baseline .*--update-baseline/u,
-    );
-    expect(() => checkPerformance(distDir, looseBudgets, baselinePath)).toThrow(
-      `Regenerate it with ${baselineUpdateCommand}.`,
-    );
-  });
-
   it("updates the baseline from generated or explicitly measured metrics", () => {
     const { run, baselinePath, distDir } = createCliFixture();
     const update = (args: string[] = []) => {
@@ -581,6 +551,13 @@ describe("Control UI performance budgets", () => {
     const report = run();
     expect(report.status, report.stderr).toBe(exitCode);
     const output = exitCode === 0 ? report.stdout : report.stderr;
+    if (exitCode !== 0) {
+      expectReportText(
+        output,
+        "Cannot read Control UI startup budget baseline",
+        `Regenerate it with ${baselineUpdateCommand}.`,
+      );
+    }
     const command = output.match(/node --import [^\r\n]*?--reason "<reason>"/u)?.[0];
     // Never spawn an old raw-tsx hint: it could access the host's shared cache.
     expect(command).toBe(baselineUpdateCommand);

@@ -957,17 +957,15 @@ ensure_vm_running`,
   });
 
   it("accepts leading package-manager separators and still honors later terminators", () => {
-    expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
-    expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
-    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    for (const parseArgs of [parseLinuxSmokeArgs, parseMacosSmokeArgs]) {
+      expect(parseArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+      expect(parseArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe("fresh");
+    }
     expect(parseMacosSmokeArgs([]).vmNameExplicit).toBe(false);
     expect(parseMacosSmokeArgs(["--vm", "macOS"]).vmNameExplicit).toBe(true);
-    expect(parseMacosSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
-    expect(parseLinuxSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
-    expect(parseWindowsSmokeArgs(["--host-port", "65535"]).hostPort).toBe(65535);
     expect(parseWindowsSmokeArgs([]).snapshotHint).toBe("pre-openclaw-native-e2e-");
     for (const parseArgs of [parseMacosSmokeArgs, parseLinuxSmokeArgs, parseWindowsSmokeArgs]) {
+      expect(parseArgs(["--host-port", "65535"]).hostPort).toBe(65535);
       expect(parseArgs(["--npm-registry", "http://192.0.2.2:48123"]).npmRegistry).toBe(
         "http://192.0.2.2:48123",
       );
@@ -1323,26 +1321,22 @@ kill -TERM "$$"`,
           "{current-macos}": saved("macOS 26.5", "poweron"),
         },
       },
-      () => {
-        const snapshot = resolveSnapshot("vm", "fresh");
-        const latestE2e = resolveSnapshot("vm", "pre-openclaw-native-e2e-");
-        const missingDate = resolveSnapshot("vm", "undated-family-");
-        const latestMacos = resolveSnapshot("vm", "macOS 26.5 latest");
-        return [
-          shellQuote("it's ok"),
-          [snapshot.id, snapshot.state, snapshot.name].join("\t"),
-          [latestE2e.id, latestE2e.state, latestE2e.name].join("\t"),
-          [missingDate.id, missingDate.state, missingDate.name].join("\t"),
-          [latestMacos.id, latestMacos.state, latestMacos.name].join("\t"),
-        ].join("\n");
-      },
+      () =>
+        ["fresh", "pre-openclaw-native-e2e-", "undated-family-", "macOS 26.5 latest"].map(
+          (hint) => {
+            const { id, state, name } = resolveSnapshot("vm", hint);
+            return [id, state, name];
+          },
+        ),
     );
 
-    expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
-    expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
-    expect(output).toContain("{new-e2e}\tpoweroff\tpre-openclaw-native-e2e-2026-07-26");
-    expect(output).toContain("{undated-first}\tpoweroff\tundated-family-1");
-    expect(output.split("\n").at(-1)).toBe("{current-macos}\tpoweron\tmacOS 26.5");
+    expect(shellQuote("it's ok")).toBe("'it'\"'\"'s ok'");
+    expect(output).toEqual([
+      ["{wanted}", "poweroff", "fresh-poweroff-2026-04-01"],
+      ["{new-e2e}", "poweroff", "pre-openclaw-native-e2e-2026-07-26"],
+      ["{undated-first}", "poweroff", "undated-family-1"],
+      ["{current-macos}", "poweron", "macOS 26.5"],
+    ]);
   });
 
   it.each(["poweron", "poweroff"] as const)(

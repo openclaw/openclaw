@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -48,12 +47,9 @@ const llm = vi.hoisted(() => ({ completeSimple: vi.fn() }));
 const strings = (values: Record<string, string>) => new Map(Object.entries(values));
 const childOptions = { reject: false, timeout: 120_000, stripFinalNewline: false } as const;
 const tsxArgs = ["--import", "./scripts/tsx.mjs"];
-const runI18n = (command: string) =>
-  execa(
-    process.execPath,
-    [...tsxArgs, "scripts/control-ui-i18n.ts", ...command.split(" ")],
-    childOptions,
-  );
+const runNode = (args: string[], env?: NodeJS.ProcessEnv) =>
+  execa(testNodeExecPath, [...tsxArgs, ...args], { ...childOptions, env });
+const runI18n = (command: string) => runNode(["scripts/control-ui-i18n.ts", ...command.split(" ")]);
 vi.mock("@openclaw/ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/ai")>();
   return {
@@ -197,11 +193,7 @@ describe("translation provider privacy and fallback", () => {
         assert.equal(requests, 1);
         console.log("isolated-runtime-ok");
       `;
-      const result = await execa(
-        testNodeExecPath,
-        [...tsxArgs, "--input-type=module", "-e", code],
-        childOptions,
-      );
+      const result = await runNode(["--input-type=module", "-e", code]);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toContain("isolated-runtime-ok");
       expect(result.stdout + result.stderr).not.toContain(primary);
@@ -304,18 +296,13 @@ describe("control-ui config hint source catalog", () => {
 });
 
 describe("control-ui-i18n generated ownership", () => {
-  it("includes lazy page copy and shared search labels in the generator catalog", () => {
-    const result = spawnSync(
-      testNodeExecPath,
-      [
-        ...tsxArgs,
-        "--input-type=module",
-        "--eval",
-        'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";\nconsole.log(JSON.stringify(loadControlUiSourceCatalog()));',
-      ],
-      { cwd: process.cwd(), encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
+  it("includes lazy page copy and shared search labels in the generator catalog", async () => {
+    const result = await runNode([
+      "--input-type=module",
+      "--eval",
+      'import { loadControlUiSourceCatalog } from "./scripts/lib/control-ui-i18n-catalog.ts";\nconsole.log(JSON.stringify(loadControlUiSourceCatalog()));',
+    ]);
+    expect(result.exitCode, result.stderr).toBe(0);
     const catalog: unknown = JSON.parse(result.stdout);
     const source = flattenCatalog(catalog, "en");
     for (const fragment of [
@@ -524,22 +511,13 @@ describe("control-ui-i18n catalog validation", () => {
     ]);
   });
 
-  it("keeps verification keyless even when provider credentials exist", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/control-ui-i18n-verify.ts", "verify"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          ANTHROPIC_API_KEY: "redacted",
-          OPENAI_API_KEY: "redacted",
-        },
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
+  it("keeps verification keyless even when provider credentials exist", async () => {
+    const result = await runNode(["scripts/control-ui-i18n-verify.ts", "verify"], {
+      ...process.env,
+      ANTHROPIC_API_KEY: "redacted",
+      OPENAI_API_KEY: "redacted",
+    });
+    expect(result.exitCode, result.stderr).toBe(0);
     expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");
