@@ -55,9 +55,22 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./matrix/read-policy.js", () => ({
-  withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
-}));
+for (const [modulePath, keys] of Object.entries({
+  "./matrix/read-policy.js": ["withAuthorizedMatrixReadTarget"],
+  "./matrix/actions/room.js": ["getMatrixMemberInfo", "getMatrixRoomInfo"],
+  "./matrix/actions/reactions.js": [
+    "listMatrixEmojis",
+    "listMatrixReactions",
+    "removeMatrixReactions",
+  ],
+  "./matrix/actions/pins.js": ["pinMatrixMessage", "unpinMatrixMessage", "listMatrixPins"],
+  "./matrix/actions/polls.js": ["voteMatrixPoll"],
+  "./matrix/actions/verification.js": ["listMatrixVerifications"],
+  "./profile-update.js": ["applyMatrixProfileUpdate"],
+} satisfies Record<string, (keyof typeof mocks)[]>)) {
+  // mock-isolation: Adapter tests supply operations without opening real Matrix clients.
+  vi.doMock(modulePath, () => Object.fromEntries(keys.map((key) => [key, mocks[key]])));
+}
 
 vi.mock("./matrix/actions/messages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./matrix/actions/messages.js")>()),
@@ -66,36 +79,12 @@ vi.mock("./matrix/actions/messages.js", async (importOriginal) => ({
   readMatrixMessage: mocks.readMatrixMessage,
   readMatrixMessages: mocks.readMatrixMessages,
 }));
-vi.mock("./matrix/actions/room.js", () => ({
-  getMatrixMemberInfo: mocks.getMatrixMemberInfo,
-  getMatrixRoomInfo: mocks.getMatrixRoomInfo,
-}));
-vi.mock("./matrix/actions/reactions.js", () => ({
-  listMatrixEmojis: mocks.listMatrixEmojis,
-  listMatrixReactions: mocks.listMatrixReactions,
-  removeMatrixReactions: mocks.removeMatrixReactions,
-}));
-vi.mock("./matrix/actions/pins.js", () => ({
-  pinMatrixMessage: mocks.pinMatrixMessage,
-  unpinMatrixMessage: mocks.unpinMatrixMessage,
-  listMatrixPins: mocks.listMatrixPins,
-}));
-vi.mock("./matrix/actions/polls.js", () => ({ voteMatrixPoll: mocks.voteMatrixPoll }));
-vi.mock("./matrix/actions/verification.js", () => ({
-  listMatrixVerifications: mocks.listMatrixVerifications,
-}));
-
 vi.mock("./matrix/send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./matrix/send.js")>()),
   reactMatrixMessage: mocks.reactMatrixMessage,
   sendMessageMatrix: mocks.sendMatrixMessage,
 }));
 
-vi.mock("./profile-update.js", () => ({
-  applyMatrixProfileUpdate: mocks.applyMatrixProfileUpdate,
-}));
-
-// Load the adapter only after its lower-operation and read-policy mocks are registered.
 const { matrixMessageActions } = await import("./actions.js");
 
 export const getMatrixActionMocks = () => mocks;
