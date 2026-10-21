@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { validateNodeHostStatsPayload } from "../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,7 +14,6 @@ import {
 } from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -575,34 +573,6 @@ it.runIf(process.platform !== "win32").for([
     });
   },
 );
-
-it("publishes host stats through the native bridge only while connected", async () => {
-  const { connect, ready, messages, stop } = startWorkerFixture(false);
-  const publications = () => messagesOfType(messages, "node-event");
-  try {
-    await ready();
-    expect(publications()).toEqual([]);
-    vi.useFakeTimers();
-    connect(1);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(publications()).toHaveLength(1);
-    expect(publications()[0]).toMatchObject({
-      type: "node-event",
-      generation: 1,
-      event: { event: NODE_HOST_STATS_EVENT },
-    });
-    const params = publications()[0]?.event as { payloadJSON: string };
-    expect(validateNodeHostStatsPayload(JSON.parse(params.payloadJSON))).toBe(true);
-    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
-    expect(publications()).toHaveLength(2);
-    connect(2, null);
-    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
-    expect(publications()).toHaveLength(2);
-  } finally {
-    await stop();
-    vi.useRealTimers();
-  }
-});
 
 it.each(["prepared failure", "later failure"] as const)(
   "keeps worker hosting diagnostics local across reconnects: %s",

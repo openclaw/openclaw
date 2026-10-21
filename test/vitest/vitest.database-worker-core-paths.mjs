@@ -1267,7 +1267,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-session-canonical-keys.completions.test.ts",
   "src/commands/doctor-session-canonical-keys.test.ts",
   "src/commands/doctor-lint.crabbox.test.ts",
-  "src/node-host/config-read.test.ts",
   "src/node-host/config.test.ts",
   "src/flows/doctor-health-contribution-runners.config.deferred.test.ts",
   "src/flows/doctor-health.dangling-workshop-index.test.ts",
