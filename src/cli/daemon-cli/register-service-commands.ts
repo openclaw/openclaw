@@ -94,7 +94,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
-      const { runDaemonStatus } = await import("./status.runtime.js");
+      const { runDaemonStatus } = await import("./status.js");
       await runDaemonStatus({
         rpc: resolveGatewayRpcOptionsWithLocalPort(
           {
@@ -135,7 +135,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(updateExecutorOption())
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
-        const { runDaemonInstall } = await import("./install.runtime.js");
+        const { runDaemonInstall } = await import("./install.js");
         await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
       });
     });
@@ -149,7 +149,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       .description(`${description} the Gateway service (launchd/systemd/schtasks)`)
       .option("--json", "Output JSON", false)
       .action(async (cmdOpts, command) => {
-        const lifecycle = await import("./lifecycle.runtime.js");
+        const lifecycle = await import("./lifecycle.js");
         await lifecycle[action]({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
       });
   }
@@ -167,7 +167,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
-        const { runDaemonStop } = await import("./lifecycle.runtime.js");
+        const { runDaemonStop } = await import("./lifecycle.js");
         await runDaemonStop(resolveLifecycleOptions(cmdOpts, command));
       });
     });
@@ -197,7 +197,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
       await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
-        const { runDaemonRestart } = await import("./lifecycle.runtime.js");
+        const { runDaemonRestart } = await import("./lifecycle.js");
         await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
       });
     });

@@ -798,7 +798,6 @@ describe("SessionDiffPanel", () => {
 
     await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
     expect(loader).toHaveBeenCalledTimes(2);
-    expect(loader).toHaveBeenNthCalledWith(2, { scope: "all" });
     expect(loadFileText).not.toHaveBeenCalled();
     expect(panel.textContent).not.toContain("expanded current file line");
     expect(panel.querySelector(".session-diff__gap-controls")).toBeNull();

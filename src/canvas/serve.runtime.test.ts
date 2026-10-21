@@ -1,52 +1,48 @@
-// Core Canvas document HTTP response coverage.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
+import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { createCanvasDocument, resolveCanvasDocumentsDir } from "./documents.js";
 import { handleCanvasDocumentHttpRequest } from "./serve.runtime.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
-
-async function createStateDir(): Promise<string> {
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-serve-"));
-  tempDirs.push(stateDir);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
+beforeEach(() => {
+  stateDir = tempDirs.make("openclaw-canvas-serve-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return stateDir;
-}
+});
+afterEach(() => vi.unstubAllEnvs());
+const documentUrl = (file = "index.html") => `/__openclaw__/canvas/documents/widget-1/${file}`;
 
 async function createHtmlDocument(html: string, cspSandbox?: "scripts") {
-  const stateDir = await createStateDir();
-  const document = await createCanvasDocument({ id: "widget-1", html, cspSandbox }, { stateDir });
-  return { stateDir, document };
+  return createCanvasDocument({ id: "widget-1", html, cspSandbox }, { stateDir });
 }
 
 async function capture(url: string, method = "GET") {
-  const response = {
-    statusCode: 200,
-    headers: {} as Record<string, number | string | string[]>,
-    body: Buffer.alloc(0) as Buffer,
-    setHeader(name: string, value: number | string | readonly string[]) {
-      this.headers[name.toLowerCase()] = typeof value === "object" ? [...value] : value;
-      return this;
-    },
-    end(chunk?: string | Buffer) {
-      this.body = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? "");
-      return this;
-    },
-  };
+  const response = createMockServerResponse();
   const handled = await handleCanvasDocumentHttpRequest(
     { method, url } as IncomingMessage,
-    response as unknown as ServerResponse,
+    response,
   );
-  return { handled, ...response, text: response.body.toString("utf8") };
+  const body = Buffer.from(response.body ?? "");
+  return {
+    handled,
+    statusCode: response.statusCode,
+    getHeader: (name: string) => response.getHeader(name),
+    body,
+    text: body.toString("utf8"),
+  };
+}
+
+async function expectHead(url: string) {
+  const get = await capture(url);
+  const head = await capture(url, "HEAD");
+  expect([get.statusCode, head.statusCode, head.body.byteLength]).toEqual([200, 200, 0]);
+  expect(head.getHeader("content-length")).toBe(String(get.body.byteLength));
+  return { get, head };
 }
 
 describe("core canvas document host", () => {
@@ -63,109 +59,65 @@ describe("core canvas document host", () => {
         { scriptOrigins: ["'self'"] },
       ),
     ],
-  ])("preserves document-approved renderer sources for %s documents", async (_, html) => {
-    const stateDir = await createStateDir();
-    const document = await createCanvasDocument({ html, cspSandbox: "scripts" }, { stateDir });
+    ["sandbox-marked", "<html><body>widget</body></html>"],
+  ])("serves %s HTML unchanged with the sandbox and renderer policy", async (_, html) => {
+    const document = await createHtmlDocument(html, "scripts");
     const response = await capture(document.entryUrl);
-    const policy = String(response.headers["content-security-policy"]);
-    const scripts = policy
-      .split(";")
-      .find((directive) => directive.trim().startsWith("script-src "));
+    expect(response).toMatchObject({ handled: true, statusCode: 200, text: html });
+    expect(["content-type", "cache-control", "referrer-policy"].map(response.getHeader)).toEqual([
+      "text/html; charset=utf-8",
+      "no-store",
+      "no-referrer",
+    ]);
+    const csp = String(response.getHeader("content-security-policy"));
+    const scripts = csp.split(";").find((directive) => directive.trim().startsWith("script-src "));
     expect(scripts?.split(/\s+/)).toContain("'self'");
-    expect(policy).toContain("connect-src 'none'");
-    expect(policy).toContain("sandbox allow-scripts");
-    expect(response.text).toBe(html);
-  });
-
-  it("serves sandbox-marked HTML with the stable CSP header and no mutation", async () => {
-    const html = "<html><body>widget</body></html>";
-    const { document } = await createHtmlDocument(html, "scripts");
-
-    const response = await capture(document.entryUrl);
-    expect(response.handled).toBe(true);
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(response.headers["cache-control"]).toBe("no-store");
-    const csp = String(response.headers["content-security-policy"]);
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("https://cdn.jsdelivr.net");
     expect(csp).toContain("font-src data:");
     expect(csp).toContain("connect-src 'none'");
-    expect(response.headers["referrer-policy"]).toBe("no-referrer");
-    expect(response.text).toBe(html);
   });
 
   it("omits the sandbox response header for unmarked documents", async () => {
-    const { document } = await createHtmlDocument("<html><body>plain</body></html>");
+    const document = await createHtmlDocument("<html><body>plain</body></html>");
 
     const response = await capture(document.entryUrl);
     expect(response.statusCode).toBe(200);
-    expect(response.headers["content-security-policy"]).toBeUndefined();
+    expect(response.getHeader("content-security-policy")).toBeUndefined();
   });
 
   it("serves Content-Length on HEAD responses", async () => {
-    const html = "<html><body>widget</body></html>";
-    const { stateDir, document } = await createHtmlDocument(html, "scripts");
-    const css = "body { color: red; }";
-    await writeFile(
-      path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "style.css"),
-      css,
-      "utf8",
-    );
-    const cssUrl = document.entryUrl.replace(/index\.html$/, "style.css");
+    const document = await createHtmlDocument("<html><body>widget</body></html>", "scripts");
+    const file = (name: string) => path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", name);
+    await writeFile(file("style.css"), "body { color: red; }", "utf8");
 
-    const getHtml = await capture(document.entryUrl);
-    const headHtml = await capture(document.entryUrl, "HEAD");
-    expect(headHtml.statusCode).toBe(200);
-    expect(headHtml.headers["content-length"]).toBe(String(getHtml.body.byteLength));
-    expect(headHtml.body.byteLength).toBe(0);
-    expect(headHtml.headers["content-type"]).toBe("text/html; charset=utf-8");
-    expect(headHtml.headers["content-security-policy"]).toBe(
-      getHtml.headers["content-security-policy"],
+    const { get: getHtml, head: headHtml } = await expectHead(document.entryUrl);
+    expect(headHtml.getHeader("content-type")).toBe("text/html; charset=utf-8");
+    expect(headHtml.getHeader("content-security-policy")).toBe(
+      getHtml.getHeader("content-security-policy"),
     );
 
-    const getCss = await capture(cssUrl);
-    const headCss = await capture(cssUrl, "HEAD");
-    expect(getCss.statusCode).toBe(200);
-    expect(headCss.statusCode).toBe(200);
-    expect(headCss.headers["content-length"]).toBe(String(getCss.body.byteLength));
-    expect(headCss.body.byteLength).toBe(0);
+    await expectHead(documentUrl("style.css"));
 
     // Invalid UTF-8 in a copied HTML file expands to U+FFFD when served, so the
     // header must be measured from the decoded representation, not raw bytes.
-    const brokenBytes = Buffer.from([
-      0x3c, 0x68, 0x31, 0x3e, 0xff, 0xfe, 0x3c, 0x2f, 0x68, 0x31, 0x3e,
-    ]);
-    await writeFile(
-      path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "broken.html"),
-      brokenBytes,
-    );
-    const brokenUrl = document.entryUrl.replace(/index\.html$/, "broken.html");
-    const getBroken = await capture(brokenUrl);
-    const headBroken = await capture(brokenUrl, "HEAD");
-    expect(getBroken.statusCode).toBe(200);
+    const brokenBytes = Buffer.from([0xff, 0xfe]);
+    await writeFile(file("broken.html"), brokenBytes);
+    const { get: getBroken } = await expectHead(documentUrl("broken.html"));
     expect(getBroken.body.byteLength).toBeGreaterThan(brokenBytes.byteLength);
-    expect(headBroken.headers["content-length"]).toBe(String(getBroken.body.byteLength));
-    expect(headBroken.body.byteLength).toBe(0);
   });
 
   it("rejects unsupported methods and traversal paths", async () => {
-    await createStateDir();
-    const methodResponse = await capture(
-      "/__openclaw__/canvas/documents/widget-1/index.html",
-      "POST",
-    );
-    expect(methodResponse.statusCode).toBe(405);
-    expect(methodResponse.text).toBe("Method Not Allowed");
+    const methodResponse = await capture(documentUrl(), "POST");
+    expect(methodResponse).toMatchObject({ statusCode: 405, text: "Method Not Allowed" });
 
     const traversalResponse = await capture(
       "/__openclaw__/canvas/documents/../widget-1/index.html",
     );
     expect(traversalResponse.handled).toBe(false);
 
-    const missingResponse = await capture("/__openclaw__/canvas/documents/widget-1/index.html");
-    expect(missingResponse.statusCode).toBe(404);
-    expect(missingResponse.text).toBe("not found");
+    const missingResponse = await capture(documentUrl());
+    expect(missingResponse).toMatchObject({ statusCode: 404, text: "not found" });
   });
 });

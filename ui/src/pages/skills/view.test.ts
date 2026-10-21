@@ -521,6 +521,43 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
 
+  it("updates the latest ClawHub version in an open detail dialog", async () => {
+    const container = createContainer();
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const detail = {
+      skill: {
+        slug: "github",
+        displayName: "GitHub",
+        summary: "GitHub integration for OpenClaw",
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_100,
+      },
+      latestVersion: { version: "1.0.0", createdAt: 1_700_000_200 },
+    };
+    renderView(container, { clawhubDetailRef: "github", clawhubDetail: detail });
+    const { dialog } = await getRenderedModalDialog(container);
+    const body = expectDefined(
+      container.querySelector(".skill-reader-dialog__body"),
+      "ClawHub detail body",
+    );
+    expect(normalizeText(body)).toContain("Latest: v1.0.0");
+
+    renderView(container, {
+      clawhubDetailRef: "github",
+      clawhubDetail: {
+        ...detail,
+        latestVersion: { version: "2.0.0", createdAt: 1_700_000_300 },
+      },
+    });
+
+    expect((await getRenderedModalDialog(container)).dialog).toBe(dialog);
+    expect(container.querySelector(".skill-reader-dialog__body")).toBe(body);
+    expect(normalizeText(body)).toContain("Latest: v2.0.0");
+    expect(normalizeText(body)).not.toContain("Latest: v1.0.0");
+  });
+
   it.each([
     { clawhubDetailLoading: true, clawhubDetailError: null },
     { clawhubDetailLoading: false, clawhubDetailError: "Unable to read skill" },

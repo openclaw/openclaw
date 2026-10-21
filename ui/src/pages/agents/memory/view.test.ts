@@ -477,8 +477,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("sources/chatgpt-2026-04-10-alpha.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(compactText(container.querySelector(".dreams-diary__preview-hint"))).toBe(
       "Showing the first chunk of this page (6001 total lines).",
@@ -614,8 +619,13 @@ describe("dreaming view", () => {
     await Promise.resolve();
 
     expect(onOpenWikiPage).toHaveBeenCalledWith("reports/weekly-stock.md");
-    const request = { page: previewPage, loading: false, error: null };
-    props.wikiPreview = { ...request, request };
+    const request = { page: previewPage, source: { read: previewPage } };
+    props.wikiPreview = {
+      request,
+      page: previewPage,
+      readKey: request.source,
+      readPage: () => previewPage,
+    };
     rerender();
     expect(textItems(container, ".dreams-diary__insight-list strong")).not.toContain(
       "Page details",

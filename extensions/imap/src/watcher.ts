@@ -15,7 +15,6 @@ import {
   isImapUid,
   MAX_IMAP_UID,
   recordImapAttempt,
-  rememberImapMessage,
   type ImapWatcherState,
 } from "./state.js";
 
@@ -421,7 +420,9 @@ export class ImapAccountWatcher {
     }
     if (result.ok) {
       if (mail.messageId) {
-        await rememberImapMessage(state, accountId, mail.messageId);
+        await state.messageIds.register(accountId, {
+          messageIds: [...(messageRing?.messageIds ?? []), mail.messageId].slice(-100),
+        });
       }
       const gate = verdict.reason === "token" ? "gate=token" : `strength=${verdict.strength}`;
       this.options.context.logger.info(
