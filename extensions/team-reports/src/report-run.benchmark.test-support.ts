@@ -17,7 +17,6 @@ import {
   fixturePeople,
 } from "./report-run.benchmark-fixtures.test-support.js";
 import { TeamReportsRunner } from "./run-worker.js";
-import type { ResolvedTeamReportsConfig } from "./run.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore } from "./store.js";
 
