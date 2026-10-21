@@ -7,7 +7,7 @@ import {
   postTrustedWebToolsJson as postJson,
   readWebSearchApiKey as readKey,
   readWebSearchQueryAndCount as readQuery,
-  throwWebSearchApiError,
+  throwWebSearchApiError as throwApiError,
 } from "./web-search-provider-common.js";
 
 const realFetch = globalThis.fetch;
@@ -21,18 +21,15 @@ const requestDefaults = {
 };
 // Only routing is injected; the guarded owner consumes the real HTTP response.
 async function requestSearch(
-  body: string,
+  [status, body, phrase = ""]: [status: number, body: string, phrase?: string],
   params: Partial<Parameters<typeof postJson>[0]> = {},
-  status = 200,
-  phrase = "",
   received?: () => void,
 ) {
   let authorization: string | undefined;
   const result = await withServer(
     (request, response) => {
       authorization = request.headers.authorization;
-      response.writeHead(status, phrase);
-      response.write(body);
+      response.writeHead(status, phrase).write(body);
       if (!received) {
         response.end(); // Cancellation is tested with the body still open.
       }
@@ -69,17 +66,14 @@ it.each([
 
 it.each(["env", "file", "exec"] as const)("rejects unresolved %s refs", (source) => {
   withEnv({ SEARCH_A: "ambient" }, () => {
-    expect(() =>
-      readCredential({ source, provider: "default", id: "TEST_SEARCH_REFERENCE" }),
-    ).toThrow(UnresolvedSecretInputError);
+    const ref = { source, provider: "default", id: "TEST_SEARCH_REFERENCE" };
+    expect(() => readCredential(ref)).toThrow(UnresolvedSecretInputError);
   });
 });
 
 it("reads a required query and keeps count fallback resolution with the caller", () => {
-  expect(readQuery({ query: "  test  ", count: 2 }, { maxResults: 7 })).toEqual({
-    query: "test",
-    count: 2,
-  });
+  const args = { query: "  test  ", count: 2 };
+  expect(readQuery(args, { maxResults: 7 })).toEqual({ query: "test", count: 2 });
   expect(readQuery({ query: "test" }, { maxResults: 7 })).toEqual({ query: "test", count: 7 });
   expect(readQuery({ query: "test" })).toEqual({ query: "test", count: undefined });
   expect(() => readQuery({})).toThrow("query required");
@@ -97,32 +91,25 @@ it.each([
   ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "***"],
   ["truncated credential", "synthetic-web-key-long", "rejected $key", "", 15, "rejected ***"],
   ["ordinary detail", "s7Key", "quota exceeded", "", undefined, "quota exceeded"],
-] as const)(
-  "redacts %s without discarding diagnostics",
-  async (_, apiKey, body, phrase, maxErrorBytes, expected) => {
-    const { result: error, authorization } = await requestSearch(
-      body.replace("$key", apiKey),
-      { apiKey, maxErrorBytes },
-      401,
-      phrase.replace("$key", apiKey),
-    );
-    expect(authorization).toBe(`Bearer ${apiKey}`);
-    const message = `Search API error (401): ${expected}`;
-    expect(error).toMatchObject({ message, status: 401, statusCode: 401 });
-    const diagnostic = redactLogRecordForTransport({ error: String(error) });
-    expect(diagnostic).toEqual({ error: `ProviderHttpError: ${message}` });
-    expect(String(diagnostic.error)).not.toContain(apiKey);
-  },
-);
+] as const)("redacts %s", async (_, apiKey, body, phrase, maxErrorBytes, expected) => {
+  const { result: error, authorization } = await requestSearch(
+    [401, body.replace("$key", apiKey), phrase.replace("$key", apiKey)],
+    { apiKey, maxErrorBytes },
+  );
+  expect(authorization).toBe(`Bearer ${apiKey}`);
+  const message = `Search API error (401): ${expected}`;
+  expect(error).toMatchObject({ message, status: 401, statusCode: 401 });
+  const diagnostic = redactLogRecordForTransport({ error: String(error) });
+  expect(diagnostic).toEqual({ error: `ProviderHttpError: ${message}` });
+  expect(String(diagnostic.error)).not.toContain(apiKey);
+});
 
 it("preserves caller cancellation after error headers arrive", async () => {
   const controller = new AbortController();
   const reason = new Error("synthetic caller cancellation");
   const { result } = await requestSearch(
-    "partial diagnostic",
+    [401, "partial diagnostic"],
     { signal: controller.signal },
-    401,
-    "",
     () => controller.abort(reason),
   );
   expect(result).toBe(reason);
@@ -130,38 +117,34 @@ it("preserves caller cancellation after error headers arrive", async () => {
 
 it("keeps successful responses and existing two-argument SDK calls usable", async () => {
   expect(redactToolPayloadText("Bearer tokens")).toBe("Bearer tokens");
-  const { result } = await requestSearch('{"answer":"Bearer tokens"}');
+  const { result } = await requestSearch([200, '{"answer":"Bearer tokens"}']);
   expect(result).toEqual({ answer: "Bearer tokens" });
-  await expect(
-    throwWebSearchApiError(new Response("quota exceeded", { status: 429 }), "Search"),
-  ).rejects.toThrow("Search API error (429): quota exceeded");
+  const failure = throwApiError(new Response("quota exceeded", { status: 429 }), "Search");
+  await expect(failure).rejects.toThrow("Search API error (429): quota exceeded");
 });
 
 it("honors the reader TTL while preserving the shipped one-argument reader", async () => {
-  const { readCachedSearchPayload: read, writeCachedSearchPayload: write } =
-    await import("./web-search-provider-common.js");
+  const cache = await import("./web-search-provider-common.js");
   const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const key = "query:reader-ttl";
-  write(key, { text: "original" }, 900_000);
-  expect(read(key, 0)).toBeUndefined();
-  write(key, { text: "disabled" }, 0);
+  cache.writeCachedSearchPayload(key, { text: "original" }, 900_000);
+  expect(cache.readCachedSearchPayload(key, 0)).toBeUndefined();
+  cache.writeCachedSearchPayload(key, { text: "disabled" }, 0);
   clock.mockReturnValue(61_000);
-  expect(read(key, 60_000)).toBeUndefined();
-  expect(read(key)).toEqual({ text: "original", cached: true });
+  expect(cache.readCachedSearchPayload(key, 60_000)).toBeUndefined();
+  expect(cache.readCachedSearchPayload(key)).toEqual({ text: "original", cached: true });
   clock.mockReturnValue(901_001);
-  expect(read(key)).toBeUndefined();
+  expect(cache.readCachedSearchPayload(key)).toBeUndefined();
 });
 
 it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
   vi.resetModules();
-  const globals = globalThis as Record<PropertyKey, unknown>;
   const symbol = Symbol.for("openclaw.web-search.cache");
-  delete globals[symbol];
-
+  Reflect.deleteProperty(globalThis, symbol);
   const module = await import("./web-search-provider-common.js");
   const cacheKey = "query:test";
   module.writeCachedSearchPayload(cacheKey, { ok: true }, 60_000);
 
   expect(module.readCachedSearchPayload(cacheKey)).toEqual({ ok: true, cached: true });
-  expect(globals[symbol]).toBeUndefined();
+  expect(Reflect.get(globalThis, symbol)).toBeUndefined();
 });

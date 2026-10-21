@@ -1,5 +1,3 @@
-// Real manifest/artifact discovery, credential preparation, selection, and tool
-// execution. Only the external HTTP transport is replaced; no live API is used.
 import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -9,11 +7,8 @@ import { listSearchProviderOptions } from "../../flows/search-setup.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { resolveManifestContractOwnerPluginId as contractOwner } from "../../plugins/plugin-registry-contributions.js";
 import { createResolverContext } from "../../secrets/runtime-shared.js";
-import { resolveRuntimeWebTools } from "../../secrets/runtime-web-tools.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { resolveRuntimeWebTools as resolveTools } from "../../secrets/runtime-web-tools.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   hasUsableWebSearchProvider,
   resolveWebSearchProviderId,
@@ -23,20 +18,19 @@ import { createWebSearchTool } from "./web-search.js";
 
 const API_KEY = "sk-synthetic-deepseek-search-key";
 const SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
-const fetchFixture = vi.fn<typeof fetch>();
-let state: OpenClawTestState;
+const CREDENTIAL_PATH = "plugins.entries.deepseek.config.webSearch.apiKey";
+const DOCS = "https://docs.openclaw.ai/providers/deepseek#web-search";
+const fetchMock = vi.fn<typeof fetch>();
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 
 function searchConfig(
   options: { apiKey?: unknown; explicit?: boolean; enabled?: boolean } = {},
 ): OpenClawConfig {
-  const search = {
-    ...(options.explicit === false ? {} : { provider: "deepseek" }),
-    cacheTtlMinutes: 0,
-  };
-  const deepseek = {
-    enabled: options.enabled ?? true,
-    config: { webSearch: { apiKey: options.apiKey ?? API_KEY } },
-  };
+  const { explicit = true } = options;
+  const search = { ...(explicit ? { provider: "deepseek" } : {}), cacheTtlMinutes: 0 };
+  const apiKey = options.apiKey ?? API_KEY;
+  const enabled = options.enabled ?? true;
+  const deepseek = { enabled, config: { webSearch: { apiKey } } };
   return {
     tools: { web: { search } },
     plugins: { allow: ["deepseek"], entries: { deepseek } },
@@ -47,8 +41,16 @@ function source(url: string, title: string, summary: string, extra = {}) {
   return { url, title, summary, ...extra };
 }
 function respond(...results: unknown[]) {
-  fetchFixture.mockResolvedValueOnce(Response.json({ results }));
+  fetchMock.mockResolvedValueOnce(Response.json({ results }));
 }
+
+const defaultResult = {
+  title: "DeepSeek source",
+  url: "https://example.com/source",
+  summary: "A current summary",
+  date: "2026-10-17",
+  site_name: "Example",
+};
 
 async function execute(args: Record<string, unknown> = {}, config = searchConfig()) {
   const tool = createWebSearchTool({ config, agentDir: state.agentDir() });
@@ -61,15 +63,11 @@ async function execute(args: Record<string, unknown> = {}, config = searchConfig
   return result;
 }
 
-type SearchResult = Awaited<ReturnType<typeof execute>>;
 const resultHeader = { provider: "deepseek", kind: "results" };
-function expectError(result: SearchResult, message: string) {
-  expect(result.details).toMatchObject({
-    provider: "deepseek",
-    kind: "error",
-    error: "provider_error",
-    message: expect.stringContaining(message),
-  });
+const stamp = { untrusted: true, source: "web_search", wrapped: true, provider: "deepseek" };
+type SearchResult = Awaited<ReturnType<typeof execute>>;
+function expectResult(result: SearchResult, entry: object, details = {}) {
+  expect(result.details).toMatchObject({ ...resultHeader, count: 1, results: [entry], ...details });
 }
 
 beforeAll(async () => {
@@ -91,17 +89,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchFixture.mockReset().mockImplementation(async () =>
-    Response.json({
-      results: [
-        source("https://example.com/source", "DeepSeek source", "A current summary", {
-          date: "2026-10-17",
-          site_name: "Example",
-        }),
-      ],
-    }),
-  );
-  vi.stubGlobal("fetch", fetchFixture);
+  fetchMock.mockReset().mockImplementation(async () => Response.json({ results: [defaultResult] }));
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -112,11 +101,7 @@ it("discovers the manifest contract and validates plugin-owned configuration", (
   const pluginMetadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
   const options = listSearchProviderOptions(config).filter((entry) => entry.id === "deepseek");
   expect(options).toMatchObject([
-    {
-      pluginId: "deepseek",
-      label: "DeepSeek",
-      credentialPath: "plugins.entries.deepseek.config.webSearch.apiKey",
-    },
+    { pluginId: "deepseek", label: "DeepSeek", credentialPath: CREDENTIAL_PATH },
   ]);
   expect(
     contractOwner({
@@ -137,15 +122,13 @@ it("discovers the manifest contract and validates plugin-owned configuration", (
       expect.objectContaining({ path: "plugins.entries.deepseek.config.webSearch" }),
     ]),
   });
-  expect(fetchFixture).not.toHaveBeenCalled();
+  expect(fetchMock).not.toHaveBeenCalled();
 });
 
-it.each(["explicit", "automatic", "model credential"])("selects and executes %s", async (mode) => {
-  const config = searchConfig({
-    explicit: mode === "explicit",
-    apiKey: mode === "model credential" ? "" : API_KEY,
-  });
-  if (mode === "model credential") {
+it.each(["explicit", "automatic", "model"])("selects and executes %s", async (mode) => {
+  const modelKey = mode === "model";
+  const config = searchConfig({ explicit: mode === "explicit", apiKey: modelKey ? "" : API_KEY });
+  if (modelKey) {
     config.models = {
       providers: { deepseek: { baseUrl: "https://api.deepseek.com", models: [], apiKey: API_KEY } },
     };
@@ -154,8 +137,8 @@ it.each(["explicit", "automatic", "model credential"])("selects and executes %s"
   expect(resolveWebSearchProviderId({ config })).toBe("deepseek");
   const query = "site:example.com DeepSeek after:2026-10-01";
   const result = await execute({ query, count: 2 }, config);
-  expect(fetchFixture).toHaveBeenCalledOnce();
-  const [url, init] = fetchFixture.mock.calls[0] ?? [];
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const [url, init] = fetchMock.mock.calls[0] ?? [];
   expect(url).toBe(SEARCH_URL);
   expect(init?.method).toBe("POST");
   expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${API_KEY}`);
@@ -163,39 +146,30 @@ it.each(["explicit", "automatic", "model credential"])("selects and executes %s"
     throw new Error("expected a serialized JSON search request");
   }
   expect(JSON.parse(init.body)).toEqual({ query, count: 2, need_content: false });
-  expect(result.details).toMatchObject({
-    ...resultHeader,
-    count: 1,
-    query,
-    results: [
-      {
-        title: expect.stringContaining("DeepSeek source"),
-        url: "https://example.com/source",
-        snippet: expect.stringContaining("A current summary"),
-        published: "2026-10-17",
-        siteName: expect.stringContaining("Example"),
-      },
-    ],
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      wrapped: true,
-      provider: "deepseek",
+  expectResult(
+    result,
+    {
+      title: expect.stringContaining("DeepSeek source"),
+      url: "https://example.com/source",
+      snippet: expect.stringContaining("A current summary"),
+      published: "2026-10-17",
+      siteName: expect.stringContaining("Example"),
     },
-  });
+    { query, externalContent: stamp },
+  );
 });
 
 it("prepares a plugin SecretRef through the real web-tools secret owner before execution", async () => {
   const ref = { source: "env", provider: "default", id: "DEEPSEEK_SEARCH_TEST_KEY" };
   const sourceConfig = searchConfig({ apiKey: ref });
-  const resolvedConfig = structuredClone(sourceConfig);
+  const resolved = structuredClone(sourceConfig);
   const metadata = loadPluginMetadataSnapshot({ config: sourceConfig, env: process.env });
   const context = createResolverContext({
     sourceConfig,
     env: { ...process.env, DEEPSEEK_SEARCH_TEST_KEY: API_KEY },
     manifestRegistry: metadata.manifestRegistry,
   });
-  const prepared = await resolveRuntimeWebTools({ sourceConfig, resolvedConfig, context });
+  const prepared = await resolveTools({ sourceConfig, resolvedConfig: resolved, context });
   expect(prepared.metadata.search).toMatchObject({
     selectedProvider: "deepseek",
     providerSource: "configured",
@@ -203,12 +177,10 @@ it("prepares a plugin SecretRef through the real web-tools secret owner before e
   });
   expect(prepared.degradedOwners).toEqual([]);
   expect(sourceConfig.plugins?.entries?.deepseek?.config).toEqual({ webSearch: { apiKey: ref } });
-  expect(resolvedConfig.plugins?.entries?.deepseek?.config).toEqual({
-    webSearch: { apiKey: API_KEY },
-  });
-  const result = await execute({}, resolvedConfig);
+  expect(resolved.plugins?.entries?.deepseek?.config).toEqual({ webSearch: { apiKey: API_KEY } });
+  const result = await execute({}, resolved);
   expect(result.details).toMatchObject(resultHeader);
-  expect(new Headers(fetchFixture.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+  expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
     `Bearer ${API_KEY}`,
   );
 });
@@ -217,30 +189,32 @@ it("does not select or contact a disabled DeepSeek plugin", async () => {
   const config = searchConfig({ enabled: false });
   expect(await hasUsableWebSearchProvider({ config, agentDir: state.agentDir() })).toBe(false);
   await expect(execute({}, config)).rejects.toThrow("no provider is available");
-  expect(fetchFixture).not.toHaveBeenCalled();
+  expect(fetchMock).not.toHaveBeenCalled();
 });
 
 it.each([
-  { options: { apiKey: "" }, args: {}, message: "DEEPSEEK_API_KEY" },
-  { options: {}, args: { query: "x".repeat(129) }, message: "128 Unicode characters" },
-  {
-    options: {},
-    args: { query: "unsupported freshness", freshness: "day" },
-    message: "operators directly in query",
-  },
-])(
-  "rejects unavailable credentials or unsupported input ($message)",
-  async ({ options, args, message }) => {
-    const result = await execute(args, searchConfig(options));
-    expectError(result, message);
-    if (options.apiKey === "") {
-      expect(result.details).toMatchObject({
-        docs: "https://docs.openclaw.ai/providers/deepseek#web-search",
-      });
-    }
-    expect(fetchFixture).not.toHaveBeenCalled();
-  },
-);
+  [{ apiKey: "" }, {}, "DEEPSEEK_API_KEY", 0],
+  [{}, { query: "x".repeat(129) }, "128 Unicode characters", 0],
+  [{}, { freshness: "day" }, "operators directly in query", 0],
+  [{}, {}, "HTTP 403", 403],
+] as const)("reports %s / %s: %s", async (options, args, message, status) => {
+  const diagnostic = "private upstream diagnostic";
+  if (status) {
+    fetchMock.mockResolvedValueOnce(new Response(`${diagnostic} Bearer ${API_KEY}`, { status }));
+  }
+  const result = await execute(args, searchConfig(options));
+  expect(result.details).toMatchObject({
+    kind: "error",
+    provider: "deepseek",
+    error: "provider_error",
+    message: expect.stringContaining(message),
+  });
+  if ("apiKey" in options) {
+    expect(result.details).toMatchObject({ docs: DOCS });
+  }
+  expect(JSON.stringify(result)).not.toContain(diagnostic);
+  expect(fetchMock).toHaveBeenCalledTimes(status ? 1 : 0);
+});
 
 it("bounds and sanitizes result prose, rejects free-form dates, and ignores extra results", async () => {
   respond(
@@ -251,18 +225,15 @@ it("bounds and sanitizes result prose, rejects free-form dates, and ignores extr
     { title: "over requested count", url: "https://example.com/extra" },
   );
   const result = await execute({ count: 1 });
-  expect(result.details).toMatchObject({
-    ...resultHeader,
-    count: 1,
-    truncated: true,
-    results: [
-      {
-        url: "https://example.com/safe",
-        title: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-        snippet: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-      },
-    ],
-  });
+  expectResult(
+    result,
+    {
+      url: "https://example.com/safe",
+      title: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+      snippet: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
+    },
+    { truncated: true },
+  );
   const serialized = JSON.stringify(result.details);
   expect(serialized.length).toBeLessThan(22_000);
   for (const excluded of [
@@ -276,33 +247,17 @@ it("bounds and sanitizes result prose, rejects free-form dates, and ignores extr
 });
 
 it.each(["", "javascript:alert(1)", "https://example.com/" + "x".repeat(2_050)])(
-  "never lets a malformed upstream URL select the raw compatibility branch (%s)",
+  "drops malformed URL %s without falling back to raw",
   async (url) => {
     respond(
       source(url, "Malformed source", "untrusted malformed source"),
       source("https://example.com/valid", "Valid source", "Retained paid result"),
     );
     const result = await execute({ count: 2 });
-    expect(result.details).toMatchObject({
-      ...resultHeader,
-      count: 1,
-      results: [
-        {
-          url: "https://example.com/valid",
-          snippet: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
-        },
-      ],
+    expectResult(result, {
+      url: "https://example.com/valid",
+      snippet: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(JSON.stringify(result.details)).not.toContain("untrusted malformed source");
   },
 );
-
-it("returns actionable HTTP errors without exposing private upstream diagnostics or credentials", async () => {
-  fetchFixture.mockResolvedValueOnce(
-    new Response(`private upstream diagnostic Bearer ${API_KEY}`, { status: 403 }),
-  );
-  const result = await execute();
-  expectError(result, "HTTP 403");
-  expect(JSON.stringify(result)).not.toContain("private upstream diagnostic");
-  expect(fetchFixture).toHaveBeenCalledOnce();
-});
