@@ -2,6 +2,11 @@ import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
   awaitGateBeforeSettlement,
@@ -90,6 +95,24 @@ function holdProvider(text: string): () => void {
 
 function readEntry(fixture: Fixture, sessionKey: string) {
   return loadSessionEntryReadOnly({ storePath: fixture.storePath, sessionKey });
+}
+
+function sendChat(
+  fixture: Fixture,
+  sessionKey: string,
+  sessionId: string,
+  message: string,
+  runId: string,
+  queueMode?: "interrupt" | "steer",
+) {
+  return fixture.client.request("chat.send", {
+    sessionKey,
+    sessionId,
+    message,
+    deliver: false,
+    idempotencyKey: runId,
+    queueMode,
+  });
 }
 
 /** Seeds a main session exactly as a Gateway restart leaves an interrupted turn. */
@@ -256,15 +279,10 @@ async function unavailableDelegatedTurnLeavesConversationUsable(fixture: Fixture
 
   const user = "Delegated case: fresh authenticated request.";
   const runId = "boundary-delegated-new";
-  await expect(
-    fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: user,
-      deliver: false,
-      idempotencyKey: runId,
-    }),
-  ).resolves.toMatchObject({ runId, status: "started" });
+  await expect(sendChat(fixture, sessionKey, sessionId, user, runId)).resolves.toMatchObject({
+    runId,
+    status: "started",
+  });
   await waitForChatTurn(runId, user);
   expect(readEntry(fixture, sessionKey)).toMatchObject({
     sessionId,
@@ -281,15 +299,10 @@ async function owedResendRunsBeforeFirstChatSend(fixture: Fixture) {
   const user = "First-send case: message that arrives during startup.";
   await seedInterruptedSession(fixture, { sessionKey, sessionId, message: owed });
   const runId = "boundary-first-send-user";
-  await expect(
-    fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: user,
-      deliver: false,
-      idempotencyKey: runId,
-    }),
-  ).resolves.toMatchObject({ runId, status: "started" });
+  await expect(sendChat(fixture, sessionKey, sessionId, user, runId)).resolves.toMatchObject({
+    runId,
+    status: "started",
+  });
   await waitForChatTurn(runId, user);
   // The startup scan that follows finds nothing left to resend.
   await expect(runStartupRecovery(fixture)).resolves.toMatchObject({ started: 0, failed: 0 });
@@ -312,13 +325,7 @@ async function owedResendRunsBeforeChatSendDuringItsAdmission(fixture: Fixture) 
   try {
     recovery = runStartupRecovery(fixture);
     await waitForPreparedResend(fixture, sessionKey);
-    send = fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: user,
-      deliver: false,
-      idempotencyKey: runId,
-    });
+    send = sendChat(fixture, sessionKey, sessionId, user, runId);
   } finally {
     await releaseAdmission();
   }
@@ -362,13 +369,7 @@ async function sameIdRetryJoinsPreparedResend(fixture: Fixture) {
     await waitForPreparedResend(fixture, sessionKey, sourceRunId);
     // The retry joins the owed resend instead of dispatching or reporting "pending; retry".
     await expect(
-      fixture.client.request("chat.send", {
-        sessionKey,
-        sessionId,
-        message: owed,
-        deliver: false,
-        idempotencyKey: sourceRunId,
-      }),
+      sendChat(fixture, sessionKey, sessionId, owed, sourceRunId),
     ).resolves.toMatchObject({ runId: sourceRunId, status: "ok" });
   } finally {
     await releaseAdmission();
@@ -427,14 +428,7 @@ async function interruptWinsOverOwedResend(fixture: Fixture) {
   await seedInterruptedSession(fixture, { sessionKey, sessionId, message: owed });
   const runId = "boundary-interrupt-owed-user";
   await expect(
-    fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: user,
-      deliver: false,
-      queueMode: "interrupt",
-      idempotencyKey: runId,
-    }),
+    sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"),
   ).resolves.toMatchObject({ runId, status: "started" });
   // The interrupt wins: the user's message runs and the owed resend is dropped, not replayed.
   await waitForChatTurn(runId, user);
@@ -486,14 +480,7 @@ async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSign
     const source = expectDefined(getRpcSource(resendRunId), "registered restart resend");
     expect(resendTurns(owed)).toHaveLength(0);
     await expect(
-      fixture.client.request("chat.send", {
-        sessionKey,
-        sessionId,
-        message: user,
-        deliver: false,
-        queueMode: "interrupt",
-        idempotencyKey: runId,
-      }),
+      sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"),
     ).resolves.toMatchObject({ runId, interruptedActiveRun: true });
     expect(source.input.abortSignal.aborted).toBe(true);
   } finally {
@@ -511,39 +498,6 @@ async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSign
   expect(resendTurns(owed)).toHaveLength(0);
 }
 
-async function interruptEndsRunningResend(fixture: Fixture) {
-  const sessionKey = "agent:main:boundary-interrupt-running";
-  const sessionId = "boundary-interrupt-running-session";
-  const owed = "Running-interrupt case: owed interrupted task.";
-  const user = "Running-interrupt case: newest message.";
-  await seedInterruptedSession(fixture, { sessionKey, sessionId, message: owed });
-  const release = holdProvider(owed);
-  const recovery = runStartupRecovery(fixture);
-  await vi.waitFor(() => expect(resendTurns(owed)).toHaveLength(1), { timeout: 30_000 });
-  // The executing resend already counts as started, so it owes no further attempt.
-  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toMatchObject({
-    chargedAttempts: 1,
-    startedAttempt: 1,
-  });
-  const runId = "boundary-interrupt-running-user";
-  await expect(
-    fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: user,
-      deliver: false,
-      queueMode: "interrupt",
-      idempotencyKey: runId,
-    }),
-  ).resolves.toMatchObject({ runId, interruptedActiveRun: true });
-  release();
-  await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
-  await waitForChatTurn(runId, user);
-  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
-  await expect(runStartupRecovery(fixture)).resolves.toMatchObject({ started: 0, failed: 0 });
-  expect(resendTurns(owed)).toHaveLength(1);
-}
-
 async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
   const sessionKey = "agent:main:boundary-interrupt-cleanup";
   const sessionId = "boundary-interrupt-cleanup-session";
@@ -553,6 +507,10 @@ async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
   const release = holdProvider(owed);
   const recovery = runStartupRecovery(fixture);
   await vi.waitFor(() => expect(resendTurns(owed)).toHaveLength(1), { timeout: 30_000 });
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toMatchObject({
+    chargedAttempts: 1,
+    startedAttempt: 1,
+  });
   // Admission performs Stop only after its authority checks. Hold the handoff to
   // dispatch until the real interrupted owner releases its placement claim.
   const admit = chatAdmission.admitChatSend;
@@ -582,14 +540,7 @@ async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
   const runId = "boundary-interrupt-cleanup-user";
   try {
     await expect(
-      fixture.client.request("chat.send", {
-        sessionKey,
-        sessionId,
-        message: user,
-        deliver: false,
-        queueMode: "interrupt",
-        idempotencyKey: runId,
-      }),
+      sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"),
     ).resolves.toMatchObject({ runId, status: "started", interruptedActiveRun: true });
     expect(admissionGate).toHaveBeenCalledOnce();
   } finally {
@@ -598,6 +549,7 @@ async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
   }
   await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
   await waitForChatTurn(runId, user);
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
   await expect(runStartupRecovery(fixture)).resolves.toMatchObject({ started: 0, failed: 0 });
   // The user's message ran exactly once and the interrupted resend is not replayed.
   expect(promptTurns(user)).toHaveLength(1);
@@ -627,14 +579,7 @@ async function steerQueuesBehindRestartSafeResend(fixture: Fixture) {
   expect(activePrompt(resendTurns(owed)[0] ?? "")).toContain("narrowed to replay-safe tools");
   const runId = "boundary-steer-user";
   await expect(
-    fixture.client.request("chat.send", {
-      sessionKey,
-      sessionId,
-      message: steer,
-      deliver: false,
-      queueMode: "steer",
-      idempotencyKey: runId,
-    }),
+    sendChat(fixture, sessionKey, sessionId, steer, runId, "steer"),
   ).resolves.toMatchObject({ runId, status: "started" });
   release();
   await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
@@ -694,13 +639,7 @@ async function resetRestoresMainAfterRecoveryArchival(fixture: Fixture) {
     expect.objectContaining({ type: "reset", reason: "reset" }),
   );
   const runId = "boundary-archived-main-fresh";
-  await fixture.client.request("chat.send", {
-    sessionKey,
-    sessionId,
-    message: fresh,
-    deliver: false,
-    idempotencyKey: runId,
-  });
+  await sendChat(fixture, sessionKey, sessionId, fresh, runId);
   await waitForChatTurn(runId, fresh);
   expect(promptTurns(fresh)[0]).not.toContain(owed);
 }
@@ -724,15 +663,11 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
   let responseCount = 0;
   const provider = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const body = await readRequestText(request);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;
       }
-      const body = Buffer.concat(chunks).toString("utf8");
       if (!body.includes("Generate a concise session title")) {
         requests.push(body);
         for (const [text, gate] of holds) {
@@ -751,16 +686,8 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   try {
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", resolve);
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("boundary provider did not bind");
-    }
     const model = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
+      `${await listenLoopback(provider)}/v1`,
       "gpt-startup-recovery-boundary",
     );
     const cfg = {
@@ -817,7 +744,6 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
     await stopCancelsWaitingResend(fixture);
     await interruptWinsOverOwedResend(fixture);
     await interruptCancelsWaitingResend(fixture, signal);
-    await interruptEndsRunningResend(fixture);
     await interruptSurvivesInterruptedTurnCleanup(fixture);
     await steerQueuesBehindRestartSafeResend(fixture);
     await resetRestoresMainAfterRecoveryArchival(fixture);
@@ -830,10 +756,7 @@ it("orders, joins, and cancels restart resends through the session mailbox", asy
       await gateway.server.close().catch(() => undefined);
     }
     if (provider.listening) {
-      provider.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        provider.close(() => resolve());
-      });
+      await closeHttpServer(provider);
     }
     await state.cleanup();
   }

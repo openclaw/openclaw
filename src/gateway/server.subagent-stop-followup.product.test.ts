@@ -1,5 +1,4 @@
 // Prove Stop, deletion, and yield of kept children through real Gateway tools.
-import { X509Certificate } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -7,7 +6,6 @@ import {
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import * as announceOutput from "../agents/subagents/announce/subagent-announce-output.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../agents/subagents/registry/subagent-registry-helpers.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
@@ -21,20 +19,17 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import * as sessionReconciliation from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   closeProvider,
   listenProvider,
   readProviderBody,
 } from "./gateway-provider-fixture.test-support.js";
 import {
-  buildSubagentStopConfig,
-  subagentStopProxyHeaders,
+  createSubagentStopFixture,
+  findSubagentRecords,
+  subagentToolCallEvents,
 } from "./server.subagent-stop-settlement.product.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 vi.mock("../agents/subagents/announce/subagent-announce-output.js", { spy: true });
 vi.mock("../agents/subagents/registry/subagent-registry-sweep-kill.js", { spy: true });
@@ -49,78 +44,8 @@ const deletedTask = "Pause until this child session is deleted.";
 const siblingTask = "Finish the sibling task after the other child is retired.";
 const siblingResult = "AFTER_RETIREMENT_OK";
 const pauseNotice = "Paused awaiting continuation.";
-const proxyUser = "subagent-stop-administrator@example.test";
-
-function toolCallEvents(name: string, args: Record<string, unknown>, sequence: number) {
-  const responseId = `resp_stop_followup_${sequence}`;
-  const itemId = `fc_stop_followup_${sequence}`;
-  const callId = `call_stop_followup_${sequence}`;
-  const argumentsText = JSON.stringify(args);
-  const item = {
-    type: "function_call",
-    id: itemId,
-    call_id: callId,
-    name,
-    arguments: argumentsText,
-  };
-  return [
-    {
-      type: "response.created",
-      response: { id: responseId, object: "response", status: "in_progress", output: [] },
-    },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      item_id: itemId,
-      output_index: 0,
-      delta: argumentsText,
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: itemId,
-      output_index: 0,
-      arguments: argumentsText,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: responseId,
-        object: "response",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 8, output_tokens: 4, total_tokens: 12 },
-      },
-    },
-  ];
-}
-
-function findRecords(
-  value: unknown,
-  matches: (record: Record<string, unknown>) => boolean,
-): Record<string, unknown>[] {
-  if (typeof value === "string") {
-    try {
-      return findRecords(JSON.parse(value) as unknown, matches);
-    } catch {
-      return [];
-    }
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => findRecords(item, matches));
-  }
-  if (!value || typeof value !== "object") {
-    return [];
-  }
-  const record = value as Record<string, unknown>;
-  return [
-    ...(matches(record) ? [record] : []),
-    ...Object.values(record).flatMap((item) => findRecords(item, matches)),
-  ];
-}
-
 const spawnReceipts = (body: string) =>
-  findRecords(
+  findSubagentRecords(
     JSON.parse(body) as unknown,
     (record) => typeof record.childSessionKey === "string" && typeof record.runId === "string",
   ).map((record) => ({
@@ -193,7 +118,7 @@ async function holdUntilStopped(
 
 function modelActions(response: ServerResponse, sequence: number) {
   const tool = (name: string, args: Record<string, unknown>) => {
-    writeOpenAiResponsesSse(response, toolCallEvents(name, args, sequence));
+    writeOpenAiResponsesSse(response, subagentToolCallEvents(name, args, sequence));
     return true;
   };
   return {
@@ -284,7 +209,7 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
         });
       }
       if (parentRequestCount === 4) {
-        const [followup] = findRecords(
+        const [followup] = findSubagentRecords(
           JSON.parse(body) as unknown,
           (record) =>
             record.status === "accepted" &&
@@ -494,30 +419,8 @@ function startYieldedPairModel() {
 }
 
 async function startProofGateway(modelUrl: string, label: string) {
-  const state = await createOpenClawTestState({ label });
-  setUserProfileRole(ensureProfileForEmail(proxyUser).id, "administrator");
-  const cfg = buildSubagentStopConfig(state.workspaceDir, {
-    certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
-    keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
-  });
-  const provider = cfg.models?.providers?.synthetic;
-  if (!provider) {
-    throw new Error("Missing synthetic model provider");
-  }
-  provider.baseUrl = modelUrl;
-  provider.request = { allowPrivateNetwork: true };
-  const gateway = await startGatewayWithClient({
-    cfg,
-    configPath: state.configPath,
-    auth: cfg.gateway?.auth,
-    edgeAuthHeaders: subagentStopProxyHeaders,
-    secure: true,
-    tlsFingerprint: new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256,
-    clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    origin: "https://control.example.com",
-    scopes: ["operator.admin", "operator.read", "operator.write"],
-  });
+  const { state, start } = await createSubagentStopFixture(label, modelUrl);
+  const gateway = await start();
   await gateway.server.startupSettled;
   return {
     client: gateway.client,

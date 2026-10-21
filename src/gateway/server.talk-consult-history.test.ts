@@ -6,7 +6,6 @@ import {
   afterEach,
   beforeAll,
   beforeEach,
-  describe,
   expect,
   it,
   vi,
@@ -274,6 +273,8 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 const matchingTexts = (messages: unknown[], text: string) =>
   messages.map(extractText).filter((value) => value === text);
+const generatedInputs = (messages: unknown[]) =>
+  messages.filter((message) => extractText(message)?.includes(args.question));
 function transcriptMessages() {
   return loadTranscriptEventsSync(scope()).flatMap((event) => {
     const message = asOptionalRecord(asOptionalRecord(event)?.message);
@@ -497,32 +498,28 @@ it.each([
   }
 });
 
-describe("Browser Talk literal consult commands", () => {
-  it("does not turn a generated stop question into cancellation of the active consult", async () => {
-    const first = await startHeldConsult();
-    const ack = await consult("/stop", "literal-stop-during-task");
-    expect(ack.runId).not.toBe(first.ack.runId);
-    expect
-      .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
-      .toBe(false);
-    releaseModel.resolve();
-    await waitForDispatchEnd();
-    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
-      expect.arrayContaining([expect.stringContaining("/stop")]),
-    );
-  });
+it("does not turn a generated stop question into cancellation of the active consult", async () => {
+  const first = await startHeldConsult();
+  const ack = await consult("/stop", "literal-stop-during-task");
+  expect(ack.runId).not.toBe(first.ack.runId);
+  expect.soft(first.abortSignal.aborted, "generated input cancelled the existing task").toBe(false);
+  releaseModel.resolve();
+  await waitForDispatchEnd();
+  expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
+    expect.arrayContaining([expect.stringContaining("/stop")]),
+  );
+});
 
-  it("preserves an actual human stop command", async () => {
-    const first = await startHeldConsult();
-    const stopped = await rpc("chat.send", {
-      sessionKey,
-      message: "/stop",
-      idempotencyKey: "human-stop",
-    });
-    expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+it("preserves an actual human stop command", async () => {
+  const first = await startHeldConsult();
+  const stopped = await rpc("chat.send", {
+    sessionKey,
+    message: "/stop",
+    idempotencyKey: "human-stop",
   });
+  expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
+  expect(first.abortSignal.aborted).toBe(true);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
@@ -612,9 +609,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
 
   const storedMessages = transcriptMessages();
-  const generated = storedMessages.filter((message) =>
-    extractText(message)?.includes(args.question),
-  );
+  const generated = generatedInputs(storedMessages);
   expect(matchingTexts(storedMessages, consultAnswer)).toHaveLength(1);
   const storedToolResult = storedMessages.find(
     (message) => extractText(message) === consultToolResult,
@@ -744,9 +739,7 @@ it.each(["before-final", "after-final"] as const)(
       expectNoGeneratedInput(liveMessages(), "direct live publication");
 
       const storedMessages = transcriptMessages();
-      const generated = storedMessages.filter((message) =>
-        extractText(message)?.includes(args.question),
-      );
+      const generated = generatedInputs(storedMessages);
       expect(generated).toHaveLength(1);
       expect(generated[0]).toMatchObject({
         role: "user",
