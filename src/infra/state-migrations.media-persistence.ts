@@ -116,6 +116,7 @@ async function migrateAgentDatabase(params: {
   preparedArchives?: ReadonlySet<string>;
   migratedFromVersion?: number;
   integrityCheck?: "quick" | "full";
+  sessionEntryStatePrepared: boolean;
 }) {
   if (agentEngineInput()) {
     return inspectPostgresMediaPersistence(params);
@@ -278,6 +279,19 @@ async function migrateAgentDatabase(params: {
         finalVersion: userVersion,
       };
     }
+    const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
+    if (!legacyTextStorage && !params.sessionEntryStatePrepared) {
+      return {
+        deferred: true,
+        entryStatePreparationRequired: true,
+        rewrittenSessions: 0,
+        rewrittenTrajectoryRows: 0,
+        rewrittenArchives: 0,
+        warnings: schemaWarnings,
+        initialVersion,
+        finalVersion: userVersion,
+      };
+    }
     const mediaSchemaUpgrade = userVersion === PREVIOUS_MEDIA_SCHEMA_VERSION;
     const assertMediaSchemaMigration = () => {
       if (!mediaSchemaUpgrade) {
@@ -302,7 +316,6 @@ async function migrateAgentDatabase(params: {
       });
     }
     assertOpenClawAgentSchemaContains(database, params.pathname, schemaSql, schemaMode);
-    const legacyTextStorage = userVersion < AGENT_STORAGE_SCHEMA_VERSION;
     const db = getNodeSqliteKysely<MediaMigrationDatabase>(database);
     let rewritten = { rewrittenSessions: 0, rewrittenTrajectoryRows: 0 };
     let preserved = false;
@@ -480,6 +493,8 @@ export async function migrateLegacyMediaPersistence(
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
+    isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
+    prepareSessionEntryState?: (target: AgentDatabaseMigrationTarget) => Promise<boolean>;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
@@ -566,9 +581,8 @@ export async function migrateLegacyMediaPersistence(
       }
       seenPaths.add(entry.realPath);
       try {
-        const preparedForRepair = await withAgentDatabaseMaintenanceLease(
-          { env, processBound: true },
-          async (maintenance) => {
+        const migrateWithLease = (sessionEntryStatePrepared: boolean) =>
+          withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
             const result = await migrateAgentDatabase({
               agentId: entry.agentId,
               changes,
@@ -581,41 +595,57 @@ export async function migrateLegacyMediaPersistence(
               migratedFromVersion: preparedDiscovery.versionMigrations?.find(
                 (migration) => migration.path === pathname,
               )?.foundVersion,
+              sessionEntryStatePrepared,
             });
             maintenance.assertOwned();
-            if (!result.deferred) {
-              archiveDirectories.add(
-                resolveSqliteTranscriptArchiveDirectory({
-                  agentId: entry.agentId,
-                  path: pathname,
-                }),
-              );
-            }
-            warnings.push(...result.warnings);
-            recoverableWarningCount += result.warnings.length;
-            const schemaAdvanced = result.finalVersion > result.initialVersion;
-            if (
-              schemaAdvanced &&
-              !preparedDiscovery.versionMigrations?.some((migration) => migration.path === pathname)
-            ) {
-              changes.push(
-                `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
-              );
-            }
-            if (result.rewrittenSessions > 0 || result.rewrittenTrajectoryRows > 0) {
-              changes.push(
-                `Migrated media persistence in ${pathname}: ${result.rewrittenSessions} transcript session(s), ${result.rewrittenTrajectoryRows} trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
-              );
-            }
-            if (result.rewrittenArchives > 0) {
-              changes.push(
-                `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
-              );
-            }
-            // Only a version-only advance postpones the following Doctor repairs.
-            return !result.deferred || !schemaAdvanced;
-          },
+            return result;
+          });
+        let result = await migrateWithLease(
+          !params.prepareSessionEntryState || params.isSessionEntryStatePrepared?.(entry) === true,
         );
+        if ("entryStatePreparationRequired" in result && params.prepareSessionEntryState) {
+          // The normal entry writer owns its own maintenance admission and backup.
+          // Let the media lease settle before that writer runs, then re-admit media once.
+          const preparationWarnings = result.warnings;
+          if (await params.prepareSessionEntryState(entry)) {
+            const resumed = await migrateWithLease(true);
+            result = {
+              ...resumed,
+              warnings: [...preparationWarnings, ...resumed.warnings],
+            };
+          }
+        }
+        if (!result.deferred) {
+          archiveDirectories.add(
+            resolveSqliteTranscriptArchiveDirectory({
+              agentId: entry.agentId,
+              path: pathname,
+            }),
+          );
+        }
+        warnings.push(...result.warnings);
+        recoverableWarningCount += result.warnings.length;
+        const schemaAdvanced = result.finalVersion > result.initialVersion;
+        if (
+          schemaAdvanced &&
+          !preparedDiscovery.versionMigrations?.some((migration) => migration.path === pathname)
+        ) {
+          changes.push(
+            `Upgraded agent database schema in ${pathname}: v${result.initialVersion} -> v${result.finalVersion}.`,
+          );
+        }
+        if (result.rewrittenSessions > 0 || result.rewrittenTrajectoryRows > 0) {
+          changes.push(
+            `Migrated media persistence in ${pathname}: ${result.rewrittenSessions} transcript session(s), ${result.rewrittenTrajectoryRows} trajectory row(s), schema v${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+          );
+        }
+        if (result.rewrittenArchives > 0) {
+          changes.push(
+            `Migrated canonical transcript archive media in ${pathname}: ${result.rewrittenArchives} archive(s).`,
+          );
+        }
+        // Only a version-only advance postpones the following Doctor repairs.
+        const preparedForRepair = !result.deferred || !schemaAdvanced;
         if (preparedForRepair) {
           preparedRepairTargets.push(entry);
         }

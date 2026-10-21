@@ -212,6 +212,8 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
   let inspectedEntryStatePaths = new Set<string>();
+  let mediaPreparedEntryStateCount = 0;
+  let mediaEntryStatePreparationError: Error | undefined;
   const versionMigrationPaths = new Set(
     params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
   );
@@ -256,6 +258,34 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
+          isSessionEntryStatePrepared: (target) =>
+            inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
+          prepareSessionEntryState: async (target) => {
+            try {
+              const { repairLegacySessionEntryStates } =
+                await import("../commands/doctor-session-delivery-state.js");
+              const report = await repairLegacySessionEntryStates({
+                apply: true,
+                cfg: params.config,
+                env: stateEnv,
+                integrityCheck: params.integrityCheck,
+                targets: [
+                  { agentId: target.agentId, storePath: target.path, sqlitePath: target.path },
+                ],
+                onInspectedTargets: (targets) => {
+                  for (const inspected of targets) {
+                    inspectedEntryStatePaths.add(inspected.canonicalPath);
+                  }
+                },
+              });
+              mediaPreparedEntryStateCount += report.repaired;
+              return true;
+            } catch (error) {
+              mediaEntryStatePreparationError ??=
+                error instanceof Error ? error : new Error(String(error));
+              return false;
+            }
+          },
           onPreparedRepairTargets: (targets) => {
             preparedRepairTargets = targets;
           },
@@ -266,6 +296,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
         agentPersistence,
         agentPersistence,
         async () => {
+          if (mediaEntryStatePreparationError) {
+            throw mediaEntryStatePreparationError;
+          }
           const { repairLegacySessionEntryStates } =
             await import("../commands/doctor-session-delivery-state.js");
           const report = await repairLegacySessionEntryStates({
@@ -283,10 +316,11 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
                 sqlitePath: target.path,
               })),
           });
+          const repaired = mediaPreparedEntryStateCount + report.repaired;
           return {
             changes:
-              report.repaired > 0
-                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+              repaired > 0
+                ? [`Canonicalized entry state for ${repaired} durable session row(s).`]
                 : [],
             warnings: [],
           };

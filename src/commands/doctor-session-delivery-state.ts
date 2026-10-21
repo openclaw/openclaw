@@ -13,6 +13,7 @@ import {
   projectExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
+import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   assertExistingDatabaseIdentity,
@@ -152,7 +153,8 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
         params.source === "raw" &&
         params.deferSchemaRepair &&
         (error instanceof SqliteSchemaMismatchError ||
-          error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError)
+          error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError ||
+          (error instanceof Error && isTerminalSqliteIntegrityError(error)))
       ) {
         note(
           `- Session entry inspection awaits its database schema repair: ${formatErrorMessage(error)}`,

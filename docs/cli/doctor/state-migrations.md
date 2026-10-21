@@ -156,9 +156,10 @@ in memory. A Doctor preview reports the affected rows without changing them and
 defers further session inspection until `doctor --fix` runs. The update-time
 Doctor pass performs the same repair before the candidate resumes sessions.
 The migration prelude repairs scalar rows in already-readable databases before
-media rewriting, then upgrades database schemas and retries only the targets whose
-scalar repair was deferred. Standalone session import keeps its existing
-`doctor --fix` prerequisite
+media rewriting. Databases whose version was just advanced retain unrelated
+content until a later same-version Doctor pass. Other targets that need schema,
+media, or integrity preparation are retried after that preparation in the same
+invocation. Standalone session import keeps its existing `doctor --fix` prerequisite
 for older schemas; session recovery restores or repairs its selected database
 before inspecting and converting scalar state.
 If the recovered database still needs a schema upgrade, recovery reports the
