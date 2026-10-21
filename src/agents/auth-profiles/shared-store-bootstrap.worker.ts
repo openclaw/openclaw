@@ -186,7 +186,9 @@ export function bootstrapSharedAuthStoreInWorker(
             { operationLabel: "auth-profiles.bootstrap-fallback-source" },
           );
         } catch (error) {
-          if (committing) throw error;
+          if (committing) {
+            throw error;
+          }
           // Leave unreadable fallback state to Doctor rather than flipping ownership past it.
           return commit(false);
         } finally {
