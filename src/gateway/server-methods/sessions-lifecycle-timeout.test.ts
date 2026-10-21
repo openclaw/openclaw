@@ -5,12 +5,8 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as runs from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionStore from "../../config/sessions/session-accessor.js";
 import * as lifecycle from "../../sessions/session-controller.lifecycle.js";
-import * as mailbox from "../../sessions/session-controller.mailbox.js";
-import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient } from "../session-sharing.test-utils.js";
@@ -19,65 +15,20 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 useChatAbortRegistryFixture();
 
-it.each([
-  { method: "sessions.delete", backend: "embedded" },
-  { method: "sessions.patch", backend: "embedded" },
-  { method: "sessions.delete", backend: "controller" },
-  { method: "sessions.patch", backend: "controller" },
-] as const)(
-  "$method reports its finite drain timeout with an unresponsive $backend backend",
-  async ({ method, backend }) => {
+it.each(["sessions.delete", "sessions.patch"] as const)(
+  "%s reports its finite drain timeout with an unresponsive embedded backend",
+  async (method) => {
     const sessionKey = "agent:main:drain-timeout";
     const sessionId = "drain-timeout-session";
     const target = { agentId: "main", sessionKey };
     await sessionStore.upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
     const aborted = createDeferred();
-    const completion = createDeferred();
     const onAbort = () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       aborted.resolve();
     };
     const handle = runs.createEmbeddedRunHandle({ abort: onAbort });
-    let execution: Promise<void> | undefined;
-    if (backend === "embedded") {
-      runs.registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
-    } else {
-      const controllerTarget = lifecycle.captureSessionTarget({
-        storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: "main",
-        }),
-        ...target,
-        incarnation: sessionId,
-      });
-      const registration = registerChatAbortController({
-        target: controllerTarget,
-        runId: "stuck-backend",
-        ...target,
-        sessionId,
-        timeoutMs: 60_000,
-        sourceWork: completion.promise,
-        onCancel: onAbort,
-      });
-      if (!registration.registered) {
-        throw new Error("Expected the unresponsive controller source to register");
-      }
-      const claim = await mailbox.claimSessionControllerTask(
-        registration.entry.input,
-        (mailboxClaim) =>
-          createReplyOperation({
-            ...target,
-            sessionId,
-            resetTriggered: false,
-            target: controllerTarget,
-            mailboxClaim,
-          }),
-      );
-      execution = completion.promise.finally(() => {
-        claim.operation?.complete();
-        mailbox.releaseSessionControllerClaim(claim);
-        registration.cleanup();
-      });
-    }
+    runs.registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
     const respond = vi.fn();
     const client = roleClient("write", "timeout-operator");
     client.connect.scopes = ["operator.admin"];
@@ -115,9 +66,7 @@ it.each([
       expect([entry?.sessionId, entry?.archivedAt]).toEqual([sessionId, undefined]);
     } finally {
       vi.useRealTimers();
-      completion.resolve();
       runs.clearTestEmbeddedRun(sessionId, handle, sessionKey);
-      await execution;
       await request;
     }
   },

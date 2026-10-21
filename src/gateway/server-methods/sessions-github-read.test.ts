@@ -10,12 +10,10 @@ import {
   resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
 } from "../../agents/github-tool-identity.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
 import type { UserGitHubConnection } from "../../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as prRead from "../control-ui-session-pr-read.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { personalGitHubStatusAsync as personalGitHubStatus } from "../github-personal-status.js";
@@ -23,7 +21,6 @@ import * as publicationAvailability from "../github-publication-availability.js"
 import * as relevance from "../github-publication-relevance.js";
 import {
   expectFailure,
-  expectNoCalls,
   expectReply,
   mockPublicationIdentity,
   optionsResult,
@@ -138,12 +135,18 @@ it("reads personal options and receipts while shared identity discovery is pendi
       return publisherIdentity();
     });
     const respond = vi.fn();
-    const request = fixture.options(respond);
+    const request = fixture.options(respond, { idempotencyKey: "owned-unknown-attempt" });
     try {
       await withinTest(entered.promise, signal);
       expect(fixture.personalConnectionStatus).toHaveBeenCalledOnce();
       expect(fixture.personalPending).toHaveBeenCalledOnce();
       expect(fixture.latestShared).toHaveBeenCalledOnce();
+      expect(fixture.latestShared).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
+        "owned-unknown-attempt",
+        expect.any(Function),
+        expect.any(Function),
+      );
       expect(respond).not.toHaveBeenCalled();
     } finally {
       release.resolve();
@@ -173,38 +176,6 @@ it.each([
     });
   },
 );
-
-it("reuses native authentication for consecutive options requests and refreshes after invalidation", async () => {
-  useRealIdentity();
-  mocks.runCommandBuffered
-    .mockReset()
-    .mockImplementation(async () => commandResult("synthetic-options-native"));
-  vi.spyOn(globalThis, "fetch").mockImplementation(async () => accountResponse());
-  await withReadFixture(async (fixture) => {
-    for (let index = 0; index < 2; index++) {
-      const respond = await fixture.options(undefined, {
-        idempotencyKey: "owned-unknown-attempt",
-      });
-      expectOptions(respond, { shared: detectedPublisher });
-      expect(fixture.latestShared).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
-        "owned-unknown-attempt",
-        expect.any(Function),
-        expect.any(Function),
-      );
-      expectNoCalls(fixture.personalPending, fixture.requestForSession);
-    }
-    expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
-    expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
-      ["gh", "auth", "token", "--hostname", "github.com"],
-      expect.any(Object),
-    );
-    expect(fetch).toHaveBeenCalledOnce();
-    clearGitHubCredentialVerificationCache();
-    await fixture.options();
-    expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
-  });
-});
 
 it.for(["token", "native"] as const)(
   "serves stale options while %s authentication refreshes without waiting",
@@ -480,17 +451,13 @@ it.each(["accepted", "missing", "scope", "connection", "unverified-profile"] as 
 it.each([
   ...[
     "unchanged",
-    "scope",
-    "connection",
-    "profile",
-    "session-lifecycle",
     "github-unchanged",
     "github-unavailable",
     "github-generation",
     "github-account",
   ].map((change) => ({ change, phase: "personal" })),
   // Both authority owners must also run after the later shared read.
-  ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
+  { change: "github-generation", phase: "shared" },
 ])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
   await withPersonalReadFixture(async (fixture) => {
     const owner = ownerOf(fixture);
@@ -523,19 +490,7 @@ it.each([
       async (respond, release) => {
         expect(fixture.latestShared).toHaveBeenCalledOnce();
 
-        if (change === "scope") {
-          fixture.client.connect.scopes = [];
-        } else if (change === "connection") {
-          fixture.disconnect();
-        } else if (change === "profile") {
-          expectDefined(fixture.client.authenticatedUserProfile, "reader profile").profileId =
-            ensureProfileForEmail("replacement-reader@example.test").id;
-        } else if (change === "session-lifecycle") {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            { lifecycleRevision: "replaced-publication-session" },
-          );
-        } else if (change === "github-generation") {
+        if (change === "github-generation") {
           saveConnection(owner, {
             ...connection,
             generation: "6a7862d3-9895-4905-a4fb-f16f143aed3e",

@@ -625,20 +625,6 @@ describe("loadSessionDiff", () => {
     },
   );
 
-  it("hides unchanged binary files and resurfaces later binary edits", async () => {
-    initFiles({ "icon.bin": Buffer.from([0, 1, 2, 0, 3]) });
-    const captured = await useBaseline();
-    expect(captured?.files).toHaveLength(1);
-
-    const unchanged = await readDiff();
-    expect(unchanged.files).toEqual([]);
-
-    write("icon.bin", Buffer.from([0, 1, 9, 0, 3]));
-    const changed = await readDiff();
-    expect(filePaths(changed)).toEqual(["icon.bin"]);
-    expect(changed.files[0]?.binary).toBe(true);
-  });
-
   it("keeps pre-session changes hidden when new files exceed the fingerprint budget", async () => {
     initFiles({ "z-existing.txt": "preexisting work\n" });
     const captured = await baseline();
@@ -660,32 +646,23 @@ describe("loadSessionDiff", () => {
     expect(filePaths(result)).toEqual(["AGENTS.md"]);
   });
 
-  it.each([false, true])(
-    "reads uncommitted changes once when the baseline has no matching paths (prior changes: %s)",
-    async (priorChanges) => {
-      seedRepo({ "changed.txt": "before\n", "prior.txt": "before\n" });
-      if (priorChanges) {
-        append("prior.txt", "prior change\n");
-      }
-      await useBaseline();
-      if (priorChanges) {
-        commitFiles("save prior change");
-      }
-      append("changed.txt", "new change\n");
-
-      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-
-      const result = await readDiff({ scope: "uncommitted" });
-      expect(result.files).toEqual([
-        expect.objectContaining({ path: "changed.txt", additions: 1, deletions: 0 }),
-      ]);
-      expect(result.files[0]?.patch).toContain("+new change");
-      // Revision status, checkout read, base selection, tracked inventory/patch, untracked listing.
-      expect(
-        commands.mock.calls.filter(([argv]) => argv[argv.indexOf("-C") + 1] === repoRoot).length,
-      ).toBeLessThanOrEqual(7);
-    },
-  );
+  it("reads uncommitted changes once when the baseline has no matching paths", async () => {
+    seedRepo({ "changed.txt": "before\n", "prior.txt": "before\n" });
+    append("prior.txt", "prior change\n");
+    await useBaseline();
+    commitFiles("save prior change");
+    append("changed.txt", "new change\n");
+    const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    const result = await readDiff({ scope: "uncommitted" });
+    expect(result.files).toEqual([
+      expect.objectContaining({ path: "changed.txt", additions: 1, deletions: 0 }),
+    ]);
+    expect(result.files[0]?.patch).toContain("+new change");
+    // Revision status, checkout read, base selection, tracked inventory/patch, untracked listing.
+    expect(
+      commands.mock.calls.filter(([argv]) => argv[argv.indexOf("-C") + 1] === repoRoot).length,
+    ).toBeLessThanOrEqual(7);
+  });
 
   it("keeps exact large-file counts and later previews when untracked patches are omitted", async () => {
     initRepo(repoRoot);

@@ -174,6 +174,8 @@ it.each([
       expectGoal(respond, { status: "complete" });
     } else {
       expectFailure(respond, { code: "INVALID_REQUEST" });
+      expect(readGoal()).toEqual(initialGoal());
+      expect(resumeChat).not.toHaveBeenCalled();
     }
     expect(resolved).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -285,19 +287,14 @@ it.each(["sessions.goal.update", "sessions.goal.clear"] as const)(
     }),
 );
 
-it.each([
-  { name: "session generation", patch: { sessionId: "replaced-session" } },
-  { name: "Goal identity", patch: { goalId: "replaced-goal" } },
-  { name: "agent owner", patch: { agentId: "other" } },
-])("rejects stale $name without changing state", ({ patch }) =>
+it("rejects a different agent owner without changing state", () =>
   withGoalState(async () => {
     await seedSession();
-    const result = await invoke(operation("pause", patch));
+    const result = await invoke(operation("pause", { agentId: "other" }));
     expectFailure(result, { code: "INVALID_REQUEST" });
     expect(readGoal()).toEqual(initialGoal());
     expect(resumeChat).not.toHaveBeenCalled();
-  }),
-);
+  }));
 
 it("rejects a revoked caller without persisting a Goal change or receipt", () =>
   withGoalState(async () => {

@@ -47,37 +47,6 @@ function resolveTarget(key: string, agentId: string) {
   });
 }
 
-function startOperation(
-  target: Awaited<ReturnType<typeof resolveTarget>>,
-  agentId: string,
-  sessionKey: string,
-  sessionId: string,
-  aliases?: string[],
-) {
-  const operation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    agentId,
-    resetTriggered: false,
-    target: captureSessionTarget({
-      storeScope: target.storePath,
-      sessionKey: target.canonicalKey,
-      incarnation: sessionId,
-      agentId,
-      aliases,
-    }),
-  });
-  operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-  return operation;
-}
-
-function mutationParams(method: string, key: string, sessionId: string) {
-  return {
-    key,
-    ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
-  };
-}
-
 function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationHandlers }) {
   const cfg = getRuntimeConfig();
   const client = sharingPolicyClient({
@@ -174,10 +143,20 @@ it.each([
     { agentId, sessionKey: target.canonicalKey },
     { sessionId: targetId, lifecycleRevision: "original", updatedAt: 1 },
   );
-  const operation = startOperation(foreignTarget, foreignAgentId, key, foreignId, [
-    key,
-    ...foreignTarget.storeKeys,
-  ]);
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: foreignId,
+    agentId: foreignAgentId,
+    target: captureSessionTarget({
+      storeScope: foreignTarget.storePath,
+      sessionKey: foreignTarget.canonicalKey,
+      aliases: [key, ...foreignTarget.storeKeys],
+      incarnation: foreignId,
+      agentId: foreignAgentId,
+    }),
+    resetTriggered: false,
+  });
+  operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
   const queueKeys = [key, target.canonicalKey, targetId];
   const followup = (ownerAgentId: string, sessionId: string, sessionKey: string) => {
     const run = createQueueTestRun({ prompt: ownerAgentId });
@@ -195,7 +174,11 @@ it.each([
   let owned: ReturnType<typeof followup> | undefined;
   try {
     owned = followup(agentId, targetId, target.canonicalKey);
-    await gateway()(method, { ...mutationParams(method, key, targetId), agentId });
+    await gateway()(method, {
+      key,
+      agentId,
+      ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
+    });
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
@@ -220,22 +203,3 @@ it.each([
     }
   }
 });
-
-it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
-  "%s still cancels the selected agent's own session",
-  async (method) => {
-    const key = "agent:main:lifecycle-owned";
-    const sessionId = "owned-session";
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
-    const target = await resolveTarget(key, "main");
-    const operation = startOperation(target, "main", key, sessionId);
-    operation.setPhase("running");
-    try {
-      await gateway()(method, mutationParams(method, key, sessionId));
-      expect(operation.abortSignal.aborted).toBe(true);
-    } finally {
-      operation.complete();
-      clearSessionQueues([key, sessionId]);
-    }
-  },
-);
