@@ -46,6 +46,7 @@ import {
   resolvePluginPackageMapTarget,
   visitPluginSourceReferences,
 } from "./plugin-source-references.js";
+import { ensureDependencyLink } from "./plugin-generation-links.js";
 
 export type PluginGenerationArtifact = {
   sourceRoot: string;
@@ -248,9 +249,10 @@ function createPluginGenerationArtifact(
           : destination;
       const link = path.join(lookupDirectory, "node_modules", name);
       packages.get(dependency.root)!.links.add(link);
-      if (!fs.existsSync(link)) {
-        fs.mkdirSync(path.dirname(link), { recursive: true, mode: 0o700 });
-        fs.symlinkSync(path.relative(path.dirname(link), captured), link, "junction");
+      // Concurrent capture roots and disposed workspaces can leave the same link
+      // path present (possibly dangling). ensureDependencyLink() retires dangling
+      // links and tolerates EEXIST instead of failing the whole capture.
+      if (ensureDependencyLink(link, captured) !== "reused") {
         additions.add(link);
       }
     };
