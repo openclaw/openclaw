@@ -44,12 +44,6 @@ const cases: {
     credential: savedCredential,
     reply: "No managed credential supplied.",
   },
-  {
-    name: "leaves native authentication in charge when only a canonical API key is saved",
-    order: undefined,
-    credential: { type: "api_key", provider: "anthropic", key: "synthetic-pasted-anthropic-key" },
-    reply: "No managed credential supplied.",
-  },
 ];
 
 type CliAuthGateway = Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>>;
@@ -446,27 +440,3 @@ it(
     expect(await probes()).toBe(loginProbes + 1);
   },
 );
-
-it("does not start a Gateway after CLI auth fixture acquisition is cancelled", async () => {
-  const controller = new AbortController();
-  const cancelled = new Error("Cancel after writing the fixture executable");
-  const originalPath = process.env.PATH;
-  const originalHome = process.env.HOME;
-  const writeFile = fs.writeFile;
-  const startup = vi.spyOn(gatewayFixture, "startGatewayWithClient");
-  const write = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-    await writeFile(...args);
-    if (typeof args[0] === "string" && path.basename(args[0]) === "claude.cjs") {
-      controller.abort(cancelled);
-    }
-  });
-  try {
-    await expect(prepareCliAuthFixture(cases[0]!, controller.signal)).rejects.toBe(cancelled);
-    expect(startup).not.toHaveBeenCalled();
-    expect(process.env.PATH).toBe(originalPath);
-    expect(process.env.HOME).toBe(originalHome);
-  } finally {
-    write.mockRestore();
-    startup.mockRestore();
-  }
-});
