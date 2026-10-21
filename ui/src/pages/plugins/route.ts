@@ -60,7 +60,6 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
     },
     component: () =>
       import("./plugins-page.tsx").then((module) => ({
-        header: true,
         renderSolid: (props: SolidRouteProps<PluginsRouteData>) =>
           createComponent(module.PluginsPage, {
             get routeData() {
