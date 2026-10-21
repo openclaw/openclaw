@@ -31,6 +31,7 @@ vi.mock("./client/storage.js", async (importOriginal) => ({
   repairCurrentTokenStorageMetaDeviceId: mocks.repair,
 }));
 
+// mock-isolation: Supply secret-resolution results without consulting configured providers or credentials.
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveConfiguredSecretInputString: mocks.secret,
 }));

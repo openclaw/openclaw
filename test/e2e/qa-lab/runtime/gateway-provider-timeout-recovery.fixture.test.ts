@@ -62,6 +62,7 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
       await setImmediate();
     },
   }));
+  // mock-isolation: Capture the fixture's Gateway lifecycle and RPCs without launching a child process.
   vi.doMock("../../../../extensions/qa-lab/api.js", () => ({
     createQaGatewayChild: () => ({
       start: async (options: { providerBaseUrl: string }) => {
