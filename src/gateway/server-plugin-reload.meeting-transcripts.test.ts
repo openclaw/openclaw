@@ -101,19 +101,29 @@ function useCaptureClock() {
   });
 }
 
-/** Yield to real I/O (dynamic imports) without advancing the faked capture clock. */
-async function settle(until: () => boolean = () => false, turns = 1_000) {
-  for (let turn = 0; turn < turns && !until(); turn += 1) {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-}
-
 async function createMeetingReloadFixture(options: { background: boolean }) {
   // Final effect: the Gateway's browser.request method, reached only through the
   // real in-process dispatch owners.
   const effects: BrowserEffect[] = [];
+  // Dispatch loads modules through real I/O, so waits key off produced events
+  // (browser calls, capture logs, quiesce), never a count of event-loop turns.
+  const waiters = new Set<() => void>();
+  const notify = () => {
+    for (const waiter of waiters) {
+      waiter();
+    }
+  };
+  const until = (done: () => boolean) =>
+    new Promise<void>((resolve) => {
+      const check = () => {
+        if (done()) {
+          waiters.delete(check);
+          resolve();
+        }
+      };
+      waiters.add(check);
+      check();
+    });
   const browserRequest = vi.fn(({ params, client, respond }: GatewayRequestHandlerOptions) => {
     const body = params.body as { generation: number; label: string };
     effects.push({
@@ -124,16 +134,20 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
       actor: client?.internal?.operatorRoleActor ?? client?.authenticatedUserProfile,
     });
     respond(true, { ok: true });
+    notify();
   });
   const context = createContext([["browser.request", "operator.admin", "browser", browserRequest]]);
   const resolveGateway = () => context;
-  const debug = vi.fn();
+  const debug = vi.fn((_message: string) => notify());
   const generations: Array<{
     api: OpenClawPluginApi;
     bridge: MeetingDurableTranscriptBridge;
     callBrowser?: MeetingBrowserRequestCaller;
   }> = [];
   const holds: CaptureHold[] = [];
+  // Captures that ran to completion. A tick that fires while the previous capture is
+  // still settling is skipped by design, so tests advance the clock only after this.
+  const finished: string[] = [];
   const fixture = await createPluginReloadRecoveryFixture(
     { cleanups, logMocks: log },
     {
@@ -208,23 +222,28 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
           const callBrowser = plugin.callBrowser;
           await plugin.bridge.start(session, async () => {
             const label = `capture ${++periodic}`;
-            await callBrowser({
-              method: "POST",
-              path: "/act",
-              body: { generation, label },
-              timeoutMs: 1_000,
-            });
-            const hold = holds.find((candidate) => candidate.label === `${generation}:${label}`);
-            if (hold) {
-              hold.entered();
-              await hold.release;
-              // New browser work from a capture admitted before retirement.
+            try {
               await callBrowser({
                 method: "POST",
                 path: "/act",
-                body: { generation, label: `${label} after hold` },
+                body: { generation, label },
                 timeoutMs: 1_000,
               });
+              const hold = holds.find((candidate) => candidate.label === `${generation}:${label}`);
+              if (hold) {
+                hold.entered();
+                await hold.release;
+                // New browser work from a capture admitted before retirement.
+                await callBrowser({
+                  method: "POST",
+                  path: "/act",
+                  body: { generation, label: `${label} after hold` },
+                  timeoutMs: 1_000,
+                });
+              }
+            } finally {
+              finished.push(`${generation}:${label}`);
+              notify();
             }
           });
         }),
@@ -246,6 +265,15 @@ async function createMeetingReloadFixture(options: { background: boolean }) {
     effects,
     generations,
     debug,
+    notify,
+    until,
+    finished: (generation: number, count: number) =>
+      until(() => finished.filter((label) => label.startsWith(`${generation}:`)).length >= count),
+    logged: (text: string, times = 1) =>
+      until(
+        () =>
+          debug.mock.calls.filter(([message]) => String(message).includes(text)).length >= times,
+      ),
     join,
     holdCapture,
     labels,
@@ -267,8 +295,13 @@ it.each([
     const meeting = await createMeetingReloadFixture({ background });
     useCaptureClock();
     await meeting.join(1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await settle();
+    // Step one tick at a time: a tick still dispatching makes the next one skip.
+    for (const tick of [1, 2]) {
+      await vi.advanceTimersByTimeAsync(5_000);
+      await (background
+        ? meeting.finished(1, tick + 1)
+        : meeting.logged("Gateway caller authority is no longer active.", tick));
+    }
 
     expect(meeting.labels()).toEqual(ticks);
     expect(meeting.effects.every((effect) => effect.owner === "first")).toBe(true);
@@ -280,12 +313,6 @@ it.each([
         { kind: "system" },
         { kind: "system" },
       ]);
-    }
-    if (!background) {
-      // Inherited request authority is refused before browser.request runs.
-      expect(meeting.debug).toHaveBeenCalledWith(
-        expect.stringContaining("Gateway caller authority is no longer active."),
-      );
     }
     await meeting.generations[0]!.bridge.stop(session, async () => {});
   },
@@ -307,24 +334,26 @@ it("drains an admitted capture through reload, refuses new ticks, and hands the 
   const otherWork = old.run(() => otherCall.promise);
   const oldApi = meeting.generations[0]!.api;
   const oldCallBrowser = meeting.generations[0]!.callBrowser!;
+  const quiesce = old.quiesce.bind(old);
+  vi.spyOn(old, "quiesce").mockImplementation(() => {
+    const accepting = quiesce();
+    meeting.notify();
+    return accepting;
+  });
   const reloading = meeting.fixture.reload();
-  await settle(() => !old.acceptingCalls);
-  expect(old.acceptingCalls).toBe(false);
+  await meeting.until(() => !old.acceptingCalls);
   expect(meeting.fixture.registryOwner.registry).toBe(meeting.fixture.previousRegistry);
 
   // Admitted work may finish, including its new browser call after retirement began.
   held.release();
   await vi.advanceTimersByTimeAsync(0);
-  await settle();
+  await meeting.finished(1, 2);
   expect(meeting.labels()).toEqual(["1:capture 1", "1:capture 2", "1:capture 2 after hold"]);
 
   // A tick that would start new capture work is refused before browser.request.
   await vi.advanceTimersByTimeAsync(5_000);
-  await settle();
+  await meeting.logged("Plugin first was reloaded or disabled");
   expect(meeting.labels()).toHaveLength(3);
-  expect(meeting.debug).toHaveBeenCalledWith(
-    expect.stringContaining("Plugin first was reloaded or disabled"),
-  );
 
   otherCall.resolve();
   await otherWork;
@@ -341,8 +370,10 @@ it("drains an admitted capture through reload, refuses new ticks, and hands the 
 
   // The replacement instance owns the meeting; the retired instance cannot reach it.
   await meeting.join(2);
-  await vi.advanceTimersByTimeAsync(10_000);
-  await settle();
+  for (const tick of [1, 2]) {
+    await vi.advanceTimersByTimeAsync(5_000);
+    await meeting.finished(2, tick + 1);
+  }
   expect(meeting.labels(2)).toEqual(["2:capture 1", "2:capture 2", "2:capture 3"]);
   await expect(
     oldCallBrowser({
@@ -378,15 +409,11 @@ it.each([
     await vi.advanceTimersByTimeAsync(elapsedMs);
     held.release();
     await vi.advanceTimersByTimeAsync(0);
-    await settle();
+    // The resumed capture's browser call is refused, and reported, before dispatch.
+    await meeting.logged('Plugin "first" runtime is no longer active.');
 
     expect(meeting.labels()).toEqual(["1:capture 1", "1:capture 2"]);
-    expect(meeting.debug).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "first" runtime is no longer active.'),
-    );
-    if (!forced) {
-      await vi.advanceTimersByTimeAsync(5_000);
-    }
+    // Before the limit, disposal completes once that capture settles; no clock advance.
     const result = await disposed;
     expect(result.errors.some((error) => error instanceof PluginInstanceDrainTimeoutError)).toBe(
       forced,
