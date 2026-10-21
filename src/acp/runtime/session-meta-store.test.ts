@@ -21,14 +21,20 @@ vi.mock("../../config/sessions/paths.js", () => ({
 const { readSessionEntryFromStore, resolveSessionStorePathForAcp } =
   await import("./session-meta-store.js");
 
-function explicitFleet(): OpenClawConfig {
+function explicitFleet(owner?: string): OpenClawConfig {
   return {
     agents: {
       ownership: "explicit",
       entries: { ops: {}, research: {} },
+      ...(owner ? { defaults: { sessionStore: { agentId: owner } } } : {}),
     },
+    ...(owner ? { session: { store: "/stores/shared.sqlite" } } : {}),
   };
 }
+
+const selectionError = expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" });
+const readGlobal = (cfg = explicitFleet(), agentId?: string) =>
+  readSessionEntryFromStore({ cfg, agentId, sessionKey: "global" });
 
 describe("ACP session metadata store ownership", () => {
   beforeEach(() => {
@@ -51,31 +57,21 @@ describe("ACP session metadata store ownership", () => {
   });
 
   it("returns a typed selection error for an ownerless bare key", () => {
-    expect(() =>
-      readSessionEntryFromStore({
-        cfg: explicitFleet(),
-        sessionKey: "global",
-      }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    expect(() => readGlobal()).toThrowError(selectionError);
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
   it.each(["persisted", "sole"] as const)("reads the %s owner's global session", (owner) => {
-    const cfg = {
-      ...explicitFleet(),
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ...explicitFleet().agents,
-        ...(owner === "persisted"
-          ? { defaults: { sessionStore: { agentId: "ops" } } }
-          : { entries: { ops: {} } }),
-      },
-    } satisfies OpenClawConfig;
+    const cfg =
+      owner === "persisted"
+        ? explicitFleet("ops")
+        : ({
+            session: { store: "/stores/shared.sqlite" },
+            agents: { ownership: "explicit", entries: { ops: {} } },
+          } satisfies OpenClawConfig);
     mocks.loadSessionEntryReadOnly.mockReturnValue({ sessionId: "ops-session" });
 
-    const result = readSessionEntryFromStore({ cfg, sessionKey: "global" });
-
-    expect(result).toMatchObject({
+    expect(readGlobal(cfg)).toMatchObject({
       agentId: "ops",
       storePath: "/stores/ops.json",
       entry: { sessionId: "ops-session" },
@@ -86,21 +82,9 @@ describe("ACP session metadata store ownership", () => {
   });
 
   it("returns a typed selection error when the persisted fixed-store owner is retired", () => {
-    const cfg = {
-      ...explicitFleet(),
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ...explicitFleet().agents,
-        defaults: { sessionStore: { agentId: "retired" } },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(() => readSessionEntryFromStore({ cfg, sessionKey: "global" })).toThrowError(
-      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-    );
-    expect(() =>
-      readSessionEntryFromStore({ cfg, agentId: "research", sessionKey: "global" }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    const cfg = explicitFleet("retired");
+    expect(() => readGlobal(cfg)).toThrowError(selectionError);
+    expect(() => readGlobal(cfg, "research")).toThrowError(selectionError);
     expect(mocks.loadSessionEntryReadOnly).not.toHaveBeenCalled();
   });
 
@@ -111,6 +95,6 @@ describe("ACP session metadata store ownership", () => {
         agentId: "ops",
         sessionKey: "agent:research:work",
       }),
-    ).toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+    ).toThrowError(selectionError);
   });
 });
