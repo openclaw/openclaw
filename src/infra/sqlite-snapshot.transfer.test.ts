@@ -2,16 +2,15 @@ import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readMigrationArtifactIdentity,
   type MigrationArtifactVerification,
 } from "./session-sqlite-migration-artifact.js";
-import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
   exclusiveCopyPublication,
   snapshotContent,
+  useSnapshotFixture,
   type PublicationFixture,
 } from "./sqlite-snapshot.test-support.js";
 
@@ -41,22 +40,15 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   };
 });
 
-import { createVerifiedSqliteSnapshot, publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
+import { publishVerifiedSqliteFile } from "./sqlite-snapshot.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let sourcePath: string;
 let targetPath: string;
 let tempDir: string;
-
-beforeEach(async () => {
-  tempDir = tempDirs.make("openclaw-sqlite-transfer-");
-  if (process.platform === "win32") {
-    tempDir = path.join(tempDir, "private");
-    await createPrivateSqliteDirectory(tempDir);
-  }
-  sourcePath = path.join(tempDir, "source.sqlite");
-  targetPath = path.join(tempDir, "snapshot.sqlite");
-  execSource("VACUUM;");
+const fixture = useSnapshotFixture({ preserveRowIds: true });
+const { execSource, query, snapshot, expectSnapshotFailureWithoutTarget } = fixture;
+beforeEach(() => {
+  ({ tempDir, sourcePath, targetPath } = fixture);
 });
 
 afterEach(() => {
@@ -64,27 +56,6 @@ afterEach(() => {
   durabilityTestState.hashedBytes = 0;
   vi.restoreAllMocks();
 });
-
-type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
-
-async function expectSnapshotFailureWithoutTarget(pattern: RegExp): Promise<void> {
-  await expect(snapshot()).rejects.toThrow(pattern);
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
-}
-
-function execSource(sql: string) {
-  using source = new (requireNodeSqlite().DatabaseSync)(sourcePath);
-  source.exec(sql);
-}
-
-function query(sql: string, file = targetPath) {
-  using database = new (requireNodeSqlite().DatabaseSync)(file, { readOnly: true });
-  return database.prepare(sql).all();
-}
-
-function snapshot(options: Partial<SnapshotOptions> = {}) {
-  return createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds: true, ...options });
-}
 
 function mockExclusiveCopyTransfer() {
   const transfer = exclusiveCopyPublication();
