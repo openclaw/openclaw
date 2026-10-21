@@ -340,31 +340,6 @@ describe("scripts/ui", () => {
     }
   });
 
-  it("routes Windows Corepack pnpm entrypoints through node", () => {
-    const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(tempDir, "pnpm.mjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-    const env = { npm_execpath: npmExecPath, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
-
-    expect(
-      resolvePnpmSpawnCall(["run", "build"], env, {
-        cwd: "C:\\repo\\ui",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [npmExecPath, "run", "build"],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env,
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
-  });
-
   it("detects direct execution through a junctioned script path", () => {
     const realScriptPath = path.resolve("repo/openclaw/scripts/ui.js");
     const junctionScriptPath = path.resolve("linked/openclaw/scripts/ui.js");

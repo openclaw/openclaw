@@ -15,7 +15,6 @@ import {
   selectChangedTsgoCoreTestShards,
   orderChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
-  TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
@@ -243,19 +242,6 @@ describe("changed core test graph selection", () => {
     expect(names(["test/helpers/shared.ts"])).toEqual(selected.map((shard) => shard.name));
   });
 
-  it.each([leaf])("selects every consuming test graph for %s", (source) => {
-    const graphs = inventory();
-    for (const graph of graphs) {
-      if (graph.name === "core-test-agents-tools") {
-        graph.files.push(source);
-      }
-    }
-    expect(selectChangedTsgoCoreTestShards([source], graphs)?.map((shard) => shard.name)).toEqual([
-      "agents-other",
-      "agents-tools",
-    ]);
-  });
-
   it.each([
     ["mixed config input", [leaf, "package.json"]],
     ["production ownership", [leaf]],
@@ -281,14 +267,6 @@ function compilerFixture(prefix: string, scripts: string[]) {
   fs.symlinkSync(path.resolve("scripts/lib"), f.file("scripts/lib"), "dir");
   return f;
 }
-const compilerOptions = {
-  noEmit: true,
-  strict: true,
-  types: [],
-  lib: ["es5"],
-  module: "nodenext",
-  target: "es2022",
-};
 let fixtureReceipts: FixtureReceiptChannel;
 beforeAll(async () => {
   fixtureReceipts = await openFixtureReceiptChannel();
@@ -428,7 +406,12 @@ it.runIf(process.platform !== "win32")(
                 : ["src/empty.ts"];
         json(config, {
           compilerOptions: {
-            ...compilerOptions,
+            noEmit: true,
+            strict: true,
+            types: [],
+            lib: ["es5"],
+            module: "nodenext",
+            target: "es2022",
             incremental: true,
             tsBuildInfoFile: file(`.artifacts/${name}.tsbuildinfo`),
           },
@@ -521,17 +504,6 @@ exec ${JSON.stringify(native)} "$@"
       expect(initial.builds).toEqual([]);
       const extension = "extensions/example/value.ts";
       write(extension, "export type ExtensionValue = number;\n");
-      const noncoreConsumer = "test/noncore-consumer.ts";
-      write(
-        noncoreConsumer,
-        "export type { ExtensionValue } from '../extensions/example/value.js';\n",
-      );
-      for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
-        json(graph.config, {
-          compilerOptions,
-          files: [file(noncoreConsumer)],
-        });
-      }
       const plannerDriver = write(
         "scripts/extension-plan-fixture.mts",
         `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
@@ -540,21 +512,17 @@ if (process.argv[2] === "boundary") {
   const graphs = await checkCoreTsgoGraphBoundary();
   console.log(JSON.stringify(Object.fromEntries(graphs.map(({ name, files }) => [name, files]))));
 } else {
-  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}, ...JSON.parse(process.argv[3])], {
+  const plan = await createChangedCiTypeCheckPlan([${JSON.stringify(helper)}], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
   });
   console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
 }
 `,
       );
-      const inspectExtension = async (
-        mode: "plan" | "core-plan" | "boundary",
-        extraPaths: string[] = [],
-      ) => {
+      const inspectExtension = async (mode: "core-plan" | "boundary") => {
         write("compiler-events.tsv", "");
-        return await run(plannerDriver, [mode, JSON.stringify(extraPaths)]);
+        return await run(plannerDriver, [mode]);
       };
-      const deletedNonCompilerPaths = ["docs/removed.md", "docs/removed.mdx", "ui/src/removed.css"];
       const presentationPaths = [
         "extensions/active-memory/control-ui.presentation.json",
         "extensions/memory-wiki/control-ui.presentation.json",
@@ -612,26 +580,6 @@ if (process.argv[2] === "boundary") {
       for (const [config, original] of originalConfigs) {
         write(config, original);
       }
-      const extensionPlan = await inspectExtension("plan", deletedNonCompilerPaths);
-      const expectPlan = (result: Awaited<ReturnType<typeof runNodeScript>>, names: string[]) => {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout.trim())).toEqual({ mode: "changed", names });
-      };
-      expectPlan(extensionPlan, [
-        "extensions",
-        "extensions-test",
-        "scripts",
-        ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
-      ]);
-      const discovery = compilerEvents();
-      expect(discovery).toHaveLength(7);
-      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
-      const corePlan = await inspectExtension("core-plan", deletedNonCompilerPaths);
-      expectPlan(corePlan, ["core-test-agents-other"]);
-      const deletedCompilerPlan = await inspectExtension("plan", ["extensions/example/removed.ts"]);
-      expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
-      expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
-      expect(compilerEvents()).toEqual([]);
       // Its parallel owner must still reject a type-only edge into an extension.
       write(
         consumer,

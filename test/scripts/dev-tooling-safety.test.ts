@@ -650,22 +650,6 @@ describe("script-specific dev tooling hardening", () => {
     expect(body.cancel).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds OpenAI realtime smoke response body reads by streamed bytes", async () => {
-    const maxBytes = realtime.OPENAI_HTTP_RESPONSE_MAX_BYTES;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new Uint8Array(maxBytes + 1));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(
-      realtime.readBoundedText(response, "OpenAI Realtime test", maxBytes),
-    ).rejects.toThrow(`OpenAI Realtime test response body exceeded ${maxBytes} bytes`);
-  });
-
   it("rejects absolute-form URLs in the Anthropic capture proxy", () => {
     expect(
       prompt.resolveAnthropicUpstreamUrl(

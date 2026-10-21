@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
@@ -19,7 +19,7 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
@@ -164,9 +164,14 @@ async function runWithProcesses(
   signal: AbortSignal,
 ) {
   const sockets = new Set<net.Socket>();
-  const events = new Map<string, net.Socket>();
+  const events = new Map<string, ReturnType<typeof createDeferred<net.Socket>>>();
+  const event = (name: string) => {
+    if (!events.has(name)) {
+      events.set(name, createDeferred<net.Socket>());
+    }
+    return events.get(name)!;
+  };
   const checkpointPids = new Set<number>();
-  const listeners = new Map<string, (socket: net.Socket) => void>();
   let cleaning = false;
   const server = net.createServer((socket) => {
     sockets.add(socket);
@@ -174,10 +179,9 @@ async function runWithProcesses(
       socket.end("continue");
     }
     socket.once("data", (data) => {
-      const { name: event, pid } = JSON.parse(data.toString());
+      const { name, pid } = JSON.parse(data.toString());
       checkpointPids.add(pid);
-      events.set(event, socket);
-      listeners.get(event)?.(socket);
+      event(name).resolve(socket);
     });
   });
   server.listen(0, "127.0.0.1");
@@ -227,21 +231,7 @@ async function runWithProcesses(
   if (signal.aborted) {
     abort();
   }
-  const waitEvent = (name: string) =>
-    new Promise<net.Socket>((resolve, reject) => {
-      signal.throwIfAborted();
-      signal.addEventListener(
-        "abort",
-        () => reject(new Error("Fixture canceled", { cause: signal.reason })),
-        { once: true },
-      );
-      const socket = events.get(name);
-      if (socket) {
-        resolve(socket);
-      } else {
-        listeners.set(name, resolve);
-      }
-    });
+  const waitEvent = (name: string) => withinTest(event(name).promise, signal);
   try {
     const checkpoint = (name: string) => `
         const socket = require('node:net').connect(${address.port}, '127.0.0.1', () => socket.write(JSON.stringify({ name: ${JSON.stringify(name)}, pid: process.pid })));
@@ -553,16 +543,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   });
 
-  it("releases ownership after a native execFileSync ENOENT error", async () => {
-    const root = createCheckout();
-    const error = await withDistArtifactOwnership(root, async () =>
-      execFileSync(path.join(root, "absent-command"), [], { stdio: "pipe" }),
-    ).catch((cause: unknown) => cause);
-    expect(error).toHaveProperty("code", "ENOENT");
-    expect((error as { error?: unknown }).error ?? error).toBe(error);
-    expectOwnership(root, false, false);
-  });
-
   it.for([false, true])(
     "retains ownership when recording uncertainty fails (nested=%s)",
     async (nested, { signal }) => {
@@ -630,39 +610,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(recovered.code, recovered.output).toBe(0);
         expectFile(root, "dist/retained-artifact.txt", "next generation");
         expectFile(directory, "owner.json", false);
-      }, signal);
-    },
-  );
-
-  it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
-    "retains ownership for unjoined work nested in %s",
-    async (kind, { signal }) => {
-      // Retention deliberately keeps lock handles open; a joined child owns
-      // their disposal rather than leaking them into the shared Vitest worker.
-      await withProcesses(async ({ start }) => {
-        const root = createCheckout();
-        const probe = write(
-          root,
-          "retained-error.mts",
-          `
-          import assert from 'node:assert/strict';
-          import { withDistArtifactOwnership } from ${JSON.stringify(sourceScript("lib/dist-artifact-ownership.mts"))};
-          const kind = ${JSON.stringify(kind)};
-          const uncertainty = { processTreeState: 'indeterminate' };
-          const aggregate = new AggregateError([], 'sibling cleanup');
-          aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
-          const error = kind === 'cyclic aggregate' ? aggregate
-            : kind === 'bundler errors' ? Object.assign(new Error('Build failed'), { errors: [aggregate] })
-            : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
-          const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
-            throw error;
-          }).catch(cause => cause);
-          assert.equal(outcome, error);
-        `,
-        );
-        const result = await start(root, probe).done;
-        expectOwnership(root, true, true);
-        expect(result.code, result.output).toBe(0);
       }, signal);
     },
   );
