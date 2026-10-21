@@ -30,9 +30,14 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { persistSessionTranscriptTurn as persistTurn } from "./session-accessor.js";
 import { getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot } from "./session-transcript-reconcile-pool.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
+import {
+  holdReconcileAck,
+  markRebuild as markDirty,
+  rebuildState,
+  seedTranscript as seed,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning as isReconciling,
   reconcileSessionTranscriptIndexes as reconcile,
@@ -43,7 +48,6 @@ import {
 } from "./session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
   (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
@@ -99,23 +103,6 @@ function expectLeases(databasePath: string, ...expected: Array<string | undefine
   );
 }
 
-type Database = ReturnType<typeof openDatabase>;
-function markDirty(database: Database, sessionId: string) {
-  database.db
-    .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
-    .run(sessionId);
-}
-function rebuildState(database: Database, sessionId: string) {
-  return database.db
-    .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
-    .get(sessionId);
-}
-function seed(scope: Parameters<typeof persistTurn>[0], eventId: string, content: string) {
-  return persistTurn(scope, {
-    messages: [{ eventId, message: { role: "user", content } }],
-    touchSessionEntry: false,
-  });
-}
 const settledOutcome = <T>(operation: Promise<T>) =>
   operation.then(
     (value) => ({ status: "fulfilled" as const, value }),
@@ -212,51 +199,11 @@ function readProjectedTranscript(database: ReturnType<typeof openDatabase>, sess
     .all(sessionId);
 }
 
-function createPlanFinishFence(sessionId: string) {
-  const paused = createDeferred();
-  let worker: Worker | undefined;
-  let releaseAcknowledgement: (() => void) | undefined;
-  let released = false;
-  const plannerLeases = new Map<string, string>();
-  observer.onTask = ({ input, worker: created, port, observeMessage }) => {
-    if (input.mode === "disk") {
-      plannerLeases.set(input.path, input.leaseId);
-    }
-    worker = created;
-    const postMessage = port.postMessage.bind(port);
-    let finishingTarget = false;
-    observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
-      finishingTarget = message.type === "plan-finish" && message.sessionId === sessionId;
-    });
-    // The projection is committed before this ACK; pause the real worker without racing writes.
-    port.postMessage = (message: unknown, transferList) => {
-      const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-      if (finishingTarget && !released) {
-        finishingTarget = false;
-        releaseAcknowledgement = () => postMessage(message, options);
-        paused.resolve();
-        return;
-      }
-      postMessage(message, options);
-    };
-  };
-
-  return {
-    paused: paused.promise,
-    plannerLeases,
-    threadId: () => worker?.threadId,
-    release(): void {
-      released = true;
-      releaseAcknowledgement?.();
-    },
-  };
-}
-
 async function waitForCurrentProjection(databasePath: string, sessionId: string): Promise<void> {
   const database = openDatabase({ agentId: "main", path: databasePath });
   await vi.waitFor(
     () => {
-      expect(rebuildState(database, sessionId)).toEqual({ needs_rebuild: 0 });
+      expect(rebuildState(database.db, sessionId)).toEqual({ needs_rebuild: 0 });
     },
     { interval: 10, timeout: 5_000 },
   );
@@ -294,14 +241,11 @@ describe("session transcript reconcile worker lifecycle", () => {
       );
     try {
       for (const options of agents) {
-        await persistTurn(
+        await seed(
           { ...options, sessionId, sessionKey: `agent:${options.agentId}:fleet` },
-          {
-            messages: [
-              transcriptMessage(options.agentId, null, { role: "user", content: options.agentId }),
-            ],
-            touchSessionEntry: false,
-          },
+          options.agentId,
+          options.agentId,
+          null,
         );
         await waitForReconcile(options);
         // Leave only the native fixture lease before queuing cold publication workers.
@@ -316,7 +260,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         hostLeases.push(...leases);
       }
       const before = poolSnapshot();
-      const fence = createPlanFinishFence(sessionId);
+      const fence = holdReconcileAck(observer, "plan-finish", sessionId);
       for (const options of agents) {
         startReconcile(options);
       }
@@ -451,23 +395,15 @@ describe("session transcript reconcile worker lifecycle", () => {
     try {
       const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
       for (const target of [scope, secondScope]) {
-        await persistTurn(target, {
-          messages: [
-            transcriptMessage(`${target.sessionId}-seed`, null, {
-              role: "user",
-              content: target.sessionId,
-            }),
-          ],
-          touchSessionEntry: false,
-        });
+        await seed(target, `${target.sessionId}-seed`, target.sessionId, null);
       }
       const databaseOptions = { agentId: scope.agentId, env: scope.env };
       const database = openDatabase(databaseOptions);
 
-      markDirty(database, scope.sessionId);
-      markDirty(database, secondScope.sessionId);
+      markDirty(database.db, scope.sessionId);
+      markDirty(database.db, secondScope.sessionId);
 
-      const probe = createPlanFinishFence(scope.sessionId);
+      const probe = holdReconcileAck(observer, "plan-finish", scope.sessionId);
       const changes = vi.fn(() => database.db.isTransaction);
       const unsubscribe = sessionChanges.subscribe(changes);
       const facts = vi.fn();
@@ -493,7 +429,7 @@ describe("session transcript reconcile worker lifecycle", () => {
           allReconciliation,
           "reconciliation completed without the target acknowledgement gate",
         );
-        expect(rebuildState(database, scope.sessionId)).toEqual({ needs_rebuild: 0 });
+        expect(rebuildState(database.db, scope.sessionId)).toEqual({ needs_rebuild: 0 });
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
@@ -508,7 +444,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
         expect(allReconciled).toBe(false);
-        expect(rebuildState(database, secondScope.sessionId)).toEqual({ needs_rebuild: 1 });
+        expect(rebuildState(database.db, secondScope.sessionId)).toEqual({ needs_rebuild: 1 });
       } finally {
         probe.release();
         try {
@@ -552,7 +488,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       // Each active pass additionally retains the canonical publication actor until idle retirement.
       const baselineLeaseCount = countAgentDatabaseLeases(database.path, env);
 
-      markDirty(database, scope.sessionId);
+      markDirty(database.db, scope.sessionId);
       observer.onTask = ({ worker, observeMessage }) => {
         workers.add(worker);
         tasks += 1;
@@ -560,7 +496,7 @@ describe("session transcript reconcile worker lifecycle", () => {
           if (message.type !== "done" || !injectPending || injectedPending >= 6) {
             return;
           }
-          markDirty(database, scope.sessionId);
+          markDirty(database.db, scope.sessionId);
           injectedPending += 1;
           startReconcile({ ...databaseOptions, preferredSessionId: scope.sessionId });
         });
@@ -594,7 +530,7 @@ describe("session transcript reconcile worker lifecycle", () => {
       expect(workers.size).toBe(1);
       expect(injectedPending).toBe(6);
       expect(sleepSpy.mock.calls).toEqual([[0], [50], [200], [500], [1_000], [1_000]]);
-      expect(rebuildState(database, scope.sessionId)).toEqual({ needs_rebuild: 0 });
+      expect(rebuildState(database.db, scope.sessionId)).toEqual({ needs_rebuild: 0 });
       expect(readProjectedTranscript(database, scope.sessionId)).toHaveLength(2);
       expect([...workers].every((worker) => worker.threadId > 0)).toBe(true);
       expect(isReconciling(databaseOptions)).toBe(false);
@@ -621,8 +557,8 @@ describe("session transcript reconcile worker lifecycle", () => {
           const database = openDatabase(databaseOptions);
           const expected = readProjectedTranscript(database, scope.sessionId);
           expect(expected).toHaveLength(1);
-          markDirty(database, scope.sessionId);
-          const probe = createPlanFinishFence(scope.sessionId);
+          markDirty(database.db, scope.sessionId);
+          const probe = holdReconcileAck(observer, "plan-finish", scope.sessionId);
           const outcome = settledOutcome(reconcile(databaseOptions));
           try {
             await awaitGateBeforeSettlement(
@@ -693,7 +629,7 @@ describe("session transcript reconcile worker lifecycle", () => {
           // Admit the initial status once; the measured clean read needs no write grants.
           await reconcile(options);
         } else {
-          markDirty(database, scope.sessionId);
+          markDirty(database.db, scope.sessionId);
         }
         const admissions: string[] = [];
         const admissionSpy = workerProbe.admission(admission, (request, grant, admit) => {
@@ -725,7 +661,7 @@ describe("session transcript reconcile worker lifecycle", () => {
                 : ["transaction", "commit"],
           );
           expect(database.db.isTransaction).toBe(false);
-          expect(rebuildState(database, scope.sessionId)).toEqual({
+          expect(rebuildState(database.db, scope.sessionId)).toEqual({
             needs_rebuild: mode === "clean" ? 0 : 1,
           });
         } finally {
@@ -760,9 +696,9 @@ describe("session transcript reconcile worker lifecycle", () => {
 
           const database = openDatabase({ agentId: "main" });
           const databasePath = database.path;
-          markDirty(database, primarySessionId);
+          markDirty(database.db, primarySessionId);
           if (failAfterFirstPlan) {
-            markDirty(database, "cleanup-malformed");
+            markDirty(database.db, "cleanup-malformed");
             database.db
               .prepare(
                 "UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 1",
