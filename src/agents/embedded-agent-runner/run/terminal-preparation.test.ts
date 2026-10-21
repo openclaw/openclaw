@@ -48,6 +48,43 @@ describe("prepareEmbeddedRunTerminal", () => {
 
   it.each([
     {
+      name: "an acknowledgement-only user reply",
+      payload: { text: "HEARTBEAT_OK" },
+      heartbeat: undefined,
+      visible: false,
+    },
+    {
+      name: "visible text beside the acknowledgement token",
+      payload: { text: "HEARTBEAT_OK Everything is ready." },
+      heartbeat: undefined,
+      visible: true,
+    },
+    {
+      name: "media beside the acknowledgement token",
+      payload: { text: "HEARTBEAT_OK", mediaUrl: "https://example.invalid/chart.png" },
+      heartbeat: undefined,
+      visible: true,
+    },
+    {
+      name: "a real heartbeat acknowledgement",
+      payload: { text: "HEARTBEAT_OK" },
+      heartbeat: { continuesConversation: false },
+      visible: true,
+    },
+  ])("keeps $name aligned with reply presentation", async ({ payload, heartbeat, visible }) => {
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([payload]);
+
+    const prepared = await prepareAttempt({
+      attempt: attemptResult(),
+      heartbeat,
+    });
+
+    expect(prepared.payloadsWithToolMedia).toEqual([payload]);
+    expect(prepared.payloadsForVisibleCompletion).toEqual(visible ? [payload] : []);
+  });
+
+  it.each([
+    {
       name: "core-attested delivered media",
       attestedMediaUrls: ["/tmp/reply.opus"],
       forgePublicField: false,

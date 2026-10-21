@@ -1,4 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { stripHeartbeatToken } from "../../../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -359,6 +361,10 @@ export function prepareEmbeddedRunTerminal(input: {
     !attempt.didSendDeterministicApprovalPrompt &&
     !attempt.lastToolError &&
     (attempt.toolMetas?.length ?? 0) === 0;
+  const payloadsForVisibleCompletion = filterPresentationHiddenAcknowledgements({
+    payloads: recoveredFinalAssistantPayloadsAfterPromptTimeout ?? payloadsWithToolMedia,
+    isHeartbeatTrigger: runParams.trigger === "heartbeat",
+  });
   const attemptToolSummary = buildTraceToolSummary(attempt);
   // Cron execution denials must not look like successful silent completions.
   let failureSignal: EmbeddedRunFailureSignal | undefined;
@@ -393,6 +399,7 @@ export function prepareEmbeddedRunTerminal(input: {
     finalAssistantMessageRawText,
     payloads,
     payloadsWithToolMedia,
+    payloadsForVisibleCompletion,
     timedOutDuringPrompt,
     recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasSuccessfulFinalAssistantAfterPromptTimeout,
@@ -401,6 +408,23 @@ export function prepareEmbeddedRunTerminal(input: {
     failureSignal,
     terminalToolFailure,
   };
+}
+
+function filterPresentationHiddenAcknowledgements(input: {
+  payloads: EmbeddedAgentRunResult["payloads"];
+  isHeartbeatTrigger: boolean;
+}): EmbeddedAgentRunResult["payloads"] {
+  if (input.isHeartbeatTrigger || !input.payloads) {
+    return input.payloads;
+  }
+  return input.payloads.filter((payload) => {
+    const text = payload.text;
+    if (!text) {
+      return true;
+    }
+    const presentation = stripHeartbeatToken(text, { mode: "message" });
+    return !(presentation.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia);
+  });
 }
 
 function replacePartialAssistantPayload(input: {

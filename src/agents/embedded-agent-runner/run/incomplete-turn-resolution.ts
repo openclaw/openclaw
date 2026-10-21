@@ -53,6 +53,7 @@ type TerminalAuthFailureContext = {
  */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
+  rawPayloadCount?: number;
   aborted: boolean;
   externalAbort: boolean;
   timedOut: boolean;
@@ -90,6 +91,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
+  const presentationHiddenAssistantReply =
+    (params.rawPayloadCount ?? params.payloadCount) > params.payloadCount;
 
   if (
     (params.payloadCount !== 0 &&
@@ -136,6 +139,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     !incompleteTerminalAssistant &&
     !assistantState.reasoningOnly &&
     !thinkingOnlyTerminal &&
+    !presentationHiddenAssistantReply &&
     !assistantState.emptyResponse &&
     stopReason !== "error"
   ) {

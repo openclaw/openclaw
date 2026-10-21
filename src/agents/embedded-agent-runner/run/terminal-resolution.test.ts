@@ -420,6 +420,69 @@ describe("terminal resolution", () => {
     },
   );
 
+  it("surfaces the canonical missing-result outcome for a presentation-hidden acknowledgement", async () => {
+    const text = "HEARTBEAT_OK";
+    const assistant = textAssistant(text);
+    const input = makeTerminalInput({
+      assistant,
+      attemptOverrides: {
+        assistantTexts: [text],
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      },
+      finalAssistantRawText: text,
+      payloadsWithToolMedia: [{ text }],
+      payloadsForVisibleCompletion: [],
+      runParams: { terminalReplyExpectation: "result-required" },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expectComplete(resolved);
+    expect(resolved.result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      message: "No answer was returned. Ask again if you still need one.",
+    });
+    expect(resolved.result.meta.terminalReply).toEqual({ disposition: "empty" });
+    expect(resolved.result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(resolved.result.meta.finalAssistantRawText).toBeUndefined();
+    expect(resolved.result.payloads).toBeUndefined();
+    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an optional turn", terminalReplyExpectation: "optional", delivered: false },
+    {
+      name: "a delivered required result",
+      terminalReplyExpectation: "result-required",
+      delivered: true,
+    },
+  ] as const)(
+    "does not manufacture a missing-result outcome for $name",
+    async ({ terminalReplyExpectation, delivered }) => {
+      const text = "HEARTBEAT_OK";
+      const assistant = textAssistant(text);
+      const input = makeTerminalInput({
+        assistant,
+        attemptOverrides: {
+          assistantTexts: [text],
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        },
+        finalAssistantRawText: text,
+        payloadsWithToolMedia: [{ text }],
+        payloadsForVisibleCompletion: [],
+        replyDeliveryState: delivered ? "delivered" : "missing",
+        runParams: { terminalReplyExpectation },
+      });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expectComplete(resolved);
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(resolved.result.payloads).toEqual([{ text }]);
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
+
   it("completes optional empty output without recovery or a silent classification", async () => {
     const input = makeTerminalInput({ runParams: { terminalReplyExpectation: "optional" } });
     const resolved = await resolveEmbeddedRunTerminal(input);
