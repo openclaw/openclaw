@@ -250,7 +250,7 @@ export async function selectUsageSessions(params: {
   );
   const store: Record<string, SessionEntry> = {};
   const targetsBySessionKey = new Map<string, UsageSessionTarget>();
-  for (const [key, entry] of selection.entries("all")) {
+  for (const [key, entry] of selection.entries()) {
     store[key] = entry;
     targetsBySessionKey.set(key, selection.getTarget(key)!);
   }
