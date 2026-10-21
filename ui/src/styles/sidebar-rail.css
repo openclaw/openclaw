@@ -446,6 +446,10 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   margin-inline-start: auto;
 }
 
+.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
+  margin-inline-start: 0;
+}
+
 /* A growing section toggle would cover the row's empty space, which must stay
    non-interactive so native hosts can drag the window from it. */
 .sidebar-panel-header > .sidebar-session-group-toggle {
