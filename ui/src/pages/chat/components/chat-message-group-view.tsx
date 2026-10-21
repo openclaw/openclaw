@@ -1,10 +1,10 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
@@ -406,12 +406,9 @@ function FramedMessageGroup(props: {
   const replyElements: ReplyConnectorElements = {};
   const frame = createMemo(() => prepareMessageGroupFrame(props.group, props.options));
   const options = () => frame().options;
-  const media = globalThis.matchMedia?.(
+  const mobile = createMediaQuery(
     "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
   );
-  const [mobile, setMobile] = createSignal(media?.matches ?? false);
-  const onLayoutChange = () => setMobile(media?.matches ?? false);
-  onSettled(() => media && listen(media, "change", onLayoutChange));
   return (
     <div
       ref={(element) => (replyElements.group = element)}
