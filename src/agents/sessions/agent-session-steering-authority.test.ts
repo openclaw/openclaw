@@ -49,6 +49,36 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 
 registerAgentSessionLoopTestLifecycle();
+type Session = Awaited<ReturnType<typeof createTestSession>>["session"];
+function steer(
+  session: Session,
+  text: string,
+  {
+    canAdmit = () => true,
+    prepare,
+    recorder,
+  }: {
+    canAdmit?: () => boolean;
+    prepare?: () => Promise<void>;
+    recorder?: Parameters<Session["steer"]>[2];
+  },
+) {
+  return session.steer(
+    text,
+    undefined,
+    recorder,
+    undefined,
+    undefined,
+    undefined,
+    canAdmit,
+    undefined,
+    prepare,
+  );
+}
+const currentGuard = (assertCurrent: () => void) => () => {
+  assertCurrent();
+  return true;
+};
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
   testing.resetSessionControllerForTest();
@@ -81,10 +111,7 @@ it.each(["allowed", "refused", "revoked"] as const)(
           text,
           options,
           undefined,
-          () => {
-            preparation.assertCurrent();
-            return true;
-          },
+          currentGuard(() => preparation.assertCurrent()),
           undefined,
           async () => {
             await preparation.prepareCurrent();
@@ -151,21 +178,11 @@ it("orders final steering preparation through the actual session enqueue", async
   const enqueue = vi.spyOn(session.agent, "admitSteeringMessage");
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const steer = (text: string, prepare: () => Promise<void>) =>
-    session.steer(
-      text,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => true,
-      undefined,
-      prepare,
-    );
-  const first = steer("first", async () => {
-    entered.resolve();
-    await release.promise;
+  const first = steer(session, "first", {
+    prepare: async () => {
+      entered.resolve();
+      await release.promise;
+    },
   });
   const pending = [first];
   try {
@@ -174,7 +191,7 @@ it("orders final steering preparation through the actual session enqueue", async
       first,
       "first final preparation did not start",
     );
-    pending.push(steer("second", async () => {}));
+    pending.push(steer(session, "second", { prepare: async () => {} }));
     await vi.advanceTimersByTimeAsync(0);
     expect(enqueue).not.toHaveBeenCalled();
     release.resolve();
@@ -240,10 +257,7 @@ it.each([
             text,
             options,
             sessionKey,
-            () => {
-              preparation.assertCurrent();
-              return true;
-            },
+            currentGuard(() => preparation.assertCurrent()),
             undefined,
             preparation.prepareCurrent,
           );
@@ -376,42 +390,25 @@ it.each([
         version: 2,
         isAvailable: () => true,
         queueMessage: (text, options, assertOwner) =>
-          session.steer(
-            text,
-            undefined,
-            options?.userTurnTranscriptRecorder,
-            undefined,
-            undefined,
-            undefined,
-            () => {
-              assertOwner();
-              return true;
-            },
-          ),
+          steer(session, text, {
+            canAdmit: currentGuard(assertOwner),
+            recorder: options?.userTurnTranscriptRecorder,
+          }),
         ...(change.startsWith("legacy-")
           ? {}
           : {
               queueMessageAsync: (async (text, options, preparation) =>
-                session.steer(
-                  text,
-                  undefined,
-                  options?.userTurnTranscriptRecorder,
-                  undefined,
-                  undefined,
-                  undefined,
-                  () => {
-                    preparation.assertCurrent();
-                    return true;
-                  },
-                  undefined,
-                  async () => {
+                steer(session, text, {
+                  canAdmit: currentGuard(() => preparation.assertCurrent()),
+                  prepare: async () => {
                     await preparation.prepareCurrent();
                     if (change === "worker-revoked") {
                       policyPrepared.resolve();
                       await releasePolicy.promise;
                     }
                   },
-                )) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
+                  recorder: options?.userTurnTranscriptRecorder,
+                })) satisfies NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>,
             }),
       };
       const handle = {
@@ -545,17 +542,7 @@ it.each([
         notified();
       }
     });
-    const pending = session.steer(
-      "owned enqueue",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      () => callerCurrent,
-      undefined,
-      prepare,
-    );
+    const pending = steer(session, "owned enqueue", { canAdmit: () => callerCurrent, prepare });
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "Final admission was not entered");
       expect(enqueue).not.toHaveBeenCalled();

@@ -26,54 +26,23 @@ import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
+type RefusalCase = {
+  overflow?: boolean;
+  overlap?: boolean;
+  threshold?: boolean;
+  queued?: boolean;
+  later?: boolean;
+};
+
 describe("AgentSession refusal compaction", () => {
-  it.each([
-    {
-      name: "refusal explanation resembles overflow",
-      overflow: false,
-      overlap: true,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: false,
-      later: false,
-      expectedRequests: 1,
-    },
-    {
-      name: "threshold maintenance preserves explicit queued user",
-      overflow: false,
-      overlap: false,
-      threshold: true,
-      queued: true,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "actual overflow still retries",
-      overflow: true,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: false,
-      expectedRequests: 2,
-    },
-    {
-      name: "explicit later user turn after refusal",
-      overflow: false,
-      overlap: false,
-      threshold: false,
-      queued: false,
-      later: true,
-      expectedRequests: 1,
-    },
-  ])("$name", async ({ overflow, overlap, threshold, queued, later, expectedRequests }) => {
+  it.each<[string, RefusalCase, number]>([
+    ["refusal explanation resembles overflow", { overlap: true }, 1],
+    ["threshold maintenance after refusal", { threshold: true }, 1],
+    ["threshold maintenance preserves explicit queued user", { threshold: true, queued: true }, 2],
+    ["actual overflow still retries", { overflow: true }, 2],
+    ["explicit later user turn after refusal", { later: true }, 1],
+  ])("%s", async (_name, scenario, expectedRequests) => {
+    const { overflow, overlap, threshold, queued, later } = scenario;
     const requests: Array<{ url: string | undefined; body: unknown }> = [];
     const explanation = overlap
       ? "This request is refused; prompt is too long."
@@ -167,7 +136,7 @@ describe("AgentSession refusal compaction", () => {
         sessionManager,
         createAssistant(
           model,
-          [{ type: "text", text: "Earlier answer." }],
+          "Earlier answer.",
           "stop",
           threshold ? model.contextWindow - 15 : 10,
         ),

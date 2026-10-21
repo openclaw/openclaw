@@ -103,6 +103,25 @@ function toolCall(
   return { type: "toolCall", id, name, arguments: args };
 }
 
+function toolCalls(messages: AgentMessage[], id?: string) {
+  return messages.flatMap((message) =>
+    message.role === "assistant"
+      ? message.content.filter(
+          (block) => block.type === "toolCall" && (id === undefined || block.id === id),
+        )
+      : [],
+  );
+}
+
+async function reopen(scope: Parameters<typeof SessionManager.open>[0], dir: string) {
+  expect(
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
+    ),
+  ).toBe(true);
+  return SessionManager.open(scope, dir);
+}
+
 async function expectReopens(
   session: AgentSession,
   manager: SessionManager,
@@ -111,12 +130,7 @@ async function expectReopens(
 ) {
   const cached = manager.buildSessionContext();
   session.dispose();
-  expect(
-    await closeOpenClawAgentDatabaseByPathAsync(
-      resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
-    ),
-  ).toBe(true);
-  const reopened = SessionManager.open(scope, dir);
+  const reopened = await reopen(scope, dir);
   expect(reopened.buildSessionContext()).toEqual(cached);
   return reopened;
 }
@@ -189,20 +203,15 @@ it.each(sourceCases)(
     await session.prompt("Compute the harmless number.");
     expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
     const liveResult = session.state.messages.find((message) => message.role === "toolResult");
-    expect(liveResult).toMatchObject({ toolCallId: "call_source" });
     if (outcome === "validation") {
       expect(liveResult).toMatchObject({
+        toolCallId: "call_source",
         isError: true,
-        content: [
-          {
-            text: expect.stringContaining(
-              label.startsWith("invalid language") ? "language" : "code",
-            ),
-          },
-        ],
+        content: [{ text: expect.stringContaining("code") }],
       });
     } else {
       expect(liveResult).toMatchObject({
+        toolCallId: "call_source",
         details: { status: outcome, ...(outcome === "completed" ? { value: 42 } : {}) },
       });
     }
@@ -280,7 +289,6 @@ it.each(["message_end", "before_message_write"] as const)(
         ],
       }),
     };
-    let action = "unchanged";
     let change = changes.unchanged!;
     const replace = (message: AgentMessage): AgentMessage => {
       if (message.role !== "assistant" || message.stopReason !== "toolUse") {
@@ -320,8 +328,7 @@ it.each(["message_end", "before_message_write"] as const)(
       customTools: [...toToolDefinitions(tools), other],
       resourceLoader,
     });
-    for (const [nextAction, transform] of Object.entries(changes)) {
-      action = nextAction;
+    for (const [action, transform] of Object.entries(changes)) {
       change = transform;
       mockToolTurn([
         toolCall(`hook_${action}`, {
@@ -331,15 +338,7 @@ it.each(["message_end", "before_message_write"] as const)(
         }),
       ]);
       await session.prompt(`Test ${action}.`);
-      const stored = manager
-        .buildSessionContext()
-        .messages.flatMap((message) =>
-          message.role === "assistant"
-            ? message.content.filter(
-                (block) => block.type === "toolCall" && block.id === `hook_${action}`,
-              )
-            : [],
-        );
+      const stored = toolCalls(manager.buildSessionContext().messages, `hook_${action}`);
       if (action === "remove") {
         expect(stored).toHaveLength(0);
         continue;
@@ -465,14 +464,7 @@ it("preserves source across reused managers and ordinary append batches", async 
       customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
     });
     await session.prompt(`Use ${mode} mode.`);
-    const latestCall = manager
-      .buildSessionContext()
-      .messages.flatMap((message) =>
-        message.role === "assistant"
-          ? message.content.filter((block) => block.type === "toolCall")
-          : [],
-      )
-      .at(-1)!;
+    const latestCall = toolCalls(manager.buildSessionContext().messages).at(-1)!;
     if (latestCall.type !== "toolCall") {
       throw new Error("missing latest call");
     }
@@ -480,38 +472,29 @@ it("preserves source across reused managers and ordinary append batches", async 
     session.dispose();
   }
   const input = { command: source, code: source, nested: { code: source } };
-  const nested = [
-    createNestedToolActivity({
-      runId: "run-test",
-      scopeId: "scope-test",
-      afterEntryId: null,
-      startOrder: 0,
-      toolCallId: "nested_shell",
-      toolName: "exec",
-      parentToolCallId: "reused_id",
-      input: { ...input, toolKind: "code_mode_exec" },
-      result: { content: [{ type: "text", text: source }], details: {} },
-      isError: false,
-      startedAt: 1,
-      timestamp: 2,
-    }),
-  ];
-  const messages = nested.map((message, index) => ({
-    message: { ...message, idempotencyKey: `batch_${index}` },
-    eventId: `batch_${index}`,
-  }));
+  const nested = createNestedToolActivity({
+    runId: "run-test",
+    scopeId: "scope-test",
+    afterEntryId: null,
+    startOrder: 0,
+    toolCallId: "nested_shell",
+    toolName: "exec",
+    parentToolCallId: "reused_id",
+    input: { ...input, toolKind: "code_mode_exec" },
+    result: { content: [{ type: "text", text: source }], details: {} },
+    isError: false,
+    startedAt: 1,
+    timestamp: 2,
+  });
+  const messages = [{ message: { ...nested, idempotencyKey: "batch_0" }, eventId: "batch_0" }];
   const first = await appendTranscriptMessages(scope, { messages });
   const repeated = await appendTranscriptMessages(scope, { messages });
   expect(first).toMatchObject([{ appended: true }]);
   expect(repeated).toMatchObject([{ appended: false, messageId: first[0]?.messageId }]);
-  expect(
-    await closeOpenClawAgentDatabaseByPathAsync(
-      resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
-    ),
-  ).toBe(true);
-  const replay = SessionManager.open(scope, dir).buildSessionContext().messages;
+  const reopened = await reopen(scope, dir);
+  const replay = reopened.buildSessionContext().messages;
   expect(replay.some((message) => message.role === "custom")).toBe(false);
-  const storedActivity = SessionManager.open(scope, dir).getBranch().at(-1);
+  const storedActivity = reopened.getBranch().at(-1);
   expect(storedActivity).toMatchObject({
     message: {
       details: {
