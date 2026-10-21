@@ -2013,8 +2013,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-node-hosting-preconditions.test.ts",
   "src/commands/doctor-plugin-registry-generation-repair.test.ts",
   "src/commands/doctor-prompter.test.ts",
-  "src/commands/doctor-retired-models.ordering.test.ts",
-  "src/commands/doctor-retired-models.successor-guard.test.ts",
   "src/commands/doctor-retired-models.test.ts",
   "src/commands/doctor-security.test.ts",
   "src/commands/doctor-session-canonical-keys.completions.test.ts",
