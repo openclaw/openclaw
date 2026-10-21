@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -10,45 +11,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   prepareTestboxLeaseFreshness,
   recordTestboxLeaseFreshness,
-  testboxLeaseStaleReasons,
 } from "../../scripts/testbox-lease-freshness.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const fingerprint = {
-  version: 2,
-  caller: "codex",
-  taskKey: "e".repeat(64),
-  checkoutKey: "f".repeat(64),
-  baseSha: "a".repeat(40),
-  headSha: "d".repeat(40),
-  dependencyDigest: "b".repeat(64),
-  environmentDigest: "c".repeat(64),
-  workflow: ".github/workflows/ci-check-testbox.yml",
-  job: "check",
-  ref: "main",
-};
+let fixture: ReturnType<typeof createLeaseFixture>;
+beforeEach(() => {
+  fixture = createLeaseFixture();
+});
 
 describe("Testbox lease freshness", () => {
-  it.each([undefined, 1, 3])("rejects provenance schema %s", (version) => {
-    expect(testboxLeaseStaleReasons({ ...fingerprint, version }, fingerprint)).toEqual([
-      "state schema",
-    ]);
-  });
-
-  it("rejects reuse without an allocation receipt and does not adopt the lease", () => {
-    const fixture = createLeaseFixture();
-    expect(() => fixture.reuse()).toThrow("has no allocation receipt");
-    expect(existsSync(fixture.statePath)).toBe(false);
-  });
-
   it("records and reuses a lease with more than a buffer of source deletions", () => {
-    const fixture = createLeaseFixture();
     const blob = fixture.git(["hash-object", "-w", "--stdin"], "");
     // Index-only files keep this real large-status fixture cheap to create and remove.
     const entries = Array.from(
@@ -73,77 +50,142 @@ describe("Testbox lease freshness", () => {
     expect(fixture.reuse()?.current).toEqual(prepared?.current);
   });
 
-  it("invalidates saved proof when source-sync or workspace preparation owners change", () => {
-    const fixture = createLeaseFixture();
-    const workflow = ".github/workflows/custom-testbox.yml";
-    const owners = [
-      "scripts/crabbox-wrapper.mjs",
-      "scripts/crabbox-wrapper.mts",
-      "scripts/crabbox-source-capsule.mts",
-      "scripts/crabbox-source-receiver.mts",
-      "scripts/testbox-lease-freshness.mts",
-      ".github/actions/prepare-testbox-shell/action.yml",
-      ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
-      workflow,
-    ];
-    for (const owner of owners) {
-      const file = join(fixture.root, owner);
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, "original\n");
-    }
-    fixture.git(["add", "."]);
-    fixture.advanceBase();
-    const args = ["--blacksmith-workflow", workflow];
-    fixture.allocate(args);
-    const prepare = () => fixture.reuse(args);
-    writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
-    expect(() => prepare()).not.toThrow();
-    for (const owner of owners) {
-      const file = join(fixture.root, owner);
-      writeFileSync(file, "changed executable owner\n");
-      expect(() => prepare(), owner).toThrow("environmentDigest");
-      writeFileSync(file, "original\n");
-    }
+  it.each([".github/workflows/custom-testbox.yml", ""])(
+    "tracks preparation owners with workflow %j",
+    (workflow) => {
+      const owners = [
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper.mts",
+        "scripts/crabbox-source-capsule.mts",
+        "scripts/crabbox-source-receiver.mts",
+        "scripts/testbox-lease-freshness.mts",
+        ".github/actions/prepare-testbox-shell/action.yml",
+        ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
+        ".github/actions/setup-android-toolchain/action.yml",
+        ...(workflow ? [workflow] : []),
+      ];
+      for (const owner of owners) {
+        fixture.write(owner, "original\n");
+      }
+      fixture.git(["add", "."]);
+      fixture.advanceBase();
+      const args = workflow ? ["--blacksmith-workflow", workflow] : ["--blacksmith-workflow="];
+      fixture.allocate(args);
+      const prepare = () => fixture.reuse(args);
+      fixture.write("unrelated-source.ts", "source change\n");
+      expect(() => prepare()).not.toThrow();
+      for (const owner of owners) {
+        fixture.write(owner, "changed executable owner\n");
+        expect(() => prepare(), owner).toThrow("environmentDigest");
+        fixture.write(owner, "original\n");
+      }
+    },
+  );
+
+  it.each(["baseSha", "dependencyDigest", "environmentDigest", "workflow", "job", "ref"])(
+    "rejects recorded leases after %s changes",
+    (field) => {
+      const prepared = fixture.allocate();
+      expect(prepared).not.toBeNull();
+      const saved = readFileSync(fixture.statePath, "utf8");
+      let args: string[] = [];
+      if (field === "baseSha") {
+        fixture.advanceBase();
+      } else if (field === "dependencyDigest") {
+        fixture.write("package.json", '{"name":"changed"}\n');
+      } else if (field === "environmentDigest") {
+        fixture.write(".node-version", "26.8.1\n");
+      } else {
+        args = [`--blacksmith-${field}`, "changed"];
+      }
+      expect(() => fixture.reuse(args, { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow(field);
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+    },
+  );
+
+  it("reuses audited install inputs after metadata and non-install scripts change", () => {
+    const prepared = fixture.allocate();
+    fixture.manifest({
+      scripts: { test: "node changed-test.mjs" },
+      openclaw: { changed: true },
+    });
+    expect(fixture.reuse()?.current).toEqual(prepared?.current);
   });
 
-  it.each([
-    "headSha",
-    "baseSha",
-    "dependencyDigest",
-    "environmentDigest",
-    "workflow",
-    "job",
-    "ref",
-  ])("rejects recorded leases after %s changes", (field) => {
-    const fixture = createLeaseFixture();
+  it.each(["run", "warmup"])("admits sparse dependency inputs for %s", (operation) => {
+    fixture.write("patches/dependency.patch", "original patch bytes\n");
+    fixture.git(["add", "patches"]);
+    fixture.advanceBase();
     const prepared = fixture.allocate();
-    expect(prepared).not.toBeNull();
     const saved = readFileSync(fixture.statePath, "utf8");
-    let args: string[] = [];
-    if (field === "headSha") {
-      fixture.advanceHead();
-      expect(fixture.git(["rev-parse", "refs/remotes/origin/main"])).toBe(
-        prepared?.current.baseSha,
-      );
-    } else if (field === "baseSha") {
-      fixture.advanceBase();
-    } else if (field === "dependencyDigest") {
-      writeFileSync(join(fixture.root, "package.json"), '{"name":"changed"}\n');
-    } else if (field === "environmentDigest") {
-      writeFileSync(join(fixture.root, ".node-version"), "26.8.1\n");
-    } else {
-      args = [`--blacksmith-${field}`, "changed"];
-    }
-    expect(() => fixture.reuse(args)).toThrow(field);
+    fixture.git(["sparse-checkout", "init", "--cone", "--sparse-index"]);
+    fixture.git(["sparse-checkout", "set", ".github", "scripts"]);
+    expect(existsSync(join(fixture.root, "packages/example/package.json"))).toBe(false);
+    expect(existsSync(join(fixture.root, "patches/dependency.patch"))).toBe(false);
+    const reuse = () => fixture.prepare([operation, "--id", "tbx_fixture"]);
+    expect(reuse()?.current).toEqual(prepared?.current);
+    expect(() => reuse()?.assertCurrent()).not.toThrow();
+    fixture.write("patches/dependency.patch", "changed patch bytes\n");
+    expect(() => reuse()).toThrow("dependencyDigest");
     expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
   });
 
-  it.each([
-    {
-      caller: "codex",
-      env: { CODEX_THREAD_ID: "session-one" },
-      changes: [{ CODEX_THREAD_ID: "session-two" }],
+  it.each(["workspace manifest", "patch bytes", "install owner"])(
+    "rejects changed %s without refreshing allocation provenance",
+    (input) => {
+      const patch = "patches/dependency.patch";
+      fixture.write(patch, "original patch bytes\n");
+      fixture.allocate();
+      const saved = readFileSync(fixture.statePath, "utf8");
+      const file =
+        input === "patch bytes"
+          ? patch
+          : input === "workspace manifest"
+            ? "packages/example/package.json"
+            : ".github/actions/setup-node-env/install-dependencies.sh";
+      fixture.write(
+        file,
+        input === "workspace manifest"
+          ? '{"name":"changed-workspace"}\n'
+          : "changed install bytes\n",
+      );
+      expect(() => fixture.reuse()).toThrow("dependencyDigest");
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
     },
+  );
+
+  it("fails closed on unaudited install lifecycle changes", () => {
+    fixture.allocate();
+    const saved = readFileSync(fixture.statePath, "utf8");
+    fixture.manifest({ scripts: { postinstall: "node arbitrary.mjs" } });
+    expect(() => fixture.reuse()).toThrow("unaudited install lifecycle scripts");
+    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+  });
+
+  it("preserves failed-command allocation provenance across unchanged and changed source", () => {
+    const allocation = fixture.prepare(["run", "--keep", "--", "false"]);
+    recordTestboxLeaseFreshness(allocation, "tbx_fixture");
+    const saved = readFileSync(fixture.statePath, "utf8");
+    const originalStat = statSync(fixture.statePath);
+    for (const change of ["unchanged", "empty commit", "source commit"]) {
+      if (change === "source commit") {
+        fixture.write("source.ts", "export const value = 2;\n");
+        fixture.git(["add", "source.ts"]);
+      }
+      const head = change === "unchanged" ? allocation?.current.headSha : fixture.advanceHead();
+      const reused = fixture.reuse(["--", "pnpm", "test"]);
+      expect(reused?.current).toEqual({ ...allocation?.current, headSha: head });
+      expect(reused?.attribution.headSha).toBe(head);
+      expect(reused?.attribution.commandKey).not.toBe(allocation?.attribution.commandKey);
+      expect(() => reused?.assertCurrent()).not.toThrow();
+      recordTestboxLeaseFreshness(reused);
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+      const reusedStat = statSync(fixture.statePath);
+      expect(reusedStat).toMatchObject({ ino: originalStat.ino, mtimeMs: originalStat.mtimeMs });
+    }
+  });
+
+  it.each([
     {
       caller: "claude",
       env: { CODEX_THREAD_ID: undefined, CLAUDE_CODE_SESSION_ID: "session-one" },
@@ -161,7 +203,6 @@ describe("Testbox lease freshness", () => {
       changes: [{ GITHUB_RUN_ID: "101" }, { GITHUB_RUN_ATTEMPT: "2" }, { GITHUB_JOB: "build" }],
     },
   ])("binds reuse to the $caller task", ({ caller, env, changes }) => {
-    const fixture = createLeaseFixture();
     const prepared = fixture.allocate([], env);
     expect(prepared?.current.caller).toBe(caller);
     expect(fixture.reuse([], env)?.current).toEqual(prepared?.current);
@@ -171,7 +212,6 @@ describe("Testbox lease freshness", () => {
   });
 
   it("rejects another worktree even at the same head and task", () => {
-    const fixture = createLeaseFixture();
     const prepared = fixture.allocate();
     const worktree = join(fixture.root, "other-worktree");
     fixture.git(["worktree", "add", "--quiet", "--detach", worktree, "HEAD"]);
@@ -183,7 +223,6 @@ describe("Testbox lease freshness", () => {
   });
 
   it("keeps raw checkout, session, label, and payload values out of provenance", () => {
-    const fixture = createLeaseFixture();
     const session = "private-session-identifier";
     const label = "private-task-label";
     const payload = "private-command-payload";
@@ -215,71 +254,68 @@ describe("Testbox lease freshness", () => {
     expect(prepared?.current.taskKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(prepared?.current.checkoutKey).toMatch(/^[a-f0-9]{64}$/u);
     expect(prepared?.attribution.commandKey).toMatch(/^[a-f0-9]{64}$/u);
-    expect(prepared?.attribution.requestedIdleTimeout).toBe("30m");
-    expect(prepared?.attribution.requestedTtl).toBe("1h");
+    expect(prepared?.attribution).toMatchObject({
+      requestedIdleTimeout: "30m",
+      requestedTtl: "1h",
+    });
   });
 
-  it.each(["withdrawn", "reassigned", "old schema", "changed HEAD"])(
-    "rejects %s after preparation without refreshing allocation provenance",
-    (change) => {
-      const fixture = createLeaseFixture();
-      fixture.allocate();
-      const admitted = fixture.reuse();
-      const original = readFileSync(fixture.statePath, "utf8");
-      expect(() => admitted?.assertCurrent()).not.toThrow();
-      if (change === "withdrawn") {
-        rmSync(fixture.statePath);
-      } else if (change === "changed HEAD") {
-        fixture.advanceHead();
+  it.each([
+    ["withdrawn", "no allocation receipt"],
+    ["reassigned", "taskKey"],
+    ["old schema", "state schema"],
+    ["missing HEAD", "headSha"],
+    ["invalid HEAD", "headSha"],
+  ])("rejects %s after preparation without refreshing allocation provenance", (change, message) => {
+    fixture.allocate();
+    const admitted = fixture.reuse();
+    const original = readFileSync(fixture.statePath, "utf8");
+    expect(() => admitted?.assertCurrent()).not.toThrow();
+    if (change === "withdrawn") {
+      rmSync(fixture.statePath);
+    } else {
+      const receipt = JSON.parse(original);
+      if (change === "reassigned") {
+        receipt.taskKey = "another-task";
+      } else if (change === "old schema") {
+        receipt.version = 1;
       } else {
-        const receipt = JSON.parse(original);
-        if (change === "reassigned") {
-          receipt.taskKey = "another-task";
-        } else {
-          receipt.version = 1;
-        }
-        writeFileSync(fixture.statePath, JSON.stringify(receipt));
+        receipt.headSha = change === "missing HEAD" ? undefined : "invalid-sha";
       }
-      expect(() => admitted?.assertCurrent()).toThrow(
-        change === "withdrawn"
-          ? "no allocation receipt"
-          : change === "changed HEAD"
-            ? "headSha"
-            : change === "reassigned"
-              ? "taskKey"
-              : "state schema",
-      );
-      expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
-      if (change === "changed HEAD") {
-        expect(readFileSync(fixture.statePath, "utf8")).toBe(original);
-      }
-    },
-  );
+      writeFileSync(fixture.statePath, JSON.stringify(receipt));
+    }
+    const changedReceipt = existsSync(fixture.statePath)
+      ? readFileSync(fixture.statePath, "utf8")
+      : undefined;
+    expect(() => admitted?.assertCurrent()).toThrow(message);
+    expect(() => fixture.reuse()).toThrow(message);
+    expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
+    if (changedReceipt === undefined) {
+      expect(existsSync(fixture.statePath)).toBe(false);
+    } else {
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(changedReceipt);
+    }
+  });
 
   it("ignores lease flags inside the command payload", () => {
-    const fixture = createLeaseFixture();
     const env = { CODEX_THREAD_ID: undefined };
+    const payload = {
+      id: "tbx_payload",
+      label: "payload-task",
+      "idle-timeout": "9h",
+      ttl: "12h",
+      "blacksmith-workflow": "payload-workflow",
+      "blacksmith-job": "payload-job",
+      "blacksmith-ref": "payload-ref",
+    };
     const prepared = fixture.prepare(
       [
         "run",
         "--",
         "echo",
-        "--id",
-        "tbx_payload",
-        "--label",
-        "payload-task",
+        ...Object.entries(payload).flatMap(([flag, value]) => [`--${flag}`, value]),
         "--keep",
         "--keep-on-failure",
-        "--idle-timeout",
-        "9h",
-        "--ttl",
-        "12h",
-        "--blacksmith-workflow",
-        "payload-workflow",
-        "--blacksmith-job",
-        "payload-job",
-        "--blacksmith-ref",
-        "payload-ref",
       ],
       env,
     );
@@ -292,11 +328,18 @@ describe("Testbox lease freshness", () => {
   });
 
   it("allows operator one-shots and requires a task label to keep and reuse them", () => {
-    const fixture = createLeaseFixture();
     const env = { CODEX_THREAD_ID: undefined };
     expect(fixture.prepare(["run", "--", "true"], env)?.current.caller).toBe("operator");
     for (const args of [["warmup"], ["run", "--keep"], ["run", "--keep-on-failure"]]) {
       expect(() => fixture.prepare(args, env)).toThrow("--label");
+    }
+    for (const value of ["1", "t", "T", "TRUE", "true", "True"]) {
+      for (const flag of ["keep", "keep-on-failure"]) {
+        expect(() => fixture.prepare(["run", `--${flag}=${value}`], env)).toThrow("--label");
+        expect(() =>
+          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], env),
+        ).not.toThrow();
+      }
     }
     const prepared = fixture.prepare(["run", "--keep", "--label", "task-one", "--", "true"], env);
     recordTestboxLeaseFreshness(prepared, "tbx_fixture");
@@ -304,76 +347,24 @@ describe("Testbox lease freshness", () => {
     expect(() => fixture.reuse(["--label", "task-two"], env)).toThrow("taskKey");
   });
 
-  it.each(["1", "t", "T", "TRUE", "true", "True"])(
-    "matches native retained boolean %s",
-    (value) => {
-      const fixture = createLeaseFixture();
-      for (const flag of ["keep", "keep-on-failure"]) {
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`], { CODEX_THREAD_ID: undefined }),
-        ).toThrow("--label");
-        expect(() =>
-          fixture.prepare(["run", `--${flag}=${value}`, `--${flag}=false`], {
-            CODEX_THREAD_ID: undefined,
-          }),
-        ).not.toThrow();
-      }
-    },
-  );
-
-  it("preserves allocation provenance across failed commands and subsequent reuse", () => {
-    const fixture = createLeaseFixture();
-    const allocation = fixture.prepare(["run", "--keep", "--", "false"]);
-    // Allocation survives a failed command; reuse cannot replace it.
-    recordTestboxLeaseFreshness(allocation, "tbx_fixture");
-    const saved = readFileSync(fixture.statePath, "utf8");
-    const reused = fixture.reuse(["--", "pnpm", "test"]);
-    expect(reused?.current).toEqual(allocation?.current);
-    expect(reused?.attribution.commandKey).not.toBe(allocation?.attribution.commandKey);
-    const originalStat = statSync(fixture.statePath);
-
-    recordTestboxLeaseFreshness(reused);
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
-    const reusedStat = statSync(fixture.statePath);
-    expect(reusedStat.ino).toBe(originalStat.ino);
-    expect(reusedStat.mtimeMs).toBe(originalStat.mtimeMs);
-  });
-
-  it("keeps one-shot attribution out of persistent lease state", () => {
-    const fixture = createLeaseFixture();
-    const prepared = fixture.prepare(["run", "--", "true"]);
-    recordTestboxLeaseFreshness(prepared, "tbx_fixture");
+  it.each([
+    { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 0, retained: false },
+    { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 7, retained: true },
+  ])("records retention=$retained for $args exiting $exitCode", ({ args, exitCode, retained }) => {
+    const prepared = fixture.prepare(args);
+    recordTestboxLeaseFreshness(prepared, "tbx_fixture", exitCode);
     expect(prepared?.attribution.operation).toBe("run");
-    expect(existsSync(fixture.statePath)).toBe(false);
-  });
-
-  it.each([0, 7])("records conditional retention only after native failure (exit %s)", (status) => {
-    const fixture = createLeaseFixture();
-    const prepared = fixture.prepare(["run", "--keep-on-failure", "--", "task"]);
-    recordTestboxLeaseFreshness(prepared, "tbx_fixture", status);
-    expect(existsSync(fixture.statePath)).toBe(status !== 0);
-  });
-
-  it("does not treat an empty workflow option as the entire checkout", () => {
-    const fixture = createLeaseFixture();
-    const args = ["--blacksmith-workflow="];
-    fixture.allocate(args);
-    writeFileSync(join(fixture.root, "unrelated-source.ts"), "source change\n");
-    expect(() => fixture.reuse(args)).not.toThrow();
-  });
-
-  it("does not allow the retired stale override to refresh allocation provenance", () => {
-    const fixture = createLeaseFixture();
-    fixture.allocate();
-    const saved = readFileSync(fixture.statePath, "utf8");
-    fixture.advanceHead();
-    expect(() => fixture.reuse([], { OPENCLAW_TESTBOX_ALLOW_STALE: "1" })).toThrow("headSha");
-    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+    expect(existsSync(fixture.statePath)).toBe(retained);
   });
 });
 
 function createLeaseFixture() {
   const root = tempDirs.make("openclaw-testbox-freshness-");
+  const write = (file: string, content: string) => {
+    const target = join(root, file);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  };
   const env = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -386,6 +377,18 @@ function createLeaseFixture() {
   const git = (args: string[], input?: string) =>
     execFileSync("git", ["-C", root, ...args], { env, encoding: "utf8", input }).trim();
   git(["init", "--quiet", "--initial-branch=main"]);
+  for (const relative of [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    "scripts/lib/pnpm-lockfile-documents.mjs",
+  ]) {
+    const file = join(root, relative);
+    mkdirSync(dirname(file), { recursive: true });
+    copyFileSync(new URL("../../" + relative, import.meta.url), file);
+  }
+  write("package.json", '{"name":"lease-fixture","private":true}\n');
+  write("packages/example/package.json", '{"name":"workspace-fixture"}\n');
+  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/example: {}\n");
+  git(["add", "."]);
   const tree = git(["write-tree"]);
   const initial = git(["commit-tree", tree], "Initial fixture\n");
   git(["update-ref", "HEAD", initial]);
@@ -410,6 +413,11 @@ function createLeaseFixture() {
   };
   return {
     root,
+    write,
+    manifest(overrides: Record<string, unknown>) {
+      const value = { name: "lease-fixture", private: true, ...overrides };
+      write("package.json", JSON.stringify(value, null, 2));
+    },
     git,
     prepare,
     advanceHead,

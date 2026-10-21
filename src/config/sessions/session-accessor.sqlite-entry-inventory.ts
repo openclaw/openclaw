@@ -5,7 +5,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   parseSessionEntryJson,
   sessionEntryInventoryJson,
@@ -17,7 +17,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export function readSessionEntryStore(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   options: {
     allowCanonicalRepair?: boolean;
     includeArchived?: boolean;
@@ -113,13 +113,11 @@ export function* iterateSessionEntryKeys(
   database: OpenClawAgentDatabaseReader,
 ): IterableIterator<string> {
   const db = getSessionKysely(database.db);
-  for (const row of iterateSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryInventoryJson, "session_key"])
-      .orderBy("session_key", "asc"),
-  )) {
+  const query = db
+    .selectFrom("session_nodes")
+    .select([sessionEntryInventoryJson, "session_key"])
+    .orderBy("session_key", "asc");
+  for (const row of iterateSqliteQuerySync(database.db, query)) {
     if (row.entry_json === null || parseSessionEntryJson({ entry_json: row.entry_json })) {
       yield row.session_key;
     }

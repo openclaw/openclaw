@@ -1,26 +1,13 @@
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
+import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export type GatewayInflightResult = {
-  ok: boolean;
-  payload?: unknown;
-  error?: ErrorShape;
-  meta?: Record<string, unknown>;
-};
+export type GatewayInflightResult = GatewayMethodDispatchResponse;
 
 const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<GatewayInflightResult>>
 >();
-
-function getInflightMap(context: GatewayRequestContext) {
-  let inflight = inflightByContext.get(context);
-  if (!inflight) {
-    inflight = new Map();
-    inflightByContext.set(context, inflight);
-  }
-  return inflight;
-}
 
 /** Joins concurrent idempotent requests and replays completed Gateway dedupe entries. */
 export function resolveGatewayInflightRequest(params: {
@@ -45,13 +32,13 @@ export function resolveGatewayInflightRequest(params: {
     params.respond(cached.ok, cached.payload, cached.error, { cached: true });
     return { kind: "handled", done: Promise.resolve() };
   }
-  const inflightMap = getInflightMap(params.context);
+  const inflightMap = getOrCreateWeakOwnerMap(inflightByContext, params.context);
   const inflight = inflightMap.get(params.dedupeKey);
   if (inflight) {
     return {
       kind: "handled",
       done: inflight.then((result) => {
-        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+        const meta = { ...result.meta, cached: true };
         params.respond(result.ok, result.payload, result.error, meta);
       }),
     };

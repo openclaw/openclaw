@@ -82,9 +82,11 @@ extension WatchInboxStore {
         do {
             try await self.maintainChatDeliveryJournal()
             try await self.chatDeliveryJournal.enqueue(command, nowMs: WatchVoiceTurnState.nowMs())
-            return Self.persistedDeliveryResult
+            return WatchReplySendResult(delivery: .queued, errorMessage: nil, requiresCanonicalReadback: false)
         } catch {
-            return Self.failedDeliveryResult(error)
+            let message = (error as? OpenClawWatchChatDeliveryError)?.message
+                ?? String(localized: "Couldn't save this Watch message. Try again when storage is available.")
+            return WatchReplySendResult(delivery: .notSent, errorMessage: message, requiresCanonicalReadback: false)
         }
     }
 
@@ -292,20 +294,5 @@ extension WatchInboxStore {
             Logger(subsystem: "ai.openclaw.watch", category: "chat-delivery")
                 .notice("Saved Watch message projection will refresh when storage is available")
         }
-    }
-
-    private static var persistedDeliveryResult: WatchReplySendResult {
-        WatchReplySendResult(
-            delivery: .queued,
-            transport: "journal",
-            errorMessage: nil,
-            requiresCanonicalReadback: false)
-    }
-
-    private static func failedDeliveryResult(_ error: any Error) -> WatchReplySendResult {
-        let message = (error as? OpenClawWatchChatDeliveryError)?.message
-            ?? String(localized: "Couldn't save this Watch message. Try again when storage is available.")
-        return WatchReplySendResult(
-            delivery: .notSent, transport: "none", errorMessage: message, requiresCanonicalReadback: false)
     }
 }

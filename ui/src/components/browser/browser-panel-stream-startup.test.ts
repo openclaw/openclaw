@@ -1,116 +1,52 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { stubScreenshotMedia } from "./browser-panel-controller-test-support.ts";
 import {
-  createBrowserClient,
-  createBrowserPanelTestMetrics,
-  createBrowserPanelTestTab,
-  flushBrowserResponses,
-  setupBrowserPanelTestCleanup,
-  stubScreenshotMedia,
-  TestBrowserPanelHost,
-  type BrowserRequestEnvelope,
-} from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
-import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
+  deferImages,
+  flush,
+  minted,
+  ready,
+  StartupSocket,
+  streamFixture,
+} from "./browser-panel-stream.test-support.ts";
+import { screencastFrame } from "./browser-screencast-test-support.ts";
 
-const PAGE_URL = "https://example.test/page";
-const minted = {
-  token: "startup",
-  wsPath: "/browser/screencast?token=startup",
-  targetId: "raw-a",
-  url: PAGE_URL,
-};
-const ready = JSON.stringify({ type: "ready", targetId: "raw-a", url: PAGE_URL, title: "Page" });
-const controllers: BrowserPanelController[] = [];
-let sockets: StartupSocket[];
-
-class StartupSocket extends TestScreencastSocket {
-  readyState = 0;
-
-  open() {
-    this.readyState = 1;
-    this.dispatchEvent(new Event("open"));
-  }
-}
-
-setupBrowserPanelTestCleanup();
-beforeEach(() => {
-  vi.useFakeTimers();
-  stubScreenshotMedia();
-  sockets = [];
-  vi.stubGlobal(
-    "WebSocket",
-    class extends StartupSocket {
-      constructor(url: string) {
-        super(url);
-        sockets.push(this);
-      }
-    },
-  );
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:startup-frame");
-  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-});
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.hostDisconnected();
-  }
-});
-
-async function flush() {
-  await flushBrowserResponses();
-  await flushBrowserResponses();
-  await flushBrowserResponses();
-}
-
-function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
-  const gateway = createBrowserClient(
-    async (request) => {
-      switch (request.path) {
-        case "/tabs":
-          return { running: true, tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")] };
-        case "/screencast":
-          return await mint;
-        case "/screenshot":
-          return { path: "/fresh.png", targetId: "raw-a", url: PAGE_URL };
-        case "/act":
-          return createBrowserPanelTestMetrics(PAGE_URL);
-        default:
-          return { ok: true };
-      }
-    },
-    { screencast: true },
-  );
-  const controller = new BrowserPanelController(new TestBrowserPanelHost(gateway.client));
-  controller.synchronizeClient();
-  controllers.push(controller);
-  const calls = (path: string) =>
-    gateway.request.mock.calls.filter(
-      ([, params]) => (params as BrowserRequestEnvelope).path === path,
-    );
-  return { controller, calls };
+const { setup: setupStream, sockets } = streamFixture(StartupSocket, true);
+async function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
+  const state = setupStream(async (request) => (request.path === "/screencast" ? mint : undefined));
+  const pending = state.controller.refreshAll();
+  await flush();
+  return { ...state, pending };
 }
 
 describe("Browser panel stream startup lifetime", () => {
-  it.each(["mint", "connecting", "open", "ready"] as const)(
+  it.each(["mint", "connecting", "progressing"] as const)(
     "waits through slow %s, then retires it before one bounded fallback",
     async (phase) => {
       const mint = createDeferred<unknown>();
-      const { controller, calls } = setup(phase === "mint" ? mint.promise : undefined);
-      const pending = controller.refreshAll();
-      await flush();
+      const { controller, calls, pending } = await setup(
+        phase === "connecting" ? undefined : mint.promise,
+      );
       const socket = sockets[0];
-      if (phase === "open" || phase === "ready") {
-        socket?.open();
-      }
-      if (phase === "ready") {
-        socket?.receive(ready);
-      }
       await vi.advanceTimersByTimeAsync(1501);
       expect(calls("/screenshot")).toHaveLength(0);
       expect(controller.loading).toBe(true);
       const signal = calls("/screencast")[0]?.[2]?.signal;
       expect(signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(28_499);
+      if (phase === "progressing") {
+        await vi.advanceTimersByTimeAsync(8499);
+        expect(calls("/screenshot")).toHaveLength(0);
+        mint.resolve(minted);
+        await flush();
+        await vi.advanceTimersByTimeAsync(10_000);
+        sockets[0]!.open();
+        await vi.advanceTimersByTimeAsync(9000);
+        sockets[0]!.receive(ready);
+        expect(calls("/screenshot")).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(1000);
+      } else {
+        await vi.advanceTimersByTimeAsync(28_499);
+      }
       await pending;
       expect(signal?.aborted).toBe(true);
       expect(calls("/screenshot")).toHaveLength(1);
@@ -121,8 +57,9 @@ describe("Browser panel stream startup lifetime", () => {
         await flush();
         expect(sockets).toHaveLength(0);
       } else {
-        expect(socket?.close).toHaveBeenCalledOnce();
-        socket?.receive(screencastFrame());
+        const retired = socket ?? sockets[0]!;
+        expect(retired.close).toHaveBeenCalledOnce();
+        retired.receive(screencastFrame());
         await flush();
         expect(controller.view).toBe(fallback);
       }
@@ -133,33 +70,11 @@ describe("Browser panel stream startup lifetime", () => {
     },
   );
 
-  it("does not restart the total deadline when minting, socket opening, or ready advances", async () => {
-    const mint = createDeferred<unknown>();
-    const { controller, calls } = setup(mint.promise);
-    const pending = controller.refreshAll();
-    await flush();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(calls("/screenshot")).toHaveLength(0);
-    mint.resolve(minted);
-    await flush();
-    await vi.advanceTimersByTimeAsync(10_000);
-    sockets[0]!.open();
-    await vi.advanceTimersByTimeAsync(9000);
-    sockets[0]!.receive(ready);
-    expect(calls("/screenshot")).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1000);
-    await pending;
-    expect(sockets[0]!.close).toHaveBeenCalledOnce();
-    expect(calls("/screenshot")).toHaveLength(1);
-  });
-
   it("retires a mint immediately when its panel disconnects and ignores its late response", async () => {
     const mint = createDeferred<unknown>();
-    const { controller, calls } = setup(mint.promise);
-    const pending = controller.refreshAll();
-    await flush();
+    const { controller, calls, pending } = await setup(mint.promise);
     const signal = calls("/screencast")[0]?.[2]?.signal;
-    controller.hostDisconnected();
+    controller.suspendView();
     await pending;
     expect(signal?.aborted).toBe(true);
     mint.resolve(minted);
@@ -171,20 +86,8 @@ describe("Browser panel stream startup lifetime", () => {
   });
 
   it("retires a first frame whose decode stalls without publishing it over fallback", async () => {
-    const { controller, calls } = setup();
-    const pending = controller.refreshAll();
-    await flush();
-    const images: EventTarget[] = [];
-    vi.stubGlobal(
-      "Image",
-      class extends EventTarget {
-        constructor() {
-          super();
-          images.push(this);
-        }
-        src = "";
-      },
-    );
+    const { controller, calls, pending } = await setup();
+    const images = deferImages();
     sockets[0]!.receive(screencastFrame());
     await vi.advanceTimersByTimeAsync(29_999);
     expect(calls("/screenshot")).toHaveLength(0);
@@ -202,9 +105,7 @@ describe("Browser panel stream startup lifetime", () => {
   });
 
   it("keeps a usable static frame without a recurring frame watchdog", async () => {
-    const { controller, calls } = setup();
-    const pending = controller.refreshAll();
-    await flush();
+    const { controller, calls, pending } = await setup();
     sockets[0]!.open();
     sockets[0]!.receive(ready);
     sockets[0]!.receive(screencastFrame());

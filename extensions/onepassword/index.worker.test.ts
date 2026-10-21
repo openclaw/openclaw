@@ -2,6 +2,7 @@ import { DatabaseSync, StatementSync } from "node:sqlite";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -50,14 +51,26 @@ describe("OnePassword pending authorizations on the SQLite worker", () => {
         approval: { item: "Approval fixture", field: "credential", policy: "approve" },
       },
     };
+    const config = { plugins: { entries: { onepassword: { config: pluginConfig } } } };
     const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
     const on = vi.fn<OpenClawPluginApi["on"]>();
-    const api = createTestPluginApi({ id: "onepassword", pluginConfig, registerTool, on });
+    const api = createTestPluginApi({ id: "onepassword", config, pluginConfig, registerTool, on });
+    api.runtime.config = {
+      current: () => config,
+      mutateConfigFile: vi.fn(),
+      replaceConfigFile: vi.fn(),
+    };
     const unused = () => {
       throw new Error("unused store opener");
     };
     api.runtime.state = {
       resolveStateDir: () => env.OPENCLAW_STATE_DIR,
+      openKeyedStoreV2: (options) =>
+        createPluginStateKeyedStoreV2ForTests(
+          "onepassword",
+          { ...options, env },
+          { assertCurrent() {} },
+        ),
       openKeyedStore: (options) =>
         createPluginStateKeyedStoreForTests("onepassword", { ...options, env }),
       openSyncKeyedStore: (options) =>

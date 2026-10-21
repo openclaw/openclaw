@@ -5,7 +5,8 @@ import {
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
   ACTIVE_MEMORY_OPEN_TAG,
@@ -16,56 +17,67 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
+// Keep recall input small enough to leave room for instructions and tool results.
+const MAX_RECALL_QUERY_CHARS = 4_000;
+
 export function buildQuery(params: {
   latestUserMessage: string;
   recentTurns?: ActiveRecallRecentTurn[];
   config: ResolvedActiveRecallPluginConfig;
 }): string {
   const latest = params.latestUserMessage.trim();
+  if (latest.length > MAX_RECALL_QUERY_CHARS) {
+    const marker = "\n[Middle of current request omitted]\n";
+    const available = MAX_RECALL_QUERY_CHARS - marker.length;
+    const headChars = Math.ceil(available / 2);
+    return (
+      truncateUtf16Safe(latest, headChars) +
+      marker +
+      sliceUtf16Safe(latest, -(available - headChars))
+    );
+  }
   if (params.config.queryMode === "message") {
     return latest;
   }
-  if (params.config.queryMode === "full") {
-    const allTurns = (params.recentTurns ?? []).map(
-      (turn) => `${turn.role}: ${turn.text.trim().replace(/\s+/g, " ")}`,
-    );
-    if (allTurns.length === 0) {
-      return latest;
-    }
-    return ["Full conversation context:", ...allTurns, "", "Latest user message:", latest].join(
-      "\n",
-    );
-  }
+  const full = params.config.queryMode === "full";
   const remaining = {
     user: params.config.recentUserTurns,
     assistant: params.config.recentAssistantTurns,
   };
-  const selected: ActiveRecallRecentTurn[] = [];
+  const selected: string[] = [];
   for (let index = (params.recentTurns ?? []).length - 1; index >= 0; index -= 1) {
     const turn = params.recentTurns?.[index];
-    if (!turn || remaining[turn.role] <= 0) {
+    if (!turn || (!full && remaining[turn.role] <= 0)) {
       continue;
     }
     remaining[turn.role] -= 1;
-    selected.push({
-      role: turn.role,
-      text: truncateUtf16Safe(
-        turn.text.trim().replace(/\s+/g, " "),
-        turn.role === "user" ? params.config.recentUserChars : params.config.recentAssistantChars,
-      ),
-    });
+    const normalized = turn.text.trim().replace(/\s+/g, " ");
+    const text = full
+      ? normalized
+      : truncateUtf16Safe(
+          normalized,
+          turn.role === "user" ? params.config.recentUserChars : params.config.recentAssistantChars,
+        );
+    if (full || text.length > 0) {
+      selected.push(`${turn.role}: ${text}`);
+    }
   }
-  const recentTurns = selected.toReversed().filter((turn) => turn.text.length > 0);
-  if (recentTurns.length === 0) {
+  if (selected.length === 0) {
     return latest;
   }
-  return [
-    "Recent conversation tail:",
-    ...recentTurns.map((turn) => `${turn.role}: ${turn.text}`),
-    "",
-    "Latest user message:",
-    latest,
-  ].join("\n");
+  const header = full ? "Full conversation context:" : "Recent conversation tail:";
+  const history = selected.toReversed().join("\n");
+  const suffix = `\n\nLatest user message:\n${latest}`;
+  const query = `${header}\n${history}${suffix}`;
+  if (query.length <= MAX_RECALL_QUERY_CHARS) {
+    return query;
+  }
+  const marker = "[Older conversation content omitted]\n";
+  const available = MAX_RECALL_QUERY_CHARS - header.length - 1 - marker.length - suffix.length;
+  // Current text has priority over history and its presentation labels.
+  return available > 0
+    ? `${header}\n${marker}${sliceUtf16Safe(history, -available)}${suffix}`
+    : latest;
 }
 
 function normalizeSearchQueryText(text: string): string {
@@ -137,10 +149,10 @@ export function extractTextContentParts(content: unknown): string[] {
       parts.push(item);
       continue;
     }
-    if (!item || typeof item !== "object") {
+    const typed = asOptionalObjectRecord(item);
+    if (!typed) {
       continue;
     }
-    const typed = item as { type?: unknown; text?: unknown; content?: unknown };
     if (typeof typed.text === "string") {
       parts.push(typed.text);
       continue;
@@ -156,29 +168,20 @@ export function extractTextContent(content: unknown): string {
   return extractTextContentParts(content).join(" ").trim();
 }
 
-function findActiveMemoryCloseLine(lines: string[], startIndex: number): number {
-  for (let index = startIndex; index < lines.length; index += 1) {
-    if ((lines[index]?.trim() ?? "") === ACTIVE_MEMORY_CLOSE_TAG) {
-      return index;
-    }
-  }
-  return -1;
-}
-
 function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): string {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map((line) => line.trim());
   const cleanedLines: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]?.trim() ?? "";
+    const line = lines[index] ?? "";
     if (!line) {
       continue;
     }
     const blockStart = line === ACTIVE_MEMORY_CONTEXT_HEADER ? index + 1 : index;
     if (
       (!injectedPrefixOnly || line === ACTIVE_MEMORY_CONTEXT_HEADER) &&
-      lines[blockStart]?.trim() === ACTIVE_MEMORY_OPEN_TAG
+      lines[blockStart] === ACTIVE_MEMORY_OPEN_TAG
     ) {
-      const closeIndex = findActiveMemoryCloseLine(lines, blockStart + 1);
+      const closeIndex = lines.indexOf(ACTIVE_MEMORY_CLOSE_TAG, blockStart + 1);
       if (closeIndex !== -1) {
         index = closeIndex;
         continue;
@@ -200,10 +203,10 @@ function stripRecalledContextNoise(text: string, injectedPrefixOnly = false): st
 export function extractRecentTurns(messages: unknown[]): ActiveRecallRecentTurn[] {
   const turns: ActiveRecallRecentTurn[] = [];
   for (const message of messages) {
-    if (!message || typeof message !== "object") {
+    const typed = asOptionalObjectRecord(message);
+    if (!typed) {
       continue;
     }
-    const typed = message as { role?: unknown; content?: unknown };
     const role = typed.role === "user" || typed.role === "assistant" ? typed.role : undefined;
     if (!role) {
       continue;

@@ -3,11 +3,11 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   withSecureTestNodeCommand,
   withSecureTestNodeExecPath,
 } from "../secrets/test-node-command.test-support.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
@@ -33,6 +33,7 @@ import { configureGatewayForSetup } from "./setup.gateway-config.js";
 import { resolveQuickstartGatewayDefaults } from "./setup.shared.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => closeOpenClawStateDatabaseAsync());
 
 describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
@@ -60,14 +61,6 @@ describe("configureGatewayForSetup", () => {
     });
   }
 
-  function createRuntime(): RuntimeEnv {
-    return {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-  }
-
   function createQuickstartGateway(authMode: "token" | "password") {
     return {
       hasExisting: false,
@@ -86,10 +79,8 @@ describe("configureGatewayForSetup", () => {
       flow: "advanced",
       baseConfig: {},
       nextConfig: {},
-      localPort: 18789,
       quickstartGateway: createQuickstartGateway("token"),
       prompter: createPrompter({ selectQueue: [], textQueue: [] }),
-      runtime: createRuntime(),
       ...overrides,
     });
   }
@@ -109,7 +100,7 @@ describe("configureGatewayForSetup", () => {
           id: "OPENCLAW_GATEWAY_TOKEN",
         });
         const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-        const stored = readSecretStoreValue({
+        const stored = await readSecretStoreValue({
           scope: { kind: "team" },
           name: "OPENCLAW_GATEWAY_TOKEN",
         });
@@ -155,6 +146,90 @@ describe("configureGatewayForSetup", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
+  it.each(["quickstart", "advanced"] as const)(
+    "%s preserves an existing trusted-proxy config without an auth prompt",
+    async (flow) => {
+      // Rerunning onboarding must not downgrade an identity-bearing gateway to
+      // token auth, and must not mint a token beside the kept trustedProxy block.
+      const baseConfig = {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-user"],
+            },
+          },
+          trustedProxies: ["10.0.0.5"],
+        },
+      };
+      const prompter = createPrompter({ selectQueue: [], textQueue: [] });
+      const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
+        configureGatewayForSetup({
+          flow,
+          baseConfig,
+          nextConfig: baseConfig,
+          quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+          prompter,
+        }),
+      );
+      expect(result.nextConfig.gateway?.auth).toEqual(baseConfig.gateway.auth);
+      expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
+      expect(result.nextConfig.gateway?.trustedProxies).toEqual(["10.0.0.5"]);
+      expect(prompter.select).not.toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Gateway access protection" }),
+      );
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses to rewrite a trusted-proxy gateway to password for tailscale funnel", async () => {
+    // A local-only password must not become a remote shared secret merely
+    // because Funnel was selected.
+    const baseConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy" as const,
+          password: "synthetic-local-password",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-user"],
+          },
+        },
+        trustedProxies: ["10.0.0.5"],
+      },
+    };
+    await expect(
+      configure({
+        flow: "quickstart",
+        baseConfig,
+        nextConfig: baseConfig,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
+      }),
+    ).rejects.toThrow(/Funnel requires password auth/);
+  });
+
+  it("still switches token auth to password for tailscale funnel", async () => {
+    mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
+    const baseConfig = {
+      gateway: {
+        auth: { mode: "token" as const, token: "existing-token" },
+      },
+    };
+    const result = await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, () =>
+      configure({
+        flow: "quickstart",
+        baseConfig,
+        nextConfig: baseConfig,
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig, { tailscale: "funnel" }),
+        prompter: createPrompter({ selectQueue: [], textQueue: ["synthetic-funnel-password"] }),
+      }),
+    );
+    expect(result.nextConfig.gateway?.auth?.mode).toBe("password");
+    expect(result.nextConfig.gateway?.auth?.password).toBe("synthetic-funnel-password");
+    expect(result.nextConfig.gateway?.tailscale?.mode).toBe("funnel");
+  });
+
   it("seeds advanced gateway prompts from explicit classic options", async () => {
     const gatewayDefaults = resolveQuickstartGatewayDefaults(
       {},
@@ -176,7 +251,6 @@ describe("configureGatewayForSetup", () => {
 
     const result = await configure({
       flow: "advanced",
-      localPort: gatewayDefaults.port,
       quickstartGateway: gatewayDefaults,
       prompter,
     });
@@ -327,14 +401,12 @@ describe("configureGatewayForSetup", () => {
         selectQueue: ["loopback", "off", "env"],
         textQueue: ["18789", "OPENCLAW_GATEWAY_TOKEN"],
       });
-      const runtime = createRuntime();
 
       const result = await configure({
         flow: "advanced",
         quickstartGateway: createQuickstartGateway("token"),
         secretInputMode: "ref", // pragma: allowlist secret
         prompter,
-        runtime,
       });
 
       expect(result.nextConfig.gateway?.auth?.mode).toBe("token");
@@ -356,7 +428,7 @@ describe("configureGatewayForSetup", () => {
         id: "gateway/auth/token",
       },
     };
-    const runtime = createRuntime();
+
     const prompter = createPrompter({
       selectQueue: [],
       textQueue: [],
@@ -381,7 +453,6 @@ describe("configureGatewayForSetup", () => {
         },
         quickstartGateway,
         prompter,
-        runtime,
       }),
     );
 
@@ -397,7 +468,6 @@ describe("configureGatewayForSetup", () => {
       );
       const result = await configure({
         flow: "advanced",
-        localPort: gatewayDefaults.port,
         quickstartGateway: gatewayDefaults,
         prompter: createPrompter({ selectQueue: [], textQueue: [] }),
       });

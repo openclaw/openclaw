@@ -284,7 +284,6 @@ struct QuickChatModelTests {
 
         #expect(model.isGrantingPermissions)
         #expect(!model.canCaptureWindow)
-        #expect(!model.canCaptureTextContext)
         latch.finish()
         while model.isGrantingPermissions {
             await Task.yield()

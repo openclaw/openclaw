@@ -6,6 +6,7 @@ import {
   type IdentifierAuthentication,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ImapAccountConfig } from "./config.js";
 
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
@@ -34,8 +35,6 @@ type SenderGateVerdict =
         | { accepted: false; transient: boolean }
       ));
 
-export type MailAuthenticator = typeof authenticate;
-
 function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
   if (at < 1) {
@@ -60,11 +59,7 @@ function recipientAddresses(mail: ParsedMail): string[] {
   const to = mail.to ? (Array.isArray(mail.to) ? mail.to : [mail.to]) : [];
   const delivered = mail.headers.get("delivered-to");
   const deliveredValues =
-    typeof delivered === "string"
-      ? [delivered]
-      : Array.isArray(delivered)
-        ? delivered.filter((entry): entry is string => typeof entry === "string")
-        : [];
+    typeof delivered === "string" ? [delivered] : filterStringEntries(delivered);
   return [
     ...to.flatMap((address: AddressObject) => address.value.map((entry) => entry.address ?? "")),
     ...deliveredValues,
@@ -166,7 +161,6 @@ export async function evaluateImapSender(params: {
   raw: Buffer;
   internalDate: Date;
   account: ImapAccountConfig;
-  authenticator?: MailAuthenticator;
 }): Promise<SenderGateVerdict> {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
@@ -186,7 +180,7 @@ export async function evaluateImapSender(params: {
   let result: AuthenticateResult | undefined;
   try {
     const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-    result = await (params.authenticator ?? authenticate)(params.raw, {
+    result = await authenticate(params.raw, {
       resolver: async (domain, type) =>
         type === "TXT" ? await resolver.resolveTxt(domain) : await resolver.resolve(domain),
       disableArc: true,

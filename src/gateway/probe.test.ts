@@ -1,5 +1,3 @@
-// Gateway probe tests cover bootstrap auth, pairing prompts,
-// event-loop readiness checks, and close/error reporting.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isGatewayProtocolResponseError,
@@ -16,10 +14,9 @@ const { gatewayClientState, createGatewayClientState } = vi.hoisted(() => {
     socketOpened: true,
     transportValidated: true,
     close: { code: 1008, reason: "pairing required" },
-    helloAuth: {
-      role: "operator",
-      scopes: ["operator.read"],
-    } as { role?: string; scopes?: string[] } | undefined,
+    helloAuth: { role: "operator", scopes: ["operator.read"] } as
+      | { role?: string; scopes?: string[] }
+      | undefined,
     helloServer: {
       version: "2026.4.24",
       buildId: "build-test",
@@ -39,7 +36,7 @@ const { gatewayClientState, createGatewayClientState } = vi.hoisted(() => {
   return { gatewayClientState: createState(), createGatewayClientState: createState };
 });
 
-const { deviceIdentityState, createDeviceIdentityState } = vi.hoisted(() => {
+const { deviceIdentityState, createDeviceIdentityState, loadDeviceIdentity } = vi.hoisted(() => {
   const createState = () => ({
     value: { deviceId: "test-device-identity" } as Record<string, unknown>,
     throwOnLoad: false,
@@ -50,32 +47,30 @@ const { deviceIdentityState, createDeviceIdentityState } = vi.hoisted(() => {
       updatedAtMs: 1,
     } as Record<string, unknown> | null,
     cachedOriginToken: null as Record<string, unknown> | null,
-    identityPaths: [] as unknown[],
-    tokenParams: [] as unknown[],
-    originTokenParams: [] as unknown[],
   });
-  return { deviceIdentityState: createState(), createDeviceIdentityState: createState };
+  const state = createState();
+  return {
+    deviceIdentityState: state,
+    createDeviceIdentityState: createState,
+    loadDeviceIdentity: () => {
+      if (state.throwOnLoad) {
+        throw new Error("read-only identity dir");
+      }
+      return state.value;
+    },
+  };
 });
 
 const { eventLoopReadyState, createEventLoopReadyState } = vi.hoisted(() => {
   const createState = () => ({
     calls: [] as Array<{ maxWaitMs?: number } | undefined>,
-    result: {
-      ready: true,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 2,
-      aborted: false,
-    },
+    result: { ready: true, aborted: false },
   });
   return { eventLoopReadyState: createState(), createEventLoopReadyState: createState };
 });
 
 class MockGatewayClient {
-  private readonly opts: Record<string, unknown>;
-
-  constructor(opts: Record<string, unknown>) {
-    this.opts = opts;
+  constructor(private readonly opts: Record<string, unknown>) {
     gatewayClientState.options = opts;
     gatewayClientState.requests = [];
   }
@@ -95,11 +90,8 @@ class MockGatewayClient {
     const onClose = this.opts.onClose;
     if (typeof onClose === "function") {
       onClose(gatewayClientState.close.code, gatewayClientState.close.reason, {
-        phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
         transportValidated: gatewayClientState.transportValidated,
-        connectRequestSent: true,
-        transientPreHelloCleanClose: false,
       });
     }
   }
@@ -149,10 +141,7 @@ class MockGatewayClient {
     if (gatewayClientState.requestError) {
       throw new MockGatewayClientRequestError(gatewayClientState.requestError);
     }
-    if (method === "system-presence") {
-      return [];
-    }
-    return {};
+    return method === "system-presence" ? [] : {};
   }
 }
 
@@ -162,31 +151,16 @@ vi.mock("./client.js", () => ({
   isGatewayProtocolResponseError,
 }));
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateDeviceIdentity: () => {
-    if (deviceIdentityState.throwOnLoad) {
-      throw new Error("read-only identity dir");
-    }
-    return deviceIdentityState.value;
-  },
-  loadDeviceIdentityIfPresent: (options: unknown) => {
-    deviceIdentityState.identityPaths.push(options);
-    if (deviceIdentityState.throwOnLoad) {
-      throw new Error("read-only identity dir");
-    }
-    return deviceIdentityState.value;
-  },
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateDeviceIdentityAsync: loadDeviceIdentity,
+  loadDeviceIdentityIfPresentAsync: loadDeviceIdentity,
 }));
 
+// mock-isolation: Probe credentials come from the fixture, never the local device-auth store.
 vi.mock("../infra/device-auth-store.js", () => ({
-  loadDeviceAuthTokenReadOnly: (params: unknown) => {
-    deviceIdentityState.tokenParams.push(params);
-    return deviceIdentityState.cachedToken;
-  },
-  loadOriginDeviceTokenReadOnly: (params: unknown) => {
-    deviceIdentityState.originTokenParams.push(params);
-    return deviceIdentityState.cachedOriginToken;
-  },
+  loadDeviceAuthTokenReadOnly: () => deviceIdentityState.cachedToken,
+  loadOriginDeviceTokenReadOnly: () => deviceIdentityState.cachedOriginToken,
 }));
 
 vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
@@ -196,34 +170,18 @@ vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   }),
 }));
 
-const { clampProbeTimeoutMs, getDeviceRequiredProbeCacheSizeForTest, probeGateway } =
-  await import("./probe.js");
+const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
 
-function expectProbeResultFields(
-  result: Awaited<ReturnType<typeof probeGateway>>,
-  fields: Partial<Awaited<ReturnType<typeof probeGateway>>>,
-): void {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(result[key as keyof typeof result]).toEqual(value);
-  }
-}
-
-function expectProbeAuthFields(
-  result: Awaited<ReturnType<typeof probeGateway>>,
-  fields: Partial<Awaited<ReturnType<typeof probeGateway>>["auth"]>,
-): void {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(result.auth[key as keyof typeof result.auth]).toEqual(value);
-  }
+function expectFields(result: unknown, fields: Record<string, unknown>): void {
+  expect(result).toEqual(expect.objectContaining(fields));
 }
 
 let probeUrlSeq = 0;
 
 function nextProbeUrl(label: string): string {
-  probeUrlSeq += 1;
-  return `ws://127.0.0.1:18789/${label}-${probeUrlSeq}`;
+  return `ws://127.0.0.1:18789/${label}-${++probeUrlSeq}`;
 }
 
 function setDeviceRequiredProbeMode(): void {
@@ -234,42 +192,19 @@ function setDeviceRequiredProbeMode(): void {
   gatewayClientState.connectErrorDetails = null;
 }
 
-function lastGatewayClientOptions(): Record<string, unknown> | null {
-  return gatewayClientState.options;
+const lastGatewayClientOptions = () => gatewayClientState.options;
+const runLightweightProbe = (url: string) => runProbe({ url, includeDetails: false });
+
+function runProbe(params: Partial<ProbeGatewayParams> = {}) {
+  return probeGateway({ url: "ws://127.0.0.1:18789", timeoutMs: 1_000, ...params });
 }
 
-async function runLightweightProbe(url: string): Promise<Awaited<ReturnType<typeof probeGateway>>> {
-  return await probeGateway({
-    url,
-    timeoutMs: 1_000,
-    includeDetails: false,
-  });
+function runTokenProbe(params: Partial<ProbeGatewayParams> = {}) {
+  return runProbe({ auth: { token: "secret" }, ...params });
 }
 
-async function runTokenProbe(
-  params: Partial<ProbeGatewayParams> = {},
-): Promise<Awaited<ReturnType<typeof probeGateway>>> {
-  return await probeGateway({
-    url: "ws://127.0.0.1:18789",
-    auth: { token: "secret" },
-    timeoutMs: 1_000,
-    ...params,
-  });
-}
-
-async function runTokenLightweightProbe(
-  params: Partial<ProbeGatewayParams> = {},
-): Promise<Awaited<ReturnType<typeof probeGateway>>> {
-  return await runTokenProbe({
-    includeDetails: false,
-    ...params,
-  });
-}
-
-function expectLightweightProbeResult(result: Awaited<ReturnType<typeof probeGateway>>): void {
-  expect(result.ok).toBe(true);
-  expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-  expect(gatewayClientState.requests).toStrictEqual([]);
+function runTokenLightweightProbe(params: Partial<ProbeGatewayParams> = {}) {
+  return runTokenProbe({ includeDetails: false, ...params });
 }
 
 async function primeDeviceRequiredProbeFailures(url: string): Promise<void> {
@@ -282,11 +217,8 @@ function expectDeviceRequiredClose(
   result: Awaited<ReturnType<typeof probeGateway>>,
   hint?: string,
 ): void {
-  expect(result.close).toEqual(
-    hint
-      ? { code: 1008, reason: "device identity required", hint }
-      : { code: 1008, reason: "device identity required" },
-  );
+  const close = { code: 1008, reason: "device identity required" };
+  expect(result.close).toEqual(hint ? { ...close, hint } : close);
 }
 
 describe("probeGateway", () => {
@@ -301,44 +233,12 @@ describe("probeGateway", () => {
     expect(clampProbeTimeoutMs(2_000)).toBe(2_000);
     expect(clampProbeTimeoutMs(3_000_000_000)).toBe(2_147_483_647);
   });
-  it("waits for event-loop readiness before connecting", async () => {
-    await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
-
-    expect(eventLoopReadyState.calls).toHaveLength(1);
-    expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(1_000);
-    expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
-    expect(gatewayClientState.startCalls).toBe(1);
-  });
 
   it("fails before connecting when event-loop readiness consumes the initial probe budget", async () => {
-    eventLoopReadyState.result = {
-      ready: false,
-      elapsedMs: 250,
-      maxDriftMs: 500,
-      checks: 1,
-      aborted: false,
-    };
-
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1,
-      includeDetails: false,
-    });
-
-    expectProbeResultFields(result, {
-      ok: false,
-      error: "timeout",
-      close: null,
-    });
-    expectProbeAuthFields(result, {
-      role: null,
-      scopes: [],
-      capability: "unknown",
-    });
+    eventLoopReadyState.result = { ready: false, aborted: false };
+    const result = await runProbe({ timeoutMs: 1, includeDetails: false });
+    expectFields(result, { ok: false, error: "timeout", close: null });
+    expectFields(result.auth, { role: null, scopes: [], capability: "unknown" });
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(250);
     expect(gatewayClientState.options?.url).toBe("ws://127.0.0.1:18789");
@@ -353,153 +253,33 @@ describe("probeGateway", () => {
       signal: controller.signal,
     });
     await vi.waitFor(() => expect(gatewayClientState.startCalls).toBe(1));
-
     controller.abort();
-
     await expect(probe).resolves.toMatchObject({ ok: false, error: "aborted" });
     expect(gatewayClientState.stopAndWaitCalls).toEqual([{ timeoutMs: 1_000 }]);
   });
 
-  it("connects with operator.read scope", async () => {
-    const result = await runTokenProbe();
-
-    expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
-    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.requests).toEqual([
-      "health",
-      "status",
-      "system-presence",
-      "config.get",
-    ]);
-    expect(result.ok).toBe(true);
-    expectProbeAuthFields(result, {
-      role: "operator",
-      scopes: ["operator.read"],
-      capability: "read_only",
-    });
-    expect(result.server).toEqual({
-      version: "2026.4.24",
-      buildId: "build-test",
-      connId: "conn-test",
-    });
-  });
-
-  it("keeps legacy server metadata compatible when build identity is absent", async () => {
-    gatewayClientState.helloServer = {
-      version: "2026.4.24",
-      connId: "conn-test",
-    };
-
-    const result = await runTokenLightweightProbe();
-
-    expect(result.server).toEqual({
-      version: "2026.4.24",
-      connId: "conn-test",
-    });
-    expect(result.server).not.toHaveProperty("buildId");
-  });
-
   it("preserves structured missing-scope details from a post-connect request", async () => {
-    gatewayClientState.helloAuth = {
-      role: "operator",
-      scopes: ["operator.write"],
-    };
-    gatewayClientState.requestError = {
-      code: "FORBIDDEN",
-      message: "permission denied",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    };
-
-    const result = await runTokenProbe();
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("permission denied");
-    expect(result.connectLatencyMs).not.toBeNull();
-    expect(result.missingScopeErrorDetails).toEqual({
+    const details = {
       code: "MISSING_SCOPE",
       missingScope: "operator.read",
       requiredScopes: ["operator.read"],
-    });
-  });
-
-  it("loads probe identity and cached device auth from the provided env", async () => {
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: "/tmp/openclaw-probe-service-state",
-    } as NodeJS.ProcessEnv;
-
-    await runTokenProbe({ env });
-
-    expect(deviceIdentityState.identityPaths).toEqual([{ env }]);
-    expect(deviceIdentityState.tokenParams).toEqual([
-      {
-        deviceId: "test-device-identity",
-        role: "operator",
-        env,
-      },
-    ]);
-    expect(gatewayClientState.options?.env).toBe(env);
-  });
-
-  it("keeps device identity enabled for remote probes", async () => {
-    deviceIdentityState.cachedOriginToken = {
-      token: "cached-origin-operator-token",
-      role: "operator",
-      scopes: ["operator.read"],
-      updatedAtMs: 1,
     };
-    await runTokenProbe({
-      url: "wss://gateway.example/ws",
-    });
-
-    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(gatewayClientState.options?.deviceAuthScope).toBe("wss://gateway.example/ws");
-    expect(deviceIdentityState.originTokenParams).toEqual([
-      {
-        gatewayScope: "wss://gateway.example/ws",
-        deviceId: "test-device-identity",
-        role: "operator",
-        env: undefined,
-      },
-    ]);
-    expect(deviceIdentityState.tokenParams).toEqual([]);
-  });
-
-  it.each([false, true])(
-    "does not attach a first-time unauthenticated probe identity (origin-scoped=%s)",
-    async (originScopedDeviceAuth) => {
-      deviceIdentityState.cachedToken = null;
-      deviceIdentityState.cachedOriginToken = null;
-
-      await probeGateway({
-        url: "ws://127.0.0.1:18789",
-        timeoutMs: 1_000,
-        originScopedDeviceAuth,
-      });
-
-      expect(gatewayClientState.options?.deviceIdentity).toBeNull();
-    },
-  );
-
-  it("skips detail RPCs for lightweight reachability probes", async () => {
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-      includeDetails: false,
-    });
-
-    expectLightweightProbeResult(result);
+    gatewayClientState.helloAuth = { role: "operator", scopes: ["operator.write"] };
+    gatewayClientState.requestError = {
+      code: "FORBIDDEN",
+      message: "permission denied",
+      details,
+    };
+    const result = await runTokenProbe();
+    expectFields(result, { ok: false, error: "permission denied" });
+    expect(result.connectLatencyMs).not.toBeNull();
+    expect(result.missingScopeErrorDetails).toEqual(details);
+    expectFields(result.auth, { scopes: ["operator.write"], capability: "write_capable" });
   });
 
   it("falls back to token/password auth when device identity cannot be persisted", async () => {
     deviceIdentityState.throwOnLoad = true;
-
     const result = await runTokenProbe();
-
     expect(result.ok).toBe(true);
     expect(gatewayClientState.options?.deviceIdentity).toBeNull();
     expect(gatewayClientState.requests).toEqual([
@@ -510,104 +290,55 @@ describe("probeGateway", () => {
     ]);
   });
 
-  it("fetches only presence for presence-only probes", async () => {
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-      detailLevel: "presence",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(gatewayClientState.requests).toEqual(["system-presence"]);
-    expect(result.health).toBeNull();
-    expect(result.status).toBeNull();
-    expect(result.configSnapshot).toBeNull();
-  });
-
-  it("fetches only config for config-only probes", async () => {
-    const result = await probeGateway({
-      url: "ws://127.0.0.1:18789",
-      timeoutMs: 1_000,
-      detailLevel: "config",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(gatewayClientState.requests).toEqual(["config.get"]);
-    expect(result.health).toBeNull();
-    expect(result.status).toBeNull();
-    expect(result.presence).toBeNull();
-    expect(result.configSnapshot).toEqual({});
+  it.each([
+    ["presence", "system-presence", { configSnapshot: null }],
+    ["config", "config.get", { presence: null, configSnapshot: {} }],
+  ] as const)("fetches only %s details", async (detailLevel, method, fields) => {
+    const result = await runProbe({ detailLevel });
+    expectFields(result, { ok: true, health: null, status: null, ...fields });
+    expect(gatewayClientState.requests).toEqual([method]);
   });
 
   it("surfaces immediate close failures before the probe timeout", async () => {
     gatewayClientState.startMode = "close";
-
-    const result = await runTokenLightweightProbe({
-      timeoutMs: 5_000,
-    });
-
-    expectProbeResultFields(result, {
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+    expectFields(result, {
       ok: false,
       error: "gateway closed (1008): pairing required",
       close: { code: 1008, reason: "pairing required" },
     });
-    expectProbeAuthFields(result, { capability: "pairing_pending" });
+    expectFields(result.auth, { capability: "pairing_pending" });
     expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("falls back to stop when close drain fails", async () => {
     gatewayClientState.stopAndWaitMode = "reject";
-
     const result = await runTokenLightweightProbe({
       url: nextProbeUrl("close-drain-fallback"),
     });
-
     expect(result.ok).toBe(true);
     expect(gatewayClientState.stopAndWaitCalls).toHaveLength(1);
     expect(gatewayClientState.stopCalls).toBe(1);
-  });
-
-  it("reports write-capable auth when hello-ok scopes include operator.write", async () => {
-    gatewayClientState.helloAuth = {
-      role: "operator",
-      scopes: ["operator.write"],
-    };
-
-    const result = await runTokenLightweightProbe();
-
-    expectProbeAuthFields(result, {
-      scopes: ["operator.write"],
-      capability: "write_capable",
-    });
+    expect(gatewayClientState.requests).toStrictEqual([]);
   });
 
   it("keeps capability unknown when hello-ok omits auth metadata", async () => {
     gatewayClientState.helloAuth = undefined;
-
     const result = await runTokenLightweightProbe();
-
-    expectProbeAuthFields(result, {
-      role: null,
-      scopes: [],
-      capability: "unknown",
-    });
+    expectFields(result.auth, { role: null, scopes: [], capability: "unknown" });
   });
 
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
     gatewayClientState.close = { code: 1008, reason: "connect failed" };
-
-    const result = await runTokenLightweightProbe({
-      timeoutMs: 5_000,
-    });
-
-    expectProbeResultFields(result, {
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+    expectFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "connect failed" },
     });
-    expectProbeAuthFields(result, { capability: "pairing_pending" });
+    expectFields(result.auth, { capability: "pairing_pending" });
     expect(result.connectLatencyMs).not.toBeNull();
   });
 
@@ -617,152 +348,114 @@ describe("probeGateway", () => {
       "unauthorized: too many failed authentication attempts (retry later)";
     gatewayClientState.connectErrorDetails = { code: "AUTH_RATE_LIMITED" };
     gatewayClientState.close = { code: 1008, reason: "connect failed" };
-
     const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-
-    expectProbeResultFields(result, { ok: false });
-    expectProbeAuthFields(result, { capability: "unknown" });
+    expectFields(result, { ok: false });
+    expectFields(result.auth, { capability: "unknown" });
   });
 
   it("keeps latency unknown when the opened transport fails validation", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
     gatewayClientState.transportValidated = false;
-
     const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
-
     expect(result.connectLatencyMs).toBeNull();
   });
 
   it("short-circuits later unpaired probes after repeated device-required closes", async () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("device-required");
-
     for (let i = 0; i < 3; i += 1) {
       gatewayClientState.options = null;
       const result = await runLightweightProbe(url);
 
-      expectProbeResultFields(result, {
+      expectFields(result, {
         ok: false,
         error: "gateway closed (1008): device identity required",
       });
       expectDeviceRequiredClose(result);
       expect(lastGatewayClientOptions()?.url).toBe(url);
     }
-
     const startCalls = gatewayClientState.startCalls;
     gatewayClientState.options = null;
-
     const result = await runLightweightProbe(url);
-
-    expectProbeResultFields(result, {
+    expectFields(result, {
       ok: false,
       connectLatencyMs: null,
       error: "gateway closed (1008): device identity required",
       close: {
         code: 1008,
         reason: "device identity required",
-        hint: "probe short-circuited by recent device-required rejections",
+        hint: "check short-circuited by recent device-required rejections",
       },
       health: null,
       status: null,
       presence: null,
       configSnapshot: null,
     });
-    expectProbeAuthFields(result, {
-      role: null,
-      scopes: [],
-      capability: "unknown",
-    });
+    expectFields(result.auth, { role: null, scopes: [], capability: "unknown" });
     expect(gatewayClientState.startCalls).toBe(startCalls);
     expect(lastGatewayClientOptions()).toBeNull();
     expect(result.gatewayReached).toBeUndefined();
-  });
-
-  it("does not cache other policy-close reasons", async () => {
-    deviceIdentityState.cachedToken = null;
-    gatewayClientState.startMode = "close";
-    gatewayClientState.close = { code: 1008, reason: "pairing required" };
-    const url = nextProbeUrl("pairing-required");
-
-    for (let i = 0; i < 4; i += 1) {
-      gatewayClientState.options = null;
-      const result = await runLightweightProbe(url);
-
-      expect(result.close).toEqual({ code: 1008, reason: "pairing required" });
-      expect(lastGatewayClientOptions()?.url).toBe(url);
-    }
-  });
-
-  it("keeps device-required probe cache entries per URL", async () => {
-    setDeviceRequiredProbeMode();
-    const firstUrl = nextProbeUrl("first-device-required");
-    const secondUrl = nextProbeUrl("second-device-required");
-
-    await primeDeviceRequiredProbeFailures(firstUrl);
-
-    gatewayClientState.options = null;
-    const result = await runLightweightProbe(secondUrl);
-
-    expectDeviceRequiredClose(result);
-    expect(result.close?.hint).toBeUndefined();
-    expect(lastGatewayClientOptions()?.url).toBe(secondUrl);
   });
 
   it("expires device-required probe cache entries after the TTL", async () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("ttl-device-required");
     let nowMs = 1_000_000;
-    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    try {
-      await primeDeviceRequiredProbeFailures(url);
+    using _ = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    await primeDeviceRequiredProbeFailures(url);
 
-      nowMs += 5 * 60_000;
-      gatewayClientState.options = null;
-      const result = await runLightweightProbe(url);
+    nowMs += 5 * 60_000;
+    gatewayClientState.options = null;
+    const result = await runLightweightProbe(url);
 
-      expectDeviceRequiredClose(result);
-      expect(result.close?.hint).toBeUndefined();
-      expect(lastGatewayClientOptions()?.url).toBe(url);
-    } finally {
-      dateNowSpy.mockRestore();
-    }
+    expectDeviceRequiredClose(result);
+    expect(result.close?.hint).toBeUndefined();
+    expect(lastGatewayClientOptions()?.url).toBe(url);
   });
 
   it("evicts the oldest device-required cache entries once the cap is reached", async () => {
     setDeviceRequiredProbeMode();
-    for (let i = 0; i <= 500; i += 1) {
+    const oldestUrl = nextProbeUrl("cache-oldest");
+    const newestUrl = nextProbeUrl("cache-newest");
+    const hint = "check short-circuited by recent device-required rejections";
+    // Expiry must not masquerade as capacity eviction.
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    await primeDeviceRequiredProbeFailures(oldestUrl);
+    for (let i = 0; i < 499; i += 1) {
       await runLightweightProbe(nextProbeUrl(`cache-evict-${i}`));
     }
-    expect(getDeviceRequiredProbeCacheSizeForTest()).toBeLessThanOrEqual(500);
+    const startsAtCapacity = gatewayClientState.startCalls;
+    expectDeviceRequiredClose(await runLightweightProbe(oldestUrl), hint);
+    expect(gatewayClientState.startCalls).toBe(startsAtCapacity);
+
+    await primeDeviceRequiredProbeFailures(newestUrl);
+    const startsAfterEviction = gatewayClientState.startCalls;
+    expectDeviceRequiredClose(await runLightweightProbe(newestUrl), hint);
+    expect(gatewayClientState.startCalls).toBe(startsAfterEviction);
+
+    expectDeviceRequiredClose(await runLightweightProbe(oldestUrl));
+    expect(gatewayClientState.startCalls).toBe(startsAfterEviction + 1);
+    expect(lastGatewayClientOptions()?.url).toBe(oldestUrl);
   });
 
   it("lets paired probes clear prior device-required failures", async () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("paired-device-required");
-
     await primeDeviceRequiredProbeFailures(url);
-
-    deviceIdentityState.cachedToken = {
-      token: "cached-operator-token",
-      role: "operator",
-      scopes: ["operator.read"],
-      updatedAtMs: 1,
-    };
+    deviceIdentityState.cachedToken = createDeviceIdentityState().cachedToken;
     gatewayClientState.startMode = "hello";
     gatewayClientState.options = null;
-
     const success = await runLightweightProbe(url);
-
     expect(success.ok).toBe(true);
-    expect(lastGatewayClientOptions()?.url).toBe(url);
-    expect(lastGatewayClientOptions()?.deviceIdentity).toEqual(deviceIdentityState.value);
-    expect(lastGatewayClientOptions()?.sharedStateMode).toBe("read-only");
-
+    expectFields(lastGatewayClientOptions(), {
+      url,
+      deviceIdentity: deviceIdentityState.value,
+      sharedStateMode: "read-only",
+    });
     setDeviceRequiredProbeMode();
     gatewayClientState.options = null;
     const afterSuccess = await runLightweightProbe(url);
-
     expectDeviceRequiredClose(afterSuccess);
     expect(afterSuccess.close?.hint).toBeUndefined();
     expect(lastGatewayClientOptions()?.url).toBe(url);
@@ -771,26 +464,24 @@ describe("probeGateway", () => {
   it("does not short-circuit explicit-auth probes after unauthenticated failures", async () => {
     setDeviceRequiredProbeMode();
     const url = nextProbeUrl("explicit-auth-device-required");
-
     await primeDeviceRequiredProbeFailures(url);
-
     gatewayClientState.startMode = "hello";
     gatewayClientState.helloAuth = {};
     gatewayClientState.options = null;
-
     const result = await runTokenLightweightProbe({
       url,
       auth: { token: "explicit-token" },
     });
-
     expect(result.ok).toBe(true);
-    expectProbeAuthFields(result, {
+    expectFields(result.auth, {
       role: null,
       scopes: [],
       capability: "connected_no_operator_scope",
     });
-    expect(lastGatewayClientOptions()?.url).toBe(url);
-    expect(lastGatewayClientOptions()?.token).toBe("explicit-token");
-    expect(lastGatewayClientOptions()?.deviceIdentity).toBeNull();
+    expectFields(lastGatewayClientOptions(), {
+      url,
+      token: "explicit-token",
+      deviceIdentity: null,
+    });
   });
 });

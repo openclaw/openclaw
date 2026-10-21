@@ -66,6 +66,14 @@ export const rateLimitOverloadCases = [
           "402 You have reached your subscription quota limit. Please wait for automatic quota refresh in the rolling time window, upgrade to a higher plan, or use a Pay-As-You-Go API Key for unlimited access.",
       },
     ],
+    // MiniMax Token Plan 2056 (#172165), with no HTTP status/type to mask the wording.
+    [
+      "billing-minimax-chinese-usage-limit",
+      {
+        provider: "minimax",
+        message: "已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)",
+      },
+    ],
     ["billing-chinese-too-frequent", { message: "请求过于频繁，请稍后重试" }],
     ["billing-chinese-frequency-limit", { message: "调用频率超限" }],
     ["billing-chinese-quota-exhausted", { message: "配额已用尽" }],

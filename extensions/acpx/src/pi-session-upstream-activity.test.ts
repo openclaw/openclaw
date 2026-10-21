@@ -1,30 +1,27 @@
-import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPiStoreFixture } from "./pi-session-catalog.test-support.js";
+import {
+  createPiStoreFixture,
+  piJsonl,
+  piMessage,
+  restorePiEnvironment,
+} from "./pi-session-catalog.test-support.js";
 import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
 const temporaryDirectories: string[] = [];
-const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
-const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalEnvironment = {
+  PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+};
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  if (originalSessionDir === undefined) {
-    delete process.env.PI_CODING_AGENT_SESSION_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_SESSION_DIR = originalSessionDir;
-  }
-  if (originalAgentDir === undefined) {
-    delete process.env.PI_CODING_AGENT_DIR;
-  } else {
-    process.env.PI_CODING_AGENT_DIR = originalAgentDir;
-  }
+  restorePiEnvironment(originalEnvironment);
   await Promise.all(
-    temporaryDirectories.splice(0).map(async (directory) => {
-      await fs.rm(directory, { recursive: true, force: true });
-    }),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -46,6 +43,14 @@ async function injectFileShortReads(filePath: string, maxBytes: number): Promise
     return Reflect.apply(realRead, this, [buffer, offset, Math.min(length, maxBytes), position]);
   } as FileHandle["read"]);
 }
+
+const userRow = (content: string, timestamp: string, extra: Record<string, unknown> = {}) =>
+  piMessage({ role: "user", content }, { timestamp, ...extra });
+const appendUser = (file: string, ...row: Parameters<typeof userRow>) =>
+  fs.appendFile(file, piJsonl([userRow(...row)]));
+const activity = (fields: Record<string, unknown>) => [
+  expect.objectContaining({ kind: "activity", ...fields }),
+];
 
 async function createActivityFixture(ownRecentUserTexts: string[] = []) {
   const sessionDirectory = await createPiStoreFixture(
@@ -75,45 +80,21 @@ describe("Pi session upstream activity", () => {
   it("detects external turns, suppresses own echoes, and confirms deletion", async () => {
     const { file, probe } = await createActivityFixture(["sent from OpenClaw"]);
 
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({
-        type: "message",
-        id: "user-own",
-        parentId: "info-1",
-        timestamp: "2026-07-13T10:00:05.000Z",
-        message: { role: "user", content: "sent  from OpenClaw" },
-      })}\n`,
-    );
+    await appendUser(file, "sent  from OpenClaw", "2026-07-13T10:00:05.000Z", {
+      id: "user-own",
+      parentId: "info-1",
+    });
     const ownEcho = await checkPiUpstreamActivity([probe]);
-    expect(ownEcho).toEqual([
-      expect.objectContaining({
-        kind: "activity",
-        sessionKey: probe.sessionKey,
-        humanTurns: 0,
-      }),
-    ]);
+    expect(ownEcho).toEqual(activity({ sessionKey: probe.sessionKey, humanTurns: 0 }));
 
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({
-        type: "message",
-        id: "user-external",
-        parentId: "user-own",
-        timestamp: "2026-07-13T10:00:06.000Z",
-        message: { role: "user", content: "external Pi turn" },
-      })}\n`,
-    );
+    await appendUser(file, "external Pi turn", "2026-07-13T10:00:06.000Z", {
+      id: "user-external",
+      parentId: "user-own",
+    });
     const external = await checkPiUpstreamActivity([
       { ...probe, marker: ownEcho[0]!.kind === "activity" ? ownEcho[0]!.nextMarker : null },
     ]);
-    expect(external).toEqual([
-      expect.objectContaining({
-        kind: "activity",
-        sessionKey: probe.sessionKey,
-        humanTurns: 1,
-      }),
-    ]);
+    expect(external).toEqual(activity({ sessionKey: probe.sessionKey, humanTurns: 1 }));
 
     await fs.rm(file);
     await expect(checkPiUpstreamActivity([probe])).resolves.toEqual([
@@ -140,24 +121,13 @@ describe("Pi session upstream activity", () => {
 
   it("completes bounded scan windows across positional short reads", async () => {
     const { file, probe } = await createActivityFixture();
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({
-        type: "message",
-        timestamp: "2026-07-13T10:00:05.000Z",
-        message: { role: "user", content: "short-read Pi turn" },
-      })}\n`,
-    );
+    await appendUser(file, "short-read Pi turn", "2026-07-13T10:00:05.000Z");
     await injectFileShortReads(file, 17);
     const completeSize = (await fs.stat(file)).size;
 
-    await expect(checkPiUpstreamActivity([probe])).resolves.toEqual([
-      expect.objectContaining({
-        kind: "activity",
-        humanTurns: 1,
-        nextMarker: { offset: completeSize },
-      }),
-    ]);
+    await expect(checkPiUpstreamActivity([probe])).resolves.toEqual(
+      activity({ humanTurns: 1, nextMarker: { offset: completeSize } }),
+    );
 
     await fs.appendFile(file, '{"type":"message"');
     await expect(
@@ -168,62 +138,30 @@ describe("Pi session upstream activity", () => {
   it("preserves Pi date parsing for numeric-looking activity timestamps", async () => {
     const { file, probe } = await createActivityFixture();
 
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({
-        type: "message",
-        timestamp: "0",
-        message: { role: "user", content: "first external Pi turn" },
-      })}\n`,
-    );
+    await appendUser(file, "first external Pi turn", "0");
     const first = await checkPiUpstreamActivity([probe]);
-    expect(first).toEqual([
-      expect.objectContaining({
-        kind: "activity",
-        humanTurns: 1,
-        occurredAt: Date.parse("0"),
-      }),
-    ]);
+    expect(first).toEqual(activity({ humanTurns: 1, occurredAt: Date.parse("0") }));
     expect(first[0]?.kind === "activity" ? first[0].occurredAt : undefined).not.toBe(0);
 
-    await fs.appendFile(
-      file,
-      `${JSON.stringify({
-        type: "message",
-        timestamp: "2026",
-        message: { role: "user", content: "second external Pi turn" },
-      })}\n`,
-    );
+    await appendUser(file, "second external Pi turn", "2026");
     await expect(
       checkPiUpstreamActivity([
         { ...probe, marker: first[0]!.kind === "activity" ? first[0]!.nextMarker : null },
       ]),
-    ).resolves.toEqual([
-      expect.objectContaining({
-        kind: "activity",
-        humanTurns: 1,
-        occurredAt: Date.parse("2026"),
-      }),
-    ]);
+    ).resolves.toEqual(activity({ humanTurns: 1, occurredAt: Date.parse("2026") }));
   });
 
   it("stops the cursor before the first unclassifiable complete row", async () => {
     const { file, probe } = await createActivityFixture();
     await fs.appendFile(
       file,
-      `${JSON.stringify({
-        type: "message",
-        timestamp: "2026-07-13T10:00:05.000Z",
-        message: { role: "user", content: "first external turn" },
-      })}\n{not-json}\n${JSON.stringify({
-        type: "message",
-        timestamp: "2026-07-13T10:00:06.000Z",
-        message: { role: "user", content: "must remain behind the bad row" },
-      })}\n`,
+      piJsonl([userRow("first external turn", "2026-07-13T10:00:05.000Z")]) +
+        "{not-json}\n" +
+        piJsonl([userRow("must remain behind the bad row", "2026-07-13T10:00:06.000Z")]),
     );
 
     const first = await checkPiUpstreamActivity([probe]);
-    expect(first).toEqual([expect.objectContaining({ kind: "activity", humanTurns: 1 })]);
+    expect(first).toEqual(activity({ humanTurns: 1 }));
     await expect(
       checkPiUpstreamActivity([
         { ...probe, marker: first[0]!.kind === "activity" ? first[0]!.nextMarker : null },

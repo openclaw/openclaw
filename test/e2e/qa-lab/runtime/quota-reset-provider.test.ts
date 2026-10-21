@@ -16,19 +16,11 @@ it("trusts only the fixture certificate for auxiliary HTTPS requests", async (co
   execFileSync(
     "openssl",
     [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-keyout",
+      ..."req -x509 -newkey rsa:2048 -nodes -keyout".split(" "),
       key,
       "-out",
       cert,
-      "-days",
-      "1",
-      "-subj",
-      "/CN=localhost",
+      ..."-days 1 -subj /CN=localhost".split(" "),
       "-addext",
       "subjectAltName=IP:127.0.0.1",
       "-addext",
@@ -41,9 +33,11 @@ it("trusts only the fixture certificate for auxiliary HTTPS requests", async (co
     cert: readFileSync(cert),
   });
   context.onTestFinished(() => provider.stop());
-  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject({
-    cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" },
-  });
+  await expect(fetch(`${provider.baseUrl}/v1/responses`)).rejects.toMatchObject(
+    process.versions.bun
+      ? { code: "DEPTH_ZERO_SELF_SIGNED_CERT" }
+      : { cause: { code: "DEPTH_ZERO_SELF_SIGNED_CERT" } },
+  );
   const response = await provider.fetch("/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -104,11 +98,12 @@ it("prints bounded readiness receipts from the quota failure hook before Gateway
     ]);
     const receipt = String(print.mock.calls[0]![0]);
     expect(Buffer.byteLength(receipt)).toBeLessThan(1_024);
-    expect(receipt).toContain('"status":502');
-    expect(receipt).toContain('"error":"invalid-json"');
-    expect(receipt).toContain('"error":"timeout"');
-    expect(receipt).not.toContain("retained-only log");
-    expect(receipt).not.toContain("probes");
+    for (const text of ['"status":502', '"error":"invalid-json"', '"error":"timeout"']) {
+      expect(receipt).toContain(text);
+    }
+    for (const text of ["retained-only log", "probes"]) {
+      expect(receipt).not.toContain(text);
+    }
   } finally {
     createInstance.mockRestore();
     print.mockRestore();
@@ -160,21 +155,22 @@ it.each(["http", "websocket"] as const)(
     };
     try {
       const captured = await hold.arrived;
+      const expectHeld = () => {
+        expect(observed).not.toHaveBeenCalled();
+        expect(captured.releasedAt).toBeUndefined();
+      };
       provider.setPhase("restored");
       const observed = vi.fn(() => hold.release());
       provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });
 
       await request("gpt-5.6-luna");
-      expect(observed).not.toHaveBeenCalled();
-      expect(captured.releasedAt).toBeUndefined();
+      expectHeld();
       await request("gpt-5.5", "/quota-backup/responses");
-      expect(observed).not.toHaveBeenCalled();
-      expect(captured.releasedAt).toBeUndefined();
+      expectHeld();
 
       if (transport === "websocket") {
         await request("gpt-5.5", "/v1/responses", false);
-        expect(observed).not.toHaveBeenCalled();
-        expect(captured.releasedAt).toBeUndefined();
+        expectHeld();
       }
 
       await request("gpt-5.5", "/v1/responses?fixture=primary");

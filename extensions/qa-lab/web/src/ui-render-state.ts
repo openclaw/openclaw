@@ -28,10 +28,7 @@ export function restoreRenderState(
       ?.querySelector<HTMLButtonElement>(`button[data-tab="${CSS.escape(focusedTab)}"]`)
       ?.focus({ preventScroll: true });
   } else if (focusedId) {
-    const el = root.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`);
-    if (el && "focus" in el) {
-      el.focus();
-    }
+    root.querySelector<HTMLElement>(`#${CSS.escape(focusedId)}`)?.focus();
   }
   if (tabBar && sameWidth) {
     tabBar.scrollLeft = tabScrollLeft;

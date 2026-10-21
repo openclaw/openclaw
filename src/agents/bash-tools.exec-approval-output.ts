@@ -4,10 +4,45 @@ import {
   formatExecAutoReviewAssessment,
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecHostCommandParams, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "./tool-result-limits.js";
+
+export function buildExecApprovalFollowupTarget(params: ExecHostCommandParams, approvalId: string) {
+  return {
+    approvalId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.notifySessionKey ?? params.sessionKey,
+    expectedSessionId: params.sessionId,
+    sessionStore: params.sessionStore,
+    bashElevated: params.bashElevated,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
+    direct: params.approvalFollowupMode === "direct",
+  };
+}
+
+export function buildExecApprovalDeniedToolResult(
+  text: string,
+  cwd: string | undefined,
+  failureKind: "approval_required" | "auto-review-denied",
+): AgentToolResult<ExecToolDetails> {
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      failureKind,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: false,
+      cwd,
+    },
+  };
+}
 
 /** Renders automatic denials consistently for gateway and node tool transports. */
 export function buildExecAutoReviewDeniedToolResult(params: {
@@ -18,32 +53,20 @@ export function buildExecAutoReviewDeniedToolResult(params: {
 }): AgentToolResult<ExecToolDetails> {
   const { decision, command, toolCallId } = params;
   const text = `Exec denied by auto-review (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}\nCommand: ${command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      failureKind: "auto-review-denied",
-      durationMs: 0,
-      aggregated: text,
-      timedOut: false,
-      cwd: params.cwd,
-      approvalReviewOutcome: "denied",
-      ...(toolCallId
-        ? {
-            approvalReviews: [
-              {
-                id: `guardian:${toolCallId}`,
-                label: "Guardian",
-                status: "denied" as const,
-                riskLevel: decision.risk,
-                rationale: decision.rationale,
-              },
-            ],
-          }
-        : {}),
-    },
-  };
+  const result = buildExecApprovalDeniedToolResult(text, params.cwd, "auto-review-denied");
+  result.details.approvalReviewOutcome = "denied";
+  if (toolCallId) {
+    result.details.approvalReviews = [
+      {
+        id: `guardian:${toolCallId}`,
+        label: "Guardian",
+        status: "denied",
+        riskLevel: decision.risk,
+        rationale: decision.rationale,
+      },
+    ];
+  }
+  return result;
 }
 
 type ExecApprovalOutputStream = {

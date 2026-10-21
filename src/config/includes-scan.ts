@@ -1,4 +1,3 @@
-// Scans included config files and resolves include graphs.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

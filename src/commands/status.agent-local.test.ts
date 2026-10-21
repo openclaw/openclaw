@@ -5,16 +5,17 @@ import { buildStatusAgentsValue } from "./status.command-sections.js";
 
 it("does not project the gateway's compatibility id as an explicit fleet default", async () => {
   await withOpenClawTestState({ label: "status-explicit-fleet" }, async () => {
-    const { agentStatus } = await collectStatusLocalSnapshot({
+    const prepared = await collectStatusLocalSnapshot({
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     });
+    const agentStatus = prepared.publish();
     expect(agentStatus).toMatchObject({
       defaultId: null,
       ownership: "explicit",
       selectionRequired: true,
       agents: [{ id: "alpha" }, { id: "beta" }],
     });
-    expect(buildStatusAgentsValue({ agentStatus, formatTimeAgo: () => "now" })).toBe(
+    expect(buildStatusAgentsValue({ agentStatus })).toBe(
       "2 · no workspaces bootstrapping · sessions 0",
     );
   });

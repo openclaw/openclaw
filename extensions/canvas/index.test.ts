@@ -14,7 +14,6 @@ const mocks = vi.hoisted(() => {
   return {
     httpHandler,
     loadRenderer: vi.fn(),
-    createDefaultCanvasCliDependencies: vi.fn(() => ({ deps: true })),
     registerNodesCanvasCommands: vi.fn(),
     toolExecute,
     createCanvasTool: vi.fn(() => ({
@@ -32,8 +31,8 @@ vi.mock("./src/host/a2ui.js", () => {
   return { handleA2uiHttpRequest: mocks.httpHandler.handleHttpRequest };
 });
 
-vi.mock("./src/cli.js", () => ({
-  createDefaultCanvasCliDependencies: mocks.createDefaultCanvasCliDependencies,
+vi.mock("./src/cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/cli.js")>()),
   registerNodesCanvasCommands: mocks.registerNodesCanvasCommands,
 }));
 
@@ -41,11 +40,15 @@ vi.mock("./src/tool.js", () => ({
   createCanvasTool: mocks.createCanvasTool,
 }));
 
+// mock-isolation: importing the real harness would defeat the cold-registration guard.
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
+  throw new Error("agent harness runtime loaded before Canvas presentation");
+});
+
 function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   const registrations = {
     registerHttpRoute: vi.fn<OpenClawPluginApi["registerHttpRoute"]>(),
     registerService: vi.fn<OpenClawPluginApi["registerService"]>(),
-    registerHostedMediaResolver: vi.fn<OpenClawPluginApi["registerHostedMediaResolver"]>(),
     registerWidgetPresenter: vi.fn<OpenClawPluginApi["registerWidgetPresenter"]>(),
     registerTool: vi.fn<OpenClawPluginApi["registerTool"]>(),
     registerNodeCliFeature: vi.fn<OpenClawPluginApi["registerNodeCliFeature"]>(),
@@ -58,7 +61,6 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
   return {
     routes: registrations.registerHttpRoute.mock.calls.map(([route]) => route),
     services: registrations.registerService.mock.calls,
-    resolvers: registrations.registerHostedMediaResolver.mock.calls,
     widgetPresenters: registrations.registerWidgetPresenter.mock.calls.map(
       ([presenter]) => presenter,
     ),
@@ -128,13 +130,12 @@ describe("Canvas plugin entry", () => {
   });
 
   it("defers Canvas CLI and tool implementations until use", async () => {
-    const { resolvers, tools, cliFeatures } = registerCanvas();
+    const { tools, cliFeatures } = registerCanvas();
 
-    expect(resolvers).toHaveLength(0);
     expect(tools).toHaveLength(1);
     expect(tools.map(({ opts }) => opts?.name)).toEqual([undefined]);
     expect(cliFeatures).toHaveLength(1);
-    expect(mocks.createDefaultCanvasCliDependencies).not.toHaveBeenCalled();
+    expect(mocks.registerNodesCanvasCommands).not.toHaveBeenCalled();
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
 
     await cliFeatures[0]?.registrar({
@@ -144,7 +145,6 @@ describe("Canvas plugin entry", () => {
       workspaceDir: undefined,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
-    expect(mocks.createDefaultCanvasCliDependencies).toHaveBeenCalledTimes(1);
     expect(mocks.registerNodesCanvasCommands).toHaveBeenCalledTimes(1);
 
     const registeredTools = tools.map(({ tool: toolFactory }) => {

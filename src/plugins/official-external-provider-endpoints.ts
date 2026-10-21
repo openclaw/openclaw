@@ -9,7 +9,6 @@
  * Kept separate from official-external-plugin-catalog.ts so provider
  * transports do not pull the ClawHub install/marketplace module graph.
  */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 
@@ -22,19 +21,8 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
  * so they stay inert instead of complicating the mirror contract.
  */
 export function listOfficialExternalProviderEndpointManifests(): Record<string, unknown>[] {
-  const entries = (officialExternalProviderCatalog as { entries?: unknown }).entries;
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  const manifests: Record<string, unknown>[] = [];
-  for (const entry of entries) {
-    if (!isRecord(entry)) {
-      continue;
-    }
+  return officialExternalProviderCatalog.entries.flatMap((entry) => {
     const manifest = entry[MANIFEST_KEY];
-    if (isRecord(manifest) && Array.isArray(manifest.providerEndpoints)) {
-      manifests.push(manifest);
-    }
-  }
-  return manifests;
+    return manifest.providerEndpoints ? [manifest] : [];
+  });
 }

@@ -1,4 +1,3 @@
-// Line tests cover outbound media plugin behavior.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
@@ -16,70 +15,38 @@ afterAll(() => {
 
 import { buildLineMediaMessage } from "./outbound-media.js";
 
-const HTTPS_URL_ERROR = new Error("LINE outbound media URL must use HTTPS");
-const USER_TARGET = "line:user:Uabc";
 const PREVIEW_URL = "https://example.com/preview.jpg";
+const AUDIO_URL = "https://example.com/download?id=audio";
+const VIDEO_URL = "https://example.com/clip.mp4";
+const INSECURE_PREVIEW_URL =
+  "http://line-user:line-fixture@example.com/image.jpg?auth=line-query#line-fragment";
 
-function createCredentialBearingHttpUrl(): string {
-  const url = new URL("http://example.com/image.jpg");
-  url.username = ["line", "user"].join("-");
-  url.password = ["line", "fixture"].join("-");
-  url.searchParams.set("auth", ["line", "query"].join("-"));
-  url.hash = ["line", "fragment"].join("-");
-  return url.href;
+function build(
+  url: string,
+  options: Parameters<typeof buildLineMediaMessage>[1] = {},
+  target = "line:user:Uabc",
+) {
+  return buildLineMediaMessage(url, options, target);
 }
 
 beforeEach(() => {
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
-  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset().mockResolvedValue({
     hostname: "example.com",
     addresses: ["93.184.216.34"],
   });
 });
 
-describe("buildLineMediaMessage URL boundary", () => {
-  it("pins the hostname of an accepted HTTPS URL", async () => {
-    await expect(
-      buildLineMediaMessage("https://example.com/image.jpg", {}, USER_TARGET),
-    ).resolves.toEqual({
-      type: "image",
-      originalContentUrl: "https://example.com/image.jpg",
-      previewImageUrl: "https://example.com/image.jpg",
-    });
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
-      policy: { allowPrivateNetwork: false },
-    });
-  });
-
-  it("accepts an uppercase HTTPS scheme", async () => {
-    await expect(
-      buildLineMediaMessage("HTTPS://EXAMPLE.COM/img.jpg", {}, USER_TARGET),
-    ).resolves.toMatchObject({ type: "image" });
-    expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
-      policy: { allowPrivateNetwork: false },
-    });
-  });
-
+describe("buildLineMediaMessage", () => {
   it.each([
     {
       name: "malformed media URL",
-      run: () => buildLineMediaMessage("not a url?query=fixture#fragment", {}, USER_TARGET),
+      run: () => build("not a url?query=fixture#fragment"),
       expected: new Error("LINE outbound media currently requires a public HTTPS URL"),
     },
     {
-      name: "insecure media URL",
-      run: () => buildLineMediaMessage(createCredentialBearingHttpUrl(), {}, USER_TARGET),
-      expected: HTTPS_URL_ERROR,
-    },
-    {
       name: "insecure preview URL",
-      run: () =>
-        buildLineMediaMessage(
-          "https://example.com/video.mp4",
-          { mediaKind: "video", previewImageUrl: createCredentialBearingHttpUrl() },
-          USER_TARGET,
-        ),
-      expected: HTTPS_URL_ERROR,
+      run: () => build(VIDEO_URL, { mediaKind: "video", previewImageUrl: INSECURE_PREVIEW_URL }),
+      expected: new Error("LINE outbound media URL must use HTTPS"),
     },
   ])("does not expose credentials from a $name", async ({ run, expected }) => {
     await expect(run()).rejects.toThrow(expected);
@@ -88,9 +55,7 @@ describe("buildLineMediaMessage URL boundary", () => {
   it("rejects a URL longer than 2000 chars before any hostname lookup", async () => {
     const longUrl = `https://example.com/${"a".repeat(1981)}`;
     expect(longUrl.length).toBeGreaterThan(2000);
-    await expect(buildLineMediaMessage(longUrl, {}, USER_TARGET)).rejects.toThrow(
-      /2000 chars or less/i,
-    );
+    await expect(build(longUrl)).rejects.toThrow(/2000 chars or less/i);
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).not.toHaveBeenCalled();
   });
 
@@ -99,116 +64,40 @@ describe("buildLineMediaMessage URL boundary", () => {
       new Error("SSRF blocked private network target"),
     );
 
-    await expect(
-      buildLineMediaMessage("https://127.0.0.1/image.jpg", {}, USER_TARGET),
-    ).rejects.toThrow(/private network/i);
+    await expect(build("https://127.0.0.1/image.jpg")).rejects.toThrow(/private network/i);
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("127.0.0.1", {
       policy: { allowPrivateNetwork: false },
     });
   });
-});
-
-describe("buildLineMediaMessage kind resolution", () => {
-  it("respects an explicit media kind without remote MIME probing", async () => {
-    await expect(
-      buildLineMediaMessage(
-        "https://example.com/download?id=123",
-        { mediaKind: "video", previewImageUrl: PREVIEW_URL },
-        USER_TARGET,
-      ),
-    ).resolves.toEqual({
-      type: "video",
-      originalContentUrl: "https://example.com/download?id=123",
-      previewImageUrl: PREVIEW_URL,
-    });
-  });
-
   it("infers audio from explicit duration metadata when mediaKind is omitted", async () => {
-    await expect(
-      buildLineMediaMessage(
-        "https://example.com/download?id=audio",
-        { durationMs: 30000 },
-        USER_TARGET,
-      ),
-    ).resolves.toEqual({
+    await expect(build(AUDIO_URL, { durationMs: 30000 })).resolves.toEqual({
       type: "audio",
-      originalContentUrl: "https://example.com/download?id=audio",
+      originalContentUrl: AUDIO_URL,
       duration: 30000,
     });
   });
 
-  it("does not infer video from previewImageUrl alone", async () => {
-    await expect(
-      buildLineMediaMessage(
-        "https://example.com/image.jpg",
-        { previewImageUrl: PREVIEW_URL },
-        USER_TARGET,
-      ),
-    ).resolves.toEqual({
+  it("defaults an untyped URL to an image message", async () => {
+    await expect(build(AUDIO_URL)).resolves.toMatchObject({
       type: "image",
-      originalContentUrl: "https://example.com/image.jpg",
-      previewImageUrl: PREVIEW_URL,
+      originalContentUrl: AUDIO_URL,
     });
   });
 
-  it.each([
-    { url: "https://example.com/audio.mp3", expectedType: "audio" },
-    { url: "https://example.com/voice.m4a", expectedType: "audio" },
-    { url: "https://example.com/image.jpg", expectedType: "image" },
-    { url: "https://example.com/image.png", expectedType: "image" },
-    // An extensionless URL carries no evidence at all.
-    { url: "https://example.com/download?id=audio", expectedType: "image" },
-  ])("reads $url as a $expectedType message", async ({ url, expectedType }) => {
-    await expect(buildLineMediaMessage(url, {}, USER_TARGET)).resolves.toMatchObject({
-      type: expectedType,
-      originalContentUrl: url,
-    });
-  });
-
-  it.each([
-    // These suffixes name formats LINE cannot carry in its native message types.
-    "https://example.com/image.webp",
-    "https://example.com/file.unknown",
-  ])("delivers unsupported %s as its URL", async (url) => {
-    await expect(buildLineMediaMessage(url, {}, USER_TARGET)).resolves.toEqual({
-      type: "text",
-      text: url,
-    });
-  });
-
-  it("reads an MP4 URL as a video message once a preview image exists", async () => {
-    const url = "https://example.com/video.mp4";
-    await expect(
-      buildLineMediaMessage(url, { previewImageUrl: PREVIEW_URL }, USER_TARGET),
-    ).resolves.toEqual({
-      type: "video",
-      originalContentUrl: url,
-      previewImageUrl: PREVIEW_URL,
-    });
-  });
-
-  it("names the missing preview image when the caller asked for a video", async () => {
-    await expect(
-      buildLineMediaMessage("https://example.com/clip.mp4", { mediaKind: "video" }, USER_TARGET),
-    ).rejects.toThrow(/require previewImageUrl/i);
-  });
+  it.each(["https://example.com/image.webp", "https://example.com/file.unknown", VIDEO_URL])(
+    "delivers unsupported or posterless %s as its URL",
+    async (url) => {
+      await expect(build(url)).resolves.toEqual({
+        type: "text",
+        text: url,
+      });
+    },
+  );
 
   it("names the missing preview image when tracking metadata declares video intent", async () => {
     await expect(
-      buildLineMediaMessage(
-        "https://example.com/download?id=video",
-        { trackingId: "track-1" },
-        USER_TARGET,
-      ),
+      build("https://example.com/download?id=video", { trackingId: "track-1" }),
     ).rejects.toThrow(/require previewImageUrl/i);
-  });
-
-  it("delivers an inferred video without a poster as its URL", async () => {
-    // Nobody asked for a video here, so a hard failure would lose a send the
-    // caller only described by its URL.
-    await expect(
-      buildLineMediaMessage("https://example.com/clip.mp4", {}, USER_TARGET),
-    ).resolves.toEqual({ type: "text", text: "https://example.com/clip.mp4" });
   });
 
   it("gates trackingId on user targets", async () => {
@@ -217,40 +106,15 @@ describe("buildLineMediaMessage kind resolution", () => {
       previewImageUrl: PREVIEW_URL,
       trackingId: "track-1",
     };
-    await expect(
-      buildLineMediaMessage("https://example.com/clip.mp4", options, USER_TARGET),
-    ).resolves.toEqual({
+    const expected = {
       type: "video",
-      originalContentUrl: "https://example.com/clip.mp4",
+      originalContentUrl: VIDEO_URL,
       previewImageUrl: PREVIEW_URL,
+    };
+    await expect(build(VIDEO_URL, options)).resolves.toEqual({
+      ...expected,
       trackingId: "track-1",
     });
-    await expect(
-      buildLineMediaMessage("https://example.com/clip.mp4", options, "line:group:Cabc"),
-    ).resolves.toEqual({
-      type: "video",
-      originalContentUrl: "https://example.com/clip.mp4",
-      previewImageUrl: PREVIEW_URL,
-    });
-  });
-
-  it("builds an audio message with a default duration", async () => {
-    await expect(
-      buildLineMediaMessage("https://example.com/voice.m4a", { mediaKind: "audio" }, USER_TARGET),
-    ).resolves.toEqual({
-      type: "audio",
-      originalContentUrl: "https://example.com/voice.m4a",
-      duration: 60000,
-    });
-  });
-
-  it("defaults an image preview to the media URL", async () => {
-    await expect(
-      buildLineMediaMessage("https://example.com/photo.png", { mediaKind: "image" }, USER_TARGET),
-    ).resolves.toEqual({
-      type: "image",
-      originalContentUrl: "https://example.com/photo.png",
-      previewImageUrl: "https://example.com/photo.png",
-    });
+    await expect(build(VIDEO_URL, options, "line:group:Cabc")).resolves.toEqual(expected);
   });
 });

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   listPendingIMessageApprovalReactionPollTargets,
@@ -180,17 +181,17 @@ async function bindObservedConversation(params: {
 }
 
 export async function pollPendingIMessageApprovalReactions(params: {
+  signal?: AbortSignal;
   client: IMessageRpcClient;
   cfg: OpenClawConfig;
   accountId: string;
   allowRecentChatDiscovery?: boolean;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
-  logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = await listPendingIMessageApprovalReactionPollTargets({
     accountId: params.accountId,
   });
-  if (targets.length === 0) {
+  if (params.signal?.aborted || targets.length === 0) {
     return;
   }
   const pendingByMessageId = buildPendingTargetsByMessageId(targets);
@@ -202,20 +203,21 @@ export async function pollPendingIMessageApprovalReactions(params: {
   const chatIds = shouldDiscoverRecentChats
     ? [...new Set([...explicitChatIds, ...(await listRecentChatIds(params.client))])]
     : explicitChatIds;
-  if (chatIds.length === 0) {
-    return;
-  }
   for (const chatId of chatIds) {
+    if (params.signal?.aborted) {
+      return;
+    }
     let messages: HistoryMessage[];
     try {
       messages = await fetchRecentHistory({ client: params.client, chatId });
     } catch (err) {
-      params.logVerboseMessage?.(
-        `imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`,
-      );
+      logVerbose(`imessage: approval reaction poll skipped chat_id=${chatId}: ${String(err)}`);
       continue;
     }
     for (const message of messages) {
+      if (params.signal?.aborted) {
+        return;
+      }
       const targetGuid = message.guid?.trim();
       if (!targetGuid) {
         continue;
@@ -228,6 +230,9 @@ export async function pollPendingIMessageApprovalReactions(params: {
       }
       await bindObservedConversation({ target, message });
       for (const reaction of message.reactions ?? []) {
+        if (params.signal?.aborted) {
+          return;
+        }
         const reactionPayload = buildReactionPayload({ targetMessage: message, reaction });
         if (!reactionPayload) {
           continue;
@@ -238,7 +243,6 @@ export async function pollPendingIMessageApprovalReactions(params: {
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
           gatewayRuntime: params.gatewayRuntime,
-          logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {
           return;

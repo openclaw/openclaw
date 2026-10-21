@@ -3,18 +3,16 @@ import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operat
 import {
   getSqliteWorkerActorIdentity,
   runSqliteWorkerStoreOperation,
-  type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  getExistingOpenClawStateSchemaPath,
+  isExistingOpenClawStateSchema,
+} from "./openclaw-state-db-schema-policy.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import type {
-  OpenClawStateWorkerOperations,
-  OpenClawStateWorkerInspectionOperations,
-} from "./openclaw-state-worker-contract.js";
-
-type StoreOperations = OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations;
-type Store = SqliteWorkerStore<StoreOperations>;
+import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
+import type { Store } from "./openclaw-state-worker-store.types.js";
 
 /** A live alias cannot authorize a worker still bound to a vanished opening path. */
 export function assertOpenClawStateWorkerActorPath(
@@ -46,12 +44,23 @@ export function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  signal?: AbortSignal,
 ): Promise<T> {
   const { admission } = context;
   const actor = getSqliteWorkerActorIdentity(store);
-  return runSqliteWorkerStoreOperation<StoreOperations, T>(
+  return runSqliteWorkerStoreOperation<OpenClawStateWorkerOperations, T>(
     store,
-    operation,
+    (scope) =>
+      operation(
+        signal
+          ? {
+              execute: (command, options) =>
+                scope.execute(command, {
+                  signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
+                }),
+            }
+          : scope,
+      ),
     context,
     (commandType) => {
       admission.assertCurrent();
@@ -62,33 +71,32 @@ export function runWithOpenClawStateWorkerStore<T>(
   );
 }
 
-/** Only native opening owns the caller scope; a cached actor must not retain it. */
-export function captureOpenClawStateWorkerOpeningGuard(
-  context: OpenClawStateWorkerContext,
-  assertCurrent?: () => void,
-) {
-  const admission: { assertCurrent?: () => void; refusal?: { error: unknown } } = {
-    assertCurrent,
-  };
-  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() => {
-    context.admission.assertCurrent();
-    try {
-      assertCurrent?.();
-    } catch (error) {
-      admission.refusal = { error };
-      throw error;
-    }
-  });
+export function assertOpenClawStateWorkerSchemaContext(context: OpenClawStateWorkerContext): void {
+  isExistingOpenClawStateSchema(context.admission.databasePath);
+  if (getExistingOpenClawStateSchemaPath() !== context.existingSchemaPath) {
+    throw new Error("Shared-state worker schema context does not match its caller");
+  }
+}
+
+/** Native opening retains its physical admission, not an individual command's authority. */
+export function captureOpenClawStateWorkerOpeningGuard(context: OpenClawStateWorkerContext) {
+  const databaseAdmission = context.admission;
+  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() =>
+    databaseAdmission.assertCurrent(),
+  );
   return {
-    admission,
     assertCurrent: () => {
       if (!captured) {
         throw new Error("Shared-state worker opening admission is closed");
       }
       captured();
     },
-    releaseContext() {
-      captured = undefined;
+    async run<T>(open: () => Promise<T>): Promise<T> {
+      try {
+        return await open();
+      } finally {
+        captured = undefined;
+      }
     },
   };
 }

@@ -73,5 +73,6 @@ struct AboutSettings: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
+        .environment(\.openURL, AppActivation.shared.openURLAction)
     }
 }

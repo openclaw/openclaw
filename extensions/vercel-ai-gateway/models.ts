@@ -85,16 +85,8 @@ const STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG: readonly StaticVercelGatewayModel[
 ] as const;
 
 function toPerMillionCost(value: unknown): number {
-  const numeric =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
-  if (numeric === undefined || numeric < 0) {
-    return 0;
-  }
-  return numeric * 1_000_000;
+  const price = (parseStrictFiniteNumber(value) ?? 0) * 1_000_000;
+  return Number.isFinite(price) && price >= 0 ? price : 0;
 }
 
 function normalizeCost(value: unknown): ModelDefinitionConfig["cost"] {
@@ -161,16 +153,14 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
   const normalizedCost = normalizeCost(model.pricing);
+  const tags = Array.isArray(model.tags) ? model.tags : undefined;
 
   return {
     id,
     name: (typeof model.name === "string" ? model.name.trim() : "") || fallback?.name || id,
-    reasoning:
-      Array.isArray(model.tags) && model.tags.includes("reasoning")
-        ? true
-        : (fallback?.reasoning ?? false),
-    input: Array.isArray(model.tags)
-      ? model.tags.includes("vision")
+    reasoning: tags?.includes("reasoning") ? true : (fallback?.reasoning ?? false),
+    input: tags
+      ? tags.includes("vision")
         ? ["text", "image"]
         : ["text"]
       : (fallback?.input ?? ["text"]),

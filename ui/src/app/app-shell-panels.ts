@@ -15,7 +15,7 @@ import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext } from "./context.ts";
 import {
   isOptionalElementDefined,
-  type LazyCustomElementRequestController,
+  type LazyCustomElementRequests,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
@@ -25,7 +25,7 @@ import { isBrowserPanelSurfaceAvailable, isDesktopPanelAvailable } from "./panel
 
 export interface ShellPanelHost {
   readonly context: ApplicationContext | undefined;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
+  readonly lazyCustomElements: LazyCustomElementRequests;
   readonly terminalPanelElement: OptionalCustomElement;
   readonly browserPanelElement: OptionalCustomElement;
   readonly desktopPanelElement: OptionalCustomElement;

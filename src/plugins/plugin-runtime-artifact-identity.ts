@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { FsSafeError, walkDirectorySync } from "../infra/fs-safe.js";
@@ -82,10 +83,8 @@ function listRuntimeArtifactFiles(rootDir: string): string[] {
     .toSorted();
 }
 
-function sameOpenedFile(before: fs.Stats, after: fs.Stats): boolean {
+function sameOpenedFileMetadata(before: fs.Stats, after: fs.Stats): boolean {
   return (
-    before.dev === after.dev &&
-    before.ino === after.ino &&
     before.size === after.size &&
     before.mtimeMs === after.mtimeMs &&
     before.ctimeMs === after.ctimeMs
@@ -113,7 +112,12 @@ function hashRuntimeArtifactFile(params: {
   try {
     const hashed = hashFileDescriptorSync(opened.fd, opened.stat.size);
     const after = fs.fstatSync(opened.fd);
-    if (hashed.sizeBytes !== opened.stat.size || !sameOpenedFile(opened.stat, after)) {
+    const identity = fs.fstatSync(opened.fd, { bigint: true });
+    if (
+      hashed.sizeBytes !== opened.stat.size ||
+      !sameFileIdentity(opened.exactIdentity, identity) ||
+      !sameOpenedFileMetadata(opened.stat, after)
+    ) {
       throw new Error(changedMessage);
     }
     return { hash: hashed.sha256, size: opened.stat.size, mode: opened.stat.mode };

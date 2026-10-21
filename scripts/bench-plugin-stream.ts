@@ -6,12 +6,34 @@ import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
 
 const events = 2_000;
+const workload = process.argv[2] ?? "text";
+if (workload !== "text" && workload !== "mixed") {
+  throw new Error("Expected text or mixed workload");
+}
 const registry = createEmptyPluginRegistry();
 const record = createPluginRecord({ id: "stream-fixture", origin: "bundled" });
 registry.plugins.push(record);
 const instance = new PluginInstance(record.id, { record, registry });
 const content = Array.from({ length: 64 }, () => ({ type: "text", text: "x".repeat(38) }));
 const payload = { type: "text_delta", delta: "chunk", partial: { content } };
+const longText = {
+  ...payload,
+  partial: { content: [...content, { type: "text", text: "assistant text ".repeat(2_000) }] },
+};
+const toolCall = {
+  type: "toolcall_delta",
+  delta: '"argument":',
+  partial: {
+    content: [
+      {
+        type: "toolCall",
+        id: "call_fixture",
+        name: "read",
+        arguments: { text: "x".repeat(8_000) },
+      },
+    ],
+  },
+};
 const toolResult = {
   type: "tool_result",
   content: Array.from({ length: 50 }, () =>
@@ -21,7 +43,15 @@ const toolResult = {
 const provider = instance.wrap({
   async *stream() {
     for (let sequence = 0; sequence < events; sequence++) {
-      yield { ...payload, sequence };
+      const event =
+        workload === "text"
+          ? payload
+          : sequence % 100 === 99
+            ? toolResult
+            : sequence % 5 === 4
+              ? toolCall
+              : longText;
+      yield { ...event, sequence };
     }
     yield toolResult;
   },
@@ -52,13 +82,17 @@ async function consume(layers: number) {
 }
 
 try {
-  for (const layers of [0, 5]) {
+  for (const layers of [0, 1, 5]) {
     await consume(layers);
     const samples: number[] = [];
+    const cpuSamples: number[] = [];
     for (let sample = 0; sample < 5; sample++) {
       const start = performance.now();
+      const cpu = process.threadCpuUsage();
       await consume(layers);
       samples.push((performance.now() - start) / (events + 1));
+      const used = process.threadCpuUsage(cpu);
+      cpuSamples.push((used.user + used.system) / 1_000 / (events + 1));
     }
     globalThis.gc?.();
     const session = new Session();
@@ -71,21 +105,48 @@ try {
     await consume(layers);
     const { profile } = await session.post("HeapProfiler.stopSampling");
     session.disconnect();
-    const nodes = [profile.head];
+    const nodes = [{ node: profile.head, category: "other" }];
+    const categories: Record<string, number> = {};
     let bytes = 0;
-    for (const node of nodes) {
+    for (const entry of nodes) {
+      const { node } = entry;
+      const name = node.callFrame.functionName;
+      const category =
+        name === "isPluginData"
+          ? "dataWalk"
+          : entry.category === "dataWalk"
+            ? entry.category
+            : name === "structuredClone"
+              ? "structuredClone"
+              : name === "wrap"
+                ? "valueViews"
+                : name === "wrapIteratorResult" || name === "IteratorResultReader"
+                  ? "iteratorResults"
+                  : name === "readResultMember"
+                    ? "resultReads"
+                    : entry.category;
       bytes += node.selfSize;
-      nodes.push(...node.children);
+      categories[category] = (categories[category] ?? 0) + node.selfSize;
+      nodes.push(...node.children.map((child) => ({ node: child, category })));
     }
     console.log(
       JSON.stringify({
         node: process.version,
         events,
+        workload,
         layers,
         eventBytes: Buffer.byteLength(JSON.stringify(payload)),
         toolResultBytes: Buffer.byteLength(JSON.stringify(toolResult)),
         msPerEvent: samples.toSorted((a, b) => a - b)[2],
+        mainThreadMsPer10kEvents: cpuSamples.toSorted((a, b) => a - b)[2]! * 10_000,
         sampledAllocatedBytesPerEvent: bytes / (events + 1),
+        sampledMBPer10kEvents: bytes / (events + 1) / 100,
+        allocationCategories: Object.fromEntries(
+          Object.entries(categories).map(([name, size]) => [
+            name,
+            { bytesPerEvent: size / (events + 1), percent: (100 * size) / bytes },
+          ]),
+        ),
         rssBytes: process.memoryUsage().rss,
       }),
     );

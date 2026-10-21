@@ -1,4 +1,3 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
 import type { BrowserTab } from "../client.types.js";
@@ -10,9 +9,9 @@ import {
   setPwToolsCoreCurrentRefLocator,
   setPwToolsCoreDownloadCapture,
 } from "../pw-tools-core.test-harness.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { atBarrier, gate as createGate, startRoute } from "./agent-route.test-support.js";
+import { createDashboardRouteContext } from "./dashboard-ownership.test-support.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 const browser = vi.hoisted(() => ({
   open: vi.fn(),
@@ -61,7 +60,6 @@ vi.mock("../pw-ai-module.js", () => ({
 
 import {
   assertBrowserDashboardTargetCurrent,
-  reconcileBrowserDashboards,
   requestBrowserDashboard,
   stopBrowserDashboard,
 } from "../../browser-dashboard.js";
@@ -73,33 +71,7 @@ const sessionKey = "agent:main:dashboard-transfer-proof";
 const request = { sessionKey, agentId: "main", name: "service" };
 
 function transferRoutes(tab: BrowserTab) {
-  const profile = makeBrowserProfile();
-  const unused = async (): Promise<never> => {
-    throw new Error("Unexpected profile operation");
-  };
-  const profileCtx: ProfileContext = {
-    profile,
-    ensureBrowserAvailable: async () => {},
-    ensureTabAvailable: async () => tab,
-    isHttpReachable: async () => true,
-    isTransportAvailable: async () => true,
-    isReachable: async () => true,
-    listTabs: async () => [tab],
-    openTab: unused,
-    labelTab: unused,
-    focusTab: unused,
-    closeTab: unused,
-    stopRunningBrowser: unused,
-    resetProfile: unused,
-  };
-  const state = makeBrowserServerState({ profile, resolvedOverrides: { ssrfPolicy: undefined } });
-  const context: BrowserRouteContext = {
-    ...profileCtx,
-    state: () => state,
-    forProfile: () => profileCtx,
-    listProfiles: unused,
-    mapTabError: () => null,
-  };
+  const context = createDashboardRouteContext(tab);
   const { app, postHandlers } = createBrowserRouteApp();
   registerBrowserAgentActHookRoutes(app, context);
   registerBrowserAgentActDownloadRoutes(app, context);
@@ -107,72 +79,47 @@ function transferRoutes(tab: BrowserTab) {
 }
 
 const cases = [
-  {
-    kind: "input",
-    path: "/hooks/file-chooser",
-    body: { inputRef: "1", paths: ["/tmp/upload.txt"] },
-    preparation: "paths",
-  },
-  {
-    kind: "upload",
-    path: "/hooks/file-chooser",
-    body: { ref: "1", paths: ["/tmp/upload.txt"] },
-    preparation: "paths",
-  },
-  {
-    kind: "upload arm",
-    path: "/hooks/file-chooser",
-    body: { paths: ["/tmp/upload.txt"] },
-    preparation: "paths",
-  },
-  { kind: "dialog arm", path: "/hooks/dialog", body: { accept: true }, preparation: "module" },
-  {
-    kind: "download",
-    path: "/download",
-    body: { ref: "1", path: "/tmp/download.txt" },
-    preparation: "output",
-  },
-  {
-    kind: "download waiter",
-    path: "/wait/download",
-    body: { path: "/tmp/download.txt" },
-    preparation: "output",
-  },
+  ["input", "/hooks/file-chooser", { inputRef: "1", paths: ["/tmp/upload.txt"] }, "paths"],
+  ["upload", "/hooks/file-chooser", { ref: "1", paths: ["/tmp/upload.txt"] }, "paths"],
+  ["upload arm", "/hooks/file-chooser", { paths: ["/tmp/upload.txt"] }, "paths"],
+  ["dialog arm", "/hooks/dialog", { accept: true }, "module"],
+  ["download", "/download", { ref: "1", path: "/tmp/download.txt" }, "output"],
+  ["download waiter", "/wait/download", { path: "/tmp/download.txt" }, "output"],
 ] as const;
+
+const boundaryFailure = "Operation completed before its held boundary";
 
 describe("dashboard transfer authority", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
   it.each(
-    cases.flatMap((entry) =>
-      ["Stop", "replacement", "current", "absent"].map((authority) =>
-        Object.assign({}, entry, { authority }),
-      ),
+    cases.flatMap(([kind, path, body, gate]) =>
+      (kind === "upload" ? ["Stop", "absent"] : ["Stop", "current"]).map((authority) => ({
+        kind,
+        path,
+        body,
+        gate,
+        authority,
+      })),
     ),
   )(
     "checks $kind authority after $authority during preparation",
-    async ({ kind, path, body, preparation: gate, authority }) => {
+    async ({ kind, path, body, gate, authority }) => {
       for (const prepare of Object.values(preparation)) {
         prepare.mockResolvedValue(undefined);
       }
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      preparation[gate].mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-      });
+      const ready = createGate();
+      preparation[gate].mockImplementationOnce(ready.block);
       const dashboard = await requestBrowserDashboard(request);
       const targetId = dashboard.browserTab!.targetId;
       const tab: BrowserTab = { targetId, type: "page", title: "Service", url: dashboard.url };
       const nativeEffect = vi.fn(async () => {});
-      const fileChooser = { setFiles: nativeEffect };
-      const waitForEvent = vi.fn(async () => fileChooser);
+      const waitForEvent = vi.fn(async () => ({ setFiles: nativeEffect }));
       setPwToolsCoreCurrentPage({ url: () => tab.url, isClosed: () => false, waitForEvent });
       setPwToolsCoreCurrentRefLocator({ setInputFiles: nativeEffect, click: nativeEffect });
-      const session = getPwToolsCoreSessionMocks();
-      session.armObservedDialogResponseOnPage.mockImplementation(() => {
+      getPwToolsCoreSessionMocks().armObservedDialogResponseOnPage.mockImplementation(() => {
         void nativeEffect();
       });
-      const capture = {
+      setPwToolsCoreDownloadCapture({
         armed: true,
         promise: Promise.resolve({
           url: tab.url,
@@ -180,61 +127,34 @@ describe("dashboard transfer authority", () => {
           suggestedFilename: "download.txt",
         }),
         cancel: vi.fn(),
-      };
-      setPwToolsCoreDownloadCapture(capture);
-      const closeEntered = createDeferred<void>();
-      const releaseClose = createDeferred<void>();
+      });
+      const closing = createGate();
       browser.closeOwned.mockImplementation(async () => {
-        closeEntered.resolve();
-        await releaseClose.promise;
+        closing.enter();
+        await closing.promise;
         fixture.tabs = fixture.tabs.filter((entry) => entry.targetId !== targetId);
         return { status: "closed" };
       });
-      const response = createBrowserRouteResponse();
-      const operation = Promise.resolve(
-        transferRoutes(tab).get(path)!(
-          {
-            params: {},
-            query: {},
-            body: { ...body, targetId },
-            ...(authority === "absent"
-              ? {}
-              : {
-                  assertCurrent: async (profile?: ResolvedBrowserProfile) =>
-                    await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
-                }),
-          },
-          response.res,
-        ),
-      );
+      const { response, completion: operation } = startRoute(transferRoutes(tab).get(path), {
+        body: { ...body, targetId },
+        ...(authority === "absent"
+          ? {}
+          : {
+              assertCurrent: async (profile?: ResolvedBrowserProfile) =>
+                await assertBrowserDashboardTargetCurrent(dashboard, "main", {}, profile),
+            }),
+      });
       let retirement: Promise<unknown> | undefined;
       try {
-        await Promise.race([
-          entered.promise,
-          operation.then(() => {
-            throw new Error(
-              `Transfer ended before preparation: ${response.statusCode} ${JSON.stringify(response.body)}`,
-            );
-          }),
-        ]);
-        if (authority === "Stop" || authority === "replacement") {
-          if (authority === "replacement") {
-            fixture.widgets[0]!.instanceId = "instance-two";
-            retirement = reconcileBrowserDashboards();
-          } else {
-            retirement = stopBrowserDashboard(request);
-          }
-          await Promise.race([
-            closeEntered.promise,
-            retirement.then(() => {
-              throw new Error("Retirement skipped held close");
-            }),
-          ]);
+        await atBarrier(ready.entered, operation, boundaryFailure);
+        if (authority === "Stop") {
+          retirement = stopBrowserDashboard(request);
+          await atBarrier(closing.entered, retirement, boundaryFailure);
         }
         expect(fixture.tabs.map((entry) => entry.targetId)).toContain(targetId);
-        release.resolve();
+        ready.resolve();
         await operation;
-        if (authority === "Stop" || authority === "replacement") {
+        if (authority === "Stop") {
           expect(nativeEffect).not.toHaveBeenCalled();
           expect(waitForEvent).not.toHaveBeenCalled();
           expect(response.statusCode).toBeGreaterThanOrEqual(400);
@@ -247,8 +167,8 @@ describe("dashboard transfer authority", () => {
           expect(response.body).toMatchObject({ ok: true });
         }
       } finally {
-        release.resolve();
-        releaseClose.resolve();
+        ready.resolve();
+        closing.resolve();
         await Promise.allSettled([operation, retirement]);
       }
     },

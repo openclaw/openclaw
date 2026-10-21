@@ -9,10 +9,7 @@ const BOARD_EVENT_DEDUPE_MS = 5_000;
 const recentNotices = new Map<string, { summary: string; at: number }>();
 
 export class BoardEventPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "BoardEventPayloadError";
-  }
+  override name = "BoardEventPayloadError";
 }
 
 function serializePayload(payload: unknown): string {
@@ -66,8 +63,4 @@ export function appendBoardEventNotice(params: {
     formatNotice(params.widget, summary),
     params.agentId ? withSystemEventOwner(options, params.agentId) : options,
   );
-}
-
-export function resetBoardEventNoticeStateForTest(): void {
-  recentNotices.clear();
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { extractDocumentContent } from "../media/document-extractors.runtime.js";
+import { extractPdfContent } from "../media/pdf-extract.js";
 import { extractReadableContent } from "../web-fetch/content-extractors.runtime.js";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -38,9 +38,8 @@ describe.each([
     factory: "createFixtureDocumentExtractor",
     contract: "documentExtractors",
     extract: (config?: OpenClawConfig) =>
-      extractDocumentContent({
+      extractPdfContent({
         buffer: Buffer.from("fixture"),
-        mimeType: "application/pdf",
         maxPages: 1,
         maxPixels: 100,
         minTextChars: 1,
@@ -105,7 +104,13 @@ exports.${factory} = () => ({
           await withPluginMetadataSnapshotScope(
             empty,
             async () => {
-              await expect(extract(config)).resolves.toBeNull();
+              if (contract === "documentExtractors") {
+                await expect(extract(config)).rejects.toThrow(
+                  "PDF extraction disabled or unavailable",
+                );
+              } else {
+                await expect(extract(config)).resolves.toBeNull();
+              }
             },
             options,
           );

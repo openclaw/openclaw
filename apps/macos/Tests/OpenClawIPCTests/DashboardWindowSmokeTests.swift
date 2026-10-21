@@ -49,12 +49,10 @@ private final class DashboardBrowserImportGate {
 
 @MainActor
 private func nextDashboardImportRequest(_ requests: AsyncStream<Int>) async throws -> Int {
-    try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-        for await request in requests {
-            return request
-        }
-        throw CancellationError()
+    for await request in requests {
+        return request
     }
+    throw CancellationError()
 }
 
 private final class DashboardWindowGestureSpy: NSWindow {
@@ -70,7 +68,7 @@ private final class DashboardWindowGestureSpy: NSWindow {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardWindowSmokeTests {
     @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
@@ -116,7 +114,7 @@ struct DashboardWindowSmokeTests {
         defer { NSWindow.removeFrame(usingName: windowAutosaveName) }
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/control/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -190,11 +188,11 @@ struct DashboardWindowSmokeTests {
     @Test func `dashboard reload decision preserves live same URL content`() throws {
         let current = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let replacement = try #require(URL(string: "http://127.0.0.1:18790/control/"))
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "secret")
-        let rotatedAuth = DashboardWindowAuth(
+        let rotatedAuth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "rotated")
@@ -244,7 +242,7 @@ struct DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -283,7 +281,7 @@ struct DashboardWindowSmokeTests {
             buttonNumber: 1))
     }
 
-    @Test func `dashboard permits only trusted ClickClack discussion subframes`() throws {
+    @Test func `dashboard permits HTTP subframes requested by the trusted main frame`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let channel = try #require(URL(string: "http://127.0.0.1:18890/embed/channel/T01/C01"))
         let thread = try #require(URL(string: "http://127.0.0.1:18890/embed/thread/T01/M01"))
@@ -311,8 +309,24 @@ struct DashboardWindowSmokeTests {
             to: channel, dashboardURL: dashboard, isMainFrame: true))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
-        #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+        #expect(ControlUIDocumentHost.shouldAllowNavigation(
             to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        for address in ["https://app.example.com/any/path?query=yes", "https://app.example.com/mcp-app-sandbox"] {
+            let url = try #require(URL(string: address))
+            #expect(ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+            #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
+            #expect(!ControlUIDocumentHost.shouldAllowNavigation(
+                to: url, dashboardURL: dashboard, isMainFrame: true, isTrustedDashboardSource: true))
+        }
+        for address in ["custom://app.example.com/path", "https://user@app.example.com/path"] {
+            #expect(try !ControlUIDocumentHost.shouldAllowNavigation(
+                to: #require(URL(string: address)),
+                dashboardURL: dashboard,
+                isMainFrame: false,
+                isTrustedDashboardSource: true))
+        }
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
             to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
         #expect(!ControlUIDocumentHost.shouldAllowNavigation(
@@ -327,7 +341,7 @@ struct DashboardWindowSmokeTests {
         let dashboard = server.url("/control/")
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -357,7 +371,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestContinuation: CheckedContinuation<Bool, Never>?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in
@@ -385,7 +399,7 @@ struct DashboardWindowSmokeTests {
 
         controller.update(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth.unauthenticated)
         firstRequestContinuation?.resume(returning: false)
         firstRequestContinuation = nil
         #expect(try await nextDashboardImportRequest(requests.stream) == 2)
@@ -405,7 +419,7 @@ struct DashboardWindowSmokeTests {
         let gate = DashboardBrowserImportGate()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in gate.request() })
@@ -441,7 +455,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestApplied: Bool?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { shouldApply in
@@ -470,9 +484,7 @@ struct DashboardWindowSmokeTests {
         try controller.nativeBrowser.close(tabId: "mac-import")
         firstRequestContinuation?.resume()
         firstRequestContinuation = nil
-        try await AsyncTimeout.withTimeout(seconds: 5, onTimeout: { URLError(.timedOut) }) {
-            await settled.wait()
-        }
+        await settled.wait()
         #expect(firstRequestApplied == false)
 
         try controller.nativeBrowser.open(tabId: "mac-import", url: link, sessionKey: "")
@@ -489,13 +501,13 @@ struct DashboardWindowSmokeTests {
         let dataStore = WKWebsiteDataStore.nonPersistent()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         let other = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { other.closeDashboard() }
@@ -542,9 +554,7 @@ struct DashboardWindowSmokeTests {
             "url": "https://docs.openclaw.ai/platforms/macos",
             "target": "inline",
         ])
-        #expect(try request == DashboardLinkRequest(
-            url: #require(URL(string: "https://docs.openclaw.ai/platforms/macos")),
-            target: .inline))
+        #expect(try request == #require(URL(string: "https://docs.openclaw.ai/platforms/macos")))
 
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
@@ -565,9 +575,7 @@ struct DashboardWindowSmokeTests {
             "type": "open-link",
             "url": "mailto:hello@example.com",
             "target": "external",
-        ]) == DashboardLinkRequest(
-            url: #require(URL(string: "mailto:hello@example.com")),
-            target: .external))
+        ]) == #require(URL(string: "mailto:hello@example.com")))
         #expect(DashboardWindowController.linkRequest(from: [
             "type": "open-link",
             "url": "mailto:hello@example.com",
@@ -684,7 +692,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -714,7 +722,7 @@ extension DashboardWindowSmokeTests {
             html: html,
             contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
         defer { replacement.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url("/control/"), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -735,7 +743,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -768,7 +776,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -787,7 +795,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -858,7 +866,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -913,7 +921,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -951,7 +959,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),

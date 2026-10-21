@@ -1,10 +1,34 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
 import { Guard } from "typebox/guard";
 import { Check } from "typebox/schema";
-import { isRecord } from "./record-coerce.js";
+import { isRecord, isStringArray } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
+
+/** Decode a local URI fragment before recognizing or splitting its JSON Pointer. */
+export function decodeLocalSchemaRefFragment(ref: string): string | undefined {
+  if (!ref.startsWith("#")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
+export function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+/** Encoded slashes separate tokens; ~1 remains inside a single token. */
+export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  return fragment?.startsWith("/")
+    ? fragment.slice(1).split("/").map(decodeJsonPointerSegment)
+    : undefined;
+}
 
 /** Validation details shared by the TypeBox schema and value compilers. */
 export type TypeBoxValidationError = {
@@ -70,17 +94,20 @@ const schemaMapKeywords = new Set([
 const schemaValueKeywords = new Set([
   "additionalItems",
   "additionalProperties",
+  "allOf",
+  "anyOf",
   "contains",
   "else",
   "if",
   "items",
   "not",
+  "oneOf",
+  "prefixItems",
   "propertyNames",
   "then",
   "unevaluatedItems",
   "unevaluatedProperties",
 ]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const schemaResourceKeywords = new Set([
   "$anchor",
   "$defs",
@@ -231,16 +258,12 @@ function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions)
         if (schemaMapKeywords.has(key)) {
           return [key, normalizeSchemaMap(value, options, key === "dependencies")];
         }
-        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+        if (schemaValueKeywords.has(key)) {
           return [key, normalizeJsonSchemaNode(value, options)];
         }
         return [key, value];
       }),
   );
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function isJsonValue(

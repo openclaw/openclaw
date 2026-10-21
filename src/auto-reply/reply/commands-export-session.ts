@@ -1,28 +1,24 @@
-// Builds export bundles for a session transcript and runtime context.
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta-readonly.js";
+import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { isSessionFileEntry } from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
   type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
-  type SessionMessageEntry,
 } from "../../agents/sessions/session-manager.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
-import { FsSafeError } from "../../infra/fs-safe.js";
+import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  isReplyPayload,
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
-import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -41,45 +37,78 @@ interface SessionData {
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
-function hasBackendSession(entry: StoredSessionEntry, hasStoredAcpSession: boolean): boolean {
-  return (
-    hasStoredAcpSession ||
-    hasNonEmptyString(entry.claudeCliSessionId) ||
-    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
-      hasNonEmptyString(binding?.sessionId),
-    ) ||
-    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString)
-  );
+const MAX_DEFAULT_FILENAME_ATTEMPTS = 100;
+
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
 }
 
-function hasPersistedAcpSession(params: {
+async function createUnusedFile(
+  workspaceRoot: Root,
+  filePath: string,
+  contents: string,
+): Promise<string> {
+  for (let suffix = 1; suffix <= MAX_DEFAULT_FILENAME_ATTEMPTS; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      await workspaceRoot.create(candidate, contents, { encoding: "utf-8" });
+      return candidate;
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not find an unused export filename near ${filePath}`);
+}
+
+function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string): string {
+  if (!path.isAbsolute(requestedPath)) {
+    return requestedPath;
+  }
+  const normalizedRequest = path.resolve(requestedPath);
+  if (!isPathInside(workspaceRoot.rootDir, normalizedRequest)) {
+    return requestedPath;
+  }
+  return path.relative(workspaceRoot.rootDir, normalizedRequest) || requestedPath;
+}
+
+async function hasPersistedAcpSession(params: {
+  cfg: HandleCommandsParams["cfg"];
   sessionKey: string;
   entry: StoredSessionEntry;
-}): boolean {
+}): Promise<boolean> {
   if (params.entry.acp) {
     return true;
   }
   try {
-    return Boolean(readAcpSessionMetaForEntry(params));
+    return Boolean(await readAcpSessionMetaForEntryAsync(params));
   } catch {
     return false;
   }
 }
 
 function isBackendDelegatedSession(
-  entry: StoredSessionEntry,
+  storedEntry: StoredSessionEntry,
   entries: AgentSessionEntry[],
   hasStoredAcpSession: boolean,
 ): boolean {
-  if (!hasBackendSession(entry, hasStoredAcpSession)) {
+  const hasBackendSession =
+    hasStoredAcpSession ||
+    hasNonEmptyString(storedEntry.claudeCliSessionId) ||
+    Object.values(storedEntry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(storedEntry.cliSessionIds ?? {}).some(hasNonEmptyString);
+  if (!hasBackendSession) {
     return false;
   }
-  const messages = entries.filter(
-    (transcriptEntry): transcriptEntry is SessionMessageEntry => transcriptEntry.type === "message",
-  );
   return (
-    messages.length > 0 &&
-    messages.every((transcriptEntry) => transcriptEntry.message.role === "user")
+    entries.some((entry) => entry.type === "message") &&
+    entries.every((entry) => entry.type !== "message" || entry.message.role === "user")
   );
 }
 
@@ -120,59 +149,10 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  const themeVars = `
-    --cyan: #00d7ff;
-    --blue: #5f87ff;
-    --green: #b5bd68;
-    --red: #cc6666;
-    --yellow: #ffff00;
-    --gray: #808080;
-    --dimGray: #666666;
-    --darkGray: #505050;
-    --accent: #8abeb7;
-    --selectedBg: #3a3a4a;
-    --userMsgBg: #343541;
-    --toolPendingBg: #282832;
-    --toolSuccessBg: #283228;
-    --toolErrorBg: #3c2828;
-    --customMsgBg: #2d2838;
-    --text: #e0e0e0;
-    --dim: #666666;
-    --muted: #808080;
-    --border: #5f87ff;
-    --borderAccent: #00d7ff;
-    --borderMuted: #505050;
-    --success: #b5bd68;
-    --error: #cc6666;
-    --warning: #ffff00;
-    --thinkingText: #808080;
-    --userMessageBg: #343541;
-    --userMessageText: #e0e0e0;
-    --customMessageBg: #2d2838;
-    --customMessageText: #e0e0e0;
-    --customMessageLabel: #9575cd;
-    --toolTitle: #e0e0e0;
-    --toolOutput: #808080;
-    --mdHeading: #f0c674;
-    --mdLink: #81a2be;
-    --mdLinkUrl: #666666;
-    --mdCode: #8abeb7;
-    --mdCodeBlock: #b5bd68;
-  `;
-  const bodyBg = "#1e1e28";
-  const containerBg = "#282832";
-  const infoBg = "#343541";
-
   const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
 
-  const css = templateCss
-    .replace("/* {{THEME_VARS}} */", themeVars.trim())
-    .replace("/* {{BODY_BG_DECL}} */", `--body-bg: ${bodyBg};`)
-    .replace("/* {{CONTAINER_BG_DECL}} */", `--container-bg: ${containerBg};`)
-    .replace("/* {{INFO_BG_DECL}} */", `--info-bg: ${infoBg};`);
-
   const replacements: Array<[string, string]> = [
-    ["CSS", css],
+    ["CSS", templateCss],
     ["SESSION_DATA", sessionDataBase64],
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
@@ -184,18 +164,14 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   );
 }
 
-function formatSkippedRows(count: number): string {
-  return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
-}
-
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
   const rows =
     summary.rows.length > 0
       ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
       : "";
-  return summary.count === 1
-    ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
-    : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
+  const entryDescription =
+    summary.count === 1 ? "row that was not a session entry" : "rows that were not session entries";
+  return `⚠️ Skipped ${summary.count.toLocaleString()} malformed transcript ${entryDescription}.${rows}`;
 }
 
 async function readSessionDataFromIdentity(params: {
@@ -203,13 +179,11 @@ async function readSessionDataFromIdentity(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<{
-  header: SessionHeader | null;
-  entries: AgentSessionEntry[];
-  leafId: string | null;
-  hasLeafControl: boolean;
-  warnings: SessionExportWarningSummary[];
-}> {
+}): Promise<
+  Pick<SessionData, "header" | "entries" | "leafId" | "hasLeafControl"> & {
+    warnings: SessionExportWarningSummary[];
+  }
+> {
   const events = await loadTranscriptEvents(params);
   const fileEntries: SessionFileEntry[] = [];
   const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
@@ -235,7 +209,7 @@ async function readSessionDataFromIdentity(params: {
     ? rawEntries.map((entry) => {
         const node = tree.byId.get(entry.id);
         return node && entry.parentId !== node.parentId
-          ? ({ ...entry, parentId: node.parentId } as AgentSessionEntry)
+          ? { ...entry, parentId: node.parentId }
           : entry;
       })
     : rawEntries;
@@ -256,8 +230,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (args.error) {
     return { text: args.error };
   }
-  const sessionTarget = resolveExportCommandSessionTarget(params);
-  if (isReplyPayload(sessionTarget)) {
+  const sessionTarget = await resolveExportCommandSessionTarget(params);
+  if ("text" in sessionTarget) {
     return sessionTarget;
   }
   const { entry } = sessionTarget;
@@ -276,7 +250,8 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionEntry: entry,
   });
 
-  const hasStoredAcpSession = hasPersistedAcpSession({
+  const hasStoredAcpSession = await hasPersistedAcpSession({
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     entry,
   });
@@ -303,13 +278,20 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   let displayPath: string;
   try {
-    const written = await writeSessionExportFile({
-      workspaceDir: params.workspaceDir,
-      requestedPath: args.outputPath,
-      defaultFileName,
-      contents: html,
-    });
-    displayPath = written.displayPath;
+    const workspaceRoot = await root(params.workspaceDir, { mkdir: true, mode: 0o600 });
+    let writtenPath: string;
+    if (args.outputPath) {
+      // Explicit regular files retain overwrite behavior. Rebase only lexical workspace
+      // aliases onto the canonical Root; nested aliases, symlinks, and outside paths
+      // still reach fs-safe unchanged and are blocked.
+      writtenPath = normalizeWorkspaceAliasPath(workspaceRoot, args.outputPath);
+      await workspaceRoot.write(writtenPath, html, { encoding: "utf-8" });
+    } else {
+      writtenPath = await createUnusedFile(workspaceRoot, defaultFileName, html);
+    }
+    const absolutePath = await workspaceRoot.resolve(writtenPath);
+    const relativePath = path.relative(workspaceRoot.rootReal, absolutePath);
+    displayPath = relativePath.startsWith("..") ? absolutePath : relativePath;
   } catch (error) {
     if (error instanceof FsSafeError && error.category === "policy") {
       return { text: "❌ Output path must be a regular file inside the workspace." };

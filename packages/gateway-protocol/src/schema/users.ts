@@ -17,6 +17,8 @@ import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
+export * from "./users-background.js";
+
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
@@ -50,6 +52,7 @@ export const UserProfileAvatarMimeSchema = Type.Union([
   Type.Literal("image/webp"),
 ]);
 export const UserProfileGitHubIdentitySchema = closedObject({
+  host: Type.Optional(NonEmptyString),
   login: Type.String({ minLength: 1, maxLength: 39 }),
   profileUrl: NonEmptyString,
   avatarUrl: NonEmptyString,
@@ -63,13 +66,36 @@ export const UserProfileSchema = closedObject({
   createdAt: Type.Integer({ minimum: 0 }),
   updatedAt: Type.Integer({ minimum: 0 }),
   emails: Type.Array(NonEmptyString),
+  // Display primary only; null does not disable profile-wide consent or host-selected credit.
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
+  effectiveRole: Type.Optional(UserProfileRoleSchema),
+  roleSource: Type.Optional(
+    Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
+  ),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });
@@ -393,6 +419,7 @@ export const UsersGitHubAuthorizeCancelResultSchema = closedObject({ cancelled: 
 export const UsersGitHubDisconnectParamsSchema = closedObject({});
 export const UsersGitHubDisconnectResultSchema = closedObject({ disconnected: Type.Literal(true) });
 export const PersonalGitHubStatusSchema = closedObject({
+  stale: Type.Optional(Type.Boolean()),
   state: Type.Union([
     Type.Literal("connected"),
     Type.Literal("disconnected"),

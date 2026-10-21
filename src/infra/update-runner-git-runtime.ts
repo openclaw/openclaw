@@ -290,6 +290,19 @@ export async function prepareGitRuntimePromotion(
       throw new AggregateError(failures, "Git runtime backup cleanup did not finish.");
     }
   };
+  const filter = (source: string, destination: string) => {
+    if (
+      process.platform === "win32" &&
+      fsSync.lstatSync(source).isSymbolicLink() &&
+      fsSync.statSync(source).isDirectory()
+    ) {
+      // Windows junctions avoid native copy recursion and privileged directory symlinks.
+      const target = path.resolve(path.dirname(source), fsSync.readlinkSync(source));
+      fsSync.symlinkSync(target, destination, "junction");
+      return false;
+    }
+    return !disposableCaches.has(source);
+  };
   try {
     for (const { sourceRoot, destinationRoot: destination } of roots) {
       // .artifacts may point at another volume. A sibling of each destination
@@ -305,7 +318,7 @@ export async function prepareGitRuntimePromotion(
         recursive: true,
         preserveTimestamps: true,
         verbatimSymlinks: true,
-        filter: (source) => !disposableCaches.has(source),
+        filter: process.platform === "win32" || disposableCaches.size > 0 ? filter : undefined,
       });
       assertDestination?.(destination);
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
@@ -341,13 +354,14 @@ export async function prepareGitRuntimePromotion(
       throw new Error(`Retained Git runtime identity changed: ${entry.temporary}`);
     }
   };
+  const assertRetainedEntry = (entry: (typeof staged)[number], assertCurrent = () => {}) => {
+    assertCurrent();
+    assertDestination?.(entry.destination);
+    assertParents(entry);
+    assertPrevious(entry);
+  };
   const restoreEntry = async (entry: (typeof staged)[number], assertCurrent = () => {}) => {
-    const guard = () => {
-      assertCurrent();
-      assertDestination?.(entry.destination);
-      assertParents(entry);
-      assertPrevious(entry);
-    };
+    const guard = () => assertRetainedEntry(entry, assertCurrent);
     guard();
     if (entry.activated) {
       await fs.rm(entry.destination, { recursive: true, force: true });
@@ -367,17 +381,6 @@ export async function prepareGitRuntimePromotion(
     // A completed effect must leave rollback custody before a later guard can fail.
     promoted.pop();
     assertCurrent();
-    assertDestination?.(entry.destination);
-    assertParents(entry);
-    if (
-      entry.previous &&
-      !sameRuntimeIdentity(
-        entry.identities?.previous,
-        fsSync.lstatSync(entry.destination, { bigint: true }),
-      )
-    ) {
-      throw new Error(`Restored Git runtime identity changed: ${entry.destination}`);
-    }
   };
   return {
     backupRoot: staged[0]?.temporary ?? root,
@@ -394,9 +397,6 @@ export async function prepareGitRuntimePromotion(
     }),
     async activate() {
       try {
-        for (const entry of staged) {
-          assertDestination?.(entry.destination);
-        }
         for (const entry of staged) {
           assertDestination?.(entry.destination);
           const parent = path.dirname(entry.destination);
@@ -423,13 +423,10 @@ export async function prepareGitRuntimePromotion(
           }
           promoted.push(entry);
           try {
-            assertDestination?.(entry.destination);
-            assertParents(entry);
-            assertPrevious(entry);
+            assertRetainedEntry(entry);
             await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
             entry.activated = true;
           } catch (error) {
-            restoreStarted = true;
             if (hasCommandProcessCleanupError(error)) {
               throw error;
             }
@@ -452,12 +449,6 @@ export async function prepareGitRuntimePromotion(
     },
     async restore(assertCurrent = () => {}) {
       restoreStarted = true;
-      for (const entry of promoted) {
-        assertCurrent();
-        assertDestination?.(entry.destination);
-        assertParents(entry);
-        assertPrevious(entry);
-      }
       for (const entry of promoted.toReversed()) {
         await restoreEntry(entry, assertCurrent);
       }
@@ -473,7 +464,9 @@ export function createGitRuntimeTransaction({
   restoreRuntime,
 }: {
   root: string;
-  promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot" | "cleanup">;
+  promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot"> & {
+    cleanup: (assertCurrent?: () => void) => Promise<UpdateStepResult | void>;
+  };
   assertRollbackSafe: () => Promise<void>;
   restoreRuntime: PackageUpdateTransaction["rollback"];
 }): PackageUpdateTransaction {
@@ -511,7 +504,7 @@ export function createGitRuntimeTransaction({
           );
         }
         try {
-          await promotion.cleanup(assertCurrent);
+          return await promotion.cleanup(assertCurrent);
         } catch (error) {
           assertCurrent();
           if (
@@ -525,7 +518,6 @@ export function createGitRuntimeTransaction({
             true,
           );
         }
-        return undefined;
       })());
     },
   };

@@ -106,13 +106,11 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     }
   };
 
-  const resolveDirect = () =>
-    params.sandbox.bridge.resolvePath({
+  try {
+    const resolved = params.sandbox.bridge.resolvePath({
       filePath,
       cwd: params.sandbox.root,
     });
-  try {
-    const resolved = resolveDirect();
     await enforceWorkspaceBoundary(resolved);
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,

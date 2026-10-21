@@ -102,10 +102,10 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func `presence reporter summary and privacy parameters`() {
-        let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
+        let summary = PresenceReporter.composePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!summary.contains("last input"))
-        let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
+        let privacyParameters = PresenceReporter.activityPrivacyParameters
         #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
             privacyParameters["tags"]?.base as? [String] ==
@@ -116,10 +116,8 @@ struct LowCoverageHelperTests {
         let output = """
         p123
         cnode
-        uuser
         p456
         cssh
-        uroot
         """
         let listeners = PortGuardian._testParseListeners(output)
         #expect(listeners.count == 2)
@@ -129,13 +127,13 @@ struct LowCoverageHelperTests {
         let okReport = PortGuardian._testBuildReport(
             port: 18789,
             mode: .local,
-            listeners: [(pid: 1, command: "node", fullCommand: "node", user: "me")])
+            listeners: [(pid: 1, command: "node", fullCommand: "node")])
         #expect(okReport.offenders.isEmpty)
 
         let badReport = PortGuardian._testBuildReport(
             port: 18789,
             mode: .local,
-            listeners: [(pid: 2, command: "python", fullCommand: "python", user: "me")])
+            listeners: [(pid: 2, command: "python", fullCommand: "python")])
         #expect(!badReport.offenders.isEmpty)
 
         let emptyReport = PortGuardian._testBuildReport(port: 18789, mode: .local, listeners: [])
@@ -149,8 +147,7 @@ struct LowCoverageHelperTests {
             listeners: [(
                 pid: 99,
                 command: "com.docker.backend",
-                fullCommand: "com.docker.backend",
-                user: "me")])
+                fullCommand: "com.docker.backend")])
         #expect(dockerReport.offenders.isEmpty)
 
         let localDockerReport = PortGuardian._testBuildReport(
@@ -159,8 +156,7 @@ struct LowCoverageHelperTests {
             listeners: [(
                 pid: 99,
                 command: "com.docker.backend",
-                fullCommand: "com.docker.backend",
-                user: "me")])
+                fullCommand: "com.docker.backend")])
         #expect(!localDockerReport.offenders.isEmpty)
     }
 

@@ -100,32 +100,10 @@ const cronRunLogEntrySchema = z.looseObject({
   sessionKey: optionalNonBlankCronStringSchema,
 });
 
-function isJsonValue(value: unknown): value is JsonValue {
-  const pending: unknown[] = [value];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (
-      current === null ||
-      typeof current === "string" ||
-      typeof current === "boolean" ||
-      typeof current === "number"
-    ) {
-      continue;
-    }
-    if (!Array.isArray(current) && !isRecord(current)) {
-      return false;
-    }
-    for (const child of Object.values(current)) {
-      pending.push(child);
-    }
-  }
-  return true;
-}
-
 /** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
 export function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
-  const value = safeParseJson(serialized);
-  return isJsonValue(value) ? value : undefined;
+  // SAFETY: Native parsing only produces JSON values; undefined denotes a syntax error.
+  return safeParseJson(serialized) as JsonValue | undefined;
 }
 
 function toJsonValue(value: unknown): JsonValue | undefined {
@@ -165,7 +143,7 @@ export function parseCronRunLogEntryObject(
   }
 
   // Diagnostics are redacted at authoring; this read/migration path only normalizes stored shape.
-  const entry: CronRunLogEntry = {
+  return {
     ts: entryObj.ts,
     jobId: entryObj.jobId,
     action: "finished",
@@ -189,22 +167,15 @@ export function parseCronRunLogEntryObject(
     model: entryObj.model,
     provider: entryObj.provider,
     usage: entryObj.usage,
+    delivered: entryObj.delivered,
+    deliveryStatus: entryObj.deliveryStatus,
+    deliveryError: entryObj.deliveryError,
+    deliverySuppressionReason: entryObj.deliverySuppressionReason,
+    failureNotificationDelivery: entryObj.failureNotificationDelivery,
+    delivery: entryObj.delivery,
+    sessionId: entryObj.sessionId,
+    sessionKey: entryObj.sessionKey,
   };
-  for (const field of [
-    "delivered",
-    "deliveryStatus",
-    "deliveryError",
-    "deliverySuppressionReason",
-    "failureNotificationDelivery",
-    "delivery",
-    "sessionId",
-    "sessionKey",
-  ] as const) {
-    if (entryObj[field] !== undefined) {
-      Object.assign(entry, { [field]: entryObj[field] });
-    }
-  }
-  return entry;
 }
 
 /** Encodes Cron-owned outcome fields for retained history. */
@@ -353,16 +324,14 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
   if (record.detail.kind !== CRON_RUN_DETAIL_KIND) {
     return null;
   }
-  const wireDetail = { ...record.detail };
-  delete wireDetail.storeKey;
   // Cron detail is canonical write-time state; history reads do not rederive error reasons.
-  const entry = parseCronRunLogEntryObject(
+  return parseCronRunLogEntryObject(
     {
       // Released rows stored these only on the history row; current detail wins
       // when operator cancellation and the underlying execution have different outcomes.
       error: record.error,
       summary: record.summary,
-      ...wireDetail,
+      ...record.detail,
       ts: resolveCronRunRecordTimestamp(record),
       jobId: record.jobId,
       action: "finished",
@@ -371,15 +340,4 @@ export function cronRunRecordToRunLogEntry(record: CronRunRecord): CronRunLogEnt
     },
     { jobId: record.jobId },
   );
-  if (!entry) {
-    return null;
-  }
-  // The parsed entry is private; materialize the legacy reader’s absent indexed fields on it.
-  return Object.assign(entry, {
-    delivered: entry.delivered,
-    deliveryStatus: entry.deliveryStatus,
-    deliveryError: entry.deliveryError,
-    sessionId: entry.sessionId,
-    sessionKey: entry.sessionKey,
-  });
 }

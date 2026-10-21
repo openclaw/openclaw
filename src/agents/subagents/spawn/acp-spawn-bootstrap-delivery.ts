@@ -52,8 +52,7 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
 }): AcpSpawnBootstrapDeliveryPlan {
   // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation
   // binds deliver back to the originating target.
-  const boundThreadIdRaw = params.binding?.conversation.conversationId;
-  const boundThreadId = boundThreadIdRaw ? normalizeOptionalString(boundThreadIdRaw) : undefined;
+  const boundThreadId = normalizeOptionalString(params.binding?.conversation.conversationId);
   const fallbackThreadIdRaw = params.requester.origin?.threadId;
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? normalizeOptionalString(String(fallbackThreadIdRaw)) : undefined;
@@ -76,16 +75,14 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     params.binding?.conversation.accountId === requesterAccountId &&
     requesterConversationRef?.conversationId &&
     params.binding?.conversation.conversationId === requesterConversationRef.conversationId &&
-    (params.binding?.conversation.parentConversationId ?? undefined) ===
-      (requesterConversationRef.parentConversationId ?? undefined),
+    params.binding?.conversation.parentConversationId ===
+      requesterConversationRef.parentConversationId,
   );
   const boundDeliveryTarget = deliveryContextFromConversation(params.binding?.conversation);
   const inferredDeliveryTo =
-    (bindingMatchesRequesterConversation
-      ? normalizeOptionalString(params.requester.origin?.to)
-      : undefined) ??
+    (bindingMatchesRequesterConversation ? params.requester.origin?.to : undefined) ??
     boundDeliveryTarget?.to ??
-    normalizeOptionalString(params.requester.origin?.to) ??
+    params.requester.origin?.to ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,

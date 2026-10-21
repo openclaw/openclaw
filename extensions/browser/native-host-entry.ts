@@ -3,6 +3,7 @@ import {
   parseBrowserNativeHostOrigins,
   runBrowserNativeHost,
 } from "./src/browser/extension-native-host.js";
+import { encodeBrowserNativeResponse } from "./src/browser/extension-native-protocol.js";
 
 function requiredArgument(name: string): string {
   const index = process.argv.indexOf(name);
@@ -15,16 +16,12 @@ function requiredArgument(name: string): string {
 
 async function main(): Promise<void> {
   const { callerOrigin, expectedOrigins } = parseBrowserNativeHostOrigins(process.argv.slice(2));
-  let responseFrame: Buffer | undefined;
-  await runBrowserNativeHost({
+  const response = await runBrowserNativeHost({
     manifestPath: requiredArgument("--manifest"),
     launcherPath: requiredArgument("--launcher"),
     callerOrigin,
     expectedOrigins,
     input: process.stdin,
-    write: (frame) => {
-      responseFrame = frame;
-    },
     buildPairing: async (boundProfile) => {
       // Config and relay-key work must remain behind the host's validation boundary.
       const { buildBrowserNativeHostPairing } =
@@ -43,12 +40,8 @@ async function main(): Promise<void> {
       );
     },
   });
-  const response = responseFrame;
-  if (!response) {
-    throw new Error("Native host produced no response frame");
-  }
   await new Promise<void>((resolve) => {
-    process.stdout.write(response, () => resolve());
+    process.stdout.write(encodeBrowserNativeResponse(response), () => resolve());
   });
 }
 

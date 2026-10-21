@@ -1,4 +1,5 @@
 // Daemon CLI coverage tests cover daemon command branches and output behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,9 +52,6 @@ const inspectPortConnections = vi.fn(async (port: number) => ({
   port,
   connections: [],
 }));
-const verifyGatewayStartReadiness = vi.fn<(params: unknown) => Promise<void>>(
-  async () => undefined,
-);
 
 function collectMatching<T, U>(
   items: readonly T[],
@@ -173,8 +171,10 @@ vi.mock("./progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
-vi.mock("./daemon-cli/start-health.js", () => ({
-  verifyGatewayStartReadiness: (params: unknown) => verifyGatewayStartReadiness(params),
+vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/restart-health.js")>()),
+  waitForGatewayHealthyRestart: async () => ({ healthy: true }),
+  waitForGatewayHttpReadiness: async () => ({ healthz: 200, readyz: 200 }),
 }));
 
 let daemonProgram: Command;
@@ -235,7 +235,6 @@ describe("daemon-cli coverage", () => {
     inspectPortUsage.mockClear();
     inspectPortUsages.mockClear();
     buildGatewayInstallPlan.mockClear();
-    verifyGatewayStartReadiness.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {

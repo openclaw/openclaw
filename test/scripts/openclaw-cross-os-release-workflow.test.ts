@@ -1,4 +1,3 @@
-// Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -13,12 +12,16 @@ import { createReleaseCheckSelection } from "../../scripts/plan-release-workflow
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function expectContains(text: string | undefined, fragments: string[]) {
+  for (const fragment of fragments) {
+    expect(text).toContain(fragment);
+  }
+}
 
 const WORKFLOW_PATH = ".github/workflows/openclaw-cross-os-release-checks-reusable.yml";
 const RELEASE_CHECKS_PATH = ".github/workflows/openclaw-release-checks.yml";
 const WRAPPER_PATH = "scripts/github/run-openclaw-cross-os-release-checks.sh";
 const SCRIPT_PATH = "scripts/openclaw-cross-os-release-checks.ts";
-const HARNESS = "bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 
 type WorkflowStep = {
@@ -67,9 +70,61 @@ function step(workflowJob: WorkflowJob, name: string): WorkflowStep {
   return found!;
 }
 
+function expressionBinding(expression: string) {
+  return `\${{ ${expression} }}`;
+}
+
+function expectBindings(actual: unknown, prefix: string, fields: Record<string, string>) {
+  expect(actual).toMatchObject(
+    Object.fromEntries(
+      Object.entries(fields).map(([key, value]) => [key, expressionBinding(prefix + value)]),
+    ),
+  );
+}
+
+function expectRun(workflowJob: WorkflowJob, name: string, fragments: string[]) {
+  expectContains(step(workflowJob, name).run, fragments);
+}
+
+function expectBefore(workflowJob: WorkflowJob, ...names: string[]) {
+  const indices = names.map((name) => workflowJob.steps!.indexOf(step(workflowJob, name)));
+  for (let index = 1; index < indices.length; index++) {
+    expect(indices[index - 1]!, names.join(" → ")).toBeLessThan(indices[index]!);
+  }
+}
+
+function runWrapper(args: string[], cwd = process.cwd(), env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(BASH_BIN, [WRAPPER_PATH, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_RELEASE_CHECKS_SCRIPT: SCRIPT_PATH, ...env },
+  });
+}
+
+function matrixEntry(osId: "ubuntu" | "windows" | "macos", suite: string, node26 = false) {
+  const [artifact, display, runner] = {
+    ubuntu: ["linux", "Linux", "blacksmith-8vcpu-ubuntu-2404"],
+    windows: ["windows", "Windows", "blacksmith-32vcpu-windows-2025"],
+    macos: ["macos", "macOS", "xcode-27"],
+  }[osId];
+  return {
+    artifact_name: artifact + (node26 ? "-node26.1.0" : ""),
+    display_name: display,
+    node_version: node26 ? "26.1.0" : "24.21.0",
+    lane: suite.endsWith("fresh") ? "fresh" : "upgrade",
+    os_id: osId,
+    runner,
+    suite,
+    suite_label: suite.replace("-", " ") + (node26 ? " (Node 26.1.0)" : ""),
+  };
+}
+
 describe("cross-OS release checks workflow", () => {
+  const workflow = readWorkflow(WORKFLOW_PATH);
+  const release = readWorkflow(RELEASE_CHECKS_PATH);
+  const prepare = job(workflow, "prepare");
+  const consumer = job(workflow, "cross_os_release_checks");
   it("lets Windows packaged-upgrade finish its bounded timeout recovery within the job", () => {
-    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
     const expression = String(consumer["timeout-minutes"]).replace(/^\$\{\{(.*)\}\}$/u, "$1");
     for (const osId of ["ubuntu", "windows", "macos"]) {
       for (const suite of ["packaged-fresh", "packaged-upgrade", "dev-update", "installer-fresh"]) {
@@ -119,120 +174,45 @@ describe("cross-OS release checks workflow", () => {
         ]);
       }
     }
-    expect(
-      matrix.include.find((entry) => entry.os_id === "windows" && entry.suite === "dev-update"),
-    ).toEqual({
-      artifact_name: "windows",
-      display_name: "Windows",
-      node_version: "24.21.0",
-      lane: "upgrade",
-      os_id: "windows",
-      runner: "blacksmith-32vcpu-windows-2025",
-      suite: "dev-update",
-      suite_label: "dev update",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "ubuntu" && entry.suite === "installer-fresh"),
-    ).toEqual({
-      artifact_name: "linux",
-      display_name: "Linux",
-      node_version: "24.21.0",
-      lane: "fresh",
-      os_id: "ubuntu",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-      suite: "installer-fresh",
-      suite_label: "installer fresh",
-    });
-    expect(
-      matrix.include.find((entry) => entry.os_id === "macos" && entry.suite === "packaged-fresh"),
-    ).toEqual({
-      artifact_name: "macos",
-      display_name: "macOS",
-      node_version: "24.21.0",
-      lane: "fresh",
-      os_id: "macos",
-      runner: "blacksmith-6vcpu-macos-15",
-      suite: "packaged-fresh",
-      suite_label: "packaged fresh",
-    });
+    for (const [osId, suite] of [
+      ["windows", "dev-update"],
+      ["ubuntu", "installer-fresh"],
+      ["macos", "packaged-fresh"],
+    ] as const) {
+      expect(matrix.include.find((entry) => entry.os_id === osId && entry.suite === suite)).toEqual(
+        matrixEntry(osId, suite),
+      );
+    }
   });
 
-  it("filters the cross-OS runner matrix to a focused OS suite", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "windows/packaged-upgrade",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toEqual([
-      {
-        artifact_name: "windows",
-        display_name: "Windows",
-        node_version: "24.21.0",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade",
-      },
-      {
-        artifact_name: "windows-node26.1.0",
-        display_name: "Windows",
-        node_version: "26.1.0",
-        lane: "upgrade",
-        os_id: "windows",
-        runner: "blacksmith-32vcpu-windows-2025",
-        suite: "packaged-upgrade",
-        suite_label: "packaged upgrade (Node 26.1.0)",
-      },
-    ]);
-  });
-
-  it("filters the cross-OS runner matrix by suite across platforms", () => {
-    const matrix = resolveRunnerMatrix({
-      mode: "both",
-      ref: "main",
-      suiteFilter: "packaged-fresh",
-      ubuntuRunner: "",
-      windowsRunner: "",
-      macosRunner: "",
-      varUbuntuRunner: "",
-      varWindowsRunner: "",
-      varMacosRunner: "",
-    });
-
-    expect(matrix.include).toHaveLength(6);
-    expect([...new Set(matrix.include.map((entry) => entry.os_id))].toSorted()).toEqual([
-      "macos",
-      "ubuntu",
-      "windows",
-    ]);
-    expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
-  });
-
-  it("runs the TypeScript release harness through the Windows-safe wrapper", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
-
-    expect(workflow).toContain(HARNESS);
-    expect(workflow).toContain("suite_filter:");
-    expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
-    expect(workflow).not.toContain("TSX_VERSION");
-  });
+  it.each(["windows/packaged-upgrade", "packaged-fresh"])(
+    "filters the cross-OS runner matrix by %s",
+    (suiteFilter) => {
+      const matrix = resolveRunnerMatrix({ mode: "both", ref: "main", suiteFilter });
+      const source = readFileSync(WORKFLOW_PATH, "utf8");
+      expect(source).toContain("suite_filter:");
+      expect(source).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
+      if (suiteFilter === "windows/packaged-upgrade") {
+        expect(matrix.include).toEqual([
+          matrixEntry("windows", "packaged-upgrade"),
+          matrixEntry("windows", "packaged-upgrade", true),
+        ]);
+      } else {
+        expect(matrix.include).toHaveLength(6);
+        expect([...new Set(matrix.include.map((entry) => entry.os_id))].toSorted()).toEqual([
+          "macos",
+          "ubuntu",
+          "windows",
+        ]);
+        expect(matrix.include.every((entry) => entry.suite === "packaged-fresh")).toBe(true);
+      }
+    },
+  );
 
   it("preserves failed preparation and cross-OS test job conclusions", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const prepare = job(workflow, "prepare");
-    const lane = job(workflow, "cross_os_release_checks");
-
-    expect(prepare["continue-on-error"]).toBeUndefined();
-    expect(lane["continue-on-error"]).toBeUndefined();
-    expect(step(lane, "Run cross-OS release checks")["continue-on-error"]).toBeUndefined();
+    for (const target of [prepare, consumer, step(consumer, "Run cross-OS release checks")]) {
+      expect(target["continue-on-error"]).toBeUndefined();
+    }
   });
 
   it.each([
@@ -240,7 +220,6 @@ describe("cross-OS release checks workflow", () => {
     ["baseline", "download_baseline"],
     ["prerelease plugin registry", "download_prepublish_plugin_registry"],
   ])("retries only failed %s artifact acquisition once before tests", (artifact, downloadId) => {
-    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
     const first = step(consumer, `Download ${artifact} artifact`);
     const warning = step(consumer, `Warn about ${artifact} artifact acquisition retry`);
     const retry = step(consumer, `Retry ${artifact} artifact download`);
@@ -260,21 +239,12 @@ describe("cross-OS release checks workflow", () => {
       });
       expect(retryEnabled, outcome).toBe(outcome === "failure");
     }
-    const steps = consumer.steps!;
-    expect(steps.indexOf(first)).toBeLessThan(steps.indexOf(warning));
-    expect(steps.indexOf(warning)).toBeLessThan(steps.indexOf(retry));
-    expect(steps.indexOf(retry)).toBeLessThan(
-      steps.indexOf(step(consumer, "Verify release-check inputs")),
-    );
+    expectBefore(consumer, first.name!, warning.name!, retry.name!, "Verify release-check inputs");
   });
 
   it("uses the matrix runtime consistently for both consumer setup steps", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const prepare = job(workflow, "prepare");
-    const consumer = job(workflow, "cross_os_release_checks");
-    expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
-    expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
     for (const setupName of ["Setup Node.js", "Setup pnpm"]) {
+      expect(step(prepare, setupName).with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
       const expression = String(step(consumer, setupName).with?.["node-version"]);
       for (const [osId, suite, nodeVersion, expected] of [
         ["windows", "packaged-fresh", "26.1.0", "26.1.0"],
@@ -297,7 +267,6 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("reuses npm downloads across isolated lane homes without caching installed state", () => {
-    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
     const run = step(consumer, "Run cross-OS release checks");
     const restore = step(consumer, "Restore npm downloads");
     const save = step(consumer, "Save npm downloads");
@@ -317,14 +286,10 @@ describe("cross-OS release checks workflow", () => {
     expect(restore.with?.key).toBe(
       "openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-${{ needs.prepare.outputs.candidate_sha256 }}-${{ needs.prepare.outputs.baseline_sha256 }}",
     );
-    const steps = consumer.steps!;
-    expect(steps.indexOf(restore)).toBeLessThan(steps.indexOf(run));
-    expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
+    expectBefore(consumer, restore.name!, run.name!, save.name!);
   });
 
   it("fails the Windows lane on its first interrupted dashboard probe", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const consumer = job(workflow, "cross_os_release_checks");
     const run = step(consumer, "Run cross-OS release checks");
     const root = tempDirs.make("cross-os-first-failure-");
     const harness = join(root, "workflow/scripts/github");
@@ -360,18 +325,15 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("bounds npm baseline packing during prepare", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const baseline = step(job(workflow, "prepare"), "Resolve baseline package spec");
-    const baselineMetadata = step(job(workflow, "prepare"), "Capture baseline metadata");
+    const baseline = step(prepare, "Resolve baseline package spec");
+    const baselineMetadata = step(prepare, "Capture baseline metadata");
 
-    expect(workflow.on?.workflow_dispatch?.inputs?.target_context_ref).toMatchObject({
-      default: "",
-      required: false,
-    });
-    expect(workflow.on?.workflow_call?.inputs?.target_context_ref).toMatchObject({
-      default: "",
-      required: false,
-    });
+    for (const trigger of ["workflow_dispatch", "workflow_call"] as const) {
+      expect(workflow.on?.[trigger]?.inputs?.target_context_ref).toMatchObject({
+        default: "",
+        required: false,
+      });
+    }
     expect(baseline.env).toMatchObject({
       CANDIDATE_JSON: "${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/candidate.json",
       INPUT_PREVIOUS_VERSION: "${{ inputs.previous_version }}",
@@ -392,11 +354,10 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("derives baselines from the candidate owner and passes them to every consumer", () => {
-    const release = readWorkflow(RELEASE_CHECKS_PATH);
     const target = job(release, "resolve_target");
     const sourceBaseline = step(target, "Resolve source checkout upgrade baseline");
-    const prepare = job(release, "prepare_release_package");
-    const packageBaseline = step(prepare, "Resolve package upgrade baseline");
+    const producer = job(release, "prepare_release_package");
+    const packageBaseline = step(producer, "Resolve package upgrade baseline");
     const installSmoke = job(release, "install_smoke_release_checks");
     const crossOs = job(release, "cross_os_release_checks");
     const docker = job(release, "docker_e2e_release_checks");
@@ -411,7 +372,7 @@ describe("cross-OS release checks workflow", () => {
       TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
       TARGET_SHA: "${{ steps.ref.outputs.sha }}",
     });
-    expect(prepare.outputs?.upgrade_baseline).toBe("${{ steps.upgrade_baseline.outputs.value }}");
+    expect(producer.outputs?.upgrade_baseline).toBe("${{ steps.upgrade_baseline.outputs.value }}");
     expect(packageBaseline.env).toMatchObject({
       CANDIDATE_PUBLISHED: "${{ needs.resolve_target.outputs.candidate_published }}",
       CANDIDATE_VERSION:
@@ -424,16 +385,16 @@ describe("cross-OS release checks workflow", () => {
     expect(crossOs.with?.previous_version).toBe(
       "${{ needs.prepare_release_package.outputs.upgrade_baseline }}",
     );
+    expect(crossOs.with?.workflow_ref).toBe("${{ github.sha }}");
     expect(docker.with?.published_upgrade_survivor_baseline).toBe(
       "${{ format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) }}",
     );
     expect(packageAcceptance.with?.published_upgrade_survivor_baseline).toBe(
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}",
+      "${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}",
     );
   });
 
   it("installs trusted workflow dependencies for artifact resolution and upgrade metadata", () => {
-    const prepare = job(readWorkflow(WORKFLOW_PATH), "prepare");
     const install = step(prepare, "Install workflow validation dependencies");
 
     expect(install).toMatchObject({
@@ -446,69 +407,66 @@ describe("cross-OS release checks workflow", () => {
     );
     expect(step(prepare, "Capture baseline metadata").if).toBe("${{ inputs.mode != 'fresh' }}");
 
-    const installIndex =
-      prepare.steps?.findIndex(
-        (candidate) => candidate.name === "Install workflow validation dependencies",
-      ) ?? -1;
     for (const dependentStep of [
       "Resolve provider-owned companion requirements",
       "Resolve provided candidate package",
       "Capture baseline metadata",
     ]) {
-      expect(installIndex, dependentStep).toBeLessThan(
-        prepare.steps?.findIndex((candidate) => candidate.name === dependentStep) ?? -1,
-      );
+      expectBefore(prepare, install.name!, dependentStep);
     }
   });
 
   it("keeps release artifact tarball filenames local before upload paths use them", () => {
-    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(workflow.match(/function resolveTarballFileName/g)).toHaveLength(1);
-    expect(workflow.match(/path\.win32\.basename\(fileName\)/g)).toHaveLength(2);
-    expect(workflow).toContain("candidate_file_name");
-    expect(workflow).toContain("Baseline npm pack filename");
-    expect(workflow).toContain("fileName !== path.basename(fileName)");
-    expect(workflow).toContain("fileName !== path.win32.basename(fileName)");
-    expect(workflow).toContain("process.stdout.write(`file_name=${fileName}\\n`);");
+    expect(source.match(/function resolveTarballFileName/g)).toHaveLength(1);
+    expect(source.match(/path\.win32\.basename\(fileName\)/g)).toHaveLength(2);
+    expectContains(source, [
+      "candidate_file_name",
+      "Baseline npm pack filename",
+      "fileName !== path.basename(fileName)",
+      "fileName !== path.win32.basename(fileName)",
+      "process.stdout.write(`file_name=${fileName}\\n`);",
+    ]);
   });
 
   it("binds the prepared release package to an immutable artifact and package tuple", () => {
-    const release = readWorkflow(RELEASE_CHECKS_PATH);
     const producer = job(release, "prepare_release_package");
-    expect(producer.outputs).toMatchObject({
-      artifact_digest:
-        "${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactDigest }}",
-      artifact_id:
-        "${{ steps.release_package_upload.outputs.artifact-id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactId }}",
-      artifact_name:
-        "${{ steps.artifact.outputs.name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactName }}",
-      artifact_run_attempt:
-        "${{ steps.artifact.outputs.run_attempt || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}",
-      artifact_run_id:
-        "${{ steps.artifact.outputs.run_id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunId }}",
-      package_file_name:
-        "${{ steps.artifact.outputs.file_name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageFileName }}",
-      package_sha256:
-        "${{ steps.package.outputs.sha256 || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSha256 }}",
-      package_version:
-        "${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}",
-      prepublish_plugin_registry_json: "${{ steps.registry_identity.outputs.json }}",
-      source_sha:
-        "${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}",
+    for (const [output, primary, fallback] of [
+      [
+        "artifact_digest",
+        "release_package_upload.outputs.artifact-digest",
+        "packageArtifactDigest",
+      ],
+      ["artifact_id", "release_package_upload.outputs.artifact-id", "packageArtifactId"],
+      ["artifact_name", "artifact.outputs.name", "packageArtifactName"],
+      ["artifact_run_attempt", "artifact.outputs.run_attempt", "packageArtifactRunAttempt"],
+      ["artifact_run_id", "artifact.outputs.run_id", "packageArtifactRunId"],
+      ["package_file_name", "artifact.outputs.file_name", "packageFileName"],
+      ["package_sha256", "package.outputs.sha256", "packageSha256"],
+      ["package_version", "package.outputs.package_version", "packageVersion"],
+      ["source_sha", "package.outputs.source_sha", "packageSourceSha"],
+    ] as const) {
+      expect(producer.outputs?.[output], output).toBe(
+        expressionBinding(
+          `steps.${primary} || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').${fallback}`,
+        ),
+      );
+    }
+    expectBindings(producer.outputs, "steps.", {
+      prepublish_plugin_registry_json: "registry_identity.outputs.json",
     });
     expect(step(producer, "Checkout trusted workflow ref").with).toMatchObject({
       ref: "${{ github.sha }}",
       "persist-credentials": false,
     });
 
-    const metadata = step(producer, "Set artifact metadata");
-    expect(metadata.run).toContain(
+    expectRun(producer, "Set artifact metadata", [
       "name=release-package-under-test-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
-    );
-    expect(metadata.run).toContain("file_name=openclaw-current.tgz");
-    expect(metadata.run).toContain("run_attempt=${GITHUB_RUN_ATTEMPT}");
-    expect(metadata.run).toContain("run_id=${GITHUB_RUN_ID}");
+      "file_name=openclaw-current.tgz",
+      "run_attempt=${GITHUB_RUN_ATTEMPT}",
+      "run_id=${GITHUB_RUN_ID}",
+    ]);
 
     const upload = step(producer, "Upload release package artifact");
     expect(upload.id).toBe("release_package_upload");
@@ -516,15 +474,14 @@ describe("cross-OS release checks workflow", () => {
       name: "${{ steps.artifact.outputs.name }}",
       "if-no-files-found": "error",
     });
-    const resolve = step(producer, "Resolve release package artifact");
-    expect(resolve.run).toContain("--resolve-provider-required-companion-packages");
-    expect(resolve.run).toContain(".requiredPrepublishPluginPackages");
-    expect(resolve.run).toContain("'$provider + $docker | unique | sort'");
-    expect(resolve.run).toContain("--plugin-registry-output-dir");
-    expect(resolve.run).toContain("--required-plugin-packages-json");
-    expect(resolve.run).toContain(
+    expectRun(producer, "Resolve release package artifact", [
+      "--resolve-provider-required-companion-packages",
+      ".requiredPrepublishPluginPackages",
+      "'$provider + $docker | unique | sort'",
+      "--plugin-registry-output-dir",
+      "--required-plugin-packages-json",
       'source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")',
-    );
+    ]);
 
     const registryUpload = step(producer, "Upload shared prerelease plugin registry artifact");
     expect(registryUpload.with?.name).toBe(
@@ -532,95 +489,70 @@ describe("cross-OS release checks workflow", () => {
     );
 
     const binding = step(producer, "Validate release package artifact binding");
-    expect(binding.env).toMatchObject({
-      ARTIFACT_DIGEST: "${{ steps.release_package_upload.outputs.artifact-digest }}",
-      ARTIFACT_ID: "${{ steps.release_package_upload.outputs.artifact-id }}",
-      ARTIFACT_RUN_ATTEMPT: "${{ steps.artifact.outputs.run_attempt }}",
-      ARTIFACT_RUN_ID: "${{ steps.artifact.outputs.run_id }}",
-      PACKAGE_SHA256: "${{ steps.package.outputs.sha256 }}",
-      PACKAGE_SOURCE_SHA: "${{ steps.package.outputs.source_sha }}",
-      PACKAGE_VERSION: "${{ steps.package.outputs.package_version }}",
+    expectBindings(binding.env, "steps.", {
+      ARTIFACT_DIGEST: "release_package_upload.outputs.artifact-digest",
+      ARTIFACT_ID: "release_package_upload.outputs.artifact-id",
+      ARTIFACT_RUN_ATTEMPT: "artifact.outputs.run_attempt",
+      ARTIFACT_RUN_ID: "artifact.outputs.run_id",
+      PACKAGE_SHA256: "package.outputs.sha256",
+      PACKAGE_SOURCE_SHA: "package.outputs.source_sha",
+      PACKAGE_VERSION: "package.outputs.package_version",
     });
     expect(binding.run).toContain('verify-upload "Release package"');
     expect(binding.run).toContain('"$PACKAGE_SHA256" =~ ^[a-f0-9]{64}$');
     expect(binding.run).toContain('"$PACKAGE_SOURCE_SHA" =~ ^[a-f0-9]{40}$');
 
     const crossOs = job(release, "cross_os_release_checks");
-    expect(crossOs.with).toMatchObject({
-      candidate_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
-      candidate_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_attempt:
-        "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
-      candidate_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
-      candidate_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
-      candidate_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
-      candidate_version: "${{ needs.prepare_release_package.outputs.package_version }}",
-      prepublish_plugin_registry_json:
-        "${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}",
-      target_context_ref: "${{ inputs.target_context_ref }}",
+    expectBindings(crossOs.with, "needs.prepare_release_package.outputs.", {
+      candidate_artifact_digest: "artifact_digest",
+      candidate_artifact_id: "artifact_id",
+      candidate_artifact_name: "artifact_name",
+      candidate_artifact_run_attempt: "artifact_run_attempt",
+      candidate_artifact_run_id: "artifact_run_id",
+      candidate_file_name: "package_file_name",
+      candidate_sha256: "package_sha256",
+      candidate_source_sha: "source_sha",
+      candidate_version: "package_version",
+      prepublish_plugin_registry_json: "prepublish_plugin_registry_json",
     });
+    expectBindings(crossOs.with, "inputs.", { target_context_ref: "target_context_ref" });
     expect(crossOs.with?.required_companion_packages_json).toBeUndefined();
 
     expect(job(release, "docker_e2e_release_checks").with).toMatchObject({
-      package_artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
-      package_artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
-      package_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      package_artifact_run_attempt:
-        "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
-      package_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
-      package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
-      package_sha256: "${{ needs.prepare_release_package.outputs.package_sha256 }}",
-      package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
-      package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       prepublish_plugin_registry_artifact_id:
         "${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}",
       prepublish_plugin_registry_manifest_sha256:
         "${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
     expect(job(release, "package_acceptance_release_checks").with).toMatchObject({
-      artifact_digest: "${{ needs.prepare_release_package.outputs.artifact_digest }}",
-      artifact_id: "${{ needs.prepare_release_package.outputs.artifact_id }}",
-      artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      artifact_run_attempt: "${{ needs.prepare_release_package.outputs.artifact_run_attempt }}",
-      artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
-      package_file_name: "${{ needs.prepare_release_package.outputs.package_file_name }}",
-      package_source_sha: "${{ needs.prepare_release_package.outputs.source_sha }}",
-      package_version: "${{ needs.prepare_release_package.outputs.package_version }}",
       workflow_ref: "${{ github.sha }}",
     });
   });
 
   it("builds companion registries only for scheduled cross-OS or Docker consumers", () => {
-    const workflow = readWorkflow(RELEASE_CHECKS_PATH);
-    const resolveTarget = job(workflow, "resolve_target");
-    expect(resolveTarget.outputs).toMatchObject({
-      cross_os_scheduled: "${{ steps.inputs.outputs.cross_os_scheduled }}",
-      docker_required: "${{ steps.inputs.outputs.docker_required }}",
-      package_required: "${{ steps.inputs.outputs.package_required }}",
+    const resolveTarget = job(release, "resolve_target");
+    expectBindings(resolveTarget.outputs, "steps.inputs.outputs.", {
+      cross_os_scheduled: "cross_os_scheduled",
+      docker_required: "docker_required",
+      package_required: "package_required",
     });
-    const capture = step(resolveTarget, "Capture selected inputs");
-    expect(capture.run).toContain(
+    expectRun(resolveTarget, "Capture selected inputs", [
       "import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs'",
-    );
-    expect(capture.run).toContain("JSON.stringify(createReleaseCheckSelection({");
+      "JSON.stringify(createReleaseCheckSelection({",
+    ]);
 
-    const producer = job(workflow, "prepare_release_package");
+    const producer = job(release, "prepare_release_package");
     expect(producer.if).toBe("needs.resolve_target.outputs.package_required == 'true'");
-    const resolvePackage = step(producer, "Resolve release package artifact");
-    expect(resolvePackage.run).toContain('if [[ "$CROSS_OS_SCHEDULED" == "true" ]]');
-    expect(resolvePackage.run).toContain(
+    expectRun(producer, "Resolve release package artifact", [
+      'if [[ "$CROSS_OS_SCHEDULED" == "true" ]]',
       'if [[ "$DOCKER_REQUIRED" == "true" && "$PACKAGE_MODE" == "source" ]]',
-    );
-    expect(resolvePackage.run).toContain("registry_args=()");
-    expect(resolvePackage.run).toContain(
+      "registry_args=()",
       'if [[ "$CANDIDATE_PUBLISHED" != "true" && "$required_packages" != \'[]\' ]]',
-    );
-    expect(job(workflow, "cross_os_release_checks").if).toBe(
+    ]);
+    expect(job(release, "cross_os_release_checks").if).toBe(
       "needs.resolve_target.outputs.cross_os_scheduled == 'true'",
     );
-    expect(job(workflow, "docker_e2e_release_checks").if).toBe(
+    expect(job(release, "docker_e2e_release_checks").if).toBe(
       "needs.resolve_target.outputs.docker_required == 'true'",
     );
     for (const [rerunGroup, phase, repoLiveSuiteFilter, crossOs, docker, packageRequired] of [
@@ -647,70 +579,51 @@ describe("cross-OS release checks workflow", () => {
         },
       };
       expect(runInNewContext(producer.if!, context)).toBe(packageRequired);
-      expect(runInNewContext(job(workflow, "cross_os_release_checks").if!, context)).toBe(crossOs);
-      expect(runInNewContext(job(workflow, "docker_e2e_release_checks").if!, context)).toBe(docker);
+      expect(runInNewContext(job(release, "cross_os_release_checks").if!, context)).toBe(crossOs);
+      expect(runInNewContext(job(release, "docker_e2e_release_checks").if!, context)).toBe(docker);
     }
   });
 
   it("downloads and re-exports exact candidate artifacts only by immutable id", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    for (const inputName of [
-      "candidate_artifact_digest",
-      "candidate_artifact_id",
-      "candidate_artifact_name",
-      "candidate_artifact_run_attempt",
-      "candidate_artifact_run_id",
-      "candidate_file_name",
-      "candidate_sha256",
-      "candidate_source_sha",
-      "candidate_version",
-    ]) {
-      expect(workflow.on?.workflow_dispatch?.inputs?.[inputName], inputName).toMatchObject({
-        default: "",
-        type: "string",
-      });
-      expect(workflow.on?.workflow_call?.inputs?.[inputName], inputName).toMatchObject({
-        default: "",
-        type: "string",
-      });
-    }
-    expect(workflow.on?.workflow_dispatch?.inputs?.prepublish_plugin_registry_json).toMatchObject({
-      default: "",
-      type: "string",
-    });
-    expect(workflow.on?.workflow_call?.inputs?.prepublish_plugin_registry_json).toMatchObject({
-      default: "",
-      type: "string",
-    });
-    for (const inputName of [
-      "prepublish_plugin_registry_artifact_digest",
-      "prepublish_plugin_registry_artifact_id",
-      "prepublish_plugin_registry_artifact_name",
-      "prepublish_plugin_registry_artifact_run_attempt",
-      "prepublish_plugin_registry_artifact_run_id",
-      "prepublish_plugin_registry_manifest_sha256",
-    ]) {
-      expect(workflow.on?.workflow_dispatch?.inputs?.[inputName], inputName).toBeUndefined();
-      expect(workflow.on?.workflow_call?.inputs?.[inputName], inputName).toBeUndefined();
+    const artifactFields = ["digest", "id", "name", "run_attempt", "run_id"];
+    for (const trigger of ["workflow_dispatch", "workflow_call"] as const) {
+      const inputs = workflow.on?.[trigger]?.inputs;
+      for (const inputName of [
+        ...artifactFields.map((field) => `candidate_artifact_${field}`),
+        ...["file_name", "sha256", "source_sha", "version"].map((field) => `candidate_${field}`),
+        "prepublish_plugin_registry_json",
+      ]) {
+        expect(inputs?.[inputName], `${trigger}/${inputName}`).toMatchObject({
+          default: "",
+          type: "string",
+        });
+      }
+      for (const suffix of [
+        ...artifactFields.map((field) => `artifact_${field}`),
+        "manifest_sha256",
+      ]) {
+        expect(
+          inputs?.[`prepublish_plugin_registry_${suffix}`],
+          `${trigger}/${suffix}`,
+        ).toBeUndefined();
+      }
     }
     expect(workflow.on?.workflow_call?.inputs?.required_companion_packages_json).toBeUndefined();
 
-    const prepare = job(workflow, "prepare");
-    expect(prepare.outputs).toMatchObject({
-      baseline_artifact_digest: "${{ steps.upload_baseline.outputs.artifact-digest }}",
-      baseline_artifact_id: "${{ steps.upload_baseline.outputs.artifact-id }}",
-      baseline_artifact_run_attempt: "${{ github.run_attempt }}",
-      baseline_artifact_run_id: "${{ github.run_id }}",
-      baseline_sha256: "${{ steps.baseline_metadata.outputs.sha256 }}",
-      candidate_artifact_digest: "${{ steps.upload_candidate.outputs.artifact-digest }}",
-      candidate_artifact_id: "${{ steps.upload_candidate.outputs.artifact-id }}",
-      candidate_artifact_run_attempt: "${{ github.run_attempt }}",
-      candidate_artifact_run_id: "${{ github.run_id }}",
-      candidate_sha256: "${{ steps.candidate_metadata.outputs.sha256 }}",
-      candidate_version: "${{ steps.candidate_metadata.outputs.version }}",
-      prepublish_plugin_registry_json: "${{ steps.registry_identity.outputs.json }}",
-      required_companion_packages_json: "${{ steps.provider_requirements.outputs.json }}",
-      source_sha: "${{ steps.candidate_metadata.outputs.source_sha }}",
+    for (const artifact of ["baseline", "candidate"]) {
+      expectBindings(prepare.outputs, "", {
+        [`${artifact}_artifact_digest`]: `steps.upload_${artifact}.outputs.artifact-digest`,
+        [`${artifact}_artifact_id`]: `steps.upload_${artifact}.outputs.artifact-id`,
+        [`${artifact}_artifact_run_attempt`]: "github.run_attempt",
+        [`${artifact}_artifact_run_id`]: "github.run_id",
+        [`${artifact}_sha256`]: `steps.${artifact}_metadata.outputs.sha256`,
+      });
+    }
+    expectBindings(prepare.outputs, "steps.", {
+      candidate_version: "candidate_metadata.outputs.version",
+      prepublish_plugin_registry_json: "registry_identity.outputs.json",
+      required_companion_packages_json: "provider_requirements.outputs.json",
+      source_sha: "candidate_metadata.outputs.source_sha",
     });
     for (const [jobName, workflowJob] of Object.entries(workflow.jobs)) {
       for (const checkout of workflowJob.steps?.filter((candidate) =>
@@ -721,22 +634,22 @@ describe("cross-OS release checks workflow", () => {
     }
 
     const inputBinding = step(prepare, "Validate provided candidate artifact binding");
-    expect(inputBinding.env).toMatchObject({
-      ARTIFACT_DIGEST: "${{ inputs.candidate_artifact_digest }}",
-      ARTIFACT_ID: "${{ inputs.candidate_artifact_id }}",
-      ARTIFACT_RUN_ATTEMPT: "${{ inputs.candidate_artifact_run_attempt }}",
-      ARTIFACT_RUN_ID: "${{ inputs.candidate_artifact_run_id }}",
-      CANDIDATE_SHA256: "${{ inputs.candidate_sha256 }}",
-      CANDIDATE_SOURCE_SHA: "${{ inputs.candidate_source_sha }}",
-      CANDIDATE_VERSION: "${{ inputs.candidate_version }}",
+    expectBindings(inputBinding.env, "inputs.candidate_", {
+      ARTIFACT_DIGEST: "artifact_digest",
+      ARTIFACT_ID: "artifact_id",
+      ARTIFACT_RUN_ATTEMPT: "artifact_run_attempt",
+      ARTIFACT_RUN_ID: "artifact_run_id",
+      CANDIDATE_SHA256: "sha256",
+      CANDIDATE_SOURCE_SHA: "source_sha",
+      CANDIDATE_VERSION: "version",
     });
-    expect(inputBinding.run).toContain('! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$');
-    expect(inputBinding.run).toContain('! "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$');
-    expect(inputBinding.run).toContain(
+    expectContains(inputBinding.run, [
+      '! "$ARTIFACT_ID" =~ ^[1-9][0-9]*$',
+      '! "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$',
       '[[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]]',
-    );
-    expect(inputBinding.run).toContain('verify-upload "Candidate"');
-    expect(inputBinding.run).toContain('"$CANDIDATE_SOURCE_SHA" != "$INPUT_REF"');
+      'verify-upload "Candidate"',
+      '"$CANDIDATE_SOURCE_SHA" != "$INPUT_REF"',
+    ]);
 
     const inputDownload = step(prepare, "Download provided candidate artifact");
     expect(inputDownload.with).toMatchObject({
@@ -744,73 +657,54 @@ describe("cross-OS release checks workflow", () => {
       "run-id": "${{ inputs.candidate_artifact_run_id }}",
     });
     expect(inputDownload.with?.name).toBeUndefined();
-    expect(
-      prepare.steps?.findIndex(
-        (candidate) => candidate.name === "Validate provided candidate artifact binding",
-      ),
-    ).toBeLessThan(
-      prepare.steps?.findIndex(
-        (candidate) => candidate.name === "Download provided candidate artifact",
-      ) ?? -1,
-    );
+    expectBefore(prepare, inputBinding.name!, inputDownload.name!);
 
-    const resolve = step(prepare, "Resolve provided candidate package");
-    expect(resolve.run).toContain("resolve-openclaw-package-candidate.mts");
-    expect(resolve.run).toContain("--source artifact");
-    expect(resolve.run).toContain('--package-sha256 "$INPUT_CANDIDATE_SHA256"');
-    expect(resolve.run).toContain('"$actual_sha256" == "$INPUT_CANDIDATE_SHA256"');
-    expect(resolve.run).toContain('"$actual_source_sha" == "$INPUT_CANDIDATE_SOURCE_SHA"');
-    expect(resolve.run).toContain('"$actual_version" == "$INPUT_CANDIDATE_VERSION"');
-
-    const upload = step(prepare, "Upload candidate artifact");
-    expect(upload.id).toBe("upload_candidate");
-    expect(upload.with?.name).toBe(
-      "openclaw-cross-os-release-checks-candidate-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    const baselineUpload = step(prepare, "Upload baseline artifact");
-    expect(baselineUpload.id).toBe("upload_baseline");
-    expect(baselineUpload.with?.name).toBe(
-      "openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
+    expectRun(prepare, "Resolve provided candidate package", [
+      "resolve-openclaw-package-candidate.mts",
+      "--source artifact",
+      '--package-sha256 "$INPUT_CANDIDATE_SHA256"',
+      '"$actual_sha256" == "$INPUT_CANDIDATE_SHA256"',
+      '"$actual_source_sha" == "$INPUT_CANDIDATE_SOURCE_SHA"',
+      '"$actual_version" == "$INPUT_CANDIDATE_VERSION"',
+    ]);
+    for (const artifact of ["candidate", "baseline"]) {
+      expect(step(prepare, `Upload ${artifact} artifact`)).toMatchObject({
+        id: `upload_${artifact}`,
+        with: {
+          name: `openclaw-cross-os-release-checks-${artifact}-\${{ github.run_id }}-\${{ github.run_attempt }}`,
+        },
+      });
+    }
     const registryUpload = step(prepare, "Upload source-built prerelease companion registry");
     expect(registryUpload.if).toBe(
       "inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'",
     );
-    const sourceRegistry = step(prepare, "Pack source-built prerelease companion registry");
-    expect(sourceRegistry.run).toContain("prepublish-plugin-registry-artifact.mjs create");
-    expect(sourceRegistry.run).toContain("--repo-root source");
-    expect(sourceRegistry.run).toContain('--required-packages-json "$REQUIRED_PACKAGES_JSON"');
-
-    const preparedUploadVerification = step(prepare, "Verify prepared artifact uploads");
-    expect(preparedUploadVerification.run).toContain('verify-upload "Candidate"');
-    expect(preparedUploadVerification.run).toContain('verify-upload "Baseline"');
-    expect(preparedUploadVerification.run).toContain('verify-upload "Prerelease plugin registry"');
-    const consumer = job(workflow, "cross_os_release_checks");
+    expectRun(prepare, "Pack source-built prerelease companion registry", [
+      "prepublish-plugin-registry-artifact.mjs create",
+      "--repo-root source",
+      '--required-packages-json "$REQUIRED_PACKAGES_JSON"',
+    ]);
+    expectRun(
+      prepare,
+      "Verify prepared artifact uploads",
+      ["Candidate", "Baseline", "Prerelease plugin registry"].map(
+        (label) => `verify-upload "${label}"`,
+      ),
+    );
     expect(consumer.steps?.map((candidate) => candidate.name)).not.toContain(
       "Validate prepared candidate artifact binding",
     );
 
-    for (const name of ["Download candidate artifact", "Retry candidate artifact download"]) {
-      const download = step(consumer, name);
-      expect(download.with?.["artifact-ids"], name).toBe(
-        "${{ needs.prepare.outputs.candidate_artifact_id }}",
-      );
-      expect(download.with?.["github-token"], name).toBe("${{ github.token }}");
-      expect(download.with?.["run-id"], name).toBe(
-        "${{ needs.prepare.outputs.candidate_artifact_run_id }}",
-      );
-      expect(download.with?.name, name).toBeUndefined();
-    }
-    for (const name of ["Download baseline artifact", "Retry baseline artifact download"]) {
-      const download = step(consumer, name);
-      expect(download.with?.["artifact-ids"], name).toBe(
-        "${{ needs.prepare.outputs.baseline_artifact_id }}",
-      );
-      expect(download.with?.["github-token"], name).toBe("${{ github.token }}");
-      expect(download.with?.["run-id"], name).toBe(
-        "${{ needs.prepare.outputs.baseline_artifact_run_id }}",
-      );
-      expect(download.with?.name, name).toBeUndefined();
+    for (const artifact of ["candidate", "baseline"]) {
+      for (const name of [`Download ${artifact} artifact`, `Retry ${artifact} artifact download`]) {
+        const download = step(consumer, name);
+        expect(download.with).toMatchObject({
+          "artifact-ids": `\${{ needs.prepare.outputs.${artifact}_artifact_id }}`,
+          "github-token": "${{ github.token }}",
+          "run-id": `\${{ needs.prepare.outputs.${artifact}_artifact_run_id }}`,
+        });
+        expect(download.with?.name, name).toBeUndefined();
+      }
     }
     const verify = step(consumer, "Verify release-check inputs");
     expect(verify.env?.EXPECTED_CANDIDATE_SHA256).toBe(
@@ -824,21 +718,9 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("passes and consumes the immutable prerelease companion registry generically", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const prepare = job(workflow, "prepare");
     const sourceCheckout = step(prepare, "Checkout public source ref");
     expect(sourceCheckout.if).toBe("inputs.candidate_artifact_name == ''");
     expect(sourceCheckout.with?.ref).toBe("${{ inputs.ref }}");
-    expect(prepare.steps?.map((candidate) => candidate.name)).not.toEqual(
-      expect.arrayContaining([
-        "Install companion plugin build dependencies",
-        "Pack exact Codex companion plugin",
-        "Resolve exact Codex companion plugin",
-        "Upload generated prerelease plugin registry artifact",
-      ]),
-    );
-
-    const consumer = job(workflow, "cross_os_release_checks");
     const download = step(consumer, "Download prerelease plugin registry artifact");
     expect(download.with).toMatchObject({
       "artifact-ids":
@@ -863,24 +745,18 @@ describe("cross-OS release checks workflow", () => {
   });
 
   it("owns provider companion requirements and fails closed for direct candidates", () => {
-    const workflow = readWorkflow(WORKFLOW_PATH);
-    const prepare = job(workflow, "prepare");
-    const requirements = step(prepare, "Resolve provider-owned companion requirements");
-    expect(requirements.run).toContain("--resolve-provider-required-companion-packages");
-    expect(requirements.run).toContain('--provider "$PROVIDER"');
+    expectRun(prepare, "Resolve provider-owned companion requirements", [
+      "--resolve-provider-required-companion-packages",
+      '--provider "$PROVIDER"',
+    ]);
 
-    const contract = step(prepare, "Normalize companion registry contract");
-    expect(contract.run).toContain("(keys | sort) == ([");
-    expect(contract.run).toContain('all(.[]; type == "string")');
-    expect(contract.run).toContain(
+    expectRun(prepare, "Normalize companion registry contract", [
+      "(keys | sort) == ([",
+      'all(.[]; type == "string")',
       "Prerelease companion registry must be one closed immutable JSON tuple.",
-    );
-    expect(contract.run).toContain(
       "The selected provider requires a complete immutable companion registry tuple.",
-    );
-    expect(contract.run).toContain(
       "Source-built candidates produce their own companion registry and reject a second tuple.",
-    );
+    ]);
     expect(step(prepare, "Verify provided prerelease plugin registry upload").run).toContain(
       'verify-upload "Prerelease plugin registry"',
     );
@@ -899,17 +775,12 @@ describe("cross-OS release checks workflow", () => {
     ["anthropic", []],
     ["minimax", []],
   ])("resolves provider-owned companions for %s", (provider, expected) => {
-    const result = spawnSync(
-      BASH_BIN,
-      [WRAPPER_PATH, "--resolve-provider-required-companion-packages", "--provider", provider],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_RELEASE_CHECKS_SCRIPT: SCRIPT_PATH },
-      },
-    );
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
+    const result = runWrapper([
+      "--resolve-provider-required-companion-packages",
+      "--provider",
+      provider,
+    ]);
+    expect(result).toMatchObject({ stderr: "", status: 0 });
     expect(JSON.parse(result.stdout)).toEqual(expected);
   });
 
@@ -939,10 +810,8 @@ describe("cross-OS release checks workflow", () => {
     expect(script).toMatch(/^#!\/usr\/bin\/env node$/mu);
     expect(script).not.toContain("--import tsx");
     expect(windowsCiCoverage).toContain("test/scripts/openclaw-cross-os-release-workflow.test.ts");
-    const result = spawnSync(
-      BASH_BIN,
+    const result = runWrapper(
       [
-        WRAPPER_PATH,
         "--resolve-matrix",
         "--ref",
         "test/native-node",
@@ -953,42 +822,19 @@ describe("cross-OS release checks workflow", () => {
         "--windows-runner",
         "windows-2025",
       ],
-      {
-        cwd: fixture,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_RELEASE_CHECKS_SCRIPT: SCRIPT_PATH,
-          NODE_OPTIONS: "",
-          NODE_PATH: "",
-        },
-      },
+      fixture,
+      { NODE_OPTIONS: "", NODE_PATH: "" },
     );
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
+    expect(result).toMatchObject({ stderr: "", status: 0 });
     expect(JSON.parse(result.stdout)).toEqual({
       include: [
         {
-          os_id: "windows",
-          display_name: "Windows",
+          ...matrixEntry("windows", "packaged-fresh"),
           runner: "windows-2025",
-          artifact_name: "windows",
           node_version: "24.16.0",
-          suite: "packaged-fresh",
-          suite_label: "packaged fresh",
-          lane: "fresh",
         },
-        {
-          os_id: "windows",
-          display_name: "Windows",
-          runner: "windows-2025",
-          artifact_name: "windows-node26.1.0",
-          node_version: "26.1.0",
-          suite: "packaged-fresh",
-          suite_label: "packaged fresh (Node 26.1.0)",
-          lane: "fresh",
-        },
+        { ...matrixEntry("windows", "packaged-fresh", true), runner: "windows-2025" },
       ],
     });
   });

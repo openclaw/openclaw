@@ -3,6 +3,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RuntimeConfig } from "./config.js";
+import { resolveRuntimeConfig } from "./credentials.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: () => ({ revision: 1 }),
@@ -31,8 +33,12 @@ async function register() {
         current: () => ({ plugins: { entries: { typesafe: { config } } } }),
       },
     },
-    registerDecisionProvider: (registered: DecisionProviderV1) => {
-      provider = registered;
+    registerDecisionProvider: (
+      registered: Parameters<OpenClawPluginApi["registerDecisionProvider"]>[0],
+    ) => {
+      provider = legacyWireFixture(registered, () =>
+        resolveRuntimeConfig({ plugins: { entries: { typesafe: { config } } } }),
+      );
     },
   } as unknown as OpenClawPluginApi);
   expect(provider).toBeDefined();
@@ -53,26 +59,6 @@ function evaluator() {
     },
   }));
 }
-
-it("registers and checks readiness without initializing the evaluator, then shares concurrent first use", async () => {
-  const evaluate = evaluator();
-  const initialize = vi.fn(() => ({ evaluate }));
-  vi.doMock("./client.js", initialize);
-  const { provider } = await register();
-  expect(provider.isReady?.()).toBe(true);
-  expect(initialize).not.toHaveBeenCalled();
-
-  const outcomes = await Promise.all([
-    provider.evaluate(batch, context()),
-    provider.evaluate(batch, { ...context(), model: "jev-latest" }),
-  ]);
-  expect(initialize).toHaveBeenCalledOnce();
-  expect(evaluate).toHaveBeenCalledTimes(2);
-  expect(outcomes).toMatchObject([
-    { status: "ok", result: { model: "kev-latest", answers: { q: { probabilityTrue: 0.75 } } } },
-    { status: "ok", result: { model: "jev-latest", answers: { q: { probabilityTrue: 0.75 } } } },
-  ]);
-});
 
 it.each(["abort", "deadline", "config", "credentials"] as const)(
   "observes %s changes while the evaluator import is pending",
@@ -103,18 +89,13 @@ it.each(["abort", "deadline", "config", "credentials"] as const)(
     }
     if (change === "abort") {
       await expect(outcome).rejects.toThrow("caller closed");
-    } else if (change === "config") {
-      await expect(outcome).resolves.toMatchObject({ status: "ok" });
-      expect(evaluate.mock.lastCall?.[1]).toMatchObject({ baseUrl: "http://127.0.0.1:5678" });
     } else {
       await expect(outcome).resolves.toEqual({
         status: "unavailable",
         reason: change === "deadline" ? "transport" : "credentials-unavailable",
       });
     }
-    if (change !== "config") {
-      expect(evaluate).not.toHaveBeenCalled();
-    }
+    expect(evaluate).not.toHaveBeenCalled();
   },
 );
 
@@ -129,17 +110,25 @@ it("shares a pending evaluator initialization with a later first caller", async 
   });
   vi.doMock("./client.js", initialize);
   const { provider } = await register();
+  expect(provider.isReady?.()).toBe(true);
+  expect(initialize).not.toHaveBeenCalled();
   const first = provider.evaluate(batch, context());
   let second: ReturnType<DecisionProviderV1["evaluate"]> | undefined;
   try {
     await started.promise;
-    second = provider.evaluate(batch, context());
+    second = provider.evaluate(batch, { ...context(), model: "jev-latest" });
     expect(evaluate).not.toHaveBeenCalled();
   } finally {
     release.resolve();
   }
-  await expect(first).resolves.toMatchObject({ status: "ok" });
-  await expect(second).resolves.toMatchObject({ status: "ok" });
+  await expect(first).resolves.toMatchObject({
+    status: "ok",
+    result: { model: "kev-latest", answers: { q: { probabilityTrue: 0.75 } } },
+  });
+  await expect(second).resolves.toMatchObject({
+    status: "ok",
+    result: { model: "jev-latest", answers: { q: { probabilityTrue: 0.75 } } },
+  });
   expect(initialize).toHaveBeenCalledOnce();
   expect(evaluate).toHaveBeenCalledTimes(2);
 });

@@ -43,9 +43,6 @@ import {
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
 
-let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
-let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
-
 function parseOptionalPositiveInt(value: unknown, fallback: number): number {
   const parsed =
     typeof value === "number"
@@ -61,7 +58,7 @@ function resolveChoice<T extends string>(value: unknown, choices: readonly T[], 
 }
 
 function normalizeTranscriptDir(value: unknown): string {
-  const raw = typeof value === "string" ? value.trim() : "";
+  const raw = normalizeOptionalString(value);
   if (!raw) {
     return DEFAULT_TRANSCRIPT_DIR;
   }
@@ -85,7 +82,14 @@ function normalizeConfiguredToolsAllow(value: unknown): string[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
-function resolveDefaultToolsAllow(cfg: OpenClawConfig | undefined): string[] {
+function resolveDefaultToolsAllow(
+  cfg: OpenClawConfig | undefined,
+  recallToolNames: readonly string[] | undefined,
+): string[] {
+  const providerTools = normalizeIdentifierList(recallToolNames);
+  if (providerTools.length > 0) {
+    return providerTools;
+  }
   return cfg?.plugins?.slots?.memory === "memory-lancedb"
     ? [...LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW]
     : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
@@ -138,16 +142,14 @@ export function isMissingRegisteredMemoryToolsError(
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const sourceParts = sources
-    .split(";")
-    .map((source) => source.trim())
-    .filter(Boolean);
+  const sourceParts = normalizeStringEntries(sources.split(";"));
   return sourceParts.includes(`runtime toolsAllow: ${toolsAllow.join(", ")}`);
 }
 
 export function normalizePluginConfig(
   pluginConfig: unknown,
   cfg?: OpenClawConfig,
+  recallToolNames?: readonly string[],
 ): ResolvedActiveRecallPluginConfig {
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
@@ -178,19 +180,25 @@ export function normalizePluginConfig(
       ["balanced", "strict", "contextual", "recall-heavy", "precision-heavy", "preference-only"],
       raw.queryMode === "message" ? "strict" : raw.queryMode === "full" ? "contextual" : "balanced",
     ),
-    toolsAllow: normalizeConfiguredToolsAllow(raw.toolsAllow) ?? resolveDefaultToolsAllow(cfg),
+    toolsAllow:
+      normalizeConfiguredToolsAllow(raw.toolsAllow) ??
+      resolveDefaultToolsAllow(cfg, recallToolNames),
     promptOverride: normalizeOptionalString(raw.promptOverride),
     promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: resolveIntegerOption(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
-      { min: minimumTimeoutMs, max: MAX_TIMEOUT_MS },
+      { min: DEFAULT_MIN_TIMEOUT_MS, max: MAX_TIMEOUT_MS },
     ),
     timeoutMsIsDefault: raw.timeoutMs === undefined || raw.timeoutMs === null,
-    setupGraceTimeoutMs: resolveIntegerOption(raw.setupGraceTimeoutMs, setupGraceTimeoutMs, {
-      min: 0,
-      max: MAX_SETUP_GRACE_TIMEOUT_MS,
-    }),
+    setupGraceTimeoutMs: resolveIntegerOption(
+      raw.setupGraceTimeoutMs,
+      DEFAULT_SETUP_GRACE_TIMEOUT_MS,
+      {
+        min: 0,
+        max: MAX_SETUP_GRACE_TIMEOUT_MS,
+      },
+    ),
     queryMode: resolveChoice(raw.queryMode, ["message", "recent", "full"], DEFAULT_QUERY_MODE),
     maxSummaryChars: resolveIntegerOption(raw.maxSummaryChars, DEFAULT_MAX_SUMMARY_CHARS, {
       min: 40,
@@ -242,7 +250,7 @@ export function normalizePluginConfig(
 
 export function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
   try {
-    return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
+    return api.runtime.config.current() as OpenClawConfig;
   } catch {
     return api.config;
   }
@@ -250,19 +258,6 @@ export function readActiveMemoryConfig(api: OpenClawPluginApi): OpenClawConfig {
 
 export function normalizeActiveMemoryFastMode(fastMode: unknown): ActiveMemoryFastMode | undefined {
   return fastMode === true || fastMode === false || fastMode === "auto" ? fastMode : undefined;
-}
-
-export function resetActiveMemoryConfigForTests(): void {
-  minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
-  setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
-}
-
-export function setMinimumTimeoutMsForTests(value: number): void {
-  minimumTimeoutMs = value;
-}
-
-export function setSetupGraceTimeoutMsForTests(value: number): void {
-  setupGraceTimeoutMs = Math.max(0, Math.floor(value));
 }
 
 // The runner owns CLI eligibility; explicit timeouts and direct API runs retain their budgets.

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -38,8 +38,7 @@ import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { collectAdmissionProtectedSessionIds } from "./session-history-eviction.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
-
-type SessionStoreResetScope = { agentId: string; storePath: string };
+import type { SessionStoreTarget as SessionStoreResetScope } from "./targets-collision.js";
 
 function readResetInventory(database: OpenClawAgentReadOnlyDatabase) {
   const db = getSessionKysely(database.db);
@@ -127,7 +126,7 @@ function listResetArtifacts(
 export function previewSessionStoreReset(scope: SessionStoreResetScope) {
   const resolved = captureLifecycleDatabaseScope(resolveSqliteReadScope(scope));
   const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) => runSqliteDeferredTransactionSync(database.db, () => readResetInventory(database)),
+    (database) => runSqliteReadSnapshotSync(database.db, () => readResetInventory(database)),
     toDatabaseOptions(resolved),
   );
   const inventory = opened.found ? opened.value : undefined;
@@ -149,7 +148,7 @@ export async function resetSessionStore(scope: SessionStoreResetScope): Promise<
     return;
   }
   try {
-    const inventory = runSqliteDeferredTransactionSync(retained.database.db, () =>
+    const inventory = runSqliteReadSnapshotSync(retained.database.db, () =>
       readResetInventory(retained.database),
     );
     const artifacts = listResetArtifacts(resolved.path, inventory);

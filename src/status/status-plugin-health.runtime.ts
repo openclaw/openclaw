@@ -114,15 +114,6 @@ function collectChannelPluginFailures(params: {
   }
 }
 
-function parsePluginOwner(owner: string | undefined): string | undefined {
-  const prefix = "plugin:";
-  if (!owner?.startsWith(prefix)) {
-    return undefined;
-  }
-  const pluginId = owner.slice(prefix.length).trim();
-  return pluginId.length > 0 ? pluginId : undefined;
-}
-
 function filterRuntimeToolQuarantinesForRegistry(params: {
   quarantines: readonly RuntimeToolQuarantineRecord[];
   plugins: readonly PluginHealthRecord[];
@@ -133,14 +124,20 @@ function filterRuntimeToolQuarantinesForRegistry(params: {
       .map((plugin) => plugin.id),
   );
   return params.quarantines.filter((quarantine) => {
-    const pluginId = parsePluginOwner(quarantine.owner);
+    const pluginId = quarantine.owner?.startsWith("plugin:")
+      ? quarantine.owner.slice("plugin:".length).trim()
+      : undefined;
     return !pluginId || loadedPluginIds.has(pluginId);
   });
 }
 
 // Compact status reads only the active registry and persisted health stores;
 // full config-driven channel inspection is reserved for the installed path.
-export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot {
+export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPluginHealthSnapshot> {
+  const [contextEngineQuarantines, runtimeToolQuarantines] = await Promise.all([
+    listContextEngineQuarantines(),
+    listPersistedRuntimeToolSchemaQuarantines(),
+  ]);
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
@@ -148,9 +145,9 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
   return {
     plugins,
     diagnostics,
-    contextEngineQuarantines: listContextEngineQuarantines(),
+    contextEngineQuarantines,
     runtimeToolQuarantines: filterRuntimeToolQuarantinesForRegistry({
-      quarantines: listPersistedRuntimeToolSchemaQuarantines(),
+      quarantines: runtimeToolQuarantines,
       plugins,
     }),
     channelPluginFailures: collectChannelPluginFailures({
@@ -166,7 +163,7 @@ export async function collectInstalledPluginHealthSnapshot(params: {
 }): Promise<StatusPluginHealthSnapshot> {
   const { buildPluginCompatibilityNotices, buildPluginSnapshotReport } =
     await import("../plugins/status.js");
-  const runtime = collectRuntimePluginHealthSnapshot();
+  const runtime = await collectRuntimePluginHealthSnapshot();
   const report = buildPluginSnapshotReport({
     config: params.config,
     workspaceDir: params.workspaceDir,

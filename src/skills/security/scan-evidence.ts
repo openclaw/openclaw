@@ -10,16 +10,11 @@ export const LITERAL_SECRET_SKILL_CONTENT_RULE = {
   pattern: LITERAL_SECRET_PATTERN,
 } as const;
 
-function truncateEvidence(evidence: string, maxLen = 120): string {
-  if (evidence.length <= maxLen) {
-    return evidence;
-  }
-  return `${truncateUtf16Safe(evidence, maxLen)}…`;
-}
-
 export function formatScanEvidence(evidence: string): string {
   const normalized = evidence.trim();
   return LITERAL_SECRET_PATTERN.test(normalized)
     ? "[REDACTED CREDENTIAL]"
-    : truncateEvidence(normalized);
+    : normalized.length > 120
+      ? `${truncateUtf16Safe(normalized, 120)}…`
+      : normalized;
 }

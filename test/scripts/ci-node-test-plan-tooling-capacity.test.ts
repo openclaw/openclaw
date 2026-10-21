@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
@@ -50,6 +50,42 @@ const options = {
   runnerBackend: "github",
   includeReleaseOnlyPluginShards: false,
 } as const;
+afterEach(() => {
+  fixture.files.length = 64;
+  vi.resetModules();
+});
+
+it.each([undefined, "blacksmith"])(
+  "preserves compiler/artifact capacity (%s)",
+  async (runnerBackend) => {
+    const protectedFiles = [
+      "test/scripts/vitest-worker-artifacts.ci.test.ts",
+      "test/scripts/write-unified-entry-dts.test.ts",
+      "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+    ];
+    fixture.files.push(...protectedFiles);
+    vi.resetModules();
+    const { createNodeTestShardBundles: createPlan } =
+      await import("../../scripts/lib/ci-node-test-plan.mts");
+    const jobs = createPlan({ ...options, runnerBackend, compactNodeJobCap: 90 });
+    const files = jobs.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!));
+    expect(files.toSorted()).toEqual(fixture.files.toSorted());
+    expect(new Set(files).size).toBe(files.length);
+    expect(jobs.some((job) => job.runner === "blacksmith-16vcpu-ubuntu-2404")).toBe(true);
+    for (const job of jobs) {
+      const needsCapacity = job.groups.some((group) =>
+        group.includePatterns!.some((file) => protectedFiles.includes(file)),
+      );
+      expect(job.runner).toBe(
+        needsCapacity ? "blacksmith-32vcpu-ubuntu-2404" : "blacksmith-16vcpu-ubuntu-2404",
+      );
+      expect(job.planConcurrency).toBe(1);
+      for (const group of job.groups) {
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+      }
+    }
+  },
+);
 
 it("uses idle hosted file workers without extending indivisible walls", () => {
   const compact = createNodeTestShardBundles({ ...options, compactNodeJobCap: 16 });

@@ -1,26 +1,40 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+} from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { resolveAgentWaitSource } from "./agent-dedupe.js";
-import { captureAgentJobSession, getAgentJobSession, waitForAgentJob } from "./agent-job.js";
+import {
+  captureAgentJobSession,
+  getAgentJobSession,
+  projectAgentJobObservation,
+  waitForAgentJob,
+} from "./agent-job.js";
 
+/** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns" | "dedupe">,
+  context: Pick<GatewayRequestContext, "dedupe"> &
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
   params: AgentWaitParams,
+  // Turn waits preserve byte-exact protocol run IDs.
+  options: { exactTurnSource?: boolean } = {},
 ) {
-  const runId = (params.runId ?? "").trim();
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? Math.max(0, Math.floor(params.timeoutMs))
-      : 30_000;
+  const runId = options.exactTurnSource ? params.runId : params.runId.trim();
+  const timeoutMs = params.timeoutMs ?? 30_000;
   const source = resolveAgentWaitSource(context, runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const queuedResult = () => {
-    const queued = context.chatQueuedTurns.get(runId);
-    return queued
+    const queued = getRpcSourceForGateway(runId, context.resolveGatewayContext);
+    return queued && queued.input.custody.enqueued === true && isRpcSourceQueued(queued)
       ? {
-          session: captureAgentJobSession({ ...queued, lifecycleGeneration }),
+          session: captureAgentJobSession({
+            ...getRpcSourceIdentity(queued),
+            lifecycleGeneration,
+          }),
           result: {
             runId,
             status: "pending" as const,
@@ -41,8 +55,17 @@ export function prepareAgentWaitForTurn(
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
-    const snapshot = await waitForAgentJob({ runId, timeoutMs, source });
-    const queuedAfterWait = queuedResult();
+    let queuedDuringWait: ReturnType<typeof queuedResult>;
+    const snapshot = await waitForAgentJob({
+      runId,
+      timeoutMs,
+      source,
+      stopWaiting: () => {
+        queuedDuringWait = queuedResult();
+        return queuedDuringWait !== undefined;
+      },
+    });
+    const queuedAfterWait = queuedDuringWait ?? queuedResult();
     if (queuedAfterWait) {
       return queuedAfterWait;
     }
@@ -52,25 +75,8 @@ export function prepareAgentWaitForTurn(
         session: captureAgentJobSession(runContext) ?? initialSession,
       };
     }
-    return {
-      session: snapshot.session,
-      result: {
-        runId,
-        status: snapshot.status,
-        startedAt: snapshot.startedAt,
-        endedAt: snapshot.endedAt,
-        error: snapshot.error,
-        stopReason: snapshot.stopReason,
-        livenessState: snapshot.livenessState,
-        yielded: snapshot.yielded,
-        pendingError: snapshot.pendingError,
-        timeoutPhase: snapshot.timeoutPhase,
-        providerStarted: snapshot.providerStarted,
-        ...(snapshot.terminalDelivery ? { terminalDelivery: snapshot.terminalDelivery } : {}),
-        terminalReceipt: snapshot.terminalReceipt,
-        terminalReply: snapshot.terminalReply,
-      },
-    };
+    const { session, ...result } = projectAgentJobObservation(snapshot);
+    return { session, result: { runId, ...result } };
   };
   return { session: initialSession, wait };
 }

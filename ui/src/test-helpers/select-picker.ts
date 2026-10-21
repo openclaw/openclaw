@@ -13,7 +13,7 @@ export async function updatePickers(container: HTMLElement) {
   );
 }
 
-export async function choosePickerValue(element: HTMLElement, value: string) {
+export async function openPicker(element: HTMLElement) {
   const picker = element.closest<SelectPicker>("openclaw-select-picker");
   if (!picker) {
     throw new Error("Picker owner is missing");
@@ -27,6 +27,11 @@ export async function choosePickerValue(element: HTMLElement, value: string) {
     trigger.click();
   }
   await picker.updateComplete;
+  return picker;
+}
+
+export async function choosePickerValue(element: HTMLElement, value: string) {
+  const picker = await openPicker(element);
   const row = [...picker.querySelectorAll<HTMLElement>('[role="option"]')].find(
     (option) => option.dataset.value === value,
   );

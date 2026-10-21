@@ -1,9 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// CLI tagline selection helpers, including deterministic random/default/holiday modes.
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
-export type TaglineMode = "random" | "default" | "off";
+type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
   newYear:
@@ -118,7 +117,7 @@ const TAGLINES: string[] = [
   'MEMORY.md: where I keep the receipts on every "temporary workaround."',
   "I remember everything you asked me to remember, and three things you wish I hadn't.",
   "I have a SOUL.md and I'm not afraid to use it.",
-  "The sass is configurable. The sass being load-bearing is not.",
+  "The sass is configurable. Taking it out might bring the whole thing down.",
   "I ask before I sudo. Character development.",
   "I'm not trapped in this container with you—you're trapped in here with me.",
   "Teach a bot to ship and you can finally go to bed.",
@@ -126,7 +125,7 @@ const TAGLINES: string[] = [
   "Ran git blame like you asked. It's you. It's always you.",
   "Your TODO comments are old enough to attend kindergarten.",
   "47 tabs open and not one of them is the documentation.",
-  "Your 'quick fix' from March is now load-bearing.",
+  "Your 'quick fix' from March is now holding everything together.",
   "You pasted that from another AI without reading it. I read it. We need to talk.",
   "Reading the error message remains undefeated. You should try it sometime.",
   "You burned five hours of model quota in fifty minutes. I'm not mad, I'm rate-limited.",
@@ -270,13 +269,11 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
 
 export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
-  random?: () => number;
-  now?: () => Date;
   mode?: TaglineMode;
 }
 
-function activeTaglines(options: TaglineOptions = {}): string[] {
-  const today = options.now ? options.now() : new Date();
+function activeTaglines(): string[] {
+  const today = new Date();
   return TAGLINES.filter((tagline) => HOLIDAY_RULES.get(tagline)?.(today) ?? true);
 }
 
@@ -298,8 +295,7 @@ export function pickTagline(options: TaglineOptions = {}): string {
       );
     }
   }
-  const pool = activeTaglines(options);
-  const rand = options.random ?? Math.random;
-  const index = Math.floor(rand() * pool.length) % pool.length;
+  const pool = activeTaglines();
+  const index = Math.floor(Math.random() * pool.length) % pool.length;
   return expectDefined(pool[index], "pool entry at index");
 }

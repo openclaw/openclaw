@@ -55,32 +55,42 @@ afterEach(() => {
 });
 
 describe("shell visual viewport", () => {
-  it("publishes a native-scale bound without replacing the CSS resize owner", () => {
-    disconnect = connectShellViewport();
-    for (const next of [900, 1440, 844]) {
-      vi.stubGlobal("innerHeight", next);
-      Object.assign(viewport, { height: next });
-      window.dispatchEvent(new Event("resize"));
-      flush();
-      expect(height()).toBe(`${next}px`);
-    }
-  });
-
-  it.each([false, true])(
-    "bounds sub-keyboard occlusion without removing the inset (focus: %s)",
-    (focused) => {
+  it.each([
+    { focus: "none", heights: [900, 1440, 844], layoutResize: true },
+    { focus: "none", heights: [782], layoutResize: false },
+    { focus: "editor", heights: [782], layoutResize: false },
+    { focus: "button", heights: [480], layoutResize: false },
+  ])(
+    "bounds $focus occlusion without inventing a keyboard ($heights)",
+    ({ focus, heights, layoutResize }) => {
+      if (focus === "button") {
+        const button = document.createElement("input");
+        button.type = "button";
+        document.body.append(button);
+        button.focus();
+      }
       disconnect = connectShellViewport();
-      if (focused) {
+      if (focus === "editor") {
         editor();
         flush();
       }
-      resize({ height: 782 });
-      expect(height()).toBe("782px");
-      expect(inset()).toBe("");
-      // The cap is the visible bottom in layout coordinates, not just its height.
-      resize({ height: 770, offsetTop: 12 }, "scroll");
-      expect(height()).toBe("782px");
-      expect(inset()).toBe("");
+      for (const next of heights) {
+        if (layoutResize) {
+          vi.stubGlobal("innerHeight", next);
+          Object.assign(viewport, { height: next });
+          window.dispatchEvent(new Event("resize"));
+          flush();
+        } else {
+          resize({ height: next });
+        }
+        expect(height()).toBe(`${next}px`);
+        expect(inset()).toBe("");
+        if (next === 782) {
+          resize({ height: 770, offsetTop: 12 }, "scroll");
+          expect(height()).toBe("782px");
+          expect(inset()).toBe("");
+        }
+      }
     },
   );
 
@@ -140,17 +150,6 @@ describe("shell visual viewport", () => {
     expect(inset()).toBe("");
     resize({ height: 480, scale: 1, offsetTop: 0 });
     expect(height()).toBe("480px");
-  });
-
-  it("bounds visual occlusion without inventing a keyboard for a non-editor", () => {
-    const button = document.createElement("input");
-    button.type = "button";
-    document.body.append(button);
-    button.focus();
-    disconnect = connectShellViewport();
-    resize({ height: 480 });
-    expect(height()).toBe("480px");
-    expect(inset()).toBe("");
   });
 
   it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {

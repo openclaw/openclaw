@@ -107,7 +107,7 @@ Or reuse the host already configured for the Ollama model provider:
 }
 ```
 
-`models.providers.ollama.baseUrl` is the canonical key; the web-search
+`models.providers.ollama.baseUrl` is the current key; the web-search
 provider also accepts `baseURL` there for compatibility with OpenAI SDK-style
 config examples. If nothing is set, OpenClaw defaults to
 `http://127.0.0.1:11434`.

@@ -1,3 +1,4 @@
+import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { pullOllamaModel } from "./setup-pull.js";
@@ -59,9 +60,23 @@ describe("Ollama onboarding model pulls", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("accepts a final success record without a trailing newline", async () => {
+  it.each([
+    { label: "unterminated success", body: '{"status":"success"}' },
+    {
+      label: "malformed progress before success",
+      body: 'null\nnot valid json\n{"status":"success"}',
+    },
+    {
+      label: "tolerantly decoded progress before success",
+      body: new Uint8Array([
+        ...new TextEncoder().encode('{"status":"pulling '),
+        0xff,
+        ...new TextEncoder().encode('"}\n{"status":"success"}'),
+      ]),
+    },
+  ])("accepts $label", async ({ body }) => {
     fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response('{"status":"success"}'),
+      response: new Response(body),
       release: vi.fn(async () => {}),
     });
     const progress = { update: vi.fn(), stop: vi.fn() };
@@ -71,6 +86,32 @@ describe("Ollama onboarding model pulls", () => {
       true,
     );
     expect(progress.stop).toHaveBeenCalledWith("Downloaded gemma4:e2b");
+  });
+
+  it.each([
+    { status: "pulling manifest" },
+    { status: "pulling abcdef123456", total: 100, completed: 40 },
+  ])("reports progress failures instead of a successful pull for %j", async (chunk) => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(`${JSON.stringify(chunk)}\n{"status":"success"}\n`),
+      release,
+    });
+    const progress = {
+      update: vi.fn(() => {
+        throw new Error("progress display failed");
+      }),
+      stop: vi.fn(),
+    };
+    const prompter = createTestWizardPrompter({ progress: () => progress });
+
+    await expect(pullOllamaModel("http://127.0.0.1:11434", "gemma4:e2b", prompter)).resolves.toBe(
+      false,
+    );
+    expect(progress.stop).toHaveBeenCalledWith(
+      "Failed to download gemma4:e2b: progress display failed",
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("coerces non-Error stream failures through the shared error contract", async () => {

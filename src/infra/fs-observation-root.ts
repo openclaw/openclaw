@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import { root, type Root } from "@openclaw/fs-safe/root";
 
 /** Probe a caller-selected prefix without following links or comparing entry names. */
@@ -54,12 +55,7 @@ export async function admitObservationRoot(
       }
       ancestor = candidate;
     } catch (error) {
-      if (
-        !error ||
-        typeof error !== "object" ||
-        !("code" in error) ||
-        (error.code !== "ENOENT" && error.code !== "ENOTDIR")
-      ) {
+      if (!isNotFoundPathError(error)) {
         throw error;
       }
       break;

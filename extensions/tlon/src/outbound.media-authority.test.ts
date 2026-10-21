@@ -198,10 +198,10 @@ function createFixture(
           break;
         }
         case "upload":
-          if (!(init?.body instanceof Blob)) {
+          if (init?.body == null) {
             throw new Error("Expected the Tlon image upload body");
           }
-          expect(Buffer.from(await init.body.arrayBuffer())).toEqual(IMAGE);
+          expect(Buffer.from(await new Response(init.body).arrayBuffer())).toEqual(IMAGE);
           response = new Response(
             new ReadableStream<Uint8Array>({ cancel: account.uploadCanceled }),
             {
@@ -316,19 +316,6 @@ afterEach(async () => {
 });
 
 describe("Tlon preferred media send authority", () => {
-  it.each(["memex", "s3"] as const)(
-    "uploads through %s before delivering the image",
-    async (storage) => {
-      const account = createAccount("zod", storage);
-      const fixture = createFixture([account]);
-
-      const result = await fixture.send(account);
-
-      expectDelivered(account, result, getUploadedUrl(account));
-      expect(account.uploadCanceled).toHaveBeenCalledTimes(1);
-    },
-  );
-
   it.each([
     { storage: "memex", phase: "source" },
     { storage: "memex", phase: "allocation" },

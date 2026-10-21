@@ -2,15 +2,17 @@
  * Blocks direct Codex app-server requests that would bypass OpenClaw sandbox or
  * node-exec routing guarantees.
  */
-import { tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
+import type { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   formatCodexNativeNodeExecBlock,
-  resolveCodexNativeExecutionPolicy,
+  prepareCodexNativeExecutionPolicy,
+  type resolveCodexNativeExecutionPolicy,
+  type CodexNativeExecutionPolicy,
+  type PreparedCodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 
 const ALLOWED_CONTROL_PLANE_METHODS = new Set([
@@ -57,6 +59,10 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
 }): string | undefined {
   const controlPlane = ALLOWED_CONTROL_PLANE_METHODS.has(params.method);
@@ -66,6 +72,10 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
       config: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
+      agentId: params.agentId,
+      storePath: params.storePath,
+      sessionTarget: params.sessionTarget,
+      executionPolicy: params.executionPolicy,
       surface: `app-server method \`${params.method}\``,
     });
     if (nodeExecBlock) {
@@ -80,33 +90,94 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
     return undefined;
   }
   const sandboxBlock = resolveCodexNativeSandboxBlock({
-    config: params.config,
+    ...params,
     sessionKey,
-    sandbox: params.sandbox,
     surface: `app-server method \`${params.method}\``,
   });
-  if (!sandboxBlock) {
-    return undefined;
-  }
-  if (
+  return sandboxBlock &&
     params.method === "thread/start" &&
     hasOpenClawSandboxEnvironmentSelection(params.requestParams)
+    ? undefined
+    : sandboxBlock;
+}
+
+/** Resolve policy before yielding to client acquisition and recheck it at each write. */
+export async function prepareCodexAppServerDirectSandboxBypassBlock(
+  params: Omit<
+    Parameters<typeof resolveCodexAppServerDirectSandboxBypassBlock>[0],
+    "executionPolicy"
+  >,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  if (
+    ALLOWED_CONTROL_PLANE_METHODS.has(params.method) &&
+    params.method !== "config/mcpServer/reload"
   ) {
-    return undefined;
+    return { block: undefined, async assertCurrent() {}, release() {} };
   }
-  return sandboxBlock;
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexAppServerDirectSandboxBypassBlock({
+      ...params,
+      executionPolicy: selected.policy,
+    }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
+}
+
+export async function prepareCodexNativeExecutionBlock(
+  params: Omit<Parameters<typeof resolveCodexNativeExecutionBlock>[0], "executionPolicy">,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexNativeExecutionBlock({ ...params, executionPolicy: selected.policy }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
+}
+
+export async function prepareCodexNativeSandboxBlock(
+  params: Omit<Parameters<typeof resolveCodexNativeSandboxBlock>[0], "executionPolicy">,
+): Promise<
+  { block: string | undefined } & Pick<
+    PreparedCodexNativeExecutionPolicy,
+    "assertCurrent" | "source" | "release"
+  >
+> {
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveCodexNativeSandboxBlock({ ...params, executionPolicy: selected.policy }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */
-export function resolveCodexNativeExecutionBlock(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  sandbox?: Pick<SandboxContext, "enabled"> | null;
-  sandboxEnvironmentSelected?: boolean;
-  surface: string;
-}): string | undefined {
+export function resolveCodexNativeExecutionBlock(
+  params: Parameters<typeof resolveCodexNativeSandboxBlock>[0],
+): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 
@@ -116,6 +187,9 @@ export function resolveCodexNativeSandboxBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   sandbox?: Pick<SandboxContext, "enabled"> | null;
   sandboxEnvironmentSelected?: boolean;
   surface: string;
@@ -130,23 +204,9 @@ export function resolveCodexNativeSandboxBlock(params: {
   if (isCodexRemoteExecPlacementSandbox(params.sandbox) || params.sandbox?.enabled === true) {
     return formatCodexNativeSandboxBlock({ surface: params.surface });
   }
-  const sandboxAgentId =
-    parseAgentSessionKey(sessionKey)?.agentId ??
-    params.agentId ??
-    tryResolveDefaultAgentId(params.config ?? {});
-  if (!sandboxAgentId) {
-    return undefined;
-  }
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
-    sessionKey,
-    agentId: sandboxAgentId,
-    classificationAgentId: sandboxAgentId,
-  });
-  if (!runtime.sandboxed) {
-    return undefined;
-  }
-  return formatCodexNativeSandboxBlock({ surface: params.surface });
+  return params.executionPolicy.sandboxed
+    ? formatCodexNativeSandboxBlock({ surface: params.surface })
+    : undefined;
 }
 
 function hasOpenClawSandboxEnvironmentSelection(value: unknown): boolean {
@@ -181,15 +241,12 @@ function resolveCodexNativeNodeExecBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  storePath?: string;
+  sessionTarget?: Parameters<typeof resolveCodexNativeExecutionPolicy>[0]["sessionTarget"];
+  executionPolicy: CodexNativeExecutionPolicy;
   surface: string;
 }): string | undefined {
-  const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
-  const policy = resolveCodexNativeExecutionPolicy({
-    config: params.config,
-    sessionKey,
-    agentId: params.agentId,
-    readRuntimeSessionEntry: Boolean(sessionKey),
-  });
+  const policy = params.executionPolicy;
   if (policy.nativeToolSurfaceAllowed) {
     return undefined;
   }
@@ -197,4 +254,18 @@ function resolveCodexNativeNodeExecBlock(params: {
     surface: params.surface,
     reason: policy.blockReason,
   });
+}
+
+const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
+  "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
+
+export function assertNativeConversationApprovalPolicySupported(
+  runtime: Pick<
+    ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+    "approvalPolicy" | "approvalsReviewer"
+  >,
+): void {
+  if (runtime.approvalPolicy !== "never" && runtime.approvalsReviewer === "user") {
+    throw new Error(NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE);
+  }
 }

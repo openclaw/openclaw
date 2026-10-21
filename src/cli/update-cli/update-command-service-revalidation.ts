@@ -7,35 +7,50 @@ import {
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import {
   discoverManagedGatewayBindings,
+  describeManagedGatewayBinding,
   readManagedGatewayBindingState,
   type ManagedGatewayBinding,
 } from "../../daemon/managed-gateway-bindings.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { gatewayServiceCommandOverlapsPhysicalInstallation } from "../../daemon/service-layout.js";
+import {
+  gatewayServiceCommandOverlapsPhysicalInstallation,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
+import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { readGatewayLockProcessCmdline } from "../../infra/gateway-lock-process.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import { classifyOpenClawArgv } from "../../infra/gateway-process-argv.js";
+import { createUpdatePreflightDiagnostics } from "../../infra/update-failure-facts.js";
 import { updateInstallRootsMatch } from "../../infra/update-install-root.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { formatCliCommand } from "../command-format.js";
 import { UpdatePreMutationError } from "./shared.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedGatewayServiceObservation,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
+  collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
+  GATEWAY_SERVICE_INSPECTION_WARNING,
   inspectManagedGatewayServiceBeforeUpdate,
   observedSystemdManagerUid,
+  tryRealpathOrResolve,
 } from "./update-command-service-plan.js";
 
 function matchesStoppedService(
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">,
+  before: ManagedGatewayServiceObservation,
   state: GatewayServiceState,
   inspection: ManagedGatewayUpdateVerdict,
   allowIncompleteInspection = false,
+  matchesRecordedDefinition = false,
 ): boolean {
   const verdict = before.serviceUpdateVerdict;
   const refreshDefinition = verdict?.kind === "owned" && verdict.refreshDefinition;
@@ -60,9 +75,62 @@ function matchesStoppedService(
       before.serviceManagerUid === undefined ||
       (allowIncompleteInspection && observedSystemdManagerUid(state) === undefined) ||
       before.serviceManagerUid === observedSystemdManagerUid(state)) &&
-    (refreshDefinition ||
+    (matchesRecordedDefinition ||
+      refreshDefinition ||
       ("fingerprint" in inspection && inspection.fingerprint === verdict.fingerprint)),
   );
+}
+
+/** Native inspection cannot authorize publication over a live or unverified state owner. */
+export async function assertUnavailableGatewayPackageConsumerStopped(params: {
+  roots: readonly string[];
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  assertCurrent: () => void;
+  verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
+}): Promise<void> {
+  const refuse = (cause?: unknown): never => {
+    const failure = createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message);
+    throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
+      failureFacts: [
+        ...failure.failureFacts,
+        ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
+      ],
+      cause,
+    });
+  };
+  try {
+    const owner = await readActiveGatewayLockIdentity({
+      env: params.env,
+      requireInspection: true,
+      timeoutMs: params.timeoutMs,
+    });
+    params.assertCurrent();
+    if (!owner) {
+      return;
+    }
+    const argv = readGatewayLockProcessCmdline(
+      owner.pid,
+      process.platform,
+      params.timeoutMs,
+      undefined,
+      params.env,
+    );
+    const entry = classifyOpenClawArgv(argv ?? [], {
+      requirePackageIdentity: true,
+      pid: owner.pid,
+    });
+    // A rewritten title loses the installation path, not the recorded ownership.
+    // Only a positively identified disjoint installation can be ignored.
+    const packageRoot = entry.kind === "openclaw" ? entry.packageIdentity?.root : undefined;
+    if (packageRoot && params.roots.every((root) => !updateInstallRootsMatch(root, packageRoot))) {
+      return;
+    }
+  } catch (error) {
+    params.assertCurrent();
+    refuse(error);
+  }
+  refuse();
 }
 
 /** Observe other consumers; discovery never grants permission to stop them. */
@@ -75,10 +143,14 @@ export async function assertManagedGatewayArtifactPublication(params: {
   updateInstallKind: "git" | "package" | "unknown";
   shouldRestart: boolean;
   phase?: "before-stop" | "publication";
+  inspectOverlap?: typeof gatewayServiceCommandOverlapsPhysicalInstallation;
 }): Promise<void> {
   params.assertCurrent();
   const serving = params.selected;
   const servingVerdict = serving?.serviceUpdateVerdict;
+  if (params.updateInstallKind === "package" && servingVerdict?.kind === "unavailable") {
+    await assertUnavailableGatewayPackageConsumerStopped({ ...params, verdict: servingVerdict });
+  }
   if (
     (params.phase !== "before-stop" || !params.shouldRestart) &&
     params.updateInstallKind === "git" &&
@@ -92,12 +164,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
   }
-  const bindings = await discoverManagedGatewayBindings(params.env).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return [];
-  });
+  const bindings = await discoverManagedGatewayBindings(params.env);
   params.assertCurrent();
   const readBinding = async (binding: ManagedGatewayBinding) => {
     const state = await readManagedGatewayBindingState(binding, {
@@ -126,6 +193,15 @@ export async function assertManagedGatewayArtifactPublication(params: {
       return false;
     }
     let observed = state;
+    if (process.platform === "linux") {
+      observed = {
+        ...state,
+        env: mergeGatewayServiceEnv(
+          { ...state.env, OPENCLAW_PROFILE: before.serviceEnv.OPENCLAW_PROFILE },
+          state.command,
+        ),
+      };
+    }
     if (process.platform === "darwin") {
       if (
         !state.launchAgent ||
@@ -150,7 +226,6 @@ export async function assertManagedGatewayArtifactPublication(params: {
     if (startupEntry !== undefined) {
       // Only the selected Task's proven absence can select its Startup fallback.
       selectedState ??= await readBinding({
-        profile: before.serviceEnv.OPENCLAW_PROFILE ?? "default",
         env: before.serviceEnv,
       });
       const normalize = (value: string) => path.win32.normalize(value).toLowerCase();
@@ -198,14 +273,14 @@ export async function assertManagedGatewayArtifactPublication(params: {
       continue;
     }
     for (const root of params.roots) {
-      const overlaps = await gatewayServiceCommandOverlapsPhysicalInstallation(root, state.command);
+      const overlaps = await (
+        params.inspectOverlap ?? gatewayServiceCommandOverlapsPhysicalInstallation
+      )(root, state.command);
       params.assertCurrent();
       if (overlaps !== true || (await selectedConsumer(binding, state))) {
         continue;
       }
-      const owner = state.launchAgent
-        ? `launchd job ${JSON.stringify(state.launchAgent.target)} loaded from ${JSON.stringify(state.launchAgent.sourcePath)}`
-        : `profile ${binding.profile}${binding.windowsStartupEntry ? `, Startup entry ${JSON.stringify(binding.windowsStartupEntry)}` : ""}`;
+      const owner = describeManagedGatewayBinding(binding, state);
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
         `Cannot replace ${root}: another managed Gateway (${owner}) is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.`,
@@ -218,17 +293,28 @@ export async function assertManagedGatewayArtifactPublication(params: {
 export async function revalidateManagedGatewayServiceAfterUpdate(params: {
   state: GatewayServiceState;
   root: string;
-  preManagedServiceStop?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  >;
+  preManagedServiceStop?: ManagedGatewayServiceObservation;
   allowInstallRootChange?: boolean;
   /** Restoration still rejects observed identity drift when a native probe fails. */
   allowIncompleteInspection?: boolean;
+  /** Exact native-writer result from this maintenance session, never a saved grant. */
+  expectedDefinitionFingerprint?: string;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const before = params.preManagedServiceStop;
   const verdict = before?.serviceUpdateVerdict;
   assertGatewayServiceManagementAllowedForUpdate(params.state.env);
+  if (
+    params.expectedDefinitionFingerprint !== undefined &&
+    (await fingerprintGatewayServiceDefinition(params.state.command)) !==
+      params.expectedDefinitionFingerprint
+  ) {
+    throw new GatewayServiceUpdateOwnershipError(
+      "Gateway service definition changed after its recorded repair; inspect it before restarting.",
+      undefined,
+      undefined,
+      "service-ownership-changed",
+    );
+  }
   const managerUid = observedSystemdManagerUid(params.state);
   if (
     params.allowIncompleteInspection &&
@@ -283,17 +369,31 @@ export async function revalidateManagedGatewayServiceAfterUpdate(params: {
     (verdict.kind === "owned" || verdict.kind === "unresolved") &&
     !(params.allowIncompleteInspection && inspection.kind === "unavailable") &&
     (inspection.kind !== verdict.kind ||
-      !matchesStoppedService(before, params.state, inspection, params.allowIncompleteInspection))
+      !matchesStoppedService(
+        before,
+        params.state,
+        inspection,
+        params.allowIncompleteInspection,
+        params.expectedDefinitionFingerprint !== undefined,
+      ))
   ) {
+    const unavailable = inspection.kind === "unavailable";
     throw new GatewayServiceUpdateOwnershipError(
-      inspection.kind === "unavailable"
-        ? params.state.runtime?.inspectionFailure?.timeoutMs !== undefined
-          ? inspection.message
-          : "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
-        : "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+      createUpdatePreflightDiagnostics({
+        check: unavailable ? "managed-service-runtime" : "managed-service-ownership",
+        code:
+          inspection.kind === "unavailable"
+            ? (inspection.inspectionReason ?? "service-ownership-unverified")
+            : "service-ownership-changed",
+        required: `admitted service ownership ${verdict.kind}; manager UID ${before.serviceManagerUid ?? "unavailable"}`,
+        detected: `${inspection.kind}; runtime ${params.state.runtime?.status ?? "unavailable"}; manager UID ${managerUid ?? "unavailable"}`,
+        installRoot: await tryRealpathOrResolve(params.root),
+        binaryPath: path.join(params.root, "openclaw.mjs"),
+        gatewayInstall: (await summarizeGatewayServiceLayout(params.state.command))
+          ?.packageRootReal,
+        remedy: `${unavailable ? (inspection.inspectionReason || params.state.runtime?.inspectionFailure?.timeoutMs !== undefined ? inspection.message : GATEWAY_SERVICE_INSPECTION_WARNING) : "Gateway service ownership or manager identity changed."} Run openclaw gateway status --deep and retry through the owning installation.`,
+      }),
       undefined,
-      inspection.kind === "unavailable" ? inspection.inspectionReason : undefined,
-      inspection.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   return inspection.kind === "owned" && verdict?.kind === "owned" && !verdict.refreshDefinition

@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
+import { decodeNodeInvokeParams as decodeRequest } from "../node-host/invoke-payload.js";
 import { parseWorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WorkerGatewayNamespace,
@@ -125,17 +126,6 @@ function parseRequest<T>(schema: z.ZodType<T>, value: unknown, operation: string
   return parsed.data;
 }
 
-function decodeRequest(raw?: string | null): unknown {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
-
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
   return validateNodeWorkerLaunchInput(decodeRequest(raw));
 }
@@ -185,18 +175,16 @@ export function nodeWorkerPlanHash(
     | "idleRetention"
   >,
 ): string {
-  return createHash("sha256")
-    .update(
-      stableStringify({
-        expectedBundleHash: input.expectedBundleHash,
-        descriptor: input.descriptor,
-        gatewayNamespace: input.gatewayNamespace,
-        placementGeneration: input.placementGeneration,
-        ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
-        ...(input.idleRetention ? { idleRetention: true } : {}),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    stableStringify({
+      expectedBundleHash: input.expectedBundleHash,
+      descriptor: input.descriptor,
+      gatewayNamespace: input.gatewayNamespace,
+      placementGeneration: input.placementGeneration,
+      ...(input.sessionKey === undefined ? {} : { sessionKey: input.sessionKey }),
+      ...(input.idleRetention ? { idleRetention: true } : {}),
+    }),
+  );
 }
 
 function isBoundedResultJson(value: unknown): value is string {
@@ -207,11 +195,7 @@ function isBoundedResultJson(value: unknown): value is string {
   ) {
     return false;
   }
-  try {
-    return isRecord(JSON.parse(value) as unknown);
-  } catch {
-    return false;
-  }
+  return safeParseJsonRecord(value) !== undefined;
 }
 
 function isBoundedErrorText(value: unknown): value is string {

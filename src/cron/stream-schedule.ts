@@ -1,6 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
-import type { CronPayload, CronSchedule } from "./types.js";
+import {
+  parseCronStreamSandboxTarget,
+  type CronStreamSandboxTarget,
+} from "./stream-sandbox-target.js";
+import type { CronPayload, CronSchedule, CronStoredJob } from "./types.js";
 
 // Default, minimum, and maximum are shared by normalization and runtime reads.
 const CRON_STREAM_BATCHING_BOUNDS = {
@@ -11,9 +14,33 @@ const CRON_STREAM_TRUNCATED_MARKER = "[truncated]";
 
 export type CronStreamSchedule = Extract<CronSchedule, { kind: "stream" }>;
 
-/** Opaque identity for one logical stream source across child-process restarts. */
-export function createCronStreamSourceIdentity(): string {
-  return randomUUID();
+/** A committed identity is a result fact; later writes still require the normal source checks. */
+export class CronStreamSourceRetirementError extends Error {
+  constructor(
+    readonly retirement: {
+      jobId: string;
+      scheduleKey: string;
+      previousIdentity: string;
+      identity: string;
+    },
+    cause: unknown,
+  ) {
+    super("Cron stream source retirement committed before the operation failed", { cause });
+    this.name = "CronStreamSourceRetirementError";
+  }
+}
+
+/** One logical source owns both process admission and output delivery. */
+export function ownsStreamSource(
+  job: CronStoredJob,
+  scheduleKey: string,
+  sourceIdentity: string,
+): boolean {
+  return (
+    job.schedule.kind === "stream" &&
+    cronStreamScheduleKey(job.schedule, job.streamSandbox) === scheduleKey &&
+    job.state.streamSourceIdentity === sourceIdentity
+  );
 }
 
 function clampInteger(
@@ -41,8 +68,15 @@ export function resolveCronStreamBatching(schedule: CronStreamSchedule): {
 }
 
 /** Stable key for the source definition, with omitted defaults resolved. */
-export function cronStreamScheduleKey(schedule: CronStreamSchedule): string {
+export function cronStreamScheduleKey(
+  schedule: CronStreamSchedule,
+  sandbox?: CronStreamSandboxTarget,
+): string {
   const batching = resolveCronStreamBatching(schedule);
+  const streamSandbox = parseCronStreamSandboxTarget(sandbox);
+  if (sandbox !== undefined && !streamSandbox) {
+    throw new Error("Invalid sandbox stream target");
+  }
   return JSON.stringify({
     command: schedule.command,
     cwd: schedule.cwd,
@@ -50,6 +84,7 @@ export function cronStreamScheduleKey(schedule: CronStreamSchedule): string {
     match: schedule.match,
     batchMs: batching.batchMs,
     maxBatchBytes: batching.maxBatchBytes,
+    ...(streamSandbox ? { streamSandbox } : {}),
   });
 }
 

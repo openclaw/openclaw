@@ -1,8 +1,11 @@
 import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  createLazyRuntimeModule,
+  createLazyRuntimeSurface,
+} from "openclaw/plugin-sdk/lazy-runtime";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   warn,
   computeBackoff,
@@ -24,7 +27,7 @@ import {
 } from "../client-options.js";
 import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
 import { formatSlackError } from "../errors.js";
-import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { normalizeSlackWebhookPath } from "../http/paths.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
 import { setSlackDefaultSendIdentity } from "../send.js";
 import {
@@ -44,7 +47,7 @@ import {
   type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
-import { createSlackHttpRequestHandler } from "./http-handler.js";
+import { createSlackHttpRequestHandler, registerSlackHttpHandler } from "./http-handler.js";
 import { createSlackDurableIngress } from "./ingress.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { openSlackPresenceCooldownStore } from "./presence-cooldown-store.js";
@@ -61,7 +64,6 @@ import {
   publishSlackDisconnectedStatus,
   resolveSlackBoltInterop,
   startSlackSocketAndWaitForDisconnect,
-  type SlackBoltResolvedExports,
 } from "./provider-support.js";
 import {
   formatSlackSocketModeSharedConnectionWarning,
@@ -73,7 +75,10 @@ import { resolveSlackMonitorPolicy } from "./runtime-policy.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-let slackBoltInterop: SlackBoltResolvedExports | undefined;
+const getSlackBoltInterop = createLazyRuntimeSurface(
+  () => import("@slack/bolt"),
+  resolveSlackBoltInterop,
+);
 
 function withSlackPresenceLifecycleSignal(
   fetchImpl: FetchFunction,
@@ -84,17 +89,6 @@ function withSlackPresenceLifecycleSignal(
       ...init,
       signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
     });
-}
-
-async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
-  if (!slackBoltInterop) {
-    const slackBoltModule = await import("@slack/bolt");
-    slackBoltInterop = resolveSlackBoltInterop({
-      defaultImport: slackBoltModule.default,
-      namespaceImport: slackBoltModule,
-    });
-  }
-  return slackBoltInterop;
 }
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
@@ -215,8 +209,9 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
   };
 }
 
-export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
-  const cfg = opts.config ?? getRuntimeConfig();
+export async function monitorSlackProvider(opts: MonitorSlackOpts) {
+  const { scheduler } = opts;
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const account = resolveSlackAccount({
@@ -294,7 +289,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
   const monitorContextRef: { current?: SlackMonitorContext } = {};
-  const { app, receiver, socketModeLogger } = createSlackBoltApp({
+  const { app, receiver, socketClient, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
     token,
@@ -368,15 +363,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         })
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
-  const unregisterSocketModeConnectionDiagnostics =
-    slackMode === "socket"
-      ? registerSlackSocketModeConnectionDiagnostics({
-          app,
-          onSharedConnection: (activeConnections) => {
-            runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
-          },
-        })
-      : () => {};
+  const unregisterSocketModeConnectionDiagnostics = socketClient
+    ? registerSlackSocketModeConnectionDiagnostics({
+        client: socketClient,
+        onSharedConnection: (activeConnections) => {
+          runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
+        },
+      })
+    : () => {};
 
   let botUserId = "";
   let botId = "";
@@ -445,7 +439,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
           `${identityFailureDetail}; ` +
-          "required-mention channels will fail closed without another trusted activation signal",
+          "required-mention channels will ignore messages without another trusted activation signal",
       ),
     );
   }
@@ -501,15 +495,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   let presenceRequestAbort: AbortController | undefined;
   let presenceMonitor: ReturnType<typeof createSlackPresenceMonitor> | undefined;
-  let presenceMonitorStarted = false;
   let runtimeStarted = false;
-  const startPresenceMonitor = () => {
-    if (!presenceMonitor || presenceMonitorStarted) {
-      return;
-    }
-    presenceMonitor.start();
-    presenceMonitorStarted = true;
-  };
   const installSlackPresenceRuntime = (identity: SlackInstallationIdentity) => {
     if (
       !presenceEventsEnabled ||
@@ -535,6 +521,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       installationIdentity: identity,
     });
     presenceMonitor = createSlackPresenceMonitor({
+      scheduler,
       accountId: account.accountId,
       accountConfig: slackCfg.presenceEvents,
       resolveClient: (workspaceTeamId) => resolveClient(workspaceTeamId).users,
@@ -543,7 +530,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       error: runtime.error,
     });
     if (runtimeStarted) {
-      startPresenceMonitor();
+      presenceMonitor.start();
     }
   };
   const handleSlackMessage = createSlackMessageHandler({
@@ -563,10 +550,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   let workspaceRuntimePromise: Promise<void> | undefined;
   const installSlackWorkspaceRuntime = async () => {
-    if (workspaceRuntimePromise) {
-      return await workspaceRuntimePromise;
-    }
-    workspaceRuntimePromise = (async () => {
+    workspaceRuntimePromise ??= (async () => {
       registerSlackWorkspaceEvents({
         ctx,
         appHomeSlashCommandName,
@@ -574,7 +558,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
       void ctx.readRuntimeContext();
       if (runtimeStarted) {
-        startPresenceMonitor();
+        presenceMonitor?.start();
       }
     })();
     return await workspaceRuntimePromise;
@@ -669,7 +653,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
-      void gracefulStopSlackApp(app);
+      void gracefulStopSlackApp(app, socketClient);
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -683,7 +667,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     await installSlackRuntimeForIdentity(installationIdentity);
     durableIngress.start();
     runtimeStarted = true;
-    startPresenceMonitor();
+    presenceMonitor?.start();
     if (slackMode === "http" && slackHttpHandler) {
       unregisterHttpHandler = registerSlackHttpHandler({
         path: slackWebhookPath,
@@ -694,13 +678,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
     }
 
-    if (slackMode === "socket") {
+    if (socketClient) {
       let reconnectAttempts = 0;
       let hasLoggedSocketConnected = false;
       while (!opts.abortSignal?.aborted) {
+        let delayMs: number;
         try {
           const disconnect = await startSlackSocketAndWaitForDisconnect({
             app,
+            socketClient,
             abortSignal: opts.abortSignal,
             onStarted: async () => {
               reconnectAttempts = 0;
@@ -736,7 +722,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
 
           reconnectAttempts += 1;
-          const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
+          delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.log?.(
             warn(
               formatSlackSocketReconnectMessage({
@@ -747,12 +733,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               }),
             ),
           );
-          await gracefulStopSlackApp(app);
-          try {
-            await sleepWithAbort(delayMs, opts.abortSignal);
-          } catch {
-            break;
-          }
+          await gracefulStopSlackApp(app, socketClient);
         } catch (err) {
           if (isNonRecoverableSlackAuthError(err)) {
             publishSlackBlockedStatus(opts.setStatus, err);
@@ -763,7 +744,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
           publishSlackDisconnectedStatus(opts.setStatus, err);
           reconnectAttempts += 1;
-          const delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
+          delayMs = computeBackoff(SLACK_SOCKET_RECONNECT_POLICY, reconnectAttempts);
           runtime.error?.(
             formatSlackSocketStartRetryMessage({
               attempt: reconnectAttempts,
@@ -772,12 +753,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               sdkContext: socketModeLogger.getLastMessage(),
             }),
           );
-          try {
-            await sleepWithAbort(delayMs, opts.abortSignal);
-          } catch {
-            break;
-          }
-          continue;
+        }
+        try {
+          await sleepWithAbort(delayMs, opts.abortSignal);
+        } catch {
+          break;
         }
       }
     } else if (slackMode === "relay" && relayConfig) {
@@ -819,7 +799,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
     await durableIngress.stop();
-    await gracefulStopSlackApp(app);
+    await gracefulStopSlackApp(app, socketClient);
     await slackDispatchers.close();
   }
 }
@@ -834,8 +814,7 @@ function createSlackWorkspaceClientResolver(params: {
     return () => params.appClient;
   }
   const clients = new Map<string, WebClient>();
-  return (rawTeamId?: string) => {
-    const teamId = rawTeamId;
+  return (teamId?: string) => {
     if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
       throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
     }

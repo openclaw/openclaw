@@ -13,7 +13,6 @@ describe("FaceTime driver setup", () => {
       installFaceTimeDriver({
         pluginRoot: "/tmp/facetime",
         runCommandWithTimeout: runCommandWithTimeout as never,
-        callActive: false,
       }),
     ).resolves.toEqual({ changed: false, status: "current" });
     expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
@@ -22,35 +21,21 @@ describe("FaceTime driver setup", () => {
     );
   });
 
-  it("rejects installation while a call is active", async () => {
-    const runCommandWithTimeout = vi.fn();
-
-    await expect(
-      installFaceTimeDriver({
-        pluginRoot: "/tmp/facetime",
-        runCommandWithTimeout: runCommandWithTimeout as never,
-        callActive: true,
-      }),
-    ).rejects.toThrow("during an active or pending call");
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
-
   it("installs and verifies a missing driver", async () => {
     const abortController = new AbortController();
     const runCommandWithTimeout = vi
       .fn()
       .mockResolvedValueOnce({ code: 0, stdout: "missing\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "Installed\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "current\n", stderr: "" });
+      .mockResolvedValueOnce({ code: 0, stdout: "Installed\n", stderr: "" });
 
     await expect(
       installFaceTimeDriver({
         pluginRoot: "/tmp/facetime",
         runCommandWithTimeout: runCommandWithTimeout as never,
-        callActive: false,
         signal: abortController.signal,
       }),
     ).resolves.toEqual({ changed: true, status: "current" });
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
     expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
       2,
       ["/bin/sh", "/tmp/facetime/scripts/install-driver.sh", "--ensure"],

@@ -7,7 +7,7 @@ title: "Date and time"
 ---
 
 OpenClaw uses the configured **user timezone** for message envelopes, system events, and
-the system prompt. When `agents.defaults.userTimezone` is unset, those surfaces use the
+per-turn runtime context. When `agents.defaults.userTimezone` is unset, those surfaces use the
 host timezone. Provider timestamps are preserved so tools keep their native semantics.
 When the agent needs the exact current time and `session_status` is available, it runs that tool.
 
@@ -42,10 +42,12 @@ host timezone. Absolute timestamps and elapsed-time suffixes are built in.
 [WhatsApp +1555 +30s Sun 2026-01-18 00:20:12 CST] follow-up
 ```
 
-## System prompt: temporal context
+<a id="system-prompt-temporal-context" />
 
-The system prompt includes a volatile **Temporal Context** section with the local calendar date
-and time zone, but no live clock:
+## Runtime context: date and time zone
+
+Each turn receives a **Temporal Context** section with the local calendar date and time zone,
+outside the system prompt and without a live clock:
 
 ```
 Current date: 2026-01-05
@@ -53,8 +55,12 @@ Time zone: America/Chicago
 ```
 
 The zone is `agents.defaults.userTimezone` when configured, otherwise the host timezone.
-The section lives below the prompt-cache boundary, so date rollover and timezone changes do not
-invalidate the stable prefix. When available, `session_status` remains the source for exact current time.
+The section travels in the current-turn runtime context without rewriting earlier messages, so
+date rollover preserves the complete system prompt and conversation-history prefix for caching.
+Chat Completions and native Ollama retain the hidden turn context in history by default; an
+explicit provider replay policy can override that behavior. Normal compaction budgets still apply.
+Raw model probes omit OpenClaw runtime context. When available, `session_status` remains the source
+for exact current time.
 
 ## System event lines (local by default)
 

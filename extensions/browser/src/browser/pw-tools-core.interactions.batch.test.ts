@@ -1,5 +1,7 @@
+import { EventEmitter } from "node:events";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BrowserActRequest } from "./client-actions.types.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
@@ -9,7 +11,7 @@ import { isPolicyDenyNavigationError } from "./pw-session-navigation.js";
 function createPage() {
   let currentUrl = "https://example.com";
   let closed = false;
-  const frames = new Set<(frame: unknown) => void>();
+  const events = new EventEmitter();
   const mainFrame = { url: () => currentUrl };
   return {
     page: {
@@ -18,23 +20,13 @@ function createPage() {
       keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async () => {}) },
       mainFrame: vi.fn(() => mainFrame),
       mouse: { click: vi.fn(async () => {}) },
-      on: vi.fn((event: string, handler: (frame: unknown) => void) => {
-        if (event === "framenavigated") {
-          frames.add(handler);
-        }
-      }),
-      off: vi.fn((event: string, handler: (frame: unknown) => void) => {
-        if (event === "framenavigated") {
-          frames.delete(handler);
-        }
-      }),
+      on: vi.fn(events.on.bind(events)),
+      off: vi.fn(events.off.bind(events)),
       url: vi.fn(() => currentUrl),
     },
     setPageUrl: (url: string) => {
       currentUrl = url;
-      for (const handler of frames) {
-        handler(mainFrame);
-      }
+      events.emit("framenavigated", mainFrame);
     },
     setPageClosed: (value: boolean) => {
       closed = value;
@@ -53,41 +45,37 @@ const locator = {
   setChecked: vi.fn(async () => {}),
 };
 
-const getPageForTargetId = vi.fn(async () => page);
-const ensurePageState = vi.fn(() => {});
-const assertPageNavigationCompletedSafely = vi.fn(async () => {});
-const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
-const quarantineBlockedNavigationTarget = vi.fn(async () => {});
-const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
-const refLocator = vi.fn(() => locator);
-const restoreRoleRefsForTarget = vi.fn(() => {});
-const wasBrowserNavigationSourcePreservedAfterPolicyDenial = vi.fn(() => false);
-const withPageNavigationRequestGuard = vi.fn(
-  async ({
-    action,
-    page: actionPage,
-  }: {
-    action: (url: string) => Promise<unknown>;
-    page: { url: () => string };
-  }) => await action(actionPage.url()),
-);
+const session = await vi.hoisted(async () => {
+  const { createGuardSession } = await import("./pw-tools-core.guard-test-support.js");
+  return createGuardSession(
+    () => page,
+    () => locator,
+  );
+});
+const { assertPageNavigationCompletedSafely, withPageNavigationRequestGuard } = session;
 
 const closePageViaPlaywright = vi.fn(async () => {});
 const resizeViewportViaPlaywright = vi.fn(async () => {});
+const drainDownloads = vi.fn(async () => undefined);
+const disposeDownloads = vi.fn();
+const cleanupDialogAbort = vi.fn();
 
+// mock-isolation: Exercise synthetic page actions without connecting to a live browser session.
 vi.mock("./pw-session.js", () => ({
-  assertPageNavigationCompletedSafely,
-  ensurePageState,
-  forceDisconnectPlaywrightForTarget,
-  getPageForTargetId,
+  ...session,
+  beginActionDownloadCaptureOnPage: vi.fn(() => ({
+    drain: drainDownloads,
+    dispose: disposeDownloads,
+  })),
+  createObservedDialogAbortSignalForPage: vi.fn(
+    ({ parentSignal }: { parentSignal?: AbortSignal }) => ({
+      signal: parentSignal ?? new AbortController().signal,
+      cleanup: cleanupDialogAbort,
+    }),
+  ),
+  ensurePageState: vi.fn(() => {}),
   isBrowserObservedDialogBlockedError,
   isPolicyDenyNavigationError,
-  markObservedDialogsHandledRemotelyForPage,
-  quarantineBlockedNavigationTarget,
-  refLocator,
-  restoreRoleRefsForTarget,
-  wasBrowserNavigationSourcePreservedAfterPolicyDenial,
-  withPageNavigationRequestGuard,
 }));
 
 vi.mock("./pw-tools-core.snapshot.js", () => ({
@@ -95,15 +83,51 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
   resizeViewportViaPlaywright,
 }));
 
-const { batchViaPlaywright } = await import("./pw-tools-core.interactions.js");
+vi.mock("./pw-session-connection.js", () => ({
+  pageTargetInfo: vi.fn(async () => ({ targetId: "tab-1" })),
+}));
+
+const { executeActViaPlaywright } = await import("./pw-tools-core.interactions.execution.js");
 
 const target = { cdpUrl: "http://127.0.0.1:9222", targetId: "tab-1" };
-
-function batch(options: Omit<Parameters<typeof batchViaPlaywright>[0], "cdpUrl">) {
-  return batchViaPlaywright({ ...target, ...options });
+const click = { kind: "click", ref: "1" } as const;
+const hover = { kind: "hover", ref: "2" } as const;
+const type = { kind: "type", ref: "1", text: "value" } as const;
+const press = { kind: "press", key: "Enter" } as const;
+const proxyPolicy = {
+  ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+  browserProxyMode: "explicit-browser-proxy",
+} as const;
+function nested(actions: BrowserActRequest[]): BrowserActRequest {
+  return { kind: "batch", actions, stopOnError: false };
+}
+function expectProxyGuard() {
+  expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
+    action: expect.any(Function),
+    onPolicyCheckStarted: expect.any(Function),
+    onPolicyDenied: expect.any(Function),
+    page,
+    ...proxyPolicy,
+  });
 }
 
-describe("batchViaPlaywright", () => {
+function batch(
+  actions: BrowserActRequest[],
+  {
+    stopOnError,
+    ...options
+  }: Omit<Parameters<typeof executeActViaPlaywright>[0], "cdpUrl" | "action"> & {
+    stopOnError?: boolean;
+  } = {},
+) {
+  return executeActViaPlaywright({
+    ...target,
+    ...options,
+    action: { kind: "batch", actions, stopOnError },
+  });
+}
+
+describe("executeActViaPlaywright batches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ({ page, setPageUrl, setPageClosed } = createPage());
@@ -113,12 +137,16 @@ describe("batchViaPlaywright", () => {
     closePageViaPlaywright.mockImplementation(async () => setPageClosed(true));
   });
 
+  afterEach(() => {
+    expect(drainDownloads).toHaveBeenCalledOnce();
+    expect(disposeDownloads).toHaveBeenCalledOnce();
+    expect(cleanupDialogAbort).toHaveBeenCalledOnce();
+  });
+
   it("does not expose pasted text when native insertion fails", async () => {
     const text = "synthetic-password-paste";
     page.keyboard.insertText.mockRejectedValueOnce(new Error(`Insert "${text}" failed`));
-    const result = await batch({
-      actions: [{ kind: "insertText", text }],
-    });
+    const result = await batch([{ kind: "insertText", text }]);
     expect(result.results).toEqual([
       {
         ok: false,
@@ -127,31 +155,6 @@ describe("batchViaPlaywright", () => {
     ]);
     expect(page.keyboard.insertText).toHaveBeenCalledWith(text);
     expect(JSON.stringify(result)).not.toContain(text);
-  });
-
-  it("aborts remaining actions after a same-URL reload", async () => {
-    locator.click.mockImplementationOnce(async () => {
-      setPageUrl("https://example.com");
-    });
-
-    const result = await batch({
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-      ],
-    });
-
-    expect(result).toEqual({
-      results: [{ ok: true, navigated: true, url: "https://example.com" }],
-      aborted: {
-        reason: "navigation",
-        afterAction: 1,
-        url: "https://example.com",
-        skipped: 1,
-      },
-    });
-    expect(locator.hover).not.toHaveBeenCalled();
-    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
   });
 
   it("aborts when a navigation commits after an action settles but before the next dispatch", async () => {
@@ -164,14 +167,10 @@ describe("batchViaPlaywright", () => {
       return false;
     });
 
-    const result = await batch({
-      actions: [
-        { kind: "click", ref: "1" },
-        { kind: "hover", ref: "2" },
-      ],
-    });
+    const result = await batch([click, hover]);
 
     expect(result).toEqual({
+      targetId: "tab-1",
       results: [{ ok: true, navigated: true, url: "https://example.com/late" }],
       aborted: {
         reason: "navigation",
@@ -184,221 +183,98 @@ describe("batchViaPlaywright", () => {
   });
 
   it("supports resize and close inside a batch", async () => {
-    const result = await batch({
-      actions: [{ kind: "resize", width: 800, height: 600 }, { kind: "close" }],
-    });
+    const result = await batch([{ kind: "resize", width: 800, height: 600 }, { kind: "close" }]);
 
-    expect(result).toEqual({ results: [{ ok: true }, { ok: true }] });
+    expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }, { ok: true }] });
     expect(resizeViewportViaPlaywright).toHaveBeenCalledWith({
       ...target,
       width: 800,
       height: 600,
+      signal: expect.any(AbortSignal),
     });
     expect(closePageViaPlaywright).toHaveBeenCalledWith(target);
   });
 
   it.each([
-    { name: "scrollIntoView", action: { kind: "scrollIntoView", ref: "1" } as const },
-    { name: "drag", action: { kind: "drag", startRef: "1", endRef: "2" } as const },
-    { name: "clickCoords", action: { kind: "clickCoords", x: 10, y: 20 } as const },
-    { name: "insertText", action: { kind: "insertText", text: "  pasted 🦞\n" } as const },
-    {
-      name: "select",
-      action: { kind: "select" as const, ref: "1", values: ["one"] },
-    },
-    {
-      name: "fill",
-      action: {
-        kind: "fill" as const,
-        fields: [{ ref: "1", type: "text", value: "value" }],
-      },
-    },
-    { name: "evaluate", action: { kind: "evaluate", fn: "() => true" } as const },
-  ])("guards batched $name document requests with the proxy policy", async ({ action }) => {
-    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
+    { kind: "scrollIntoView", ref: "1" },
+    { kind: "drag", startRef: "1", endRef: "2" },
+    { kind: "clickCoords", x: 10, y: 20 },
+    { kind: "insertText", text: "  pasted 🦞\n" },
+    { kind: "select", ref: "1", values: ["one"] },
+    { kind: "fill", fields: [{ ref: "1", type: "text", value: "value" }] },
+    { kind: "evaluate", fn: "() => true" },
+    { kind: "batch", actions: [click] },
+  ] satisfies BrowserActRequest[])(
+    "guards batched $kind document requests with the proxy policy",
+    async (action) => {
+      const result = await batch([action], {
+        evaluateEnabled: true,
+        ...proxyPolicy,
+      });
 
-    const result = await batch({
-      actions: [action],
-      evaluateEnabled: true,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
+      expect(result).toEqual({ targetId: "tab-1", results: [{ ok: true }] });
+      expectProxyGuard();
+      expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
+        ...target,
+        page,
+        response: null,
+        ...proxyPolicy,
+      });
+    },
+  );
 
-    expect(result).toEqual({ results: [{ ok: true }] });
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      action: expect.any(Function),
-      onPolicyCheckStarted: expect.any(Function),
-      onPolicyDenied: expect.any(Function),
-      page,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-    expect(assertPageNavigationCompletedSafely).toHaveBeenLastCalledWith({
-      ...target,
-      page,
-      response: null,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
+  it.each([false, true])("reports the first nested failure (multiple=%s)", async (multiple) => {
+    const error = multiple ? "first failure" : "not editable";
+    locator.fill.mockRejectedValueOnce(new Error(error));
+    if (multiple) {
+      locator.hover.mockRejectedValueOnce(new Error("second failure"));
+    }
+    const actions = nested([type, hover, ...(multiple ? [{ ...press, delayMs: 0 }] : [])]);
+    const result = await batch([actions, ...(!multiple ? [press] : [])]);
+    expect(result).toEqual({
       targetId: "tab-1",
+      results: [{ ok: false, error }],
     });
-  });
-
-  it("preserves proxy policy through nested batches", async () => {
-    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
-
-    const result = await batch({
-      actions: [
-        {
-          kind: "batch",
-          actions: [{ kind: "click", ref: "1" }],
-        },
-      ],
-      evaluateEnabled: true,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }] });
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      action: expect.any(Function),
-      onPolicyCheckStarted: expect.any(Function),
-      onPolicyDenied: expect.any(Function),
-      page,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-  });
-
-  it.each([
-    { innerStopOnError: false, outerStopOnError: undefined },
-    { innerStopOnError: undefined, outerStopOnError: false },
-  ])(
-    "reports nested failure with inner stop=$innerStopOnError and outer stop=$outerStopOnError",
-    async ({ innerStopOnError, outerStopOnError }) => {
-      locator.fill.mockRejectedValueOnce(new Error("not editable"));
-
-      const result = await batch({
-        targetId: "tab-1",
-        stopOnError: outerStopOnError,
-        actions: [
-          {
-            kind: "batch",
-            stopOnError: innerStopOnError,
-            actions: [
-              { kind: "type", ref: "1", text: "value" },
-              { kind: "hover", ref: "2" },
-            ],
-          },
-          { kind: "press", key: "Enter" },
-        ],
-      });
-
-      expect(result.results).toEqual([
-        { ok: false, error: "not editable" },
-        ...(outerStopOnError === false ? [{ ok: true }] : []),
-      ]);
-      expect(locator.hover).toHaveBeenCalledTimes(innerStopOnError === false ? 1 : 0);
-      expect(page.keyboard.press).toHaveBeenCalledTimes(outerStopOnError === false ? 1 : 0);
-    },
-  );
-
-  it("reports the first nested failure after all continue-on-error actions run", async () => {
-    locator.fill.mockRejectedValueOnce(new Error("first failure"));
-    locator.hover.mockRejectedValueOnce(new Error("second failure"));
-
-    const result = await batch({
-      actions: [
-        {
-          kind: "batch",
-          stopOnError: false,
-          actions: [
-            { kind: "type", ref: "1", text: "value" },
-            { kind: "hover", ref: "2" },
-            { kind: "press", key: "Enter" },
-          ],
-        },
-      ],
-    });
-
-    expect(result).toEqual({ results: [{ ok: false, error: "first failure" }] });
     expect(locator.hover).toHaveBeenCalledOnce();
-    expect(page.keyboard.press).toHaveBeenCalledOnce();
+    if (multiple) {
+      expect(page.keyboard.press).toHaveBeenCalledExactlyOnceWith("Enter", { delay: 0 });
+    } else {
+      expect(page.keyboard.press).not.toHaveBeenCalled();
+    }
   });
 
-  it.each([
-    { reason: "navigation", nested: false, stopOnError: false },
-    { reason: "closed", nested: true, stopOnError: undefined },
-  ])(
-    "preserves failure and $reason abort details (nested=$nested, stop=$stopOnError)",
-    async ({ reason, nested, stopOnError }) => {
-      locator.fill.mockRejectedValueOnce(new Error("action failed"));
-      locator.click.mockImplementationOnce(async () => {
-        if (reason === "navigation") {
-          setPageUrl("https://example.com/next");
-        } else {
-          setPageClosed(true);
-        }
-        if (!nested) {
-          throw new Error("action failed");
-        }
-      });
-
-      const result = await batch({
-        stopOnError,
-        actions: [
-          nested
-            ? {
-                kind: "batch",
-                stopOnError: false,
-                actions: [
-                  { kind: "type", ref: "1", text: "value" },
-                  { kind: "click", ref: "2" },
-                  { kind: "hover", ref: "3" },
-                ],
-              }
-            : { kind: "click", ref: "1" },
-          { kind: "press", key: "Enter" },
-        ],
-      });
-      const url = reason === "navigation" ? "https://example.com/next" : "https://example.com";
-
-      expect(result).toEqual({
-        results: [
-          {
-            ok: false,
-            error: "action failed",
-            ...(reason === "navigation" ? { navigated: true, url } : {}),
-          },
-        ],
-        aborted: { reason, afterAction: 1, url, skipped: 1 },
-      });
-      expect(locator.hover).not.toHaveBeenCalled();
-      expect(page.keyboard.press).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves failure and aborts after a same-URL reload", async () => {
+    locator.click.mockImplementationOnce(async () => {
+      setPageUrl("https://example.com");
+      throw new Error("action failed");
+    });
+    const result = await batch([click, press], { stopOnError: false });
+    expect(result).toEqual({
+      targetId: "tab-1",
+      results: [{ ok: false, error: "action failed", navigated: true, url: "https://example.com" }],
+      aborted: { reason: "navigation", afterAction: 1, url: "https://example.com", skipped: 1 },
+    });
+    expect(locator.hover).not.toHaveBeenCalled();
+    expect(page.keyboard.press).not.toHaveBeenCalled();
+    expect(page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+  });
 
   it.each([
     new SsrFBlockedError("browser navigation blocked by policy"),
     new BrowserObservedDialogBlockedError({ dialogs: { pending: [], recent: [] } }),
-  ])("preserves $name identity through permissive nested batches", async (error) => {
+  ])("stops permissive nested batches on $name", async (error) => {
     locator.fill.mockRejectedValueOnce(error);
 
-    await expect(
-      batch({
-        stopOnError: false,
-        actions: [
-          {
-            kind: "batch",
-            stopOnError: false,
-            actions: [
-              { kind: "type", ref: "1", text: "value" },
-              { kind: "hover", ref: "2" },
-            ],
-          },
-          { kind: "press", key: "Enter" },
-        ],
-      }),
-    ).rejects.toBe(error);
+    const result = batch([nested([type, hover]), press], { stopOnError: false });
+    if (error instanceof BrowserObservedDialogBlockedError) {
+      await expect(result).resolves.toEqual({
+        targetId: "tab-1",
+        blockedByDialog: true,
+        browserState: error.browserState,
+      });
+    } else {
+      await expect(result).rejects.toBe(error);
+    }
     expect(locator.hover).not.toHaveBeenCalled();
     expect(page.keyboard.press).not.toHaveBeenCalled();
   });

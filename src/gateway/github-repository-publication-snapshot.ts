@@ -194,6 +194,14 @@ export function parseGitHubRepositoryPublicationSnapshot(
   };
 }
 
+async function readPublicationFile(root: string, file: string) {
+  return (await fsRoot(root)).read(file, {
+    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    symlinks: "reject",
+    hardlinks: "reject",
+  });
+}
+
 export async function readGitHubRepositoryPublicationBlob(
   root: string,
   sha: string,
@@ -201,13 +209,7 @@ export async function readGitHubRepositoryPublicationBlob(
   if (!gitObjectPattern.test(sha)) {
     throw new Error("GitHub publication blob identity is invalid.");
   }
-  const { buffer: bytes } = await (
-    await fsRoot(root)
-  ).read("blobs/" + sha, {
-    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    symlinks: "reject",
-    hardlinks: "reject",
-  });
+  const { buffer: bytes } = await readPublicationFile(root, "blobs/" + sha);
   const actual = createHash("sha1")
     .update("blob " + bytes.length + "\0")
     .update(bytes)
@@ -219,13 +221,7 @@ export async function readGitHubRepositoryPublicationBlob(
 }
 
 export async function readGitHubRepositoryPublicationMetadata(root: string, digest: string) {
-  const { buffer } = await (
-    await fsRoot(root)
-  ).read("snapshot.json", {
-    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    symlinks: "reject",
-    hardlinks: "reject",
-  });
+  const { buffer } = await readPublicationFile(root, "snapshot.json");
   const raw = buffer.toString("utf8");
   return { raw, snapshot: parseGitHubRepositoryPublicationSnapshot(raw, digest) };
 }

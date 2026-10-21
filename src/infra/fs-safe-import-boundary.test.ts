@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
@@ -71,72 +71,54 @@ function walkSourceFiles(dir: string): string[] {
   return files;
 }
 
+function allow(surface: string, values: readonly string[], types?: readonly string[]) {
+  return { [`@openclaw/fs-safe/${surface}`]: { values, types } };
+}
+
 const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   string,
   Record<string, { values: readonly string[]; types?: readonly string[] }>
 > = {
-  "extensions/acpx/src/codex-auth-bridge.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/codex/src/app-server/computer-use-service-path.ts": {
-    "@openclaw/fs-safe/advanced": {
-      values: ["assertDirectoryIdentitySync", "readDirectoryIdentity"],
-      types: ["DirectoryIdentity"],
-    },
-  },
-  "extensions/codex/src/migration/helpers.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/cua-computer/src/driver-artifact-verification.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256FileSync"] },
-  },
-  "extensions/feishu/src/doctor.ts": {
-    "@openclaw/fs-safe/path": { values: ["safeStatSync"] },
-  },
-  "extensions/llama-cpp/src/llama-server-install.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
-  },
-  "extensions/qa-lab/src/lab-server-ui.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectorySync"] },
-  },
-  "extensions/qa-lab/src/mantis/run-cleanup.runtime.ts": {
-    "@openclaw/fs-safe/advanced": { values: ["sameFileIdentity", "withTimeout"] },
-  },
-  "extensions/qa-lab/src/scenario-catalog.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectorySync"] },
-  },
-  "extensions/migrate-claude/skills.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
-  "extensions/signal/src/install-signal-cli.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
+  "extensions/acpx/src/codex-auth-bridge.ts": allow("json", ["tryReadJson"]),
+  "extensions/codex/src/app-server/computer-use-service-path.ts": allow(
+    "advanced",
+    ["assertDirectoryIdentitySync", "readDirectoryIdentity"],
+    ["DirectoryIdentity"],
+  ),
+  "extensions/codex/src/migration/helpers.ts": allow("json", ["tryReadJson"]),
+  "extensions/cua-computer/src/driver-artifact-verification.ts": allow("durability", [
+    "sha256FileSync",
+  ]),
+  "extensions/feishu/src/doctor.ts": allow("path", ["safeStatSync"]),
+  "extensions/llama-cpp/src/llama-server-install.ts": allow("durability", ["sha256File"]),
+  "extensions/qa-lab/src/lab-server-ui.ts": allow("walk", ["walkDirectorySync"]),
+  "extensions/qa-lab/src/mantis/run-cleanup.runtime.ts": allow("advanced", [
+    "sameFileIdentity",
+    "withTimeout",
+  ]),
+  "extensions/qa-lab/src/scenario-catalog.ts": allow("walk", ["walkDirectorySync"]),
+  "extensions/migrate-claude/skills.ts": allow("walk", ["walkDirectory"]),
+  "extensions/signal/src/install-signal-cli.ts": allow("walk", ["walkDirectory"]),
   "extensions/openshell/src/backend.ts": {
-    "@openclaw/fs-safe/atomic": {
-      values: ["movePathWithCopyFallback"],
-      types: ["MovePathPublicationReceipt"],
-    },
-    "@openclaw/fs-safe/guest": { values: ["GUEST_FILESYSTEM_PYTHON"] },
+    ...allow("atomic", ["movePathWithCopyFallback"], ["MovePathPublicationReceipt"]),
+    ...allow("guest", ["GUEST_FILESYSTEM_PYTHON"]),
   },
   "extensions/matrix/src/matrix/state-layout-walk.ts": {
-    "@openclaw/fs-safe/path": { values: ["hasNodeErrorCode"] },
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+    ...allow("path", ["hasNodeErrorCode"]),
+    ...allow("walk", ["walkDirectory"]),
   },
-  "extensions/matrix/src/matrix/monitor/startup-verification.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/matrix/src/matrix/thread-bindings.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
-  "extensions/file-transfer/src/node-host/file-write.ts": {
-    "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
-  },
+  "extensions/matrix/src/matrix/monitor/startup-verification.ts": allow("json", ["tryReadJson"]),
+  "extensions/matrix/src/matrix/sdk/crypto-store-ownership.ts": allow("durability", [
+    "syncDirectory",
+  ]),
+  "extensions/matrix/src/matrix/thread-bindings.ts": allow("json", ["tryReadJson"]),
+  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": allow("walk", ["walkDirectory"]),
+  "extensions/file-transfer/src/node-host/file-write.ts": allow("advanced", [
+    "overwriteFileHandle",
+  ]),
   "extensions/file-transfer/src/tools/dir-fetch-tool.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+    ...allow("durability", ["sha256File"]),
+    ...allow("walk", ["walkDirectory"]),
   },
 };
 

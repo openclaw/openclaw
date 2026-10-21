@@ -95,17 +95,16 @@ const config = {
   },
 };
 
-async function run(command, args, options = {}) {
-  return await execFileAsync(command, args, {
+function run(command, args) {
+  return execFileAsync(command, args, {
     cwd: "/app",
     env: process.env,
     maxBuffer: 8 * 1024 * 1024,
-    ...options,
   });
 }
 
-async function docker(args, options) {
-  return await run("docker", args, options);
+function docker(args) {
+  return run("docker", args);
 }
 
 async function fileOwnership(filePath) {

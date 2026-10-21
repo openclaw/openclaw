@@ -4,6 +4,7 @@ import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { preloadSessionMessageSubscriptions } from "../../lib/sessions/session-scoped-operations.ts";
 
 function sessionLoaderDeps(
   face: BoardFace,
@@ -31,8 +32,11 @@ function sessionPage(face: BoardFace) {
     // static face route. Both locations describe the same loader match.
     loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
       sessionLoaderDeps(face, context, location),
-    loader: async (context: ApplicationContext, options) =>
-      (await import("./route-loader.ts")).loadSessionPage(context, face, options),
+    loader: async (context: ApplicationContext, options) => {
+      // Subscription acquisition owns errors and retries after this speculative load.
+      void preloadSessionMessageSubscriptions().catch(() => undefined);
+      return (await import("./route-loader.ts")).loadSessionPage(context, face, options);
+    },
     component: () => import("./route-entry.ts"),
   });
 }

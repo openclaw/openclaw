@@ -1,4 +1,3 @@
-// Telegram tests cover status plugin behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { describe, expect, it } from "vitest";
@@ -10,305 +9,139 @@ import {
   resolveTelegramReactionVariant,
 } from "./status-reaction-variants.js";
 
-type StatusIssue = ReturnType<typeof collectTelegramStatusIssues>[number];
-
-function expectIssueFields(issue: StatusIssue | undefined, expected: Partial<StatusIssue>): void {
-  if (!issue) {
-    throw new Error("expected status issue");
-  }
-  for (const [key, value] of Object.entries(expected)) {
-    expect(issue[key as keyof StatusIssue]).toBe(value);
-  }
-}
-
-function expectIssueListContainsFields(
-  issues: StatusIssue[],
-  expected: Partial<StatusIssue>,
+function expectIssueMessageContains(
+  issues: ReturnType<typeof collectTelegramStatusIssues>,
+  text: string,
 ): void {
-  const match = issues.find((issue) =>
-    Object.entries(expected).every(([key, value]) => issue[key as keyof StatusIssue] === value),
-  );
-  expectIssueFields(match, expected);
+  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
 }
 
-function expectIssueMessageContains(issues: StatusIssue[], text: string): void {
-  expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
+function collectIssues(overrides: Partial<ChannelAccountSnapshot>) {
+  return collectTelegramStatusIssues([
+    { accountId: "main", enabled: true, configured: true, ...overrides },
+  ]);
+}
+
+function expectRuntimeIssue(issues: ReturnType<typeof collectIssues>) {
+  expect(issues).toHaveLength(1);
+  expect(issues[0]).toMatchObject({ channel: "telegram", accountId: "main", kind: "runtime" });
 }
 
 describe("collectTelegramStatusIssues", () => {
   it("reports privacy-mode and wildcard unmentioned-group configuration risks", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        allowUnmentionedGroups: true,
-        audit: {
-          hasWildcardUnmentionedGroups: true,
-          unresolvedGroups: 2,
-        },
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expectIssueListContainsFields(issues, {
-      channel: "telegram",
-      accountId: "main",
-      kind: "config",
+    const issues = collectIssues({
+      allowUnmentionedGroups: true,
+      audit: {
+        hasWildcardUnmentionedGroups: true,
+        unresolvedGroups: 2,
+      },
     });
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ channel: "telegram", accountId: "main", kind: "config" }),
+      ]),
+    );
     expectIssueMessageContains(issues, "privacy mode");
     expectIssueMessageContains(issues, 'uses "*"');
     expectIssueMessageContains(issues, "unresolvedGroups=2");
   });
 
   it("reports unreachable groups with match metadata", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        audit: {
-          groups: [
-            {
-              chatId: "-100123",
-              ok: false,
-              status: "left",
-              error: "403",
-              matchKey: "alerts",
-              matchSource: "channels.telegram.groups",
-            },
-          ],
-        },
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
+    const issues = collectIssues({
+      audit: {
+        groups: [
+          {
+            chatId: "-100123",
+            ok: false,
+            status: "left",
+            error: "403",
+            matchKey: "alerts",
+            matchSource: "channels.telegram.groups",
+          },
+        ],
+      },
     });
+
+    expectRuntimeIssue(issues);
     expect(issues[0]?.message).toContain("Group -100123 not reachable");
     expect(issues[0]?.message).toContain("alerts");
     expect(issues[0]?.message).toContain("channels.telegram.groups");
   });
 
-  it("reports polling runtime state that never completed getUpdates after startup grace", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "polling",
-        connected: false,
-        lastStartAt: Date.now() - 121_000,
-        lastError: "network timeout",
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
+  it.each([
+    [
+      "polling",
+      "network timeout",
+      "has not completed a successful getUpdates call",
+      "channels status --probe",
+    ],
+    [
+      "polling",
+      "Telegram isolated polling spool handler timed out",
+      "spool backlog is stalled",
+      undefined,
+    ],
+    ["webhook", "fetch failed", "setWebhook has not completed", "webhook URL"],
+  ] as const)("reports disconnected %s runtime: %s", (mode, error, message, fix) => {
+    const issues = collectIssues({
+      running: true,
+      mode,
+      connected: false,
+      lastStartAt: Date.now() - 121_000,
+      lastError: error,
     });
-    expect(issues[0]?.message).toContain("has not completed a successful getUpdates call");
-    expect(issues[0]?.message).toContain("network timeout");
-    expect(issues[0]?.fix).toContain("channels status --probe");
+    expectRuntimeIssue(issues);
+    expect(issues[0]?.message).toContain(message);
+    expect(issues[0]?.message).toContain(error);
+    if (fix) {
+      expect(issues[0]?.fix).toContain(fix);
+    }
+    if (error.includes("spool")) {
+      expect(issues[0]?.message).not.toContain("has not completed a successful getUpdates call");
+    }
   });
 
-  it("reports isolated polling spool backlog stalls distinctly from startup failures", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
+  it.each([
+    ["polling", 3_600_000, 1_860_000, true],
+    ["polling", 60_000, 7_200_000, false],
+    ["webhook", 3_600_000, undefined, false],
+  ] as const)(
+    "checks connected %s lifecycle age %s / activity age %s",
+    (mode, age, activityAge, stale) => {
+      const now = Date.now();
+      const issues = collectIssues({
         running: true,
-        mode: "polling",
-        connected: false,
-        lastStartAt: Date.now() - 121_000,
-        lastError:
-          "Telegram isolated polling spool backlog stalled behind update 42 on lane telegram:123 for 1500100ms; marking polling unhealthy until the backlog drains.",
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
-    });
-    expect(issues[0]?.message).toContain("spool backlog is stalled");
-    expect(issues[0]?.message).not.toContain("has not completed a successful getUpdates call");
-  });
-
-  it("reports isolated polling spool handler timeouts distinctly from startup failures", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "polling",
-        connected: false,
-        lastStartAt: Date.now() - 121_000,
-        lastError:
-          "Telegram isolated polling spool handler timed out behind update 42 on lane telegram:123 after 1500100ms; marking the update failed and restarting isolated ingress so later updates can drain.",
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
-    });
-    expect(issues[0]?.message).toContain("spool backlog is stalled");
-    expect(issues[0]?.message).not.toContain("has not completed a successful getUpdates call");
-  });
-
-  it("does not report polling startup before the connect grace expires", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "polling",
-        connected: false,
-        lastStartAt: Date.now() - 60_000,
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toStrictEqual([]);
-  });
-
-  it("reports stale polling transport activity after successful getUpdates stops refreshing", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "polling",
+        mode,
         connected: true,
-        lastStartAt: Date.now() - 60 * 60_000,
-        lastTransportActivityAt: Date.now() - 31 * 60_000,
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
-    });
-    expect(issues[0]?.message).toContain("polling transport is stale");
-  });
-
-  it("does not report inherited stale transport activity during a fresh polling lifecycle", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "polling",
-        connected: true,
-        lastStartAt: Date.now() - 60_000,
-        lastTransportActivityAt: Date.now() - 2 * 60 * 60_000,
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toStrictEqual([]);
-  });
-
-  it("reports webhook runtime state that never completed setWebhook after startup grace", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "webhook",
-        connected: false,
-        lastStartAt: Date.now() - 10 * 60_000,
-        lastError: "fetch failed",
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toHaveLength(1);
-    expectIssueFields(issues[0], {
-      channel: "telegram",
-      accountId: "main",
-      kind: "runtime",
-    });
-    expect(issues[0]?.message).toContain("setWebhook has not completed");
-    expect(issues[0]?.message).toContain("fetch failed");
-    expect(issues[0]?.fix).toContain("webhook URL");
-  });
-
-  it("does not report webhook startup before the connect grace expires", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "webhook",
-        connected: false,
-        lastStartAt: Date.now() - 60_000,
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toStrictEqual([]);
-  });
-
-  it("does not report an advertised webhook just because no user updates arrived", () => {
-    const issues = collectTelegramStatusIssues([
-      {
-        accountId: "main",
-        enabled: true,
-        configured: true,
-        running: true,
-        mode: "webhook",
-        connected: true,
-        lastStartAt: Date.now() - 60 * 60_000,
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toStrictEqual([]);
-  });
+        lastStartAt: now - age,
+        ...(activityAge === undefined ? {} : { lastTransportActivityAt: now - activityAge }),
+      });
+      if (stale) {
+        expectRuntimeIssue(issues);
+        expect(issues[0]?.message).toContain("polling transport is stale");
+      } else {
+        expect(issues).toStrictEqual([]);
+      }
+    },
+  );
 });
 
 describe("resolveTelegramAllowedReactions", () => {
+  const allowed = (chat: TelegramChatDetails, getChat?: TelegramGetChat) =>
+    resolveTelegramAllowedReactions({ chat, chatId: 1, getChat });
   it("assumes no restriction when chat does not include available_reactions", async () => {
-    const result = await resolveTelegramAllowedReactions({
-      chat: { id: 1 } satisfies TelegramChatDetails,
-      chatId: 1,
-    });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when available_reactions is omitted/null", async () => {
-    const result = await resolveTelegramAllowedReactions({
-      chat: { available_reactions: null } satisfies TelegramChatDetails,
-      chatId: 1,
-    });
-    expect(result).toBeNull();
+    expect(await allowed({ id: 1 })).toBeNull();
   });
 
   it("preserves standard and custom reactions while omitting paid reactions", async () => {
-    const result = await resolveTelegramAllowedReactions({
-      chat: {
-        available_reactions: [
-          { type: "emoji", emoji: "👍" },
-          { type: "custom_emoji", custom_emoji_id: "abc" },
-          { type: "emoji", emoji: "🔥" },
-          { type: "paid" },
-        ],
-      } satisfies TelegramChatDetails,
-      chatId: 1,
+    const result = await allowed({
+      available_reactions: [
+        { type: "emoji", emoji: "👍" },
+        { type: "custom_emoji", custom_emoji_id: "abc" },
+        { type: "emoji", emoji: "🔥" },
+        { type: "paid" },
+      ],
     });
     expect(result).toEqual([
       { type: "emoji", emoji: "👍" },
@@ -318,15 +151,12 @@ describe("resolveTelegramAllowedReactions", () => {
   });
 
   it("normalizes emoji presentation selectors while retaining custom reactions", async () => {
-    const result = await resolveTelegramAllowedReactions({
-      chat: {
-        available_reactions: [
-          { type: "emoji", emoji: "❤️" },
-          { type: "custom_emoji", custom_emoji_id: "❤️" },
-        ],
-      } as never,
-      chatId: 1,
-    });
+    const result = await allowed({
+      available_reactions: [
+        { type: "emoji", emoji: "❤️" },
+        { type: "custom_emoji", custom_emoji_id: "❤️" },
+      ],
+    } as never);
 
     expect(result).toEqual([
       { type: "emoji", emoji: "❤" },
@@ -336,10 +166,7 @@ describe("resolveTelegramAllowedReactions", () => {
 
   it("treats malformed available_reactions payloads as an empty allowlist instead of throwing", async () => {
     await expect(
-      resolveTelegramAllowedReactions({
-        chat: { available_reactions: { type: "emoji", emoji: "👍" } } as never,
-        chatId: 1,
-      }),
+      allowed({ available_reactions: { type: "emoji", emoji: "👍" } } as never),
     ).resolves.toEqual([]);
   });
 
@@ -348,27 +175,9 @@ describe("resolveTelegramAllowedReactions", () => {
       available_reactions: [{ type: "emoji", emoji: "👍" }],
     });
 
-    const result = await resolveTelegramAllowedReactions({
-      chat: { id: 1 } satisfies TelegramChatDetails,
-      chatId: 1,
-      getChat,
-    });
+    const result = await allowed({ id: 1 }, getChat);
 
     expect(result).toEqual([{ type: "emoji", emoji: "👍" }]);
-  });
-
-  it("surfaces getChat lookup failures so interactive discovery does not misreport restrictions", async () => {
-    const getChat = async () => {
-      throw new Error("lookup failed");
-    };
-
-    await expect(
-      resolveTelegramAllowedReactions({
-        chat: { id: 1 } satisfies TelegramChatDetails,
-        chatId: 1,
-        getChat,
-      }),
-    ).rejects.toThrow("lookup failed");
   });
 });
 

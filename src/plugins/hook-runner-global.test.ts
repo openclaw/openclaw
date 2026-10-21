@@ -1,7 +1,12 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
+import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 async function importHookRunnerGlobalModule() {
   return import("./hook-runner-global.js");
@@ -45,11 +50,8 @@ describe("hook-runner-global", () => {
     return { modA, registry };
   }
 
-  it("preserves the initialized runner across module reloads", async () => {
-    const { modA, registry } = await createInitializedModule();
-    expect(expectGlobalHookRunner(modA.getGlobalHookRunner()).hasHooks("message_received")).toBe(
-      true,
-    );
+  it("clears the shared state across module reloads", async () => {
+    const { registry } = await createInitializedModule();
 
     vi.resetModules();
 
@@ -57,14 +59,6 @@ describe("hook-runner-global", () => {
     expect(expectGlobalHookRunner(modB.getGlobalHookRunner()).hasHooks("message_received")).toBe(
       true,
     );
-  });
-
-  it("clears the shared state across module reloads", async () => {
-    await createInitializedModule();
-
-    vi.resetModules();
-
-    const modB = await expectGlobalRunnerState({ hasRunner: true });
     modB.resetGlobalHookRunner();
     expect(modB.getGlobalHookRunner()).toBeNull();
     expect(modB.getGlobalPluginRegistry()).toBeNull();
@@ -91,6 +85,39 @@ describe("hook-runner-global", () => {
     expect(mod.hasGlobalHooks("reply_dispatch", { dispatchKind: "acp" })).toBe(true);
     expect(mod.hasGlobalHooks("reply_dispatch", {})).toBe(true);
     expect(mod.hasGlobalHooks("reply_dispatch")).toBe(true);
+  });
+
+  it("re-admits hook dispatch against the current registry after its prepared generation retires", async () => {
+    const retiredHandler = vi.fn(() => {
+      throw new PluginInstanceUnavailableError("retired-policy");
+    });
+    const currentHandler = vi.fn();
+    const retiredRegistry = createMockPluginRegistry([
+      { hookName: "before_tool_call", pluginId: "retired-policy", handler: retiredHandler },
+    ]);
+    const currentRegistry = createMockPluginRegistry([
+      { hookName: "before_tool_call", pluginId: "current-policy", handler: currentHandler },
+    ]);
+    const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const mod = await importHookRunnerGlobalModule();
+    setActivePluginRegistry(currentRegistry);
+    mod.initializeGlobalHookRunner(currentRegistry);
+
+    await withPluginRuntimeGenerationScope(
+      { metadataSnapshot, pluginRegistry: retiredRegistry },
+      async () => {
+        markPluginRegistryRetired(retiredRegistry);
+        await expect(
+          expectGlobalHookRunner(mod.getGlobalHookRunner()).runBeforeToolCall(
+            { toolName: "read", params: {} },
+            { toolName: "read" },
+          ),
+        ).resolves.toBeUndefined();
+      },
+    );
+
+    expect(retiredHandler).not.toHaveBeenCalled();
+    expect(currentHandler).toHaveBeenCalledOnce();
   });
 
   it.each([

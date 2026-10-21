@@ -178,24 +178,21 @@ final class RootSidebarModel {
         let isPartial: Bool
     }
 
-    struct SessionObserverDeclaration<Route: Equatable>: Equatable {
-        let route: Route
-        let visible: Bool
-        let generation: UInt64
+    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
+        didSet { self.updateSnoozeWakeDeadline() }
     }
 
-    private(set) var sessions: [OpenClawChatSessionEntry] = []
+    private(set) var now: Date = .now
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
     private(set) var isSessionRosterComplete = true
     private var rosterGeneration = 0
-    private var dashboardGeneration = 0
     private var sessionObserverVisibility = false
-    private var sessionObserverGeneration: UInt64 = 0
-    private var sessionObserverDeclaration: SessionObserverDeclaration<GatewayNodeSessionRoute>?
-    private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
+    private var sessionObserverSync: Task<Void, Never>?
+    @ObservationIgnored private var snoozeWakeUpdatesActive = false
+    @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -208,17 +205,29 @@ final class RootSidebarModel {
         }
     }
 
-    func sections(
+    static func sections(
+        sessions: [OpenClawChatSessionEntry],
         query: String,
         currentSessionKey: String,
         mainSessionKey: String,
         activeAgentID: String?,
         groups: [OpenClawChatSessionGroup],
-        sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
+        sessionRoutingContract: String? = nil,
+        now: Date = .now) -> [ChatSessionSidebarModel.Section]
     {
-        ChatSessionSidebarModel.sections(
-            sessions: self.sessions,
+        let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
             currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        let selectedIsSnoozed = sessions.contains {
+            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
+        }
+        return ChatSessionSidebarModel.sections(
+            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            // The shared sidebar otherwise creates a placeholder for a missing selected row.
+            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
@@ -227,11 +236,33 @@ final class RootSidebarModel {
             sessionRoutingContract: sessionRoutingContract)
     }
 
+    func setSnoozeWakeUpdatesActive(_ active: Bool) {
+        self.snoozeWakeUpdatesActive = active
+        self.updateSnoozeWakeDeadline()
+    }
+
+    private func updateSnoozeWakeDeadline() {
+        self.snoozeWakeTask?.cancel()
+        self.snoozeWakeTask = nil
+        self.now = .now
+        guard self.snoozeWakeUpdatesActive,
+              let wakeAt = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now)
+        else { return }
+
+        self.snoozeWakeTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(0, wakeAt.timeIntervalSinceNow) + 0.001))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.updateSnoozeWakeDeadline()
+        }
+    }
+
     func refresh(appModel: NodeAppModel) async {
         self.rosterGeneration &+= 1
         let rosterGeneration = self.rosterGeneration
-        self.dashboardGeneration &+= 1
-        let dashboardGeneration = self.dashboardGeneration
         self.isRefreshing = true
         defer {
             if rosterGeneration == self.rosterGeneration {
@@ -256,7 +287,7 @@ final class RootSidebarModel {
         }
 
         let loadedDashboard = await dashboard
-        guard !Task.isCancelled, dashboardGeneration == self.dashboardGeneration else { return }
+        guard !Task.isCancelled else { return }
         if let usage = loadedDashboard.usage {
             self.usage = usage
         }
@@ -289,74 +320,24 @@ final class RootSidebarModel {
 
     func setSessionObserverVisibility(appModel: NodeAppModel, visible: Bool) async {
         self.sessionObserverVisibility = visible
-        let observerGeneration = self.sessionObserverGeneration
-        let previous = self.sessionObserverSync?.task
-        let syncID = UUID()
+        let previous = self.sessionObserverSync
         let task = Task { @MainActor [weak self, weak appModel] in
             await previous?.value
             guard let self,
                   let appModel,
-                  self.sessionObserverGeneration == observerGeneration,
                   self.sessionObserverVisibility == visible,
-                  let route = await appModel.operatorSession.currentRoute(),
-                  self.sessionObserverGeneration == observerGeneration,
-                  self.sessionObserverVisibility == visible
-            else {
-                self?.finishSessionObserverSync(id: syncID)
-                return
-            }
+                  let route = await appModel.operatorSession.currentRoute()
+            else { return }
 
-            if let declaration = self.sessionObserverDeclaration,
-               declaration.route == route,
-               declaration.visible == visible,
-               declaration.generation == observerGeneration
-            {
-                self.finishSessionObserverSync(id: syncID)
-                return
-            }
-
-            // The Gateway may apply a change before its reply times out. An old
-            // confirmation must never suppress the next recovery declaration.
-            self.sessionObserverDeclaration = nil
+            // Visibility is best effort: serialize sends and replay on every subscription,
+            // rather than caching ACKs that need their own reconnect lifecycle.
             let request = OpenClawChatGatewayRequests.setSessionObserverVisibility(
                 visible,
                 timeoutMs: 12000)
-            do {
-                _ = try await appModel.operatorSession.request(
-                    request,
-                    ifCurrentRoute: route)
-                if let declaration = Self.confirmedSessionObserverDeclaration(
-                    route: route,
-                    visible: visible,
-                    generation: observerGeneration,
-                    currentGeneration: self.sessionObserverGeneration,
-                    currentVisibility: self.sessionObserverVisibility)
-                {
-                    self.sessionObserverDeclaration = declaration
-                }
-            } catch {
-                // Reconnect replays visibility on its own physical operator route.
-            }
-            self.finishSessionObserverSync(id: syncID)
+            _ = try? await appModel.operatorSession.request(request, ifCurrentRoute: route)
         }
-        self.sessionObserverSync = (id: syncID, task: task)
+        self.sessionObserverSync = task
         await task.value
-    }
-
-    static func confirmedSessionObserverDeclaration<Route: Equatable>(
-        route: Route,
-        visible: Bool,
-        generation: UInt64,
-        currentGeneration: UInt64,
-        currentVisibility: Bool) -> SessionObserverDeclaration<Route>?
-    {
-        guard generation == currentGeneration, visible == currentVisibility else { return nil }
-        return SessionObserverDeclaration(route: route, visible: visible, generation: generation)
-    }
-
-    private func finishSessionObserverSync(id: UUID) {
-        guard self.sessionObserverSync?.id == id else { return }
-        self.sessionObserverSync = nil
     }
 
     func observeSessionEvents(appModel: NodeAppModel) async {
@@ -371,13 +352,6 @@ final class RootSidebarModel {
             onEvent: { [weak self] frame in
                 await self?.handleSessionEvent(frame, appModel: appModel) ?? false
             },
-            invalidateObserverDeclaration: { [weak self] in
-                guard let self else { return }
-                // Subscription generations prevent a delayed old-socket ACK from
-                // satisfying the visibility replay queued for the new socket.
-                self.sessionObserverGeneration &+= 1
-                self.sessionObserverDeclaration = nil
-            },
             observerVisibility: { [weak self] in
                 self?.sessionObserverVisibility ?? false
             },
@@ -390,7 +364,6 @@ final class RootSidebarModel {
         makeStream: @MainActor () async -> AsyncStream<EventFrame>,
         subscribe: @MainActor () async throws -> Void,
         onEvent: @MainActor (EventFrame) async -> Bool,
-        invalidateObserverDeclaration: @MainActor () -> Void = {},
         observerVisibility: @MainActor () -> Bool = { false },
         declareObserverVisibility: @MainActor (Bool) async -> Void = { _ in },
         retryDelays: [Duration] = [
@@ -412,9 +385,6 @@ final class RootSidebarModel {
             let stream = await makeStream()
             do {
                 try await subscribe()
-                // Subscriptions are socket-owned; a successful replay invalidates
-                // an old visibility ACK even when the logical route is unchanged.
-                invalidateObserverDeclaration()
                 await declareObserverVisibility(observerVisibility())
                 failureCount = 0
 

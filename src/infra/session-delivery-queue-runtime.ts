@@ -2,7 +2,7 @@
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "./gateway-scheduler.js";
+import type { GatewayScheduler, GatewaySchedulerScope } from "./gateway-scheduler.js";
 import {
   drainPendingSessionDelivery,
   type DeliverSessionDeliveryFn,
@@ -19,44 +19,27 @@ type SessionDeliveryRuntime = {
   scheduler: GatewayScheduler;
   queueContext: OpenClawStateWorkerContext;
   deliver: DeliverSessionDeliveryFn;
-  drain?: typeof drainPendingSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
-  reloadPending?: typeof loadPendingSessionDelivery;
-  listPending?: typeof loadPendingSessionDeliveries;
   onSettled?: SettleSessionDeliveryFn;
 };
 
 const RUNTIME_RELOAD_RETRY_MS = 1_000;
-let runtime:
-  | (SessionDeliveryRuntime & {
-      runningEntries: Map<string, Promise<void>>;
-      pendingSchedules: Set<Promise<void>>;
-    })
-  | undefined;
-let runtimeGeneration = 0;
-const scheduledEntries = new Map<string, GatewayScheduledJob>();
-let pendingScan: GatewayScheduledJob | undefined;
+type ActiveSessionDeliveryRuntime = Omit<SessionDeliveryRuntime, "scheduler"> & {
+  scheduler: GatewaySchedulerScope;
+  runningEntries: Set<string>;
+  pendingSchedules: Set<Promise<void>>;
+};
+let runtime: ActiveSessionDeliveryRuntime | undefined;
 
-function clearScheduledEntries(): void {
-  for (const scheduled of scheduledEntries.values()) {
-    scheduled.cancel();
-  }
-  scheduledEntries.clear();
-  pendingScan?.cancel();
-  pendingScan = undefined;
-}
-
-function armPendingScan(generation: number): void {
-  if (!runtime || generation !== runtimeGeneration || pendingScan) {
+function armPendingScan(activeRuntime: ActiveSessionDeliveryRuntime): void {
+  if (runtime !== activeRuntime) {
     return;
   }
-  pendingScan = runtime.scheduler.schedule({
+  activeRuntime.scheduler.schedule({
     id: "session-delivery:scan",
     delayMs: RUNTIME_RELOAD_RETRY_MS,
-    run: () => {
-      pendingScan = undefined;
-      return schedulePendingSessionDeliveries();
-    },
+    mode: "earliest",
+    run: () => schedulePendingSessionDeliveries(),
   });
 }
 
@@ -72,52 +55,53 @@ function resolveRetryDelayMs(entry: QueuedSessionDelivery, now: number): number 
   return Math.max(claimDelayMs, attemptedAt + computeBackoffMs(entry.retryCount) - now);
 }
 
-function armSessionDeliveryId(id: string, delayMs: number, generation: number): void {
-  if (!runtime || generation !== runtimeGeneration) {
+function armSessionDeliveryId(
+  id: string,
+  delayMs: number,
+  activeRuntime: ActiveSessionDeliveryRuntime,
+): void {
+  if (runtime !== activeRuntime) {
     return;
   }
-  const job = runtime.scheduler.schedule({
+  activeRuntime.scheduler.schedule({
     id: `session-delivery:${id}`,
     delayMs,
     mode: "earliest",
-    run: () => {
-      scheduledEntries.delete(id);
-      return runScheduledSessionDelivery(id, generation);
-    },
+    run: () => runScheduledSessionDelivery(id, activeRuntime),
   });
-  scheduledEntries.set(id, job);
 }
 
 function armSessionDelivery(
   entry: QueuedSessionDelivery,
-  generation: number,
+  activeRuntime: ActiveSessionDeliveryRuntime,
   minimumDelayMs = 0,
 ): void {
   // The active drain owns rearming after its authoritative reload. Coalesce
   // duplicate schedules so they cannot poll the same due row in a timer loop.
-  if (!runtime || runtime.runningEntries.has(entry.id)) {
+  if (activeRuntime.runningEntries.has(entry.id)) {
     return;
   }
   armSessionDeliveryId(
     entry.id,
-    Math.max(minimumDelayMs, resolveRetryDelayMs(entry, runtime.scheduler.now())),
-    generation,
+    Math.max(minimumDelayMs, resolveRetryDelayMs(entry, activeRuntime.scheduler.now())),
+    activeRuntime,
   );
 }
 
-async function runScheduledSessionDelivery(id: string, generation: number): Promise<void> {
-  const activeRuntime = runtime;
-  if (!activeRuntime || generation !== runtimeGeneration) {
+async function runScheduledSessionDelivery(
+  id: string,
+  activeRuntime: ActiveSessionDeliveryRuntime,
+): Promise<void> {
+  if (runtime !== activeRuntime) {
     return;
   }
   if (activeRuntime.runningEntries.has(id)) {
     return;
   }
-  const settled = createDeferredCore();
-  activeRuntime.runningEntries.set(id, settled.promise);
+  activeRuntime.runningEntries.add(id);
   let pending: QueuedSessionDelivery | null = null;
   try {
-    pending = await (activeRuntime.drain ?? drainPendingSessionDelivery)({
+    pending = await drainPendingSessionDelivery({
       id,
       queueContext: activeRuntime.queueContext,
       now: () => activeRuntime.scheduler.now(),
@@ -128,47 +112,38 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
     });
   } catch (error) {
     activeRuntime.log.error(`session delivery: runtime drain failed for ${id}: ${String(error)}`);
-    if (runtime && generation === runtimeGeneration) {
-      // The durable row may still be pending. Retry the exact drain so one
-      // transient database error cannot orphan it until the next restart.
-      armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, generation);
-    }
+    // The durable row may still be pending. Retry the exact drain so one
+    // transient database error cannot orphan it until the next restart.
+    armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, activeRuntime);
   } finally {
     activeRuntime.runningEntries.delete(id);
-    settled.resolve();
-  }
-  if (!runtime || generation !== runtimeGeneration) {
-    return;
   }
   if (pending) {
     // Any still-pending row means the drain deferred, failed, or was owned
     // elsewhere. Never poll an unchanged immediately-due row at timer speed.
-    armSessionDelivery(pending, generation, RUNTIME_RELOAD_RETRY_MS);
+    armSessionDelivery(pending, activeRuntime, RUNTIME_RELOAD_RETRY_MS);
   }
 }
 
 /** Register callbacks; stop fences scheduling and joins admitted reads and drains. */
 export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () => Promise<void> {
-  runtimeGeneration += 1;
-  const generation = runtimeGeneration;
-  clearScheduledEntries();
+  runtime?.scheduler.beginClose();
   const activeRuntime = {
     ...params,
-    runningEntries: new Map<string, Promise<void>>(),
+    scheduler: params.scheduler.scope(),
+    runningEntries: new Set<string>(),
     pendingSchedules: new Set<Promise<void>>(),
   };
   runtime = activeRuntime;
   let stopPromise: Promise<void> | undefined;
   return () => {
-    if (runtimeGeneration === generation) {
-      runtimeGeneration += 1;
+    if (runtime === activeRuntime) {
       runtime = undefined;
-      clearScheduledEntries();
     }
-    // A replacement owns its own work. Join this owner's reads and settlement
-    // writes before its queue database or environment can be disposed.
+    // Public scheduling reads begin outside scheduler callbacks and must also
+    // settle before this owner's queue database or environment is disposed.
     stopPromise ??= Promise.all([
-      ...activeRuntime.runningEntries.values(),
+      activeRuntime.scheduler.stop(),
       ...activeRuntime.pendingSchedules,
     ]).then(() => {});
     return stopPromise;
@@ -180,7 +155,6 @@ export async function scheduleSessionDelivery(
   id: string,
   queueContext: OpenClawStateWorkerContext,
 ): Promise<boolean> {
-  const generation = runtimeGeneration;
   const activeRuntime = runtime;
   if (!activeRuntime) {
     return false;
@@ -203,19 +177,16 @@ export async function scheduleSessionDelivery(
   try {
     let entry: QueuedSessionDelivery | null;
     try {
-      entry = await (activeRuntime.reloadPending ?? loadPendingSessionDelivery)(
-        id,
-        activeRuntime.queueContext,
-      );
+      entry = await loadPendingSessionDelivery(id, activeRuntime.queueContext);
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to load ${id}: ${String(error)}`);
-      armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, generation);
+      armSessionDeliveryId(id, RUNTIME_RELOAD_RETRY_MS, activeRuntime);
       return true;
     }
-    if (!entry || !runtime || generation !== runtimeGeneration) {
+    if (!entry || runtime !== activeRuntime) {
       return !entry;
     }
-    armSessionDelivery(entry, generation);
+    armSessionDelivery(entry, activeRuntime);
     return true;
   } finally {
     activeRuntime.pendingSchedules.delete(settled.promise);
@@ -225,7 +196,6 @@ export async function scheduleSessionDelivery(
 
 /** Schedule every pending entry after startup recovery installs the runtime owner. */
 export async function schedulePendingSessionDeliveries(): Promise<void> {
-  const generation = runtimeGeneration;
   const activeRuntime = runtime;
   if (!activeRuntime) {
     return;
@@ -235,19 +205,14 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
   try {
     let entries: QueuedSessionDelivery[];
     try {
-      entries = await (activeRuntime.listPending ?? loadPendingSessionDeliveries)(
-        activeRuntime.queueContext,
-      );
+      entries = await loadPendingSessionDeliveries(activeRuntime.queueContext);
     } catch (error) {
       activeRuntime.log.error(`session delivery: failed to scan pending entries: ${String(error)}`);
-      armPendingScan(generation);
-      return;
-    }
-    if (!runtime || generation !== runtimeGeneration) {
+      armPendingScan(activeRuntime);
       return;
     }
     for (const entry of entries) {
-      armSessionDelivery(entry, generation);
+      armSessionDelivery(entry, activeRuntime);
     }
   } finally {
     activeRuntime.pendingSchedules.delete(settled.promise);

@@ -13,13 +13,14 @@ export function createCodexNativePreToolUseFailureBuffer(params: {
   signal: AbortSignal;
 }) {
   const pending: CodexNativePreToolUseFailure[] = [];
-  let active = false;
-  let terminalReason: CodexNativePreToolUseFailure["disposition"] | undefined;
+  let fallback:
+    | { terminalReason: CodexNativePreToolUseFailure["disposition"] | undefined }
+    | undefined;
   const emit = (failure: CodexNativePreToolUseFailure) =>
     emitCodexNativePreToolUseFailureDiagnostic({
       ...params,
       failure,
-      ...(active ? { terminalReason: terminalReason ?? failure.disposition } : {}),
+      ...(fallback ? { terminalReason: fallback.terminalReason ?? failure.disposition } : {}),
     });
   const flush = () => {
     for (const failure of pending.splice(0)) {
@@ -29,22 +30,19 @@ export function createCodexNativePreToolUseFailureBuffer(params: {
   return {
     pending,
     get active() {
-      return active;
+      return fallback !== undefined;
     },
     record(failure: CodexNativePreToolUseFailure) {
-      if (active) {
+      if (fallback) {
         emit(failure);
       } else {
         pending.push(failure);
       }
     },
     activateFallback(wasAborted: boolean) {
-      if (!active) {
-        terminalReason = wasAborted
-          ? resolveCodexToolAbortTerminalReason(params.signal)
-          : undefined;
-        active = true;
-      }
+      fallback ??= {
+        terminalReason: wasAborted ? resolveCodexToolAbortTerminalReason(params.signal) : undefined,
+      };
       flush();
     },
     flush,

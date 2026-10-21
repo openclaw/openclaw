@@ -1,4 +1,5 @@
-// Shared contracts for Gateway startup plugin collection and planning.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 export type { NormalizedPluginsConfig } from "./config-normalization-shared.js";
 
 export type GatewayStartupPluginPlan = {
@@ -19,6 +20,11 @@ export type ConfiguredGenerationProviderIds = Record<
   ReadonlySet<string>
 >;
 export type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
+
+export function isConfigActivationValueEnabled(value: unknown): boolean {
+  return value !== false && !(isRecord(value) && value.enabled === false);
+}
+
 export function sortUniquePluginIds(values: Iterable<string>): string[] {
   return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
     (left, right) => left.localeCompare(right),

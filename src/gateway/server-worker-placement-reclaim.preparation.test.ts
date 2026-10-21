@@ -1,17 +1,13 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { useReclaimFixtures } from "./server-worker-placement-reclaim.test-support.js";
 import {
   admitWorkerStopChat,
   createWorkerStopChatContext,
@@ -19,294 +15,39 @@ import {
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import { REQUEST } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createHarness } from "./worker-environments/placement-dispatch-test-harness.js";
-import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
 
-const lookup = vi.hoisted(() => ({
-  value: undefined as ReturnType<typeof import("./session-utils.js").loadSessionEntry> | undefined,
-}));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: () => lookup.value }));
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  getRuntimeConfig: () => ({}),
-}));
-const roots: string[] = [];
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  await closeStateDatabaseForTest();
-  lookup.value = undefined;
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
-
-function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed" = "active") {
-  const request = {
-    sessionId: `session-${name}`,
-    sessionKey: `agent:main:${name}`,
-    agentId: "main",
-  };
-  const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
-  const target = {
-    storePath: `/fixture/reclaim-preparation-${name}.sqlite`,
-    canonicalKey: request.sessionKey,
-    storeKeys: [request.sessionKey],
-    agentId: request.agentId,
-    store: { [request.sessionKey]: entry },
-  };
-  const placement = {
-    ...request,
-    state,
-    generation: 4,
-    environmentId: "worker",
-    activeOwnerEpoch: 7,
-  };
-  const cancel = vi.fn(async (input: { assertCurrent: () => void }) => input.assertCurrent());
-  const barriers = createGatewayWorkerPlacementReclaimBarriers({
-    placements: { get: () => ({ ...placement }) as never, waitForTurnClaimRelease: async () => {} },
-    loadSessionRuntime: async () => ({
-      managedWorktrees: { findLiveByOwner: () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
+const fixtures = useReclaimFixtures();
+function waitFor(gate: Promise<unknown>, operation: Promise<unknown>) {
+  return Promise.race([
+    gate,
+    operation.then((result): never => {
+      throw result;
     }),
-    cancelSessionWork: cancel,
-    revokeSessionAuthority: vi.fn(),
-  });
-  const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
-  const admit = (onInterrupt?: () => void) =>
-    beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [request.sessionKey, request.sessionId],
-      assertAllowed: () => {},
-      onInterrupt,
-    });
-  return {
-    ...request,
-    entry,
-    placement,
-    cancel,
-    run,
-    admit,
-    prepare: (options: Partial<Parameters<typeof barriers.runReclaimPreparation>[0]> = {}) =>
-      barriers.runReclaimPreparation({ ...request, run, ...options }),
-  };
+  ]);
 }
 
-it("one failed Stop cannot reopen ingress while another Stop still owns its closure", async () => {
-  const f = fixture("overlap");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  let calls = 0;
-  f.cancel.mockImplementation(async ({ assertCurrent }) => {
-    assertCurrent();
-    if (++calls === 1) {
-      entered.resolve();
-      await release.promise;
-    } else {
-      throw new Error("second cancellation failed");
-    }
-  });
-  const first = f.prepare();
-  await entered.promise;
-  try {
-    await expect(f.prepare()).rejects.toThrow("second cancellation failed");
-    await expect(f.admit()).rejects.toThrow();
-    expect(f.run).not.toHaveBeenCalled();
-  } finally {
-    release.resolve();
-    await first;
-  }
-  const fresh = await f.admit();
-  fresh.release();
-});
-
-it.each(["authorization", "incarnation"] as const)(
-  "rejects changed %s after cancellation and reopens admission on failure",
-  async (change) => {
-    const f = fixture(`changed-${change}`);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let authorized = true;
-    const interrupted = vi.fn();
-    const acquired = await f.admit(() => {
-      interrupted();
-      acquired.release();
-    });
-    f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      assertCurrent();
-      entered.resolve();
-      await release.promise;
-    });
-    try {
-      const stop = f.prepare({
-        authorize: () => {
-          if (!authorized) {
-            throw new Error("access revoked");
-          }
-        },
-      });
-      const rejected = expect(stop).rejects.toThrow(
-        change === "authorization" ? "access revoked" : "Session",
-      );
-      await entered.promise;
-      if (change === "authorization") {
-        authorized = false;
-      } else {
-        f.entry.lifecycleRevision = "replacement-with-same-session-id";
-      }
-      release.resolve();
-      await rejected;
-      expect(interrupted).not.toHaveBeenCalled();
-      expect(f.run).not.toHaveBeenCalled();
-      const fresh = await f.admit();
-      fresh.release();
-    } finally {
-      release.resolve();
-      acquired.release();
-    }
-  },
-);
-
-it("rechecks the exact worker owner after asynchronous cancellation setup", async () => {
-  const f = fixture("changed-worker");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const signalled = vi.fn();
-  f.cancel.mockImplementation(async ({ assertCurrent }) => {
-    entered.resolve();
-    await release.promise;
-    assertCurrent();
-    signalled();
-  });
-  const stop = f.prepare();
-  const rejected = expect(stop).rejects.toThrow("worker changed before cancellation");
-  await entered.promise;
-  // The store returns immutable snapshots; replacement must not mutate the captured owner.
-  const priorGeneration = f.placement.generation;
-  f.placement.generation = priorGeneration + 1;
-  release.resolve();
-  await rejected;
-  expect(signalled).not.toHaveBeenCalled();
-  expect(f.run).not.toHaveBeenCalled();
-});
-
-it.each(["local", "reclaimed"] as const)(
-  "does not cancel fresh work on an already %s placement",
-  async (state) => {
-    const f = fixture(`idempotent-${state}`, state);
-    const admitted = await f.admit();
-    try {
-      await f.prepare();
-      expect(f.cancel).not.toHaveBeenCalled();
-      expect(admitted.isActive()).toBe(true);
-    } finally {
-      admitted.release();
-    }
-  },
-);
-
-it("auto-suspend eligibility rejects before closing admission or signalling cancellation", async () => {
-  const f = fixture("auto-suspend");
-  await expect(
-    f.prepare({
-      beforeDrain: () => {
-        throw new Error("session is busy");
-      },
-    }),
-  ).rejects.toThrow("session is busy");
-  expect(f.cancel).not.toHaveBeenCalled();
-  expect(f.run).not.toHaveBeenCalled();
-  const fresh = await f.admit();
-  fresh.release();
-});
-
-it("keeps admissions closed while serialized teardown is queued, then revalidates the incarnation", async () => {
-  const f = fixture("queued-teardown");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const teardown = vi.fn();
-  const stop = f.prepare({
-    run: async (authorize) => {
-      entered.resolve();
-      await release.promise;
-      authorize?.();
-      teardown();
-      return await f.run();
-    },
-  });
-  const rejected = expect(stop).rejects.toThrow("Session");
-  await entered.promise;
-  await expect(f.admit()).rejects.toThrow();
-  f.entry.lifecycleRevision = "new-incarnation";
-  release.resolve();
-  await rejected;
-  expect(teardown).not.toHaveBeenCalled();
-});
-
-it("a pending dispatch retains its producer while preparation fences new ingress", async () => {
-  const f = fixture("pending-dispatch");
-  Object.assign(f.placement, { state: "provisioning" });
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const stop = f.prepare({
-    run: async () => {
-      entered.resolve();
-      await release.promise;
-      return await f.run();
-    },
-  });
-  await entered.promise;
-  try {
-    await setImmediate();
-    expect(f.cancel).not.toHaveBeenCalled();
-    expect(f.run).not.toHaveBeenCalled();
-    await expect(f.admit()).rejects.toThrow();
-  } finally {
-    release.resolve();
-    await stop;
-  }
-});
+function source(placement: {
+  generation: number;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}) {
+  return {
+    generation: placement.generation,
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
 
 async function cancellationLoadFixture(
   options: NonNullable<Parameters<typeof createHarness>[2]> = {},
   beforeCancellation?: () => Promise<void>,
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-advance-"));
-  roots.push(root);
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  const placements = createWorkerSessionPlacementStore({ database });
-  const storePath = path.join(root, "sessions.sqlite");
-  const entry = {
-    sessionId: REQUEST.sessionId,
+  const root = fixtures.makeRoot("worker-stop-advance-");
+  const { database, placements, storePath, entry, runtime } = await fixtures.createSession(root, {
+    worktreePath: root,
     lifecycleRevision: "original",
-    worktree: { id: "task-worktree", branch: "test", repoRoot: root },
-    updatedAt: Date.now(),
-  };
-  const target = {
-    storePath,
-    canonicalKey: REQUEST.sessionKey,
-    storeKeys: [REQUEST.sessionKey],
-    agentId: REQUEST.agentId,
-    store: { [REQUEST.sessionKey]: entry },
-  };
-  const runtime = {
-    managedWorktrees: {
-      findLiveByOwner: () => ({
-        id: "task-worktree",
-        name: "test",
-        repoFingerprint: "test",
-        repoRoot: root,
-        ownerId: REQUEST.sessionKey,
-        ownerKind: "session" as const,
-        path: root,
-        branch: "test",
-        baseRef: "main",
-        createdAt: 1,
-        lastActiveAt: 1,
-      }),
-    },
-    resolveGatewaySessionStoreTargetWithStore: () => target,
-    resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-  };
-  lookup.value = { ...target, cfg: {}, entry, legacyKey: undefined };
+  });
   const context = createWorkerStopChatContext();
   let delayCancellation = false;
   const loading = createDeferredCore();
@@ -337,11 +78,9 @@ async function cancellationLoadFixture(
     },
     revokeSessionAuthority: vi.fn(),
   });
-  const harness = createHarness(database, placements, {
+  const harness = await createHarness(database, placements, {
     workspacePath: root,
-    runReclaimPreparation: barriers.runReclaimPreparation,
-    runReclaimBarrier: barriers.runReclaimBarrier,
-    runFailedReclaimBarrier: barriers.runFailedReclaimBarrier,
+    ...barriers,
     ...options,
   });
   const coordinated = coordinateWorkerPlacementDispatch(
@@ -402,21 +141,11 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
       return f.harness.ready;
     });
     const dispatch = f.coordinated.dispatch(REQUEST).catch((error: unknown) => error);
-    await Promise.race([
-      provisioning.promise,
-      dispatch.then((result) => {
-        throw result;
-      }),
-    ]);
+    await waitFor(provisioning.promise, dispatch);
     const first = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     let second: Promise<unknown> | undefined;
     try {
-      await Promise.race([
-        firstLoading.promise,
-        first.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(firstLoading.promise, first);
       const initial = f.placements.get(REQUEST.sessionId);
       expect(initial?.state).toBe("provisioning");
       provisioned.resolve();
@@ -436,14 +165,9 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
           }
         })
         .catch((error: unknown) => error);
-      await Promise.race([
-        secondLoading.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(secondLoading.promise, second);
       if (change === "replacement") {
-        f.placements.startDrain({
+        await f.placements.startDrain({
           sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
@@ -451,6 +175,7 @@ it.each(["same-owner", "replacement", "incarnation", "authorization"] as const)(
         });
       } else if (change === "incarnation") {
         f.entry.lifecycleRevision = "replacement";
+        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
       } else if (change === "authorization") {
         authorized = false;
       }
@@ -483,12 +208,12 @@ it.each(["missing", "local", "reclaimed"] as const)(
     const f = await cancellationLoadFixture();
     if (state === "local") {
       const requested = await f.placements.startDispatch(REQUEST);
-      const failed = f.placements.fail({
+      const failed = await f.placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "fixture local placement",
       });
-      f.placements.transition({
+      await f.placements.transition({
         sessionId: REQUEST.sessionId,
         from: "failed",
         to: "local",
@@ -502,7 +227,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
     const cancellations = vi.fn();
     f.context.cancelRunBoundApprovals = cancellations;
     const runId = `ordinary-${state}`;
-    const admitted = await admitWorkerStopChat({ ...REQUEST, ...f, runId }).promise;
+    const admitted = await (await admitWorkerStopChat({ ...REQUEST, ...f, runId })).promise;
     if (!admitted.ok) {
       throw new Error("Ordinary local chat fixture was not admitted");
     }
@@ -523,12 +248,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
       .reclaim(REQUEST, undefined, () => prepared.resolve())
       .catch((error: unknown) => error);
     try {
-      await Promise.race([
-        prepared.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(prepared.promise, second);
       release.resolve();
       const results = await Promise.all([first, second]);
       expect(controller.signal.aborted).toBe(false);
@@ -553,7 +273,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
 );
 
 it.each([false, true])(
-  "Stop follows Move's synchronous draining owner before barrier return (abandon=%s)",
+  "Stop follows Move's acknowledged draining owner before barrier return (abandon=%s)",
   async (abandonSource) => {
     const entering = createDeferredCore();
     const begin = createDeferredCore();
@@ -569,8 +289,6 @@ it.each([false, true])(
     });
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
-      awaitTurnClaimRelease: (sessionId, wait) =>
-        f.coordinated.awaitTurnClaimRelease(sessionId, wait),
       loadSessionRuntime: async () => {
         entering.resolve();
         await begin.promise;
@@ -587,55 +305,27 @@ it.each([false, true])(
     }
 
     const transitions: string[] = [];
-    let transitionsAtFirstYield: string[] | undefined;
-    const beginPlacementMove = f.placements.beginPlacementMove.bind(f.placements);
-    vi.spyOn(f.placements, "beginPlacementMove").mockImplementation((request) => {
-      const result = beginPlacementMove(request);
-      queueMicrotask(() => {
-        transitionsAtFirstYield = [...transitions];
-      });
-      return result;
-    });
     const moving = f.coordinated
       .move(
         {
           ...REQUEST,
-          source: {
-            generation: active.generation,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
+          source: source(active),
           target: { kind: "gateway" },
           ...(abandonSource ? { abandonSource: true as const } : {}),
         },
         (placement) => transitions.push(placement.state),
       )
       .catch((error: unknown) => error);
-    await Promise.race([
-      entering.promise,
-      moving.then((result) => {
-        throw result;
-      }),
-    ]);
+    await waitFor(entering.promise, moving);
     f.armCancellation();
     const stopping = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     try {
-      await Promise.race([
-        f.loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, stopping);
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("active");
       begin.resolve();
-      await Promise.race([
-        begun.promise,
-        moving.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(begun.promise, moving);
       expect(f.placements.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect.soft(transitionsAtFirstYield).toEqual(["draining"]);
+      expect(transitions).toEqual(["draining"]);
       f.loaded.resolve();
       await f.waitForCancellationStart(stopping);
       expect(f.harness.environments.destroy).not.toHaveBeenCalled();
@@ -692,12 +382,7 @@ it.each(
     const first = f.coordinated.reclaim(REQUEST).catch((error: unknown) => error);
     await f.waitForCancellationStart(first);
     if (phase === "active") {
-      await Promise.race([
-        entered.promise,
-        first.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(entered.promise, first);
     }
     f.armCancellation();
     let secondSettled = false;
@@ -708,12 +393,7 @@ it.each(
         secondSettled = true;
       });
     try {
-      await Promise.race([
-        f.loading.promise,
-        second.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, second);
       if (change === "cleanup") {
         f.loaded.resolve();
         await f.waitForCancellationStart(second);
@@ -729,6 +409,7 @@ it.each(
         await f.placements.startDispatch(REQUEST);
       } else if (change === "incarnation") {
         f.entry.lifecycleRevision = "replacement";
+        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
       }
       f.loaded.resolve();
       const result = await second;
@@ -760,38 +441,29 @@ it.each([
 ])(
   "$action retains captured dispatch authority across cancellation loading ($advance)",
   async ({ advance, action }) => {
-    const {
-      placements,
-      entry,
-      context,
-      loading,
-      loaded,
-      cancellationStarted,
-      harness,
-      coordinated,
-      armCancellation,
-      waitForCancellationStart,
-    } = await cancellationLoadFixture(advance === "failed" ? { failAt: "sync" } : {});
+    const f = await cancellationLoadFixture(advance === "failed" ? { failAt: "sync" } : {});
     const provisioning = createDeferredCore();
     const provisioned = createDeferredCore();
     const attaching = createDeferredCore();
     const attached = createDeferredCore();
     let dispatchSignal: AbortSignal | undefined;
-    vi.mocked(harness.environments.createWithRequest).mockImplementationOnce(async ({ signal }) => {
-      dispatchSignal = signal;
-      provisioning.resolve();
-      await provisioned.promise;
-      return harness.ready;
-    });
+    vi.mocked(f.harness.environments.createWithRequest).mockImplementationOnce(
+      async ({ signal }) => {
+        dispatchSignal = signal;
+        provisioning.resolve();
+        await provisioned.promise;
+        return f.harness.ready;
+      },
+    );
     if (advance === "syncing") {
-      const attach = harness.environments.attachSession;
-      harness.environments.attachSession = vi.fn(async (request) => {
+      const attach = f.harness.environments.attachSession;
+      f.harness.environments.attachSession = vi.fn(async (request) => {
         attaching.resolve();
         await attached.promise;
         return await attach(request);
       });
     }
-    const dispatch = coordinated
+    const dispatch = f.coordinated
       .dispatch(REQUEST, (placement) => {
         if (advance === "observer" && placement.state === "active") {
           placement.generation += 100;
@@ -799,87 +471,85 @@ it.each([
       })
       .catch((error: unknown) => error);
     await provisioning.promise;
-    armCancellation();
+    f.armCancellation();
     const stopping = Promise.resolve()
       .then(async () => {
         if (action === "archive") {
-          return await prepareSessionWorkerPlacementStop({
-            ...REQUEST,
-            action,
-            context: {
-              workerSessionPlacementService: placements,
-              workerPlacementDispatchService: coordinated,
-              workerEnvironmentService: harness.environments,
-            },
-          }).stop();
+          return await (
+            await prepareSessionWorkerPlacementStop({
+              ...REQUEST,
+              action,
+              context: {
+                workerSessionPlacementService: f.placements,
+                workerPlacementDispatchService: f.coordinated,
+                workerEnvironmentService: f.harness.environments,
+              },
+            })
+          ).stop();
         }
-        return await coordinated.reclaim(REQUEST);
+        return await f.coordinated.reclaim(REQUEST);
       })
       .catch((error: unknown) => error);
     try {
-      await Promise.race([
-        loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
-      expect(placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
+      await waitFor(f.loading.promise, stopping);
+      expect(f.placements.get(REQUEST.sessionId)?.state).toBe("provisioning");
       expect(dispatchSignal?.aborted).toBe(false);
       provisioned.resolve();
       if (advance === "syncing") {
         await attaching.promise;
-        expect(placements.get(REQUEST.sessionId)?.state).toBe("syncing");
+        expect(f.placements.get(REQUEST.sessionId)?.state).toBe("syncing");
       } else {
         await dispatch;
-        expect(placements.get(REQUEST.sessionId)?.state).toBe(
+        expect(f.placements.get(REQUEST.sessionId)?.state).toBe(
           advance === "failed" ? "failed" : "active",
         );
       }
       if (advance === "replacement") {
-        const current = placements.get(REQUEST.sessionId);
+        const current = f.placements.get(REQUEST.sessionId);
         if (current?.state !== "active") {
           throw new Error("Replacement fixture requires a completed active dispatch");
         }
-        placements.startDrain({
+        await f.placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
           expectedGeneration: current.generation,
         });
       } else if (advance === "incarnation") {
-        entry.lifecycleRevision = "replacement";
+        f.entry.lifecycleRevision = "replacement";
+        await replaceSessionEntry({ ...REQUEST, storePath: f.storePath }, f.entry);
       }
-      loaded.resolve();
+      f.loaded.resolve();
       if (advance !== "replacement" && advance !== "incarnation") {
-        await waitForCancellationStart(stopping);
+        await f.waitForCancellationStart(stopping);
       }
       if (advance === "syncing") {
         expect(dispatchSignal?.aborted).toBe(true);
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
       }
       attached.resolve();
       const result = await stopping;
       if (advance === "replacement" || advance === "incarnation") {
         expect(result).toBeInstanceOf(Error);
-        expect(cancellationStarted).not.toHaveBeenCalled();
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
+        expect(f.cancellationStarted).not.toHaveBeenCalled();
+        expect(f.harness.environments.destroy).not.toHaveBeenCalled();
       } else {
         if (action === "archive") {
           expect(result).toBeUndefined();
         }
-        expect(action === "archive" ? placements.get(REQUEST.sessionId) : result).toMatchObject({
+        expect(action === "archive" ? f.placements.get(REQUEST.sessionId) : result).toMatchObject({
           state: advance === "completed" || advance === "observer" ? "reclaimed" : "local",
         });
-        expect(cancellationStarted).toHaveBeenCalled();
-        expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
-        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+        expect(f.cancellationStarted).toHaveBeenCalled();
+        expect(f.harness.environments.get(f.harness.ready.environmentId)?.state).toBe("destroyed");
+        expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       }
     } finally {
-      loaded.resolve();
+      f.loaded.resolve();
       provisioned.resolve();
       attached.resolve();
       await Promise.all([dispatch, stopping]);
-      context.chatRunState.clear();
+      f.context.chatRunState.clear();
     }
   },
 );
@@ -910,8 +580,6 @@ it.each([
     });
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
-      awaitTurnClaimRelease: (sessionId, wait) =>
-        f.coordinated.awaitTurnClaimRelease(sessionId, wait),
       loadSessionRuntime: async () => f.runtime,
       revokeSessionAuthority: vi.fn(),
     });
@@ -922,11 +590,7 @@ it.each([
       .move(
         {
           ...REQUEST,
-          source: {
-            generation: active.generation,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
+          source: source(active),
           target:
             targetKind === "profile"
               ? { kind: "profile", profileId: "destination-profile" }
@@ -962,12 +626,7 @@ it.each([
       },
     );
     try {
-      await Promise.race([
-        f.loading.promise,
-        stopping.then((result) => {
-          throw result;
-        }),
-      ]);
+      await waitFor(f.loading.promise, stopping);
       reconciled.resolve();
       await Promise.race([
         cleaning.promise,
@@ -1002,9 +661,9 @@ it.each([
         expect.soft(await moving).toMatchObject({ state: "local" });
         expect(localGenerations.size).toBe(1);
         expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-        expect.soft(f.placements.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
+        expect.soft(await f.placements.getPlacementMoveAsync(REQUEST.sessionId)).toBeUndefined();
         expect(f.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-        expect(f.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await f.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(f.harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(f.harness.log.filter((event) => event === "placement:requested")).toHaveLength(1);
       }
@@ -1013,6 +672,69 @@ it.each([
       cleaned.resolve();
       f.loaded.resolve();
       await Promise.all([moving, stopping]);
+      f.context.chatRunState.clear();
+    }
+  },
+);
+
+it.each(["transaction", "commit"] as const)(
+  "retains the abandoned Stop decision when the caller changes at %s completion admission",
+  async (stage) => {
+    let destroyed = false;
+    const f = await cancellationLoadFixture({
+      afterDestroy: () => {
+        destroyed = true;
+      },
+    });
+    const active = await f.coordinated.dispatch(REQUEST);
+    f.harness.markEnvironmentNodeDeviceId("device-1");
+    f.database.db
+      .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
+      .run("device:device-1", active.environmentId);
+    const begun = await f.placements.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: source(active),
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+    let allowed = true;
+    let admissionReached = false;
+    let connected = true;
+    const assertLifetime = () => {
+      if (!connected) {
+        throw new Error("Stop connection closed");
+      }
+    };
+    const assertCaller = () => {
+      assertLifetime();
+      if (!allowed) {
+        throw new Error("Stop caller revoked at completion");
+      }
+    };
+    const authorize = Object.assign(assertCaller, {
+      assertWorkerLifetime: assertLifetime,
+      assertWorkerGrant: assertCaller,
+    });
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (destroyed && request.stage === stage) {
+        admissionReached = true;
+        allowed = false;
+      }
+      admit(request, grant);
+    });
+    try {
+      await expect(f.coordinated.reclaim(REQUEST, authorize)).rejects.toThrow(
+        "Stop caller revoked at completion",
+      );
+      expect(admissionReached).toBe(true);
+      expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
+      expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+      expect((await f.placements.getPlacementMoveAsync(REQUEST.sessionId))?.operationId).toBe(
+        begun.intent.operationId,
+      );
+    } finally {
+      connected = false;
+      admission.mockRestore();
       f.context.chatRunState.clear();
     }
   },

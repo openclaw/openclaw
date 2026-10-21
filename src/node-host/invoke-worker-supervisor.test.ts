@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -16,6 +22,7 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import * as logger from "../logger.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -32,6 +39,15 @@ import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js"
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -89,6 +105,9 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt) {
       .fn<NodeWorkerSupervisorControl["retainWorkspaces"]>()
       .mockResolvedValue({ applied: true, deleted: 0, hasMore: false }),
     cancel: vi.fn<NodeWorkerSupervisorControl["cancel"]>().mockResolvedValue(receipt),
+    observeProcesses: vi
+      .fn<NodeWorkerSupervisorControl["observeProcesses"]>()
+      .mockResolvedValue({ sessionId: "session-1", processes: [], truncated: false }),
     stopEnvironment: vi
       .fn<NodeWorkerSupervisorControl["stopEnvironment"]>()
       .mockResolvedValue(undefined),
@@ -332,13 +351,18 @@ describe("node-host worker supervisor commands", () => {
 
   it.runIf(process.platform !== "win32")(
     "kills an in-flight desktop launcher when its invoke owner closes",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("node-worker-desktop-launch-abort-");
-      const executablePath = path.join(root, "launcher");
+      const executablePath = path.join(root, "launcher.mjs");
       const pidPath = `${executablePath}.pid`;
       fs.writeFileSync(
         executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        `#!${process.execPath}\n${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+sendReceipt(${JSON.stringify(pidPath)}, "ready");
+setInterval(() => {}, 1000);
+`,
         { mode: 0o755 },
       );
       const controller = new AbortController();
@@ -349,19 +373,34 @@ describe("node-host worker supervisor commands", () => {
         supervisor: supervisorWith(fullReceipt()),
         signal: controller.signal,
       });
-      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
-      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      let pid: number | undefined;
       try {
+        // The durable PID write protects readiness when exit overtakes receipt delivery.
+        const settled = running.then(
+          () => expect(fs.existsSync(pidPath)).toBe(true),
+          (error: unknown) => {
+            if (!fs.existsSync(pidPath)) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+        const launcherPid = Number(fs.readFileSync(pidPath, "utf8").trim());
+        pid = launcherPid;
         controller.abort(new Error("desktop owner closed"));
 
         await expect(running).resolves.toMatchObject({ result: undefined });
-        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+        await vi.waitFor(() => expect(() => process.kill(launcherPid, 0)).toThrow());
       } finally {
+        controller.abort();
         try {
-          process.kill(pid, "SIGKILL");
+          if (pid) {
+            process.kill(pid, "SIGKILL");
+          }
         } catch {
           // The expected path already reaped the launcher.
         }
+        await running;
       }
     },
   );
@@ -468,7 +507,6 @@ describe("node-host worker supervisor commands", () => {
     expect(retainBundles).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,
       bundleHashes: ["a".repeat(64)],
-      acknowledgedGeneration: 3,
     });
     expect(inspectBundle).toHaveBeenCalledWith({
       gatewayNamespace: input.gatewayNamespace,
@@ -803,21 +841,31 @@ describe("node-host worker supervisor commands", () => {
     });
   });
 
-  it("returns a bounded generic error without leaking supervisor details", async () => {
-    const leaked = `/private/path/${"secret".repeat(2_000)}`;
+  it("returns a generic error but logs the bounded, redacted supervisor cause", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const leaked = `cleanup incomplete at /private/path Bearer sk-abcdefghijklmnopqrstuv ${"x".repeat(12_000)}`;
     const supervisor = supervisorWith(fullReceipt());
     supervisor.status.mockRejectedValueOnce(new Error(leaked));
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+        supervisor,
+      });
 
-    const { result } = await invokePrivate({
-      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
-      paramsJSON: JSON.stringify({ launchId: "launch-1" }),
-      supervisor,
-    });
-
-    expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    const message = result?.error?.message ?? "";
-    expect(message).not.toContain("private/path");
-    expect(message.length).toBeLessThan(256);
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).not.toContain("private/path");
+      expect(message.length).toBeLessThan(256);
+      expect(warn).toHaveBeenCalledOnce();
+      const logged = String(warn.mock.calls[0]?.[0]);
+      expect(logged).toContain(`(${NODE_WORKER_SUPERVISOR_STATUS_COMMAND}, UNAVAILABLE)`);
+      expect(logged).toContain("cleanup incomplete");
+      expect(logged).not.toContain("sk-abcdefghijklmnopqrstuv");
+      expect(logged.length).toBeLessThan(leaked.length);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("preserves a terminal capacity result across node invoke", async () => {
@@ -838,6 +886,47 @@ describe("node-host worker supervisor commands", () => {
         message: "node worker capacity remained full for 10000 ms",
       },
     });
+  });
+
+  it("returns and logs bounded, redacted workspace failure details", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const workspace = new NodeWorkerWorkspaceRuntime({
+      root: tempDirs.make("node-worker-workspace-diagnostic-"),
+    });
+    const exec = vi
+      .spyOn(workspace, "exec")
+      .mockRejectedValueOnce(
+        new Error(
+          `workspace quiescence failed: Authorization: Bearer ${secret}\n${"detail ".repeat(300)}terminal diagnosis`,
+        ),
+      );
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+        paramsJSON: JSON.stringify({
+          gatewayNamespace: "gateway-1",
+          environmentId: "environment-1",
+          sessionId: "session-1",
+          generation: 4,
+          argv: ["node", "-e", "void 0"],
+        }),
+        workspace,
+      });
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      const message = result?.error?.message ?? "";
+      expect(message).toContain("workspace quiescence failed");
+      expect(message).toContain("terminal diagnosis");
+      expect(message).not.toContain(secret);
+      expect(message).not.toContain("\n");
+      expect(message.length).toBeLessThanOrEqual(500);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `node workspace command failed (${NODE_WORKER_WORKSPACE_EXEC_COMMAND}, UNAVAILABLE): ${message}`,
+      );
+    } finally {
+      exec.mockRestore();
+      warn.mockRestore();
+    }
   });
 
   it("preserves a typed workspace transfer failure across node invoke", async () => {

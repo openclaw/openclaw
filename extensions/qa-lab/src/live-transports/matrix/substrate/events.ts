@@ -27,7 +27,6 @@ type MatrixQaObservedEventAttachment = {
 type MatrixQaObservedApproval = {
   agentId?: string;
   allowedDecisions?: string[];
-  commandTextPreview?: string;
   hasCommandText?: boolean;
   id: string;
   kind: ChannelApprovalKind;
@@ -73,7 +72,6 @@ export type MatrixQaObservedEvent = {
 };
 
 const MATRIX_QA_APPROVAL_METADATA_KEY = "com.openclaw.approval";
-const MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS = 160;
 
 function readNonEmptyStringEntries(value: unknown) {
   return Array.isArray(value)
@@ -92,8 +90,7 @@ function resolveMatrixQaMessageContent(
   return content;
 }
 
-function normalizeMatrixQaRelation(value: unknown) {
-  const relation = asNullableObjectRecord(value);
+function normalizeMatrixQaRelation(relation: Record<string, unknown> | null) {
   if (!relation) {
     return undefined;
   }
@@ -124,20 +121,9 @@ function resolveMatrixQaObservedEventKind(params: { msgtype?: string; type: stri
 }
 
 function resolveMatrixQaAttachmentKind(msgtype: string | undefined) {
-  switch (msgtype) {
-    case "m.audio":
-      return "audio" as const;
-    case "m.file":
-      return "file" as const;
-    case "m.image":
-      return "image" as const;
-    case "m.sticker":
-      return "sticker" as const;
-    case "m.video":
-      return "video" as const;
-    default:
-      return undefined;
-  }
+  return (["audio", "file", "image", "sticker", "video"] as const).find(
+    (kind) => msgtype === `m.${kind}`,
+  );
 }
 
 function isLikelyMatrixQaFilenameBody(value: string) {
@@ -177,8 +163,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
     return undefined;
   }
   const commandText = readStringField(metadata, "commandText")?.trim();
-  const commandPreview = readStringField(metadata, "commandPreview")?.trim();
-  const commandTextPreview = commandPreview?.slice(0, MATRIX_QA_APPROVAL_COMMAND_PREVIEW_CHARS);
   return {
     id,
     kind,
@@ -190,7 +174,6 @@ function normalizeMatrixQaApprovalMetadata(value: unknown): MatrixQaObservedAppr
       ? { allowedDecisions: readNonEmptyStringEntries(metadata.allowedDecisions) }
       : {}),
     ...(commandText ? { hasCommandText: true } : {}),
-    ...(commandTextPreview ? { commandTextPreview } : {}),
     ...(kind === "plugin" && typeof metadata.pluginId === "string"
       ? { pluginId: metadata.pluginId }
       : {}),
@@ -224,7 +207,7 @@ export function normalizeMatrixQaObservedEvent(
   // An edit's outer m.replace relation describes wire delivery, not the
   // logical relation of the edited message. Matrix ignores relations inside
   // m.new_content, so the observer must inherit the original event's relation.
-  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesToRaw);
+  const logicalRelation = replacesEventId ? undefined : normalizeMatrixQaRelation(relatesTo);
   const normalizedMsgtype = readStringField(messageContent, "msgtype") ?? msgtype;
   const normalizedFilename =
     readStringField(messageContent, "filename") ?? readStringField(content, "filename");

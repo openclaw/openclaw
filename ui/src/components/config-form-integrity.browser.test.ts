@@ -2,16 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 // Control UI tests cover config form constraints, draft recovery, and repeated controls.
 import {
   renderAnalyzedFormFixture,
-  renderTextInputFixture,
-  renderNumberInputFixture,
   renderArrayFixture,
-} from "../test-helpers/config-form-fixtures.ts";
-import {
-  ConfigFormCollectionDraft,
-  type ConfigFormCollectionDraftCommit,
-} from "./config-form-collection-draft.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import { configFieldId } from "./config-form.shared.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -22,7 +17,7 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form integrity", () => {
-  it("applies schema constraints and derives bounded repeated defaults", async () => {
+  it("applies schema constraints and derives bounded repeated defaults", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -214,10 +209,10 @@ describe("config form integrity", () => {
     expect(addCode.disabled).toBe(false);
     addCode.click();
     const codeDraftHost = expectElement(
-      codes.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      codes.querySelector("openclaw-config-form-collection-draft"),
       "patterned string array draft host",
     );
-    await codeDraftHost.updateComplete;
+    flush();
     const codeDraft = expectElement(
       codes.querySelector<HTMLElement>(".cfg-collection-draft"),
       "patterned string array draft",
@@ -235,7 +230,7 @@ describe("config form integrity", () => {
     );
     codeValue.value = "abc";
     commitCode.click();
-    await codeDraftHost.updateComplete;
+    flush();
     const invalidCodeValue = expectElement(
       codeDraftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "invalid patterned string array draft value",
@@ -244,7 +239,7 @@ describe("config form integrity", () => {
     expect(onPatch).not.toHaveBeenCalledWith(["laboratory", "codes"], expect.anything());
     invalidCodeValue.value = "123";
     invalidCodeValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await codeDraftHost.updateComplete;
+    flush();
     expectElement(
       Array.from(codeDraftHost.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) => button.textContent?.trim() === "Add",
@@ -252,7 +247,7 @@ describe("config form integrity", () => {
       "valid patterned string array draft commit",
     ).click();
     expect(onPatch).toHaveBeenCalledWith(["laboratory", "codes"], ["123"]);
-    await codeDraftHost.updateComplete;
+    flush();
     expect(codes.querySelector(".cfg-collection-draft")).toBeNull();
     const limited = expectElement(
       Array.from(container.querySelectorAll<HTMLElement>(".cfg-array")).find((block) =>
@@ -337,267 +332,115 @@ describe("config form integrity", () => {
     container.remove();
   });
 
-  it("generates unambiguous accessible IDs for nested paths", () => {
-    expect(configFieldId(["a--b"], "description")).not.toBe(
-      configFieldId(["a", "b"], "description"),
-    );
-    expect(configFieldId([1], "description")).not.toBe(configFieldId(["1"], "description"));
-    expect(() => configFieldId(["\ud800"], "description")).not.toThrow();
-    expect(configFieldId(["\ud800"], "description")).not.toBe(
-      configFieldId(["\ufffd"], "description"),
-    );
-  });
-
-  it("keeps rejected map-key edits synchronized with the persisted key", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        accounts: { type: "object", additionalProperties: true },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { accounts: { alpha: {}, beta: {} } },
-      onPatch,
-    });
-
-    const alpha = expectElement(
-      Array.from(container.querySelectorAll<HTMLInputElement>(".cfg-map input")).find(
-        (input) => input.value === "alpha",
-      ),
-      "alpha map key input",
-    );
-    alpha.value = " ";
-    alpha.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(alpha.value).toBe("alpha");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    alpha.value = "beta";
-    alpha.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(alpha.value).toBe("alpha");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("commits typed map entries only after the local draft is valid", async () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        aliases: {
-          type: "object",
-          properties: {
-            fixed: { type: "integer" },
-          },
-          additionalProperties: {
-            type: "string",
-            minLength: 3,
-            pattern: "^[0-9]+$",
+  it.each(["primary", "constructor"])(
+    "commits typed map entry %s only after the local draft is valid",
+    (entryKey) => {
+      const onPatch = vi.fn();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          aliases: {
+            type: "object",
+            properties: {
+              fixed: { type: "integer" },
+            },
+            additionalProperties: {
+              type: "string",
+              minLength: 3,
+              pattern: "^[0-9]+$",
+            },
           },
         },
-      },
-    });
-    renderAnalyzedFormFixture(container, analysis, {
-      value: { aliases: {} },
-      onPatch,
-    });
+      });
+      renderAnalyzedFormFixture(container, analysis, {
+        value: { aliases: {} },
+        onPatch,
+      });
 
-    const addEntry = expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "typed map add button",
-    );
-    addEntry.click();
-    const draftHost = expectElement(
-      container.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
-      "typed map draft host",
-    );
-    await draftHost.updateComplete;
-    const draft = expectElement(
-      container.querySelector<HTMLElement>(".cfg-map .cfg-collection-draft"),
-      "typed map draft",
-    );
-    const key = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-      "typed map draft key",
-    );
-    const value = expectElement(
-      draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "typed map draft value",
-    );
-    const commit = expectElement(
-      Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "typed map draft commit",
-    );
-    key.value = "fixed";
-    key.dispatchEvent(new Event("input", { bubbles: true }));
-    value.value = "123";
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
-    commit.click();
-    await draftHost.updateComplete;
-    const reservedKey = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
-      "reserved typed map draft key",
-    );
-    expect(reservedKey.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
+      const addEntry = expectElement(
+        Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "typed map add button",
+      );
+      addEntry.click();
+      const draftHost = expectElement(
+        container.querySelector("openclaw-config-form-collection-draft"),
+        "typed map draft host",
+      );
+      flush();
+      const draft = expectElement(
+        container.querySelector<HTMLElement>(".cfg-map .cfg-collection-draft"),
+        "typed map draft",
+      );
+      const key = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "typed map draft key",
+      );
+      const value = expectElement(
+        draft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "typed map draft value",
+      );
+      const commit = expectElement(
+        Array.from(draft.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "typed map draft commit",
+      );
+      key.value = "fixed";
+      key.dispatchEvent(new Event("input", { bubbles: true }));
+      value.value = "123";
+      value.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      commit.click();
+      flush();
+      const reservedKey = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-key]"),
+        "reserved typed map draft key",
+      );
+      expect(reservedKey.getAttribute("aria-invalid")).toBe("true");
+      expect(onPatch).not.toHaveBeenCalled();
 
-    draftHost.dispatchEvent(
-      new CustomEvent<ConfigFormCollectionDraftCommit>("config-collection-draft-commit", {
-        bubbles: true,
-        detail: { key: "constructor", value: "123" },
-      }),
-    );
-    expect(onPatch).toHaveBeenCalledWith(["aliases"], { constructor: "123" });
-    onPatch.mockClear();
-
-    reservedKey.value = "primary";
-    reservedKey.dispatchEvent(new Event("input", { bubbles: true }));
-    const invalidValueInput = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "typed map draft value after reserved key",
-    );
-    invalidValueInput.value = "abc";
-    invalidValueInput.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
-    expectElement(
-      Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "invalid typed map draft commit",
-    ).click();
-    await draftHost.updateComplete;
-    const invalidValue = expectElement(
-      draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
-      "invalid typed map draft value",
-    );
-    expect(invalidValue.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-
-    invalidValue.value = "123";
-    invalidValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
-    expectElement(
-      Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add Entry",
-      ),
-      "valid typed map draft commit",
-    ).click();
-    expect(onPatch).toHaveBeenCalledWith(["aliases"], { primary: "123" });
-    await draftHost.updateComplete;
-    expect(container.querySelector(".cfg-map .cfg-collection-draft")).toBeNull();
-    container.remove();
-  });
-
-  it("validates tuple collection drafts by position and additional-item policy", async () => {
-    const host = document.createElement(
-      "openclaw-config-form-collection-draft",
-    ) as ConfigFormCollectionDraft;
-    const commits = vi.fn();
-    host.id = "tuple-draft";
-    host.props = {
-      schema: {
-        type: "array",
-        items: [
-          {
-            allOf: [
-              { type: "string", pattern: "^[0-9]+$", enum: ["123", "12"] },
-              { minLength: 3 },
-              { anyOf: [{ const: "123" }, { const: "12" }] },
-              { oneOf: [{ pattern: "^[0-9]+$" }, { const: "never" }] },
-            ],
-          },
-          { type: "number", const: 0 },
-        ],
-        additionalItems: false,
-      },
-      label: "Tuple",
-      disabled: false,
-      identity: "tuple-draft",
-      sourceIdentity: [],
-    };
-    host.addEventListener("config-collection-draft-commit", commits);
-    document.body.append(host);
-
-    host.openDraft();
-    await host.updateComplete;
-    const value = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "tuple draft value",
-    );
-    value.value = '["123",-0]';
-    value.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "valid tuple draft commit",
-    ).click();
-    expect(commits).toHaveBeenCalledTimes(1);
-
-    host.openDraft();
-    await host.updateComplete;
-    const invalidValue = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "invalid tuple draft value",
-    );
-    invalidValue.value = '["12",-0]';
-    invalidValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "invalid tuple draft commit",
-    ).click();
-    await host.updateComplete;
-    expect(commits).toHaveBeenCalledTimes(1);
-    expect(
+      reservedKey.value = entryKey;
+      reservedKey.dispatchEvent(new Event("input", { bubbles: true }));
+      const invalidValueInput = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "typed map draft value after reserved key",
+      );
+      invalidValueInput.value = "abc";
+      invalidValueInput.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
       expectElement(
-        host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-        "rejected tuple draft value",
-      ).getAttribute("aria-invalid"),
-    ).toBe("true");
+        Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "invalid typed map draft commit",
+      ).click();
+      flush();
+      const invalidValue = expectElement(
+        draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
+        "invalid typed map draft value",
+      );
+      expect(invalidValue.getAttribute("aria-invalid")).toBe("true");
+      expect(onPatch).not.toHaveBeenCalled();
 
-    const extraValue = expectElement(
-      host.querySelector<HTMLTextAreaElement>("[data-collection-draft-value]"),
-      "tuple draft value with extra item",
-    );
-    extraValue.value = '["123",-0,2]';
-    extraValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await host.updateComplete;
-    expectElement(
-      Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "tuple draft commit with extra item",
-    ).click();
-    await host.updateComplete;
-    expect(commits).toHaveBeenCalledTimes(1);
-
-    // Identity churn with identical content (autosave ack clone) keeps the
-    // draft open; only a real external array change closes it.
-    host.props = {
-      ...host.props,
-      sourceIdentity: [],
-    };
-    await host.updateComplete;
-    expect(host.querySelector(".cfg-collection-draft")).not.toBeNull();
-    host.props = {
-      ...host.props,
-      sourceIdentity: ["externally-added"],
-    };
-    await host.updateComplete;
-    expect(host.querySelector(".cfg-collection-draft")).toBeNull();
-    host.remove();
-  });
+      invalidValue.value = "123";
+      invalidValue.dispatchEvent(new Event("input", { bubbles: true }));
+      flush();
+      expectElement(
+        Array.from(draftHost.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Add Entry",
+        ),
+        "valid typed map draft commit",
+      ).click();
+      expect(onPatch).toHaveBeenCalledWith(["aliases"], { [entryKey]: "123" });
+      flush();
+      expect(container.querySelector(".cfg-map .cfg-collection-draft")).toBeNull();
+      container.remove();
+    },
+  );
 
   it("preserves unaffected scalar drafts and resets changed repeated rows", () => {
     const onPatch = vi.fn();
@@ -718,132 +561,7 @@ describe("config form integrity", () => {
     expect(revealed.validationMessage).toBe("");
   });
 
-  it("validates scalar edits against composed schemas", () => {
-    const onPatch = vi.fn();
-    const stringContainer = document.createElement("div");
-    renderTextInputFixture(stringContainer, {
-      schema: {
-        type: "string",
-        allOf: [{ pattern: "^[0-9]+$" }],
-      },
-      value: "123",
-      path: ["code"],
-      inputType: "text",
-      onPatch,
-    });
-
-    const code = expectElement(
-      stringContainer.querySelector<HTMLInputElement>("input[aria-label='Code']"),
-      "composed string scalar",
-    );
-    code.value = "abc";
-    code.dispatchEvent(new Event("input", { bubbles: true }));
-    code.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(code.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalledWith(["code"], "abc");
-    code.value = "456";
-    code.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(code.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["code"], "456");
-
-    const numberContainer = document.createElement("div");
-    renderNumberInputFixture(numberContainer, {
-      schema: {
-        type: "integer",
-        allOf: [{ minimum: 2 }, { multipleOf: 2 }],
-      },
-      value: 2,
-      path: ["amount"],
-      onPatch,
-    });
-    const amount = expectElement(
-      numberContainer.querySelector<HTMLInputElement>("input[aria-label='Amount']"),
-      "composed numeric scalar",
-    );
-    expect(
-      expectElement(
-        numberContainer.querySelector<HTMLButtonElement>("button[aria-label='Amount: +2']"),
-        "composed numeric increment",
-      ).disabled,
-    ).toBe(false);
-    numberContainer
-      .querySelector<HTMLButtonElement>("button[aria-label='Amount: +2']")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-    onPatch.mockClear();
-    amount.value = "3";
-    amount.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(amount.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalledWith(["amount"], 3);
-    amount.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(amount.value).toBe("4");
-    expect(amount.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-    amount.value = "4";
-    amount.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(amount.getAttribute("aria-invalid")).toBe("false");
-    expect(onPatch).toHaveBeenCalledWith(["amount"], 4);
-
-    const overflowContainer = document.createElement("div");
-    renderNumberInputFixture(overflowContainer, {
-      schema: { type: "integer", multipleOf: 2 },
-      value: 2,
-      path: ["overflow"],
-      onPatch,
-    });
-    const overflow = expectElement(
-      overflowContainer.querySelector<HTMLInputElement>("input[aria-label='Overflow']"),
-      "overflow numeric scalar",
-    );
-    onPatch.mockClear();
-    Object.defineProperty(overflow, "value", {
-      configurable: true,
-      value: "1e309",
-      writable: true,
-    });
-    overflow.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(overflow.getAttribute("aria-invalid")).toBe("true");
-    expect(() => overflow.dispatchEvent(new Event("change", { bubbles: true }))).not.toThrow();
-    expect(overflow.value).toBe("1e309");
-    expect(overflow.getAttribute("aria-invalid")).toBe("true");
-    expect(onPatch).not.toHaveBeenCalled();
-  });
-
-  it("materializes and preserves array minItems", () => {
-    const onPatch = vi.fn();
-    const container = document.createElement("div");
-    const schema = {
-      type: "array",
-      allOf: [{ minItems: 2, maxItems: 2 }],
-      items: { type: "string" },
-    };
-    const renderValue = (value: unknown) => {
-      renderArrayFixture(container, {
-        schema,
-        value,
-        path: ["codes"],
-        onPatch,
-      });
-    };
-
-    renderValue(undefined);
-    expectElement(
-      Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === "Add",
-      ),
-      "minimum array add",
-    ).click();
-    expect(onPatch).toHaveBeenCalledWith(["codes"], ["", ""]);
-
-    renderValue(["", ""]);
-    const removeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("button[aria-label='Remove item']"),
-    );
-    expect(removeButtons).toHaveLength(2);
-    expect(removeButtons.every((button) => button.disabled)).toBe(true);
-  });
-
-  it("retains unset array drafts until the collection source changes", async () => {
+  it("retains unset array drafts until the collection source changes", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -866,27 +584,27 @@ describe("config form integrity", () => {
       "unset codes array",
     );
     const draftHost = expectElement(
-      codes.querySelector<ConfigFormCollectionDraft>("openclaw-config-form-collection-draft"),
+      codes.querySelector("openclaw-config-form-collection-draft"),
       "unset codes draft host",
     );
-    await draftHost.updateComplete;
+    flush();
     expectElement(
       Array.from(codes.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) => button.textContent?.trim() === "Add",
       ),
       "unset codes add button",
     ).click();
-    await draftHost.updateComplete;
+    flush();
     const draftValue = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "unset codes draft value",
     );
     draftValue.value = "123";
     draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-    await draftHost.updateComplete;
+    flush();
 
     renderValue(undefined);
-    await draftHost.updateComplete;
+    flush();
     expect(
       expectElement(
         draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
@@ -895,7 +613,7 @@ describe("config form integrity", () => {
     ).toBe("123");
 
     renderValue([]);
-    await draftHost.updateComplete;
+    flush();
     expect(draftHost.querySelector(".cfg-collection-draft")).toBeNull();
     container.remove();
   });

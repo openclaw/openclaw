@@ -29,11 +29,9 @@ export function resolveAuthProfileFailureReason(params: {
     params.failoverReason === "tls_certificate" ||
     params.failoverReason === "empty_response" ||
     params.failoverReason === "context_overflow" ||
-    params.failoverReason === "format"
+    params.failoverReason === "format" ||
+    (params.failoverReason === "timeout" && params.providerStarted !== true)
   ) {
-    return null;
-  }
-  if (params.failoverReason === "timeout" && params.providerStarted !== true) {
     return null;
   }
   return params.failoverReason;

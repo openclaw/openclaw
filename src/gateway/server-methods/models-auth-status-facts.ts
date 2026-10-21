@@ -6,80 +6,35 @@ import {
 } from "../../agents/auth-health.js";
 import { DEFAULT_OAUTH_REFRESH_MARGIN_MS } from "../../agents/auth-profiles/credential-state.js";
 import { isExternalCliAuthProfileInScope } from "../../agents/auth-profiles/external-cli-sync.js";
-import { getRuntimeExternalCliProfileIds } from "../../agents/auth-profiles/runtime-external-profile-references.js";
 import { getRuntimeAuthProfileStoreSnapshotsRevision } from "../../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "../../agents/model-auth-env-vars.js";
+import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
+import {
+  isKnownEnvApiKeyMarker,
+  isNonSecretApiKeyMarker,
+} from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
+import {
+  resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
+} from "../../agents/model-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId } from "../../infra/provider-usage.types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../secrets/provider-credential-values.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "../server-model-catalog-auth.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
-import { resolveProviderApiKeys } from "./models-auth-status-api-keys.js";
 import { resolveConfigBoundProfileIds } from "./models-auth-status-config.js";
 import type { ModelAuthStatusProvider } from "./models-auth-status.types.js";
 
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
-
-function resolveConfiguredProviders(
-  cfg: OpenClawConfig,
-  apiKeys: ReadonlyMap<string, ModelAuthStatusProvider["apiKey"]>,
-): {
-  providers: string[];
-  expectsOAuth: Set<string>;
-} {
-  const out = new Set<string>();
-  const expectsOAuth = new Set<string>();
-  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
-    const normalized = normalizeProviderId(id);
-    if (!normalized) {
-      continue;
-    }
-    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
-    const hasApiKey =
-      hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults) &&
-      (rawKey === NON_ENV_SECRETREF_MARKER ||
-        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
-    const mode = provider?.auth;
-    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
-      continue;
-    }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    out.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
-  }
-  // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
-  for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
-    const provider = profile?.provider;
-    const mode = profile?.mode;
-    if (
-      typeof provider !== "string" ||
-      provider.length === 0 ||
-      (mode !== "oauth" && mode !== "token")
-    ) {
-      continue;
-    }
-    const normalized = normalizeProviderId(provider);
-    if (!normalized) {
-      continue;
-    }
-    if (apiKeys.has(normalized)) {
-      continue;
-    }
-    out.add(normalized);
-    if (mode === "oauth") {
-      expectsOAuth.add(normalized);
-    }
-  }
-  return { providers: Array.from(out), expectsOAuth };
-}
 
 type ModelAuthStatusFacts = ReturnType<typeof buildModelAuthStatusFacts>;
 const authStatusFacts = new WeakMap<
@@ -98,6 +53,11 @@ const authStatusFacts = new WeakMap<
   >
 >();
 
+function resolveEnvVarName(source: string): string | undefined {
+  const match = /^(?:shell env|env): ([A-Z][A-Z0-9_]*)$/u.exec(source);
+  return match?.[1];
+}
+
 function buildModelAuthStatusFacts(
   preparedSnapshot: PreparedGatewayModelCatalogSnapshot,
   now: number,
@@ -111,9 +71,109 @@ function buildModelAuthStatusFacts(
     metadataSnapshot: preparedSnapshot.metadataSnapshot,
     includeUntrustedWorkspacePlugins: false,
   };
-  const apiKeys = resolveProviderApiKeys(cfg, store, authAliasLookupParams);
-  const configured = resolveConfiguredProviders(cfg, apiKeys);
-  const statusProviderIds = new Set(configured.providers);
+  const lookupMaps = resolveProviderEnvAuthLookupMaps({
+    ...authAliasLookupParams,
+    config: cfg,
+    env: process.env,
+  });
+  const providerIds = new Set<string>([
+    ...Object.keys(cfg.models?.providers ?? {}),
+    ...Object.values(cfg.auth?.profiles ?? {})
+      .map((profile) => profile?.provider)
+      .filter((provider): provider is string => typeof provider === "string"),
+    ...listProviderEnvAuthLookupKeys(lookupMaps),
+  ]);
+  const apiKeys = new Map<string, ModelAuthStatusProvider["apiKey"]>();
+  for (const rawProvider of providerIds) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
+    if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
+      const profileReference = resolveProviderEntryApiKeyProfileReference({
+        cfg,
+        authAliasLookupParams,
+        provider,
+        store,
+      });
+      if (profileReference.kind !== "profile" && profileReference.kind !== "profile-incompatible") {
+        if (ref && ref.source !== "env") {
+          apiKeys.set(provider, { source: "config" });
+          continue;
+        }
+        const available = resolveUsableCustomProviderApiKey({ cfg, provider, env: process.env });
+        if (available) {
+          const rawKey =
+            typeof providerConfig?.apiKey === "string" ? providerConfig.apiKey.trim() : "";
+          if (rawKey && isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false })) {
+            continue;
+          }
+          const envVar =
+            ref?.source === "env"
+              ? ref.id
+              : profileReference.kind === "marker" && isKnownEnvApiKeyMarker(rawKey)
+                ? rawKey
+                : resolveEnvVarName(available.source);
+          apiKeys.set(provider, envVar ? { source: "env", envVar } : { source: "config" });
+          continue;
+        }
+      }
+    }
+    const envEvidence = resolveProviderEnvAuthEvidence(provider, process.env, {
+      aliasMap: lookupMaps.aliasMap,
+      candidateMap: lookupMaps.envCandidateMap,
+      authEvidenceMap: lookupMaps.authEvidenceMap,
+    });
+    if (envEvidence?.mode === "api-key") {
+      const envVar = resolveEnvVarName(envEvidence.source);
+      apiKeys.set(provider, { source: "env", ...(envVar ? { envVar } : {}) });
+    }
+  }
+  const statusProviderIds = new Set<string>();
+  const expectsOAuth = new Set<string>();
+  const includeConfiguredAuthProvider = (provider: string, mode: string | undefined) => {
+    if (apiKeys.has(provider)) {
+      return;
+    }
+    statusProviderIds.add(provider);
+    if (mode === "oauth") {
+      expectsOAuth.add(provider);
+    }
+  };
+  for (const [id, provider] of Object.entries(cfg.models?.providers ?? {})) {
+    const normalized = normalizeProviderId(id);
+    if (!normalized) {
+      continue;
+    }
+    const rawKey = typeof provider?.apiKey === "string" ? provider.apiKey.trim() : "";
+    const hasApiKey =
+      hasConfiguredSecretInput(provider?.apiKey, cfg.secrets?.defaults) &&
+      (rawKey === NON_ENV_SECRETREF_MARKER ||
+        !isNonSecretApiKeyMarker(rawKey, { includeEnvVarName: false }));
+    const mode = provider?.auth;
+    if (mode !== "oauth" && mode !== "token" && !hasApiKey) {
+      continue;
+    }
+    includeConfiguredAuthProvider(normalized, mode);
+  }
+  // auth.profiles opt in via `mode: oauth | token`; API-key profiles have no lifecycle.
+  for (const profile of Object.values(cfg.auth?.profiles ?? {})) {
+    const provider = profile?.provider;
+    const mode = profile?.mode;
+    if (
+      typeof provider !== "string" ||
+      provider.length === 0 ||
+      (mode !== "oauth" && mode !== "token")
+    ) {
+      continue;
+    }
+    const normalized = normalizeProviderId(provider);
+    if (!normalized) {
+      continue;
+    }
+    includeConfiguredAuthProvider(normalized, mode);
+  }
   for (const provider of apiKeys.keys()) {
     statusProviderIds.add(provider);
   }
@@ -128,7 +188,6 @@ function buildModelAuthStatusFacts(
       store,
       cfg,
       providers: statusProviderIds.size > 0 ? [...statusProviderIds] : undefined,
-      allowKeychainPrompt: false,
       authAliasLookupParams,
     });
   const authHealth = readAuthHealth();
@@ -143,23 +202,19 @@ function buildModelAuthStatusFacts(
   // enrichment explicit so static auth providers are not polled by default.
   const usageProviderIds = [
     ...new Set(
-      authHealth.profiles
-        .filter((p) => {
-          if (p.type === "oauth" || p.type === "token") {
-            return true;
-          }
-          const usageProvider = resolveUsageProviderId(p.provider, {
-            credentialType: p.type,
-          });
-          return usageProvider ? apiKeyUsageStatusProviders.has(usageProvider) : false;
-        })
-        .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
-        .filter((id): id is UsageProviderId => Boolean(id)),
+      authHealth.profiles.flatMap((profile) => {
+        const provider = resolveUsageProviderId(profile.provider, { credentialType: profile.type });
+        return provider &&
+          (profile.type === "oauth" ||
+            profile.type === "token" ||
+            apiKeyUsageStatusProviders.has(provider))
+          ? [provider]
+          : [];
+      }),
     ),
   ];
 
   const externalProfileIds = new Set(store.runtimeExternalProfileIds ?? []);
-  const externalCliProfileIds = new Set(getRuntimeExternalCliProfileIds(store));
   const logoutProfileIds = new Set(
     Object.entries(store.profiles)
       .filter(
@@ -202,12 +257,11 @@ function buildModelAuthStatusFacts(
   return {
     authAliasLookupParams,
     apiKeys,
-    configured,
+    expectsOAuth,
     authHealth,
     readAuthHealth: readsExternalAuth ? readAuthHealth : undefined,
     usageProviderIds,
     externalProfileIds,
-    externalCliProfileIds,
     logoutProfileIds,
     configBoundProfileIds,
     configBoundAuthProviders,
@@ -221,11 +275,7 @@ export function readModelAuthStatusFacts(
   refresh: boolean,
   now: number,
 ) {
-  let agents = authStatusFacts.get(snapshot.config);
-  if (!agents) {
-    agents = new Map();
-    authStatusFacts.set(snapshot.config, agents);
-  }
+  const agents = getOrCreateWeakOwnerMap(authStatusFacts, snapshot.config);
   const revision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const cached = agents.get(snapshot.agentId);
   if (

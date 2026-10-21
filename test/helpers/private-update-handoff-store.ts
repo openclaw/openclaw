@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { resolveServiceManagerEnv } from "../../src/daemon/service-process-env.js";
 import * as temporaryRoot from "../../src/infra/tmp-openclaw-dir.js";
 import * as managedHandoff from "../../src/infra/update-managed-service-handoff-lease.js";
+import { withRuntimePreload } from "./runtime-preload.js";
 
 export function installPrivateUpdateHandoffStore(directory: string) {
   const privateDirectory = fs.realpathSync(directory);
@@ -87,14 +88,10 @@ sqlite.DatabaseSync = new Proxy(original, {
     return Reflect.construct(target, args, newTarget);
   },
 });
-syncBuiltinESMExports();\n`,
+syncBuiltinESMExports();
+globalThis[Symbol.for("openclaw.test.privateHandoffGuard")] = expected;\n`,
     { mode: 0o600 },
   );
-  return (env: NodeJS.ProcessEnv) => ({
-    ...env,
-    OPENCLAW_TEST_PRIVATE_HANDOFF_PATH: databasePath,
-    NODE_OPTIONS: [env.NODE_OPTIONS, `--require=${JSON.stringify(guard)}`]
-      .filter(Boolean)
-      .join(" "),
-  });
+  return (env: NodeJS.ProcessEnv) =>
+    withRuntimePreload({ ...env, OPENCLAW_TEST_PRIVATE_HANDOFF_PATH: databasePath }, guard);
 }

@@ -89,16 +89,8 @@ function readAuthParamName(value: string, start: number): { name: string; end: n
 
 function isAuthHeaderStart(value: string, index: number): boolean {
   const previous = value[index - 1];
-  let serializedLineBoundary = false;
-  if (previous === "n" || previous === "r") {
-    let slashCursor = index - 2;
-    let slashCount = 0;
-    while (slashCount < 64 && value[slashCursor] === "\\") {
-      slashCount += 1;
-      slashCursor -= 1;
-    }
-    serializedLineBoundary = slashCount > 0;
-  }
+  const serializedLineBoundary =
+    (previous === "n" || previous === "r") && value[index - 2] === "\\";
   if (!serializedLineBoundary && previous !== undefined && /[A-Za-z0-9_-]/u.test(previous)) {
     return false;
   }

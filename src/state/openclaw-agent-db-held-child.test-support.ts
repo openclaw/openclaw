@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
-} from "./openclaw-agent-db.js";
+import { closeOpenClawAgentDatabases } from "./openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase, resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const options = {

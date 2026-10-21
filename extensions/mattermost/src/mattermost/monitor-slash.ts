@@ -6,7 +6,11 @@ import {
   normalizeMattermostBaseUrl,
   type MattermostClient,
 } from "./client.js";
-import { listSkillCommandsForAgents, type OpenClawConfig, type RuntimeEnv } from "./runtime-api.js";
+import {
+  prepareSkillCommandsForAgents,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "./runtime-api.js";
 import {
   DEFAULT_COMMAND_SPECS,
   isSlashCommandsEnabled,
@@ -19,19 +23,19 @@ import {
 } from "./slash-commands.js";
 import { activateSlashCommands } from "./slash-state.js";
 
-function buildSlashCommands(params: {
+async function buildSlashCommands(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   nativeSkills: boolean;
-}): MattermostCommandSpec[] {
+}): Promise<MattermostCommandSpec[]> {
   const commandsToRegister: MattermostCommandSpec[] = [...DEFAULT_COMMAND_SPECS];
   if (!params.nativeSkills) {
     return commandsToRegister;
   }
   try {
-    const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg });
+    const skillCommands = await prepareSkillCommandsForAgents({ cfg: params.cfg });
     for (const spec of skillCommands) {
-      const name = typeof spec.name === "string" ? spec.name.trim() : "";
+      const name = spec.name.trim();
       if (!name) {
         continue;
       }
@@ -112,7 +116,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
     const slashCallbackUrl = resolveCallbackUrl({
       config: slashConfig,
       gatewayPort: resolveGatewayPort(params.cfg),
-      gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
+      gatewayHost: params.cfg.gateway?.customBindHost,
     });
 
     warnOnSuspiciousCallbackUrl({
@@ -122,7 +126,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
     });
 
     const dedupedCommands = dedupeSlashCommands(
-      buildSlashCommands({
+      await buildSlashCommands({
         cfg: params.cfg,
         runtime: params.runtime,
         nativeSkills: slashConfig.nativeSkills === true,
@@ -164,7 +168,6 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
     activateSlashCommands({
       account: params.account,
-      commandTokens: registered.map((cmd) => cmd.token).filter(Boolean),
       registeredCommands: registered,
       triggerMap: buildTriggerMap(dedupedCommands),
       api: { cfg: params.cfg, runtime: params.runtime },

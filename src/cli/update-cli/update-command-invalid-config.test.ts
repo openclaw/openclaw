@@ -44,21 +44,23 @@ it.each([
       );
     } else {
       await expect(update).rejects.toMatchObject({ code: 1 });
+      const invalidConfigStep = expect.objectContaining({
+        name: "invalid-config",
+        exitCode: 1,
+        failureFacts: [
+          expect.objectContaining({
+            check: "invalid-config",
+            code: "invalid-config",
+            affectedKey,
+          }),
+        ],
+      });
       expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
         expect.objectContaining({
           status: "error",
           reason: "invalid-config",
-          steps: [
-            expect.objectContaining({
-              failureFacts: [
-                expect.objectContaining({
-                  check: "invalid-config",
-                  code: "invalid-config",
-                  affectedKey,
-                }),
-              ],
-            }),
-          ],
+          failedStep: invalidConfigStep,
+          steps: expect.arrayContaining([invalidConfigStep]),
         }),
       );
     }

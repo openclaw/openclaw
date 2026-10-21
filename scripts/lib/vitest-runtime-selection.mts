@@ -1,3 +1,4 @@
+import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import { matchesVitestCliSelection } from "../../test/vitest/vitest.pattern-file.ts";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
@@ -5,6 +6,7 @@ import {
   resolveVitestRuntimeConfigScopes,
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
+import { collectVitestFileFilters } from "./vitest-cli-mode.mts";
 
 /** Bind installed CLI matching without adding runtime dependencies to CI planning. */
 export function resolveVitestRuntimeCliSelections(
@@ -27,8 +29,18 @@ export function shouldPrepareVitestCoreWorkers(
   env: NodeJS.ProcessEnv,
   includePatterns?: readonly string[] | null,
 ): boolean {
-  const infra = "test/vitest/vitest.infra.config.ts";
-  const contracts = "test/vitest/vitest.contracts-plugin.config.ts";
+  // Prepare broad native-declaration projects before the test watchdog starts.
+  if (
+    [
+      "test/vitest/vitest.channels.config.ts",
+      "test/vitest/vitest.gateway-methods.config.ts",
+    ].includes(config) &&
+    collectVitestFileFilters(args).length === 0 &&
+    includePatterns == null &&
+    !env.OPENCLAW_VITEST_INCLUDE_FILE?.trim()
+  ) {
+    return true;
+  }
   const includesProject = (project: string) =>
     config === project ||
     config === "vitest.config.ts" ||
@@ -37,12 +49,28 @@ export function shouldPrepareVitestCoreWorkers(
       (shard) => shard.config === config && shard.projects.includes(project),
     );
   const workers = [
-    ...(includesProject(infra) ? databaseWorkerCoreTestFiles : []),
-    ...(includesProject(contracts)
+    ...(includesProject("test/vitest/vitest.infra.config.ts") ? databaseWorkerCoreTestFiles : []),
+    ...(includesProject("test/vitest/vitest.contracts-plugin.config.ts")
       ? ["src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts"]
       : []),
+    ...(includesProject("test/vitest/vitest.e2e.config.ts")
+      ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
+      : []),
   ];
-  return workers.some((file) =>
-    matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+  const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
+  return (
+    workers.some((file) =>
+      matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
+    ) ||
+    ((includesProject(agentVitestProjectOwners.core.config) ||
+      includesProject(agentVitestProjectOwners.all.config)) &&
+      matchesVitestCliSelection(
+        codeModeWorker,
+        [codeModeWorker],
+        args,
+        agentVitestProjectOwners.core.dir,
+        env,
+        includePatterns,
+      ))
   );
 }

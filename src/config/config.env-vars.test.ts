@@ -1,15 +1,24 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import {
+  clearFsSafeEnvFallback,
+  fsSafeEnvInput,
+  normalizeFsSafeNativeEnv,
+} from "../infra/fs-safe-env.js";
+import {
   applyConfigEnvVars,
+  captureConfigReadEnvMutation,
+  cloneEnvWithPlatformSemantics,
   collectConfigRuntimeEnvOwnership,
   createConfigRuntimeEnv,
-  getPublishedConfigRuntimeEnvState,
+  getPublishedConfigRuntimeEnvState as publishedEnv,
   initializePublishedConfigRuntimeEnv,
-  prepareConfigRuntimeEnv,
-  prepareConfigRuntimeEnvLoad,
+  prepareConfigRuntimeEnv as prepareEnv,
+  prepareConfigRuntimeEnvLoad as stageLoad,
   resetPublishedConfigRuntimeEnv,
+  restoreEnvChangesIfUnchanged,
+  snapshotEnv,
 } from "./config-env-vars.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { assertGatewayConfigEnvSelectionUnchanged } from "./gateway-env-selection.js";
@@ -21,6 +30,7 @@ const key = "OPENCLAW_TEST_ENV";
 const dotenvKey = "OPENCLAW_TEST_DOTENV";
 const shellKey = "OPENCLAW_TEST_SHELL";
 const config = (vars: Record<string, string>): OpenClawConfig => ({ env: { vars } });
+const windows = () => vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
 function initialize(ownedEnv: Record<string, string> = {}) {
   for (const name of [key, dotenvKey, shellKey]) {
@@ -102,28 +112,9 @@ describe("config env vars", () => {
     expect(env).toEqual({ VALID: "literal" });
   });
 
-  it("applies config env above normalized lower-precedence aliases", () => {
-    const replaced = vi.fn();
-    const env = { ZAI_API_KEY: "shell-key" };
-    applyConfigEnvVars(config({ Z_AI_API_KEY: "config-key" }), env, {
-      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
-      onLowerPrecedenceKeysReplaced: replaced,
-    });
-    expect(env).toEqual({ ZAI_API_KEY: "config-key", Z_AI_API_KEY: "config-key" });
-    expect(replaced).toHaveBeenCalledWith(["ZAI_API_KEY"]);
-  });
-
-  it("preserves a higher-precedence normalized alias", () => {
-    const env = { ZAI_API_KEY: "shell-key", Z_AI_API_KEY: "invocation-key" };
-    applyConfigEnvVars(config({ ZAI_API_KEY: "config-key" }), env, {
-      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
-    });
-    expect(env).toEqual({ ZAI_API_KEY: "invocation-key", Z_AI_API_KEY: "invocation-key" });
-  });
-
   it("prepares updates and removals without mutating the target or rescanning per key", () => {
     const env = { UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" };
-    const prepared = prepareConfigRuntimeEnv({
+    const prepared = prepareEnv({
       previousConfig: config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" }),
       nextConfig: config({ UPDATE_ME: "new" }),
       env,
@@ -139,50 +130,30 @@ describe("config env vars", () => {
     expect(rollback.cardinalities).toEqual([2]);
   });
 
-  it("publishes late loader changes from a detached final snapshot", () => {
-    const env: NodeJS.ProcessEnv = { AMBIENT: "original" };
-    const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {}, env });
-    stage.env.DOTENV_VALUE = "dotenv";
-    stage.captureDotEnvBaseline();
-    const nextConfig = config({ CONFIG_VALUE: "config" });
-    applyConfigEnvVars(nextConfig, stage.env);
-    stage.env.SHELL_VALUE = "shell";
-    const prepared = stage.prepare(nextConfig);
-    stage.env.CONFIG_VALUE = "changed after preparation";
-    expect(env).toEqual({ AMBIENT: "original" });
-    const rollback = prepared.publish();
-    expect(env).toEqual({
-      AMBIENT: "original",
-      DOTENV_VALUE: "dotenv",
-      CONFIG_VALUE: "config",
-      SHELL_VALUE: "shell",
-    });
-    rollback();
-    expect(env).toEqual({ AMBIENT: "original" });
-  });
-
   it("keeps same-valued dotenv and shell entries ambient when staged config is removed", () => {
     const previousConfig = initialize();
-    const stage = prepareConfigRuntimeEnvLoad({ previousConfig });
+    const stage = stageLoad({ previousConfig });
     stage.env[dotenvKey] = "shared";
     stage.captureDotEnvBaseline();
     const nextConfig = config({ [dotenvKey]: "shared", [key]: "config" });
     applyConfigEnvVars(nextConfig, stage.env);
     stage.env[shellKey] = "shell";
     stage.prepare(nextConfig).publish().commit();
-    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toEqual({ [key]: "config" });
-    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(nextConfig);
-    prepareConfigRuntimeEnv({ previousConfig: nextConfig, nextConfig: {} }).publish().commit();
-    expect(process.env[key]).toBeUndefined();
-    expect(process.env[dotenvKey]).toBe("shared");
-    expect(process.env[shellKey]).toBe("shell");
+    expect(publishedEnv().ownedEnv).toEqual({ [key]: "config" });
+    expect(publishedEnv().sourceConfig).toBe(nextConfig);
+    prepareEnv({ previousConfig: nextConfig, nextConfig: {} }).publish().commit();
+    expect([process.env[key], process.env[dotenvKey], process.env[shellKey]]).toEqual([
+      undefined,
+      "shared",
+      "shell",
+    ]);
   });
 
   it("publishes only captured dotenv after failed loading and preserves prior ownership", () => {
     const previousConfig = initialize({ [key]: "previous" });
     vi.stubEnv("OPENCLAW_TEST_FAILED_CONFIG", undefined);
-    const previousOwnership = getPublishedConfigRuntimeEnvState().ownedEnv;
-    const stage = prepareConfigRuntimeEnvLoad({ previousConfig });
+    const previousOwnership = publishedEnv().ownedEnv;
+    const stage = stageLoad({ previousConfig });
     stage.env[dotenvKey] = "loaded before failure";
     stage.captureDotEnvBaseline();
     applyConfigEnvVars(
@@ -196,18 +167,17 @@ describe("config env vars", () => {
     expect(process.env[dotenvKey]).toBe("loaded before failure");
     expect(process.env.OPENCLAW_TEST_FAILED_CONFIG).toBeUndefined();
     expect(process.env[shellKey]).toBeUndefined();
-    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toBe(previousOwnership);
-    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(previousConfig);
+    expect(publishedEnv().ownedEnv).toBe(previousOwnership);
+    expect(publishedEnv().sourceConfig).toBe(previousConfig);
     rollback();
-    expect(process.env[dotenvKey]).toBeUndefined();
-    expect(process.env[key]).toBe("previous");
-    expect(getPublishedConfigRuntimeEnvState().ownedEnv).toBe(previousOwnership);
-    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(previousConfig);
+    expect([process.env[dotenvKey], process.env[key]]).toEqual([undefined, "previous"]);
+    expect(publishedEnv().ownedEnv).toBe(previousOwnership);
+    expect(publishedEnv().sourceConfig).toBe(previousConfig);
   });
 
   it("retains live overrides during isolated loading and after publication", () => {
     const env: NodeJS.ProcessEnv = { CONFIG_VALUE: "old" };
-    const stage = prepareConfigRuntimeEnvLoad({
+    const stage = stageLoad({
       previousConfig: config({ CONFIG_VALUE: "old" }),
       previousOwnedEnv: { CONFIG_VALUE: "old" },
       env,
@@ -226,122 +196,32 @@ describe("config env vars", () => {
     });
   });
 
-  it("unwinds staged config behind a later failed-loader dotenv publication", () => {
-    const previousConfig = initialize({ [key]: "original" });
-    const nextConfig = config({ [key]: "candidate" });
-    const older = prepareConfigRuntimeEnvLoad({ previousConfig });
-    older.captureDotEnvBaseline();
-    applyConfigEnvVars(nextConfig, older.env);
-    const rollbackOlder = older.prepare(nextConfig).publish();
-    const newer = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
-    newer.env[dotenvKey] = "dotenv";
-    newer.captureDotEnvBaseline();
-    newer.env[key] = "discarded loader mutation";
-    const rollbackNewer = newer.prepareFailure().publish();
-    rollbackOlder();
-    expect(process.env[key]).toBe("candidate");
-    expect(process.env[dotenvKey]).toBe("dotenv");
-    expect(getPublishedConfigRuntimeEnvState().sourceConfig).toBe(nextConfig);
-    rollbackNewer();
-    expect(process.env[key]).toBe("original");
-    expect(process.env[dotenvKey]).toBeUndefined();
-    expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
-      sourceConfig: previousConfig,
-      ownedEnv: { [key]: "original" },
-    });
-  });
-
-  it.each([
-    { first: "new", second: "new", olderFirst: true },
-    { first: "older", second: "newer", olderFirst: true },
-    { first: "older", second: "newer", olderFirst: false },
-  ])(
-    "unwinds $first/$second publications, olderFirst=$olderFirst",
-    ({ first, second, olderFirst }) => {
-      const previousConfig = initialize({ [key]: "old" });
-      const older = prepareConfigRuntimeEnv({
-        previousConfig,
-        nextConfig: config({ [key]: first }),
-      });
-      const newer = prepareConfigRuntimeEnv({
-        previousConfig,
-        nextConfig: config({ [key]: second }),
-      });
-      const a = captureEnvEnumerations(process.env, () => older.publish());
-      const b = captureEnvEnumerations(process.env, () => newer.publish());
-      expect(process.env[key]).toBe(second);
-      const firstRollback = captureEnvEnumerations(process.env, olderFirst ? a.value : b.value);
-      expect(process.env[key]).toBe(olderFirst ? second : first);
-      const secondRollback = captureEnvEnumerations(process.env, olderFirst ? b.value : a.value);
-      expect(process.env[key]).toBe("old");
-      expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
-        ownedEnv: { [key]: "old" },
-        sourceConfig: previousConfig,
-      });
-      expect(a.cardinalities).toHaveLength(2);
-      expect(b.cardinalities).toHaveLength(2);
-      expect([firstRollback.cardinalities.length, secondRollback.cardinalities.length]).toEqual(
-        olderFirst ? [0, 2] : [1, 1],
-      );
-    },
-  );
-
-  it.each<{
-    before: Record<string, string>;
-    next: Record<string, string>;
-    expected: string | undefined;
-  }>([
-    { before: { [key]: "old" }, next: { [key]: "newer" }, expected: "newer" },
-    { before: {}, next: {}, expected: undefined },
-  ])("committed successor supersedes late rollback: $expected", ({ before, next, expected }) => {
-    const previousConfig = initialize(before);
-    const nextConfig = config(next);
-    const older = prepareConfigRuntimeEnv({
-      previousConfig,
-      nextConfig: config({ [key]: "added" }),
-    });
-    const newer = prepareConfigRuntimeEnv({ previousConfig, nextConfig });
-    const rollbackOlder = older.publish();
-    const committed = newer.publish();
-    expect(process.env[key]).toBe(expected);
-    committed.commit();
-    rollbackOlder();
-    expect(process.env[key]).toBe(expected);
-    expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
-      ownedEnv: next,
-      sourceConfig: nextConfig,
-    });
-  });
-
   it("rejects process-stable Gateway selector changes during reload", () => {
     expect(() =>
       assertGatewayConfigEnvSelectionUnchanged({}, config({ OPENCLAW_CONFIG_PATH: "1" })),
     ).toThrow("process-stable Gateway selector OPENCLAW_CONFIG_PATH");
   });
 
-  it.each([0, 1])(
-    "retains committed publication %s when its successors roll back",
-    (committedIndex) => {
-      const previousConfig = initialize({ [key]: "original" });
-      const configs = ["first", "middle", "last"].map((value) => config({ [key]: value }));
-      const prepared = configs.map((nextConfig) =>
-        prepareConfigRuntimeEnv({ previousConfig, nextConfig }),
-      );
-      const publications = prepared.map((candidate) => candidate.publish());
-      publications[committedIndex]!.commit();
-      for (const publication of publications.toReversed()) {
-        publication();
-      }
-      expect(process.env[key]).toBe(committedIndex === 0 ? "first" : "middle");
-      expect(getPublishedConfigRuntimeEnvState()).toMatchObject({
-        sourceConfig: configs[committedIndex],
-        ownedEnv: { [key]: committedIndex === 0 ? "first" : "middle" },
-      });
-    },
-  );
+  it("restores the last committed config environment after a rejected replacement", () => {
+    const previousConfig = initialize();
+    const acceptedConfig = config({ [key]: "accepted" });
+    prepareEnv({ previousConfig, nextConfig: acceptedConfig }).publish().commit();
+    const replacement = prepareEnv({
+      previousConfig: acceptedConfig,
+      nextConfig: config({ [key]: "rejected" }),
+    }).publish();
+    expect(process.env[key]).toBe("rejected");
+
+    replacement();
+    expect(process.env[key]).toBe("accepted");
+    expect(publishedEnv()).toMatchObject({
+      sourceConfig: acceptedConfig,
+      ownedEnv: { [key]: "accepted" },
+    });
+  });
 
   it("preserves Windows case-insensitive precedence in a merged runtime env", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    windows();
     const merged = createConfigRuntimeEnv(config({ OPENCLAW_LOAD_SHELL_ENV: "1" }), {
       OpenClaw_Load_Shell_Env: "0",
     });
@@ -352,9 +232,9 @@ describe("config env vars", () => {
   it.each([false, true])(
     "rolls back Windows spelling unless concurrently renamed: %s",
     (concurrent) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      windows();
       const env: NodeJS.ProcessEnv = { Config_Value: "old" };
-      const prepared = prepareConfigRuntimeEnv({
+      const prepared = prepareEnv({
         previousConfig: config({ Config_Value: "old" }),
         nextConfig: config({ CONFIG_VALUE: concurrent ? "new" : "old" }),
         env,
@@ -372,15 +252,15 @@ describe("config env vars", () => {
   );
 
   it("does not adopt a concurrent Windows case-only rename as config-owned", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    windows();
     const concurrentKey = key.toLowerCase();
     vi.stubEnv(concurrentKey, undefined);
     const previousConfig = initialize({ [key]: "owned" });
-    const unchanged = prepareConfigRuntimeEnv({ previousConfig, nextConfig: previousConfig });
+    const unchanged = prepareEnv({ previousConfig, nextConfig: previousConfig });
     delete process.env[key];
     process.env[concurrentKey] = "owned";
     unchanged.publish().commit();
-    prepareConfigRuntimeEnv({ previousConfig, nextConfig: {} }).publish().commit();
+    prepareEnv({ previousConfig, nextConfig: {} }).publish().commit();
     expect(process.env[concurrentKey]).toBe("owned");
   });
 
@@ -394,10 +274,10 @@ describe("config env vars", () => {
       const expected = {
         plugins: { entries: { brave: { config: { webSearch: { apiKey: "from-dotenv" } } } } },
       };
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
       expect(resolveConfigEnvVars(cfg, process.env)).toEqual(expected);
       delete process.env.BRAVE_API_KEY;
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
       expect(resolveConfigEnvVars(cfg, process.env)).toEqual(expected);
     });
   });
@@ -424,7 +304,7 @@ describe("config env vars", () => {
     const ownedEnv = collectConfigRuntimeEnvOwnership(previousConfig, before, env, {
       replacedLowerPrecedenceKeys,
     });
-    const prepared = prepareConfigRuntimeEnv({
+    const prepared = prepareEnv({
       previousConfig,
       nextConfig: config({ [key]: "next" }),
       env,
@@ -446,5 +326,77 @@ describe("config env vars", () => {
         }),
       ).toEqual({ MY_KEY: "from-config", CUSTOM_KEY: "from-override" });
     });
+  });
+});
+
+describe("config-owned fs-safe mode migration", () => {
+  const nativeKey = "OPENCLAW_FS_SAFE_NATIVE_MODE";
+  const legacyKey = "FS_SAFE_PYTHON_MODE";
+
+  beforeEach(() => {
+    for (const name of [
+      nativeKey,
+      "FS_SAFE_NATIVE_MODE",
+      legacyKey,
+      "OPENCLAW_FS_SAFE_PYTHON_MODE",
+    ]) {
+      vi.stubEnv(name, undefined);
+    }
+    vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  });
+  afterEach(() => clearFsSafeEnvFallback(process.env));
+
+  it("restores legacy fallback after a rejected native publication without adopting it", () => {
+    const source = config({ [legacyKey]: "require" });
+    const before = snapshotEnv(process.env);
+    applyConfigEnvVars(source);
+    initializePublishedConfigRuntimeEnv(source, {
+      ownedEnv: collectConfigRuntimeEnvOwnership(source, before, process.env),
+    });
+    const replacement = prepareEnv({
+      previousConfig: source,
+      nextConfig: config({ [nativeKey]: "off" }),
+    }).publish();
+    expect([process.env[nativeKey], process.env[legacyKey]]).toEqual(["off", undefined]);
+    replacement();
+    expect(process.env[nativeKey]).toBe("require");
+    expect(publishedEnv().ownedEnv).toEqual({ [legacyKey]: "require" });
+    prepareEnv({ previousConfig: source, nextConfig: {} }).publish().commit();
+    expect(process.env[nativeKey]).toBeUndefined();
+  });
+
+  it("recomputes isolated candidates without changing their parent's legacy projection", () => {
+    const env: NodeJS.ProcessEnv = { [legacyKey]: "off" };
+    normalizeFsSafeNativeEnv(env);
+    const clone = cloneEnvWithPlatformSemantics(env);
+    applyConfigEnvVars(config({ [nativeKey]: "require" }), clone);
+    expect(clone[nativeKey]).toBe("require");
+    expect(env[nativeKey]).toBe("off");
+    expect(fsSafeEnvInput(env)[nativeKey]).toBeUndefined();
+  });
+
+  it("restores invalid native input after a rejected config read introduced legacy mode", () => {
+    const env: NodeJS.ProcessEnv = { [nativeKey]: "invalid" };
+    const before = snapshotEnv(env);
+    applyConfigEnvVars(config({ [legacyKey]: "require" }), env);
+    expect(env[nativeKey]).toBe("require");
+    restoreEnvChangesIfUnchanged({ env, before, after: snapshotEnv(env) });
+    expect(env).toEqual({ [nativeKey]: "invalid" });
+  });
+
+  it("compensates synchronous read mutations using source keys, preserving later operator changes", () => {
+    const env: NodeJS.ProcessEnv = {};
+    let restore: (() => void) | undefined;
+    captureConfigReadEnvMutation(
+      env,
+      () => applyConfigEnvVars(config({ [legacyKey]: "off" }), env),
+      (receipt) => {
+        restore = receipt;
+      },
+    );
+    expect(env[nativeKey]).toBe("off");
+    env.FS_SAFE_NATIVE_MODE = "require";
+    restore?.();
+    expect(env).toEqual({ FS_SAFE_NATIVE_MODE: "require" });
   });
 });

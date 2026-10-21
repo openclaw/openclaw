@@ -11,27 +11,19 @@ import { normalizeGoogleModelId } from "./model-id.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
-const GEMINI_2_5_PRO_PREFIX = "gemini-2.5-pro";
-const GEMINI_2_5_FLASH_LITE_PREFIX = "gemini-2.5-flash-lite";
-const GEMINI_2_5_FLASH_PREFIX = "gemini-2.5-flash";
 const GEMINI_3_PRO_RE = /^gemini-3(?:\.\d+)?-pro(?:-|$)/;
 const GEMINI_3_FLASH_LITE_RE = /^gemini-3(?:\.\d+)?-flash-lite(?:-|$)/;
 const GEMINI_3_FLASH_RE = /^gemini-3(?:\.\d+)?-flash(?:-|$)/;
+const GEMINI_4_RE = /^gemini-4(?:[.-]|$)/;
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
 const GEMMA_PREFIX = "gemma-";
-const GEMINI_2_5_PRO_TEMPLATE_IDS = ["gemini-2.5-pro"] as const;
-const GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS = ["gemini-2.5-flash-lite"] as const;
-const GEMINI_2_5_FLASH_TEMPLATE_IDS = ["gemini-2.5-flash"] as const;
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3.1-pro-preview", "gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview", "gemini-2.5-flash"] as const;
-const GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-pro-low", "gemini-3-pro-high"] as const;
 const GEMINI_3_FLASH_ANTIGRAVITY_TEMPLATE_IDS = ["gemini-3-flash"] as const;
-// Gemma uses the Gemini flash template as a forward-compat approximation
-// until a dedicated Gemma template is registered in the catalog.
-const GEMMA_TEMPLATE_IDS = GEMINI_3_1_FLASH_TEMPLATE_IDS;
+const GEMINI_4_TEMPLATE_IDS = ["gemini-4-argon"] as const;
 const GOOGLE_PROVIDER_PREFIX = "google/";
 const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = ["-image", "-tts", "-live", "native-audio"] as const;
 
@@ -62,18 +54,7 @@ export function isGoogleTextGenerationModelId(id: string): boolean {
   if (GOOGLE_NON_TEXT_MODEL_ID_MARKERS.some((marker) => lower.includes(marker))) {
     return false;
   }
-  return (
-    lower.startsWith(GEMINI_2_5_PRO_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX) ||
-    lower.startsWith(GEMINI_2_5_FLASH_PREFIX) ||
-    GEMINI_3_PRO_RE.test(lower) ||
-    GEMINI_3_FLASH_LITE_RE.test(lower) ||
-    GEMINI_3_FLASH_RE.test(lower) ||
-    lower === GEMINI_PRO_LATEST_ID ||
-    lower === GEMINI_FLASH_LATEST_ID ||
-    lower === GEMINI_FLASH_LITE_LATEST_ID ||
-    lower.startsWith(GEMMA_PREFIX)
-  );
+  return GOOGLE_FORWARD_COMPAT_CASES.some((entry) => entry.match(lower));
 }
 
 export function isGoogleNativeVideoModelId(id: string): boolean {
@@ -111,14 +92,11 @@ function templateIdsForProvider(
 
 function buildGoogleTemplateSources(params: {
   providerId: string;
-  templateProviderId?: string;
   family: GoogleForwardCompatFamily;
 }) {
-  const defaultTemplateProviderId = params.templateProviderId?.trim()
-    ? params.templateProviderId
-    : isGoogleGeminiCliProvider(params.providerId)
-      ? "google"
-      : GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  const defaultTemplateProviderId = isGoogleGeminiCliProvider(params.providerId)
+    ? "google"
+    : GOOGLE_GEMINI_CLI_PROVIDER_ID;
   const preferredExternalFirst =
     isGoogleGeminiCliProvider(params.providerId) && params.family[3] === true;
   const orderedTemplateProviderIds = preferredExternalFirst
@@ -141,28 +119,23 @@ type GoogleForwardCompatCase = Pick<FamilyForwardCompatCase, "patch"> & {
 
 const GOOGLE_FORWARD_COMPAT_CASES: readonly GoogleForwardCompatCase[] = [
   {
-    match: (id) => id.startsWith(GEMINI_2_5_PRO_PREFIX),
-    family: [GEMINI_2_5_PRO_TEMPLATE_IDS, GEMINI_3_1_PRO_TEMPLATE_IDS, undefined, true],
+    match: (id) => id.startsWith("gemini-2.5-pro"),
+    family: [["gemini-2.5-pro"], GEMINI_3_1_PRO_TEMPLATE_IDS, undefined, true],
   },
   {
-    match: (id) => id.startsWith(GEMINI_2_5_FLASH_LITE_PREFIX),
-    family: [
-      GEMINI_2_5_FLASH_LITE_TEMPLATE_IDS,
-      GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS,
-      undefined,
-      true,
-    ],
+    match: (id) => id.startsWith("gemini-2.5-flash-lite"),
+    family: [["gemini-2.5-flash-lite"], GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS, undefined, true],
   },
   {
-    match: (id) => id.startsWith(GEMINI_2_5_FLASH_PREFIX),
-    family: [GEMINI_2_5_FLASH_TEMPLATE_IDS, GEMINI_3_1_FLASH_TEMPLATE_IDS, undefined, true],
+    match: (id) => id.startsWith("gemini-2.5-flash"),
+    family: [["gemini-2.5-flash"], GEMINI_3_1_FLASH_TEMPLATE_IDS, undefined, true],
   },
   {
     match: (id) => GEMINI_3_PRO_RE.test(id) || id === GEMINI_PRO_LATEST_ID,
     family: [
       GEMINI_3_1_PRO_TEMPLATE_IDS,
       GEMINI_3_1_PRO_TEMPLATE_IDS,
-      GEMINI_3_PRO_ANTIGRAVITY_TEMPLATE_IDS,
+      ["gemini-3-pro-low", "gemini-3-pro-high"],
     ],
     patch: ({ providerId }) =>
       providerId === "google" || providerId === GOOGLE_GEMINI_CLI_PROVIDER_ID
@@ -186,8 +159,13 @@ const GOOGLE_FORWARD_COMPAT_CASES: readonly GoogleForwardCompatCase[] = [
     ],
   },
   {
+    match: (id) => GEMINI_4_RE.test(id),
+    family: [GEMINI_4_TEMPLATE_IDS, GEMINI_4_TEMPLATE_IDS],
+  },
+  {
     match: (id) => id.startsWith(GEMMA_PREFIX),
-    family: [GEMMA_TEMPLATE_IDS, GEMMA_TEMPLATE_IDS],
+    // Gemma has no dedicated catalog template; approximate with the Gemini flash family.
+    family: [GEMINI_3_1_FLASH_TEMPLATE_IDS, GEMINI_3_1_FLASH_TEMPLATE_IDS],
     patch: ({ normalizedModelId }) =>
       normalizedModelId.startsWith("gemma-4") ? { reasoning: true } : undefined,
   },
@@ -229,7 +207,6 @@ export function resolveGoogleStaticModelId(
 
 export function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;
-  templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
@@ -246,7 +223,6 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       get templateSources() {
         return buildGoogleTemplateSources({
           providerId: params.providerId,
-          templateProviderId: params.templateProviderId,
           family,
         });
       },
@@ -260,6 +236,7 @@ export function isModernGoogleModel(modelId: string): boolean {
   return (
     lower.startsWith("gemini-2.5") ||
     lower.startsWith("gemini-3") ||
+    GEMINI_4_RE.test(lower) ||
     lower === GEMINI_PRO_LATEST_ID ||
     lower === GEMINI_FLASH_LATEST_ID ||
     lower === GEMINI_FLASH_LITE_LATEST_ID ||

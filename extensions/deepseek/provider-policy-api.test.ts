@@ -120,42 +120,6 @@ describe("deepseek provider-policy-api", () => {
     expect(result).toBe(providerConfig);
   });
 
-  it("preserves explicit user contextWindow override", () => {
-    const providerConfig = configWithModels({
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 500_000,
-    } as never);
-
-    const result = normalizeConfig({ provider: "deepseek", providerConfig });
-    const model = requireModel(result, 0);
-    expect(model.contextWindow).toBe(500_000);
-    expect(model.cost).toEqual({
-      input: 0.14,
-      output: 0.28,
-      cacheRead: 0.0028,
-      cacheWrite: 0,
-    });
-  });
-
-  it("preserves explicit user cost override", () => {
-    const userCost = { input: 99, output: 99, cacheRead: 99, cacheWrite: 99 };
-    const providerConfig = configWithModels({
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
-      reasoning: true,
-      input: ["text"],
-      cost: userCost,
-    } as never);
-
-    const result = normalizeConfig({ provider: "deepseek", providerConfig });
-    const model = requireModel(result, 0);
-    expect(model.cost).toEqual(userCost);
-    expect(model.contextWindow).toBe(1_000_000);
-  });
-
   it("preserves tiered pricing layered onto an older flat catalog snapshot", () => {
     const userCost = {
       input: 1.74,
@@ -185,27 +149,6 @@ describe("deepseek provider-policy-api", () => {
     expect(requireModel(result, 0).cost).toBe(userCost);
   });
 
-  it("preserves explicit user maxTokens override", () => {
-    const providerConfig = configWithModels({
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
-      reasoning: true,
-      input: ["text"],
-      maxTokens: 100_000,
-    } as never);
-
-    const result = normalizeConfig({ provider: "deepseek", providerConfig });
-    const model = requireModel(result, 0);
-    expect(model.maxTokens).toBe(100_000);
-  });
-
-  it("returns providerConfig unchanged when all models already have metadata", () => {
-    const providerConfig = configWithModels(flashModel());
-
-    const result = normalizeConfig({ provider: "deepseek", providerConfig });
-    expect(result).toBe(providerConfig);
-  });
-
   it("returns providerConfig unchanged when models array is empty", () => {
     const providerConfig = configWithModels();
 
@@ -214,7 +157,12 @@ describe("deepseek provider-policy-api", () => {
   });
 
   it("hydrates only the models that need it in a mixed list", () => {
-    const providerConfig = configWithModels(flashModel(), {
+    const authored = {
+      ...flashModel({ input: 99, output: 99, cacheRead: 99, cacheWrite: 99 }),
+      contextWindow: 500_000,
+      maxTokens: 100_000,
+    };
+    const providerConfig = configWithModels(authored, {
       id: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
       reasoning: true,

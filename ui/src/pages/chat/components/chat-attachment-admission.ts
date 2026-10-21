@@ -63,19 +63,32 @@ export function admitAttachmentFiles(
   candidates: readonly File[],
   limits: ChatAttachmentLimits | undefined,
   stagedBytes: number,
-  options: { resizeImages?: boolean } = {},
+  options: {
+    resizeImages?: boolean;
+    compressVideos?: boolean;
+    onRejected?: (file: File, message: string) => void;
+  } = {},
 ): File[] {
   const admitted: File[] = [];
   const empty: File[] = [];
   const oversized: File[] = [];
   let total = stagedBytes;
   for (const file of candidates) {
-    const reservation = attachmentReservationBytes(file.size, file.type, limits);
+    const compressible = options.compressVideos && file.type.startsWith("video/");
+    const reservation = attachmentReservationBytes(
+      file.size,
+      file.type,
+      limits,
+      compressible ? (limits?.maxBatchBytes ?? Infinity) - total : Infinity,
+    );
     if (file.size === 0) {
       empty.push(file);
     } else if (
       limits &&
-      ((file.size > reservation && !(options.resizeImages && canResizeChatAttachment(file))) ||
+      (reservation <= 0 ||
+        (file.size > reservation &&
+          !compressible &&
+          !(options.resizeImages && canResizeChatAttachment(file))) ||
         total + reservation > limits.maxBatchBytes)
     ) {
       oversized.push(file);
@@ -84,8 +97,15 @@ export function admitAttachmentFiles(
       total += reservation;
     }
   }
-  skippedFilesToast("chat.attachments.readFailed", empty);
-  skippedFilesToast("chat.attachments.tooLarge", oversized);
+  for (const [messageKey, files] of [
+    ["chat.attachments.readFailed", empty],
+    ["chat.attachments.tooLarge", oversized],
+  ] as const) {
+    skippedFilesToast(messageKey, files);
+    for (const file of files) {
+      options.onRejected?.(file, messageKey);
+    }
+  }
   return admitted;
 }
 
@@ -93,9 +113,10 @@ export function attachmentReservationBytes(
   sizeBytes: number,
   mimeType: string,
   limits: ChatAttachmentLimits | undefined,
+  availableBytes = Infinity,
 ): number {
   const ceiling = mimeType.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
-  return Math.min(sizeBytes, ceiling ?? Infinity);
+  return Math.max(0, Math.min(sizeBytes, ceiling ?? Infinity, availableBytes));
 }
 
 function attachmentBytes(attachment: ChatAttachment): number {
@@ -114,15 +135,16 @@ export function chatAttachmentBatchBytes(attachments: readonly ChatAttachment[])
   return attachments.reduce((total, attachment) => total + attachmentBytes(attachment), 0);
 }
 
-function oversizedAttachmentBatch(
+export function attachmentBatchRejection(
   attachments: readonly ChatAttachment[],
-  limits: ChatAttachmentLimits | undefined,
-): ChatAttachment[] {
+  policy: ChatAttachmentHelloPolicy | undefined,
+): string | undefined {
+  const limits = resolveChatAttachmentLimits(policy);
   if (!limits) {
-    return [];
+    return undefined;
   }
   let total = 0;
-  return attachments.filter((attachment) => {
+  const oversized = attachments.filter((attachment) => {
     const size = attachmentBytes(attachment);
     const ceiling = attachment.mimeType.startsWith("image/")
       ? limits.maxImageBytes
@@ -133,13 +155,6 @@ function oversizedAttachmentBatch(
     total += size;
     return false;
   });
-}
-
-export function attachmentBatchRejection(
-  attachments: readonly ChatAttachment[],
-  policy: ChatAttachmentHelloPolicy | undefined,
-): string | undefined {
-  const oversized = oversizedAttachmentBatch(attachments, resolveChatAttachmentLimits(policy));
   return oversized.length > 0
     ? skippedFilesMessage(
         "chat.attachments.tooLarge",

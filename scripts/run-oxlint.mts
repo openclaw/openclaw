@@ -9,18 +9,17 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
+import { resolveDevTool } from "./lib/dev-tool.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
+  resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "./lib/dist-artifact-ownership.mts";
-import {
-  applyLocalOxlintPolicy,
-  resolveLocalCheckEnv,
-  resolveRepoToolBinPath,
-} from "./lib/local-check-runtime.mts";
+import { applyLocalOxlintPolicy, resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
@@ -58,6 +57,7 @@ const OXLINT_BOUNDARY_FREE_TS_CONFIGS = new Set([
   "config/tsconfig/oxlint.core.json",
   "config/tsconfig/oxlint.scripts.json",
   "test/tsconfig/tsconfig.test.root.json",
+  "tsconfig.ui.json",
 ]);
 const OPENCLAW_FOCUSED_CONFIG_FLAG = "--openclaw-focused-config";
 const LIMIT_RULES = new Set([
@@ -148,6 +148,7 @@ async function runWithAdvisoryLimits(
   bin: string,
   args: string[],
   env: NodeJS.ProcessEnv,
+  ownedDirectory?: string,
 ): Promise<OxlintRunResult> {
   const configOption = oxlintOption(args, "--config", "-c");
   const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
@@ -213,6 +214,18 @@ async function runWithAdvisoryLimits(
   enabled &&= githubAdvisory || Boolean(untouchedExclusions);
   if (!enabled && !evidenceEnabled) {
     return { status: await runManagedCommand(command) };
+  }
+
+  if (enabled) {
+    const configRoot = fs.realpathSync(path.dirname(configPath));
+    const directory = resolveDistArtifactLockPath(configRoot);
+    if (ownedDirectory !== directory) {
+      // Oxlint anchors inherited globs at this directory. Keep its transient
+      // config here, but exclude compilers from the entire create/remove lifetime.
+      return await withDistArtifactOwnership(configRoot, () =>
+        runWithAdvisoryLimits(bin, args, env, directory),
+      );
+    }
   }
 
   // CLI --warn cannot replace scoped severities and enables rules outside their file scopes.
@@ -407,11 +420,17 @@ async function runWithAdvisoryLimits(
   }
 }
 
-/**
- * Returns whether oxlint args need package-boundary declaration artifacts first.
- */
+/** Ordinary lint is type-aware; focused guards and metadata commands need no types. */
+export function shouldPrepareOxlintArtifacts(args: readonly string[]) {
+  return (
+    !args.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+    !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))
+  );
+}
+
+/** Returns whether oxlint args also need plugin package-boundary declarations. */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  if (args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))) {
+  if (!shouldPrepareOxlintArtifacts(args)) {
     return false;
   }
 
@@ -422,7 +441,7 @@ export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
     }
     return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
   });
-  // Core, script, and root-test lint resolve sources through the root tsconfig;
+  // Core, script, root-test, and UI lint resolve sources through the root tsconfig;
   // generated plugin package declarations are only an extension-lint input.
   return (
     tsconfigs.length === 0 ||
@@ -622,8 +641,9 @@ export async function runOxlint(
         platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const finalArgs = sparseTargets.args;
-  const oxlintPath = resolveRepoToolBinPath("oxlint");
+  const tool = resolveDevTool("lint", env);
+  const finalArgs = [...tool.args, ...sparseTargets.args];
+  const oxlintPath = tool.command;
   const needsArtifactPreparation =
     !focusedConfig &&
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
@@ -645,26 +665,32 @@ export async function runOxlint(
     return { status: 0 };
   }
 
-  if (needsArtifactPreparation) {
-    // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
-    await prepareExtensionPackageBoundaryArtifacts(localEnv);
-  }
-  return await runWithAdvisoryLimits(
-    oxlintPath,
-    finalArgs,
-    resolveOxlintToolchainEnv(oxlintPath, env),
-  );
+  const run = async (ownedDirectory?: string) => {
+    if (shouldPrepareOxlintArtifacts(argv) && env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1") {
+      // Source-backed core lint skips plugin declarations, not generated schema types.
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
+    }
+    if (needsArtifactPreparation) {
+      // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
+      await prepareExtensionPackageBoundaryArtifacts(localEnv);
+    }
+    return await runWithAdvisoryLimits(
+      oxlintPath,
+      finalArgs,
+      resolveOxlintToolchainEnv(oxlintPath, tool.env),
+      ownedDirectory,
+    );
+  };
+  // Skip-prepare callers still consume shared declarations. Hold one owner across
+  // generation and lint; syntax-only guards need it only for transient config.
+  const root = process.cwd();
+  return shouldPrepareOxlintArtifacts(argv)
+    ? await withDistArtifactOwnership(root, () => run(resolveDistArtifactLockPath(root)))
+    : await run();
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  const argv = process.argv.slice(2);
-  // Skip-prepare callers still consume shared declarations. Source-only lint
-  // remains independent; sharded lint inherits its parent's owner.
-  const result =
-    !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
-    shouldPrepareExtensionPackageBoundaryArtifacts(argv)
-      ? await withDistArtifactOwnership(process.cwd(), () => runOxlint(argv))
-      : await runOxlint(argv);
+  const result = await runOxlint();
   process.exitCode = result.status;
   if (result.evidence) {
     console.log(`\n[ci-static:oxlint:leaf] ${JSON.stringify(result.evidence)}`);

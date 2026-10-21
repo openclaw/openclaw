@@ -1,7 +1,9 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parse as parseDotenv } from "dotenv";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   markMigrationItemError,
   markMigrationItemSkipped,
@@ -24,7 +26,13 @@ export function resolveHomePath(input: string): string {
 export { pathExists as exists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  const stat = await fs.stat(dirPath).catch(() => undefined);
+  const stat = await fs.stat(dirPath).catch((error: unknown) => {
+    const code = extractErrorCode(error);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  });
   return stat?.isDirectory() === true;
 }
 
@@ -35,6 +43,17 @@ export function sanitizeName(name: string): string {
 
 export async function readText(filePath: string | undefined): Promise<string | undefined> {
   return filePath ? await fs.readFile(filePath, "utf8").catch(() => undefined) : undefined;
+}
+
+export async function readJsonObject(
+  filePath: string | undefined,
+): Promise<Record<string, unknown>> {
+  const raw = await readText(filePath);
+  try {
+    return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
+  } catch {
+    return {};
+  }
 }
 
 export function parseEnv(content: string | undefined): Record<string, string> {
@@ -50,9 +69,14 @@ export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
   try {
-    const content = await fs.readFile(item.source, "utf8");
+    const content = await fs.readFile(item.source);
+    if (!isUtf8(content)) {
+      throw new Error(
+        `Source file is not valid UTF-8: ${item.source}. Re-encode it as UTF-8 and retry migration.`,
+      );
+    }
     const header = `\n\n<!-- Imported from Hermes: ${path.basename(item.source)} -->\n\n`;
-    const body = content.trimEnd();
+    const body = content.toString("utf8").trimEnd();
     if (!body) {
       return markMigrationItemSkipped(item, "source file is empty");
     }

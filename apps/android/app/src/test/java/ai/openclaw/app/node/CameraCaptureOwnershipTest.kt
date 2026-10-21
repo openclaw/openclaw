@@ -66,7 +66,7 @@ class CameraCaptureOwnershipTest {
         }
       try {
         entered.await()
-        val handler = CameraHandler(app, camera, { true }, ::invokeErrorFromThrowable)
+        val handler = CameraHandler(app, camera, { true })
         assertEquals("CAMERA_BUSY", handler.handleSnap(null).error?.code)
         assertEquals("CAMERA_BUSY", handler.handleClip("""{"includeAudio":false}""").error?.code)
         val replacement = runCatching { otherRuntimeCamera.snap(null) }.exceptionOrNull()
@@ -78,7 +78,7 @@ class CameraCaptureOwnershipTest {
       }
       val manualCapture = checkNotNull(CameraCaptureManager.tryAcquireCamera())
       try {
-        val handler = CameraHandler(app, camera, { true }, ::invokeErrorFromThrowable)
+        val handler = CameraHandler(app, camera, { true })
         assertEquals("CAMERA_BUSY", handler.handleSnap(null).error?.code)
         assertEquals("CAMERA_BUSY", handler.handleClip("""{"includeAudio":false}""").error?.code)
       } finally {

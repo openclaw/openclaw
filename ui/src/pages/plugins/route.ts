@@ -4,8 +4,9 @@ import {
   type RouteLoaderOptions,
   type RouteLocation,
 } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadPluginCatalog } from "../../lib/plugins/index.ts";
@@ -23,21 +24,15 @@ async function loadPluginsRouteData(
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const client = gatewaySnapshot.client;
-  if (gatewaySnapshot.phase !== "connected" || !client) {
-    return { gateway, gatewaySnapshot, result: null, error: null, location };
+  const data: PluginsRouteData = { gateway, gatewaySnapshot, result: null, error: null, location };
+  if (gatewaySnapshot.phase === "connected" && client) {
+    try {
+      data.result = await loadPluginCatalog(client);
+    } catch (error) {
+      data.error = formatUiError(error);
+    }
   }
-  try {
-    const result = await loadPluginCatalog(client);
-    return { gateway, gatewaySnapshot, result, error: null, location };
-  } catch (error) {
-    return {
-      gateway,
-      gatewaySnapshot,
-      result: null,
-      error: formatUiError(error),
-      location,
-    };
-  }
+  return data;
 }
 
 type PluginsSurface = "discovery" | "settings";
@@ -64,13 +59,15 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       return loadPluginsRouteData(context, options);
     },
     component: () =>
-      import("./plugins-page.ts").then(() => ({
+      import("./plugins-page.tsx").then((module) => ({
         header: true,
-        render: (data: PluginsRouteData | undefined) =>
-          html`<openclaw-plugins-page
-            .routeData=${data}
-            .surface=${surface}
-          ></openclaw-plugins-page>`,
+        renderSolid: (props: SolidRouteProps<PluginsRouteData>) =>
+          createComponent(module.PluginsPage, {
+            get routeData() {
+              return props.data;
+            },
+            surface,
+          }),
       })),
   });
 }

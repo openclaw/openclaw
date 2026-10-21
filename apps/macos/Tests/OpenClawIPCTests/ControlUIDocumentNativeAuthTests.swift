@@ -237,7 +237,6 @@ struct ControlUIDocumentNativeAuthTests {
                 }
                 for document in documents {
                     #expect(!document.auth.hasAcceptedNativeBinding)
-                    #expect(document.auth.legacyCredentials.isEmpty)
                     #expect(document.nativeGatewayAuthProvider != nil)
                 }
                 #expect(controller.window === window)
@@ -314,6 +313,7 @@ struct ControlUIDocumentNativeAuthTests {
             let retirementObserved = AsyncTestGate()
             let releaseRetirement = AsyncTestGate()
             let successorInstalled = AsyncTestGate()
+            let catalogRefreshResolved = LockIsolated<AsyncTestGate?>(nil)
             let target = DashboardGatewayTarget.profile("profile-reconnect")
             let manager = DashboardManager._testMake(
                 selection: MacGatewaySelectionPreferences(defaults: defaults),
@@ -335,9 +335,15 @@ struct ControlUIDocumentNativeAuthTests {
                         return value == lease
                     }
                     let waitForInvalidation = try #require(credentials.waitForInvalidation)
+                    let armedRefresh = catalogRefreshResolved.value
                     return DashboardNativeGatewayAuth.LegacyCredentials(
                         credentials: credentials.credentials,
-                        isCurrent: credentials.isCurrent,
+                        isCurrent: {
+                            // The manager checks a resolution in the same main-actor job
+                            // that keeps or replaces the document's projection.
+                            armedRefresh?.open()
+                            return credentials.isCurrent()
+                        },
                         waitForInvalidation: {
                             // Hold only delivery of an actual old-socket invalidation.
                             // The native owner and its successor hello remain real.
@@ -389,10 +395,26 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(webView.url == route)
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
-                #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
+                let credentials: [String: String]? = if case let .nativeDevice(_, _, _, credentials) = retained.auth {
+                    credentials
+                } else {
+                    nil
+                }
+                #expect(credentials == ["token": "accepted-profile-token"])
                 #expect(helloIdentities.value == [identity.deviceId, identity.deviceId])
                 try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
                 let providerRevision = retained.documentHost.nativeGatewayAuthRevision
+                // A catalog change that keeps this socket must not replace the current
+                // projection; that would refuse the document's native challenges.
+                let refreshResolved = AsyncTestGate()
+                catalogRefreshResolved.setValue(refreshResolved)
+                NotificationCenter.default.post(
+                    name: MacGatewayProfileStore.didChangeNotification, object: nil,
+                    userInfo: [MacGatewayProfileStore.changedProfileIDKey: "profile-reconnect"])
+                try await AsyncTimeout.withTimeout(
+                    seconds: 5, onTimeout: { URLError(.timedOut) },
+                    operation: { await refreshResolved.wait() })
+                #expect(retained.documentHost.nativeGatewayAuthRevision == providerRevision)
                 let response = try await Self.decodeReply(Self.challenge(in: webView))
                 let result = try #require(
                     response["result"] as? [String: Any],

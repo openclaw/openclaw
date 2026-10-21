@@ -1,18 +1,20 @@
 /* @vitest-environment jsdom */
-import { nothing } from "lit";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
+import "../../lib/toast-host.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createContext,
   createGateway,
-  type TestSessionsPage,
+  createPage,
+  createRenderedPage,
 } from "./sessions-page.test-support.ts";
 
 const row: GatewaySessionRow = {
@@ -29,13 +31,16 @@ const result: SessionPatchResult = {
   entry: { sessionId: row.sessionId!, archivedAt: 1 },
 };
 
-async function setup() {
+async function setup(initial = row, selection = false) {
+  let rows = [initial];
+  const started = createDeferred();
   const pending = createDeferred<SessionPatchResult>();
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "sessions.list") {
-      return sessionsResult([row], 1);
+      return sessionsResult(rows, selection ? 2 : 1);
     }
     if (method === "sessions.patch") {
+      started.resolve();
       return pending.promise;
     }
     throw new Error(`Unexpected request: ${method} ${String(params)}`);
@@ -43,17 +48,34 @@ async function setup() {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = createGateway(client);
   const sessions = createTestSessionCapability(gateway.gateway);
-  onTestFinished(() => sessions.dispose());
-  const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
-  page.context = createContext(gateway.gateway, sessions);
-  page.render = () => nothing;
-  const toast = document.createElement("openclaw-toast-host");
-  document.body.append(page, toast);
-  await page.updateComplete;
-  await sessions.refresh();
+  const context = createContext(gateway.gateway, sessions);
+  const subscribe = vi.spyOn(sessions, "subscribeList");
   const patches = () => request.mock.calls.filter(([method]) => method === "sessions.patch");
+  const page = selection
+    ? await createRenderedPage(context, sessionsResult(rows, 1), "all")
+    : await createPage(context);
+  const toast = document.createElement("openclaw-toast-host");
+  if (!selection) {
+    document.body.append(toast);
+    await sessions.refresh();
+  }
   const undo = () => toast.querySelector<HTMLButtonElement>(".app-toast__action");
-  return { page, toast, pending, request, client, gateway, patches, undo };
+  return {
+    client,
+    gateway,
+    pending,
+    started,
+    request,
+    patches,
+    page,
+    toast,
+    undo,
+    replace: async (next: GatewaySessionRow) => {
+      rows = [next];
+      await sessions.refreshList({ ...subscribe.mock.calls[0]![0], force: true });
+      await page.updateComplete;
+    },
+  };
 }
 
 afterEach(() => {
@@ -62,109 +84,145 @@ afterEach(() => {
 });
 
 describe("Sessions archive outcome lifetime", () => {
-  it.each(["before confirmation", "after confirmation"])(
-    "restores the captured pinned session after leaving %s",
-    async (navigation) => {
-      const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
-      await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
-      if (navigation === "before confirmation") {
-        fixture.page.remove();
+  it.each(
+    ["rename", "archive", "restore"].flatMap((action) =>
+      [false, true].map((replaced) => ({ action, replaced })),
+    ),
+  )(
+    "settles $action selection only for its session (replaced=$replaced)",
+    async ({ action, replaced }) => {
+      const original = { ...row, archived: action === "restore" };
+      const successor = { ...original, sessionId: "successor-session", label: "Replacement work" };
+      const fixture = await setup(original, true);
+      const { page, pending, started, patches, gateway } = fixture;
+      const checkbox = () =>
+        page.querySelector<HTMLInputElement>(`input[aria-label="Select session: ${row.key}"]`)!;
+      checkbox().click();
+      await page.updateComplete;
+      const patch =
+        action === "rename" ? { label: "Renamed work" } : { archived: action === "archive" };
+      const completion = page.patchSession(row.key, patch, undefined, original.sessionId);
+      const response: SessionPatchResult = {
+        ...result,
+        entry: {
+          sessionId: original.sessionId!,
+          ...(action === "rename"
+            ? { label: "Renamed work" }
+            : { archivedAt: action === "archive" ? 1 : undefined }),
+        },
+      };
+      try {
+        await started.promise;
+        expect(patches()).toHaveLength(1);
+        expect(patches()[0]?.[1]).toMatchObject({
+          key: row.key,
+          expectedSessionId: original.sessionId,
+          ...patch,
+        });
+        if (replaced) {
+          await fixture.replace(successor);
+          expect(page.selectedSessions.size).toBe(0);
+          checkbox().click();
+          await page.updateComplete;
+          expect(page.selectedSessions.get(row.key)?.sessionId).toBe(successor.sessionId);
+        }
+        pending.resolve(response);
+        expect(await completion).toBe("completed");
+        await page.updateComplete;
+        expect(checkbox().checked).toBe(replaced);
+        expect(page.selectedSessions.get(row.key)?.sessionId).toBe(
+          replaced ? successor.sessionId : undefined,
+        );
+        if (replaced) {
+          expect(page.result?.sessions).toMatchObject([successor]);
+        }
+        expect(gateway.setSessionKey).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve(response);
+        await completion;
       }
-      fixture.pending.resolve(result);
-      await archived;
-      await fixture.toast.updateComplete;
-      expect(fixture.undo()).not.toBeNull();
-      fixture.page.remove();
-      fixture.undo()!.click();
-      await vi.waitFor(() => expect(fixture.patches()).toHaveLength(2));
-      expect(fixture.patches()[1]![1]).toMatchObject({
-        key: row.key,
-        expectedSessionId: row.sessionId,
-        archived: false,
-        pinned: true,
-      });
-      expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    { reconnect: "before confirmation", sameClient: true },
-    { reconnect: "after confirmation", sameClient: true },
-    { reconnect: "before confirmation", sameClient: false },
-    { reconnect: "after confirmation", sameClient: false },
-  ])(
-    "retires Undo on reconnect $reconnect (same client=$sameClient)",
-    async ({ reconnect, sameClient }) => {
-      const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
-      await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
-      const transition = () => {
+    ["navigation", "before"],
+    ["navigation", "after"],
+    ["reconnect", "before"],
+    ["reconnect", "after"],
+    ["new-client", "before"],
+    ["replacement", "after"],
+    ["failure", "attached"],
+    ["failure", "detached"],
+  ] as const)("settles archive and captured Undo across %s (%s)", async (event, timing) => {
+    const fixture = await setup();
+    const { page, pending, patches, undo } = fixture;
+    const reconnect = event === "reconnect" || event === "new-client";
+    const transition = () => {
+      if (reconnect) {
         fixture.gateway.emit({ phase: "reconnecting", client: null });
         fixture.gateway.emit({
           phase: "connected",
-          client: sameClient
-            ? fixture.client
-            : ({ request: fixture.request } as unknown as GatewayBrowserClient),
+          client:
+            event === "new-client"
+              ? ({ request: fixture.request } as unknown as GatewayBrowserClient)
+              : fixture.client,
         });
-      };
-      if (reconnect === "before confirmation") {
-        transition();
-      }
-      fixture.pending.resolve(result);
-      await archived;
-      await fixture.toast.updateComplete;
-      if (reconnect === "after confirmation") {
-        expect(fixture.undo()).not.toBeNull();
-        transition();
-        fixture.undo()!.click();
       } else {
-        expect(fixture.undo()).toBeNull();
+        page.remove();
       }
-      expect(fixture.patches()).toHaveLength(1);
-    },
-  );
-
-  it("keeps the original durable identity when the row is replaced before Undo", async () => {
-    const fixture = await setup();
-    const archived = fixture.page.archiveSessionWithUndo(row);
-    fixture.pending.resolve(result);
+    };
+    const archived = page.archive(row);
+    if (event !== "replacement") {
+      await vi.waitFor(() => expect(patches()).toHaveLength(1));
+    }
+    if (timing === "before" || timing === "detached") {
+      transition();
+    }
+    if (event === "failure") {
+      pending.reject(new Error("Archive unavailable"));
+    } else {
+      pending.resolve(result);
+    }
     await archived;
-    await fixture.toast.updateComplete;
-    fixture.request.mockImplementation(async (method) => {
-      if (method === "sessions.list") {
-        return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
-      }
-      throw new Error("Session changed; reload before retrying.");
-    });
-    await fixture.page.context.sessions.refresh({ force: true });
-    fixture.page.remove();
-    fixture.undo()!.click();
-    await vi.waitFor(() => expect(fixture.patches()).toHaveLength(2));
-    expect(fixture.patches()[1]![1]).toMatchObject({ expectedSessionId: row.sessionId });
-    await vi.waitFor(() =>
-      expect(fixture.toast.textContent).toContain("Session changed; reload before retrying."),
-    );
-    expect(fixture.page.context.sessions.state.result?.sessions[0]?.sessionId).toBe(
-      "replacement-session",
-    );
-  });
-
-  it.each([false, true])(
-    "does not report success for a failed archive (left page=%s)",
-    async (left) => {
-      const fixture = await setup();
-      const archived = fixture.page.archiveSessionWithUndo(row);
-      await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
-      if (left) {
-        fixture.page.remove();
-      }
-      fixture.pending.reject(new Error("Archive unavailable"));
-      await archived;
+    if (event === "failure" || (reconnect && timing === "before")) {
       await fixture.toast.updateComplete;
-      expect(fixture.undo()).toBeNull();
-      expect(fixture.page.error).toBe(left ? null : "Archive unavailable");
-      expect(fixture.patches()).toHaveLength(1);
-    },
-  );
+      expect(undo()).toBeNull();
+      if (event === "failure") {
+        expect(page.error).toBe(timing === "detached" ? null : "Archive unavailable");
+      }
+      expect(patches()).toHaveLength(1);
+      return;
+    }
+    await waitForSolid(() => expect(undo()).not.toBeNull());
+    if (event === "replacement") {
+      fixture.request.mockImplementation(async (method) => {
+        if (method === "sessions.list") {
+          return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
+        }
+        throw new Error("Session changed; reload before retrying.");
+      });
+      await page.context.sessions.refresh({ force: true });
+    }
+    transition();
+    undo()!.click();
+    if (reconnect) {
+      expect(patches()).toHaveLength(1);
+      return;
+    }
+    await vi.waitFor(() => expect(patches()).toHaveLength(2));
+    expect(patches()[1]![1]).toMatchObject({
+      expectedSessionId: row.sessionId,
+      ...(event === "navigation" ? { key: row.key, archived: false, pinned: true } : {}),
+    });
+    if (event === "replacement") {
+      await vi.waitFor(() =>
+        expect(fixture.toast.textContent).toContain("Session changed; reload before retrying."),
+      );
+      expect(page.context.sessions.state.result?.sessions[0]?.sessionId).toBe(
+        "replacement-session",
+      );
+    } else {
+      expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
+    }
+  });
 });

@@ -7,6 +7,7 @@ import type {
   Router,
   RouterHistory,
 } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
 import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
@@ -22,8 +23,11 @@ import {
   sameRouteLocation,
   type RouteId,
 } from "./app-route-paths.ts";
+import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
+import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
+import { i18n } from "./i18n/lib/translate.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsHomePage } from "./pages/agents-home/route.ts";
@@ -33,6 +37,7 @@ import { page as appsPage } from "./pages/apps/route.ts";
 import { page as channelsPage } from "./pages/channels/route.ts";
 import { pages as chatPages } from "./pages/chat/route.ts";
 import type { ChatRouteData } from "./pages/chat/session-route-data.ts";
+import { page as clawsPage } from "./pages/claws/route.ts";
 import { page as cloudWorkersPage } from "./pages/cloud-workers/route.ts";
 import { pages as configPages } from "./pages/config/route.ts";
 import { page as connectionPage } from "./pages/connection/route.ts";
@@ -70,9 +75,10 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
-  render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  /** Mounted once per route renderer; props follow the current loader and presentation. */
+  renderSolid: (props: SolidRouteProps) => JSX.Element;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
-  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
+  renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
@@ -94,6 +100,7 @@ const APP_ROUTE_TREE = [
   appsPage,
   portalsPage,
   agentsHomePage,
+  clawsPage,
   agentsPage,
   approvalsPage,
   channelsPage,
@@ -126,7 +133,22 @@ const APP_ROUTE_TREE = [
   pluginPage,
 ] as const;
 
-const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+const appRoutes: AppRoute[] = [];
+for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
+  const loader = route.loader;
+  appRoutes.push({
+    ...route,
+    component: () =>
+      retryControlUiImport(async () => {
+        const module = await route.component();
+        await i18n.prepareLocale();
+        return module;
+      }),
+    loader: loader
+      ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
+      : undefined,
+  });
+}
 
 /** Starts route chunk downloads without running the route's loader. */
 export function warmApplicationRouteModule(

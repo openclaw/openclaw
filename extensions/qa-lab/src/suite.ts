@@ -6,7 +6,6 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaGatewayChild, QaGatewayStopResult } from "./gateway-child.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
-import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import {
   createQaTransportAdapter,
@@ -18,8 +17,8 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { waitForQaHttpReady } from "./suite-http-readiness.js";
-import { shouldUseIsolatedQaSuiteScenarioWorkers, splitModelRef } from "./suite-planning.js";
-import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
+import { shouldUseIsolatedQaSuiteScenarioWorkers } from "./suite-planning.js";
+import { runQaSuiteScenarioDefinition } from "./suite-runtime-flow.js";
 import type { QaSuiteSummaryJson } from "./suite-summary.js";
 import {
   rejectRemovedQaChannelDriverSelection,
@@ -293,20 +292,12 @@ export function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
 }) {
-  if (
-    !shouldUseIsolatedQaSuiteScenarioWorkers({
+  return (
+    shouldUseIsolatedQaSuiteScenarioWorkers({
       scenarios: params.scenarios,
       concurrency: params.concurrency,
-    })
-  ) {
-    return false;
-  }
-
-  if (params.concurrency === 1 && params.lab && !params.startLab) {
-    return false;
-  }
-
-  return true;
+    }) && !(params.concurrency === 1 && params.lab && !params.startLab)
+  );
 }
 
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
@@ -327,11 +318,6 @@ export async function runQaSuiteScenarioDefinitionForRuntime(
   return await runQaSuiteScenarioDefinition({
     env,
     scenario,
-    runScenario: runQaSuiteScenarioSteps,
-    splitModelRef,
-    formatErrorMessage,
-    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs,
     constants: {
       imageUnderstandingPngBase64: QA_IMAGE_UNDERSTANDING_PNG_BASE64,
       imageUnderstandingLargePngBase64: QA_IMAGE_UNDERSTANDING_LARGE_PNG_BASE64,
@@ -406,19 +392,13 @@ async function listGatewayHeapSnapshotFiles(tempRoot: string) {
 }
 
 export async function captureGatewayHeapSnapshotCheckpoint(params: {
-  gateway: Pick<QaGatewayChild, "tempRoot" | "pid" | "signalProcess" | "call">;
+  gateway: Pick<QaGatewayChild, "tempRoot" | "signalProcess" | "call">;
   outputDir: string;
   label: string;
 }): Promise<QaSuiteGatewayHeapSnapshot | undefined> {
   const before = new Set(
     (await listGatewayHeapSnapshotFiles(params.gateway.tempRoot)).map((file) => file.pathName),
   );
-  const pid = params.gateway.pid;
-  const assertSameGateway = () => {
-    if (params.gateway.pid !== pid) {
-      throw new Error("Gateway changed during heap snapshot capture");
-    }
-  };
   const deadlineMs = Date.now() + 20_000;
   await params.gateway.signalProcess("SIGQUIT");
   let snapshotPath: string | undefined;
@@ -438,9 +418,7 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
 
   // Node opens the file before synchronous serialization. A same-process RPC after
   // file appearance cannot respond until the signal handler has closed the writer.
-  assertSameGateway();
   await params.gateway.call("health", {}, { deadlineMs });
-  assertSameGateway();
   const { size: bytes } = await fs.stat(snapshotPath);
   const snapshotsDir = path.join(params.outputDir, "artifacts", "gateway-heap-snapshots");
   await fs.mkdir(snapshotsDir, { recursive: true });
@@ -459,7 +437,6 @@ export async function captureGatewayHeapSnapshotCheckpoint(params: {
 }
 
 export { buildQaSuiteSummaryJson } from "./suite-artifacts.js";
-export type { QaSuiteSummaryJsonParams } from "./suite-artifacts.js";
 export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {

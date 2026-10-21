@@ -1100,7 +1100,6 @@ struct WatchInboxStoreOperationTests {
     {
         WatchReplySendResult(
             delivery: delivery,
-            transport: "sendMessage",
             errorMessage: errorMessage,
             requiresCanonicalReadback: false)
     }

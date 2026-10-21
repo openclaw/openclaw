@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { generatePKCE } from "openclaw/plugin-sdk/provider-oauth-runtime";
 
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -8,10 +7,6 @@ const CALLBACK_PATH = "/auth/callback";
 const DEFAULT_CALLBACK_HOST = "localhost";
 const LOOPBACK_CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 const SCOPE = "openid profile email offline_access";
-
-const loadNodeCrypto = createLazyRuntimeModule(() =>
-  import("node:crypto").then((cryptoModule) => cryptoModule.randomBytes),
-);
 
 export function resolveOpenAICallbackHost(env: NodeJS.ProcessEnv = process.env): string {
   const host = env.OPENCLAW_OAUTH_CALLBACK_HOST?.trim() || DEFAULT_CALLBACK_HOST;
@@ -35,9 +30,9 @@ export async function createOpenAIAuthorizationFlow(
   if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
     throw new Error("OpenAI Codex OAuth is only available in Node.js environments");
   }
-  const [{ verifier, challenge }, randomBytes] = await Promise.all([
+  const [{ verifier, challenge }, { randomBytes }] = await Promise.all([
     generatePKCE(),
-    loadNodeCrypto(),
+    import("node:crypto"),
   ]);
   const state = randomBytes(16).toString("hex");
   const url = new URL(AUTHORIZE_URL);

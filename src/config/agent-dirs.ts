@@ -1,4 +1,3 @@
-// Resolves agent-specific config and workspace directories.
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -38,11 +37,6 @@ function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
 
   const agents = listAgentEntries(cfg);
-  const defaultAgentId = agents.find((agent) => agent?.default)?.id;
-  if (defaultAgentId) {
-    ids.add(normalizeAgentId(defaultAgentId));
-  }
-
   for (const entry of agents) {
     if (entry?.id) {
       ids.add(normalizeAgentId(entry.id));

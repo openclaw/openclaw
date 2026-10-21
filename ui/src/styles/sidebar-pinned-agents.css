@@ -1,0 +1,90 @@
+.sidebar-pinned-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  gap: 8px;
+  max-height: min(280px, 36dvh);
+  overflow-y: auto;
+  padding: 4px;
+  margin-bottom: 8px;
+}
+
+.sidebar-pinned-agent {
+  min-width: 0;
+}
+
+.sidebar-pinned-agent__link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 4px 6px;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar-pinned-agent__link:is(:hover, [aria-current="page"]) {
+  background: var(--bg-hover);
+}
+
+.sidebar-pinned-agent__link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sidebar-pinned-agent__avatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  font-size: 28px;
+  border-radius: 50%;
+}
+
+.sidebar-pinned-agent__avatar .session-glyph,
+.sidebar-pinned-agent__avatar .session-glyph__content {
+  width: 100%;
+  height: 100%;
+}
+
+.sidebar-pinned-agent__name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.sidebar-pinned-agent__tooltip {
+  --openclaw-tooltip-max-width: min(280px, calc(100vw - 24px));
+  --openclaw-tooltip-padding: 12px;
+}
+
+.sidebar-pinned-agent__card {
+  display: grid;
+  gap: 10px;
+  width: 240px;
+  max-width: calc(100vw - 50px);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sidebar-pinned-agent__card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.sidebar-pinned-agent__preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}

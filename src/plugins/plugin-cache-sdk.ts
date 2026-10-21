@@ -54,7 +54,6 @@ export function createPluginCacheSdk() {
     argvDirectories: new Map<string, string[]>(),
     devSourceRoots: new Map<string, string | null>(),
     runtimeModules: new Map<string, PluginRuntimeModuleResolution>(),
-    usableDistArtifacts: new Map<string, boolean>(),
     normalizedJitiAliases: new Map<string, PluginSdkAliasMap>(),
     aliasFacts: new WeakMap<
       PluginSdkAliasMap,
@@ -69,6 +68,13 @@ export function createPluginCacheSdk() {
         { resolveAlias: (specifier: string) => string | undefined; order?: number }
       >(),
       nextSdkProviderOrder: 0,
+      parents: new Map<
+        string,
+        {
+          roots: Set<string>;
+          targets: Map<string, string | undefined>;
+        }
+      >(),
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
       registeredHosts: new Set<string>(),
       hostRoots: new Map<string, string>(),

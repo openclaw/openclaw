@@ -1,4 +1,3 @@
-/** Reads ACP session status from the runtime and reconciles persisted identity metadata. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntimeStatus } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,7 +12,6 @@ import type {
 import { assertCurrentAcpActor, requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
-/** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -43,7 +41,7 @@ export async function runManagerGetSessionStatus(params: {
   const resolvedMeta = requireReadySessionMeta(resolution);
   const {
     runtime,
-    handle: ensuredHandle,
+    handle,
     meta: initialMeta,
   } = await params.ensureRuntimeHandle({
     assertActive: params.assertActive,
@@ -53,7 +51,6 @@ export async function runManagerGetSessionStatus(params: {
     meta: resolvedMeta,
     isCurrentActor,
   });
-  let handle = ensuredHandle;
   params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
   assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
@@ -86,21 +83,19 @@ export async function runManagerGetSessionStatus(params: {
     failOnStatusError: true,
     isCurrentActor,
   });
-  handle = reconciledSession.handle;
   const meta = reconciledSession.meta;
-  runtimeStatus = reconciledSession.runtimeStatus;
   const identity = resolveSessionIdentityFromMeta(meta);
   return {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
-    backend: handle.backend || meta.backend,
+    backend: reconciledSession.handle.backend || meta.backend,
     agent: meta.agent,
     ...(identity ? { identity } : {}),
     state: meta.state,
     mode: meta.mode,
     runtimeOptions: resolveRuntimeOptionsFromMeta(meta),
     capabilities,
-    runtimeStatus,
+    runtimeStatus: reconciledSession.runtimeStatus,
     lastActivityAt: meta.lastActivityAt,
     lastError: meta.lastError,
   };

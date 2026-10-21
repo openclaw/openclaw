@@ -33,12 +33,6 @@ export function resolveQueuedRestartContinuationMessageId(
   return entry.messageId;
 }
 
-const buildRestartContinuationMessageId = (params: {
-  sessionKey: string;
-  kind: RestartSentinelContinuation["kind"];
-  revision: number;
-}) => `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
-
 export function buildQueuedRestartContinuation(params: {
   sessionKey: string;
   agentId?: string;
@@ -51,11 +45,7 @@ export function buildQueuedRestartContinuation(params: {
 }): QueuedSessionDeliveryPayload {
   const idempotencyKey =
     params.idempotencyKey ??
-    buildRestartContinuationMessageId({
-      sessionKey: params.sessionKey,
-      kind: params.continuation.kind,
-      revision: params.revision,
-    });
+    `restart-sentinel:${params.sessionKey}:${params.continuation.kind}:${params.revision}`;
   if (params.continuation.kind === "systemEvent") {
     return {
       kind: "systemEvent",

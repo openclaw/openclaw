@@ -1,8 +1,7 @@
-// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
-// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import { sendJson } from "../infra/http-json.js";
 import {
   clearHttpResponseRepresentationHeaders,
   sendHttpRequestRejection,
@@ -12,6 +11,7 @@ import {
   parseContentLengthHeader,
 } from "../logging/diagnostic-payload.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
@@ -66,11 +66,25 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
   }
 }
 
-export function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+/** The listener can serve requests before background agent preparation finishes. */
+export function finishGatewayHttpDatabaseAdmissionError(
+  res: ServerResponse,
+  error: unknown,
+): boolean {
+  if (
+    !(error instanceof AgentDatabaseAdmissionError) ||
+    error.refusal.code !== "agent-database-inspection-pending"
+  ) {
+    return false;
+  }
+  if (prepareGatewayHttpErrorResponse(res, "Service Unavailable")) {
+    res.setHeader("Retry-After", "1");
+    respondPlainText(res, 503, "Agent database is starting. Please retry.");
+  }
+  return true;
 }
+
+export { sendJson };
 
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
@@ -140,16 +154,12 @@ export function parseGatewayJsonRequest<T extends z.ZodType>(
   return undefined;
 }
 
-export function sendMissingScopeForbidden(
-  res: ServerResponse,
-  missingScope: string | undefined,
-  requiredScopes?: readonly string[],
-) {
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
   const details =
     typeof missingScope === "string" && missingScope.length > 0
       ? buildMissingScopeErrorDetails({
           missingScope,
-          requiredScopes: requiredScopes ?? [missingScope],
+          requiredScopes: [missingScope],
         })
       : undefined;
   sendJson(res, 403, {
@@ -166,8 +176,9 @@ export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
   maxBytes: number,
+  timeoutMs?: number,
 ): Promise<unknown> {
-  const body = await readJsonBody(req, maxBytes);
+  const body = await readJsonBody(req, maxBytes, timeoutMs);
   if (!body.ok) {
     if (body.error === "payload too large") {
       const contentLength = parseContentLengthHeader(req.headers?.["content-length"]);
@@ -224,13 +235,17 @@ export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
   };
   res.once("finish", release);
   res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
   return release;
 }
 
 /** Abort reason used when the HTTP client disconnects before delivery. */
 class ClientDisconnectError extends Error {
-  constructor(message = "HTTP client disconnected") {
-    super(message);
+  constructor() {
+    super("HTTP client disconnected");
     this.name = "ClientDisconnectError";
   }
 }
@@ -248,9 +263,6 @@ export function watchClientDisconnect(
       ),
     ),
   );
-  if (sockets.length === 0) {
-    return () => {};
-  }
   const stopWatchingDisconnect = () => {
     for (const socket of sockets) {
       socket.off("close", handleClose);

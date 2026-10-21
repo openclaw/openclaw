@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
 import { resolveGatewayStartupPluginActivationConfig } from "../gateway/plugin-activation-runtime-config.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
@@ -19,8 +20,7 @@ import { collectInstalledPluginHealthSnapshot } from "./status-plugin-health.run
 vi.mock("../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
-// Keep the installed disk-scan report empty and deterministic so the snapshot's
-// plugin records come only from the seeded runtime registry.
+// Only seeded runtime records participate in these installed snapshots.
 vi.mock("../plugins/status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/status.js")>();
   const emptyReport = { plugins: [], diagnostics: [] } as unknown as ReturnType<
@@ -40,7 +40,6 @@ vi.mock("../plugins/gateway-startup-plugin-ids.js", async (importOriginal) => {
     collectUnregisteredConfiguredMemoryEmbeddingProviders: vi.fn(() => []),
   } as typeof actual;
 });
-// Gateway activation behavior has its own tests; these check status config ownership.
 vi.mock("../gateway/plugin-activation-runtime-config.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../gateway/plugin-activation-runtime-config.js")>();
@@ -65,12 +64,16 @@ const resolveGatewayStartupPluginActivationConfigMock = vi.mocked(
 const collectUnregisteredConfiguredMemoryEmbeddingProvidersMock = vi.mocked(
   collectUnregisteredConfiguredMemoryEmbeddingProviders,
 );
+const missingProvider = { configuredId: "custom-embed", source: "provider" } as const;
+const collect = (config?: Parameters<typeof collectInstalledPluginHealthSnapshot>[0]["config"]) =>
+  collectInstalledPluginHealthSnapshot({ config, workspaceDir: "/tmp/ws" });
 
 beforeEach(() => {
   resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
     loadFailures: [],
     missingConfiguredChannelIds: [],
   } as never);
+  loadGatewayStartupPluginPlanMock.mockReturnValue({ channelPluginIds: [], pluginIds: [] });
 });
 
 afterEach(() => {
@@ -95,19 +98,22 @@ describe("installed plugin health should-run drift", () => {
       const registry = createEmptyPluginRegistry();
       registry.plugins.push({ id: "runtime-ok", status: "loaded", enabled: true } as never);
       setActivePluginRegistry(registry, "runtime-ok", "default", "/tmp/ws");
+      const quarantine = {
+        engineId: "quarantined-engine",
+        operation: "bootstrap",
+        reason: "startup failed",
+        failedAt: new Date(123),
+      };
+      await recordPersistedContextEngineQuarantine(quarantine);
 
       const rawConfig = {} as never;
-      const snapshot = await collectInstalledPluginHealthSnapshot({
-        config: rawConfig,
-        workspaceDir: "/tmp/ws",
-      });
+      const snapshot = await collect(rawConfig);
 
-      // Plan resolved from the auto-enabled effective config with the raw config as the
-      // activation source — matching gateway boot, so auto-enabled plugins are not missed.
       expect(loadGatewayStartupPluginPlanMock).toHaveBeenCalledWith(
         expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
       );
       expect(snapshot.shouldRunPluginIds).toEqual(["planned-missing", "runtime-ok"]);
+      expect(snapshot.contextEngineQuarantines).toEqual([quarantine]);
 
       const text = formatDetailedPluginHealth(snapshot);
       expect(text).toContain("Loaded: 1 (runtime-ok)");
@@ -147,7 +153,7 @@ describe("installed plugin health should-run drift", () => {
     await withStateDirEnv("openclaw-status-should-run-no-config-", async () => {
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
 
-      const snapshot = await collectInstalledPluginHealthSnapshot({ workspaceDir: "/tmp/ws" });
+      const snapshot = await collect();
 
       expect(snapshot.shouldRunPluginIds).toBeUndefined();
       expect(loadGatewayStartupPluginPlanMock).not.toHaveBeenCalled();
@@ -159,27 +165,16 @@ describe("installed plugin health should-run drift", () => {
 });
 
 describe("installed plugin health unregistered memory embedding providers", () => {
+  beforeEach(() => {
+    collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([missingProvider]);
+  });
   it("surfaces configured memory embedding providers the runtime registry does not register", async () => {
     await withStateDirEnv("openclaw-status-memory-embed-", async () => {
-      loadGatewayStartupPluginPlanMock.mockReturnValue({
-        channelPluginIds: [],
-        pluginIds: [],
-      });
-      collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([
-        { configuredId: "custom-embed", source: "provider" },
-      ]);
       setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
 
-      const snapshot = await collectInstalledPluginHealthSnapshot({
-        config: {} as never,
-        workspaceDir: "/tmp/ws",
-      });
+      const snapshot = await collect({});
 
-      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([
-        { configuredId: "custom-embed", source: "provider" },
-      ]);
-      // The mismatch is checked against the live registry's embedding providers (collected
-      // into a Set), so a CLI/empty-registry process can never false-report "unregistered".
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([missingProvider]);
       expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).toHaveBeenCalledWith(
         expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
       );
@@ -191,22 +186,8 @@ describe("installed plugin health unregistered memory embedding providers", () =
 
   it("skips the check and renders no line when no runtime registry is active", async () => {
     await withStateDirEnv("openclaw-status-memory-embed-no-registry-", async () => {
-      // No active runtime registry (a fresh CLI process that never started a gateway).
       resetPluginRuntimeStateForTest();
-      loadGatewayStartupPluginPlanMock.mockReturnValue({
-        channelPluginIds: [],
-        pluginIds: [],
-      });
-      // Even if the resolver would report something, the null-registry guard must skip it
-      // (a CLI/empty-registry process must never false-report "unregistered").
-      collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([
-        { configuredId: "custom-embed", source: "provider" },
-      ]);
-
-      const snapshot = await collectInstalledPluginHealthSnapshot({
-        config: {} as never,
-        workspaceDir: "/tmp/ws",
-      });
+      const snapshot = await collect({});
 
       expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
       expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).not.toHaveBeenCalled();

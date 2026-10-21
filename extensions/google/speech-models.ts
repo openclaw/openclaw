@@ -25,22 +25,19 @@ export const GOOGLE_TTS_MODELS = [
   ...GOOGLE_TTS_GENERATE_CONTENT_MODELS,
 ] as const;
 
-const GOOGLE_TTS_MODEL_ALIASES: Record<string, string> = {
-  "gemini-3.1-flash-tts": "gemini-3.1-flash-tts-preview",
-};
-
 export function normalizeGoogleTtsModel(model: unknown): string {
   const trimmed = normalizeOptionalString(model);
   if (!trimmed) {
     return DEFAULT_GOOGLE_TTS_MODEL;
   }
   const withoutProvider = trimmed.startsWith("google/") ? trimmed.slice("google/".length) : trimmed;
-  return GOOGLE_TTS_MODEL_ALIASES[withoutProvider] ?? withoutProvider;
+  return withoutProvider === "gemini-3.1-flash-tts"
+    ? "gemini-3.1-flash-tts-preview"
+    : withoutProvider;
 }
 
 export function isGoogleInteractionsTtsModel(model: string): boolean {
-  // SAFETY: widening a readonly literal tuple to readonly string[] so includes() accepts any model id.
-  return (GOOGLE_TTS_INTERACTIONS_MODELS as readonly string[]).includes(model);
+  return GOOGLE_TTS_INTERACTIONS_MODELS.some((candidate) => candidate === model);
 }
 
 export function assertSupportedGoogleTtsModel(model: string): void {

@@ -22,13 +22,6 @@ export function getActiveNodeIdentityScope(profileId?: string): "requester" | "u
   return personProfileId(profileId) ? "requester" : "unknown";
 }
 
-function snapshotActiveNodeContext(context: ActiveNodeContextState): ActiveNodeContext {
-  return {
-    nodeId: context.nodeId,
-    ...(context.pairingGeneration ? { pairingGeneration: context.pairingGeneration } : {}),
-  };
-}
-
 /** Replaces the Gateway's prepared choices; no profile can inherit another person's node. */
 export function setActiveNodeContexts(next: readonly ActiveNodeContextState[]): void {
   activeNodeContexts = new Map(
@@ -62,7 +55,12 @@ export function getCurrentActiveNodeContext(profileId?: string): ActiveNodeConte
   } catch {
     return null;
   }
-  return snapshotActiveNodeContext(activeNodeContext);
+  return {
+    nodeId: activeNodeContext.nodeId,
+    ...(activeNodeContext.pairingGeneration
+      ? { pairingGeneration: activeNodeContext.pairingGeneration }
+      : {}),
+  };
 }
 
 /** Bounds the authenticated id; explicit unknown clears stale hints without injecting labels. */

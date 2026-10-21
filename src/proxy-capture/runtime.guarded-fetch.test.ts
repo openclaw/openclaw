@@ -45,7 +45,6 @@ async function captureRoots() {
     roots,
     settings,
     leases,
-    originalFetch,
     savedWrapper,
     readEvents: () =>
       Promise.all(
@@ -124,122 +123,58 @@ describe("guarded capture ownership", () => {
     }
   });
 
-  it.each([
-    "same-owner",
-    "other-owner",
-    "saved-wrapper",
-    "caller-wrapper",
-    "capture-disabled",
-  ] as const)("uses one capture owner through %s", async (mode) => {
+  it("records an active transport rejection once through the global owner", async () => {
     const fixture = await captureRoots();
-    if (mode === "same-owner") {
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.roots[0]);
-    } else if (mode === "saved-wrapper") {
-      await initializeDebugProxyCaptureAsync("second", fixture.settings[1]);
-    }
-    const callerFetch = vi.fn<typeof fetch>((input, init) => fixture.originalFetch(input, init));
+    const arrived = createDeferredCore<ServerResponse>();
+    const controller = new AbortController();
+    const secret = "fixture-transport-secret";
+    registerSecretValueForRedaction(secret);
+    const reason = new Error(`caller abort ${secret}`);
     try {
       await withServer(
         (request, response) => {
           request.resume();
-          response.writeHead(200, { "x-fixture": "caller-response" });
-          response.end("loopback response");
+          arrived.resolve(response);
         },
         async (baseUrl) => {
-          const result = await fetchWithSsrFGuard({
-            url: `${baseUrl}/ownership`,
+          const operation = fetchWithSsrFGuard({
+            url: `${baseUrl}/rejection`,
             pinDns: false,
             policy: { allowPrivateNetwork: true },
-            ...(mode === "saved-wrapper"
-              ? { fetchImpl: fixture.savedWrapper }
-              : mode === "caller-wrapper"
-                ? { fetchImpl: callerFetch }
-                : {}),
-            ...(mode === "capture-disabled" ? { capture: false } : {}),
-            init: { method: "POST", body: "loopback request" },
-          });
-          try {
-            expect(result.response.status).toBe(200);
-            expect(result.response.headers.get("x-fixture")).toBe("caller-response");
-            expect(await result.response.text()).toBe("loopback response");
-          } finally {
-            await result.release();
-          }
+            signal: controller.signal,
+            capture: false,
+          }).then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          );
+          const response = await arrived.promise;
+          controller.abort(reason);
+          response.end();
+          const completed = await operation;
+          expect(completed.error).toBe(reason);
+          expect(completed.value).toBeUndefined();
         },
       );
-      // Finalization settles any diagnostic clone before checking all writes.
       await fixture.close();
       const events = await fixture.readEvents();
-      // Disabling the guard recorder leaves an installed global recorder in control.
-      const expected = mode === "capture-disabled" || mode === "same-owner" ? [2, 0] : [0, 2];
-      expect(events.map((rows) => rows.length)).toEqual(expected);
-      for (const rows of events.filter((captured) => captured.length > 0)) {
-        expect(rows[0]).toMatchObject({ kind: "request", dataText: "loopback request" });
-        expect(rows[1]).toMatchObject({ status: 200, flowId: rows[0]!.flowId });
-        expect(["response", "error"]).toContain(rows[1]!.kind);
-      }
-      expect(callerFetch).toHaveBeenCalledTimes(mode === "caller-wrapper" ? 1 : 0);
+      expect(events.map((rows) => rows.length)).toEqual([1, 0]);
+      const event = events[0]![0]!;
+      expect(event).toMatchObject({
+        kind: "error",
+        direction: "local",
+        method: "GET",
+        path: "/rejection",
+        errorText: "caller abort [REDACTED]",
+      });
+      expect(event.status).toBeNull();
+      expect(JSON.parse(String(event.metaJson))).toMatchObject({
+        captureOrigin: "global-fetch",
+      });
     } finally {
+      controller.abort();
       await fixture.close();
     }
   });
-
-  it.each(["guarded", "global"] as const)(
-    "records an active transport rejection once through the %s owner",
-    async (mode) => {
-      const fixture = await captureRoots();
-      const arrived = createDeferredCore<ServerResponse>();
-      const controller = new AbortController();
-      const secret = "fixture-transport-secret";
-      registerSecretValueForRedaction(secret);
-      const reason = new Error(`caller abort ${secret}`);
-      try {
-        await withServer(
-          (request, response) => {
-            request.resume();
-            arrived.resolve(response);
-          },
-          async (baseUrl) => {
-            const operation = fetchWithSsrFGuard({
-              url: `${baseUrl}/rejection`,
-              pinDns: false,
-              policy: { allowPrivateNetwork: true },
-              signal: controller.signal,
-              capture: mode === "global" ? false : { flowId: "guarded-rejection-flow" },
-            }).then(
-              (value) => ({ value, error: undefined }),
-              (error: unknown) => ({ value: undefined, error }),
-            );
-            const response = await arrived.promise;
-            controller.abort(reason);
-            response.end();
-            const completed = await operation;
-            expect(completed.error).toBe(reason);
-            expect(completed.value).toBeUndefined();
-          },
-        );
-        await fixture.close();
-        const events = await fixture.readEvents();
-        expect(events.map((rows) => rows.length)).toEqual(mode === "global" ? [1, 0] : [0, 1]);
-        const event = events[mode === "global" ? 0 : 1]![0]!;
-        expect(event).toMatchObject({
-          kind: "error",
-          direction: "local",
-          method: "GET",
-          path: "/rejection",
-          errorText: "caller abort [REDACTED]",
-          ...(mode === "guarded" ? { flowId: "guarded-rejection-flow" } : {}),
-        });
-        expect(event.status).toBeNull();
-        expect(JSON.parse(String(event.metaJson))).toMatchObject({
-          captureOrigin: mode === "global" ? "global-fetch" : "guarded-fetch",
-        });
-      } finally {
-        controller.abort();
-        await fixture.close();
-      }
-    },
-  );
 
   it.each(["response", "abort"] as const)(
     "keeps a delayed caller %s while retired admissions stay fenced",

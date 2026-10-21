@@ -1,8 +1,33 @@
 import { describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "./assistant-message-failures.js";
 
 describe("classifyAssistantFailoverReason", () => {
+  it("uses the recorded provider floor even when the display message was clipped", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "429: rate limited; Retry-After: 7 seconds",
+      errorCode: "rate_limit_exceeded",
+      retryAfterMs: 62_500,
+    });
+    expect(buildAssistantFailoverSignal(message).retryAfterMs).toBe(62_500);
+    expect(buildAssistantFailoverSignal({ ...message, retryAfterMs: null }).retryAfterMs).toBe(
+      Infinity,
+    );
+    expect(
+      classifyAssistantFailoverReason(
+        {
+          ...message,
+          errorMessage: "402: account balance exhausted",
+          errorCode: "insufficient_quota",
+        },
+        { providerOwner: null },
+      ),
+    ).toBe("billing");
+  });
   const opencodeGoStalledStreamError = {
     role: "assistant" as const,
     api: "openai-completions" as const,
@@ -37,6 +62,25 @@ describe("classifyAssistantFailoverReason", () => {
       }),
     ).toBe("timeout");
   });
+
+  it.each([400, 401, 402, 403, 404])(
+    "does not classify malformed tool arguments of length %s as auth failures",
+    (argumentChars) => {
+      const message = makeAssistantMessageFixture({
+        provider: "anthropic",
+        errorMessage: "Provider completed tool call with malformed JSON arguments",
+        errorCode: "malformed_tool_call_arguments",
+        errorBody: JSON.stringify({
+          code: "malformed_tool_call_arguments",
+          argumentChars,
+          argumentHash: "synthetic-hash",
+          repairAttempted: true,
+        }),
+        content: [],
+      });
+      expect(classifyAssistantFailoverReason(message, { providerOwner: null })).toBeNull();
+    },
+  );
 
   it("does not classify caller-aborted assistant messages as provider failover", () => {
     expect(

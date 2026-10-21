@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -44,13 +45,6 @@ export async function resolveNextcloudTalkRoomKind(params: {
   timeoutMs?: number;
 }): Promise<NextcloudTalkRoomKind | undefined> {
   const { account, roomToken, runtime } = params;
-  const key = `${account.accountId}:${roomToken}`;
-  const cached = roomCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) {
-    return cached.kind;
-  }
-  roomCache.delete(key);
-
   const apiCredentials = resolveNextcloudTalkApiCredentials({
     apiUser: account.config.apiUser,
     apiPassword: account.config.apiPassword,
@@ -60,6 +54,20 @@ export async function resolveNextcloudTalkRoomKind(params: {
   if (!apiCredentials || !baseUrl) {
     return undefined;
   }
+  const key = JSON.stringify([
+    account.accountId,
+    baseUrl,
+    roomToken,
+    apiCredentials.apiUser,
+    sha256Hex(apiCredentials.apiPassword),
+    account.config.network?.dangerouslyAllowPrivateNetwork === true,
+  ]);
+  const cached = roomCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.kind;
+  }
+  roomCache.delete(key);
+
   const fallback = (error: unknown) => {
     runtime?.error?.(`nextcloud-talk: room lookup error: ${String(error)}`);
     return cacheRoomInfo(key, undefined, ROOM_CACHE_ERROR_TTL_MS);
@@ -86,7 +94,9 @@ export async function resolveNextcloudTalkRoomKind(params: {
         },
       },
       auditContext: "nextcloud-talk.room-info",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(account.config),
+      policy: ssrfPolicyFromPrivateNetworkOptIn(
+        account.config.network?.dangerouslyAllowPrivateNetwork,
+      ),
       timeoutMs: params.timeoutMs ?? NEXTCLOUD_TALK_ROOM_INFO_TIMEOUT_MS,
     });
   } catch (error) {

@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -81,8 +82,7 @@ export async function readMemoryStats(source: MemoryStatsSource, agentId: string
   const reply = asOptionalRecord(JSON.parse(result.stdout));
   const columns = reply?.columns;
   if (
-    Array.isArray(columns) &&
-    columns.every((column): column is string => typeof column === "string") &&
+    isStringArray(columns) &&
     !hasAgentScopeColumn({ fields: columns.map((name) => ({ name })) })
   ) {
     throw legacyMemorySchemaError();

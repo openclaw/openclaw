@@ -11,12 +11,17 @@ scenario:
   objective: Verify default session visibility and agent-to-agent policy dispatch a real sessions_send to another configured agent and create its main session.
   gatewayConfigPatch:
     agents:
+      ownership: explicit
       entries:
-        qa:
-          default: true
+        qa: {}
         orion:
           tools:
             profile: coding
+    bindings:
+      - agentId: qa
+        match:
+          channel: qa-channel
+          accountId: "*"
   successCriteria:
     - The source plans sessions_send to agent:orion:main with timeoutSeconds=0.
     - The exact tool call returns status accepted without a forbidden result.

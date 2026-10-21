@@ -1,10 +1,9 @@
 import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
-import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  ToolCallSummary,
-  ToolHandlerContext,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 export type ToolExecutionEndEvent = Omit<
   Extract<AgentEvent, { type: "tool_execution_end" }>,
@@ -12,7 +11,11 @@ export type ToolExecutionEndEvent = Omit<
 > & { isError?: boolean };
 
 export function endTool(ctx: ToolHandlerContext, event: ToolExecutionEndEvent) {
-  return handleToolExecutionEnd(ctx, { type: "tool_execution_end", isError: false, ...event });
+  return handleToolExecutionEnd(
+    ctx,
+    { type: "tool_execution_end", isError: false, ...event },
+    prepareToolResult(event.result),
+  );
 }
 
 export function resultWithDetails(details: Record<string, unknown>) {
@@ -24,8 +27,6 @@ export function createTestContext() {
   const onAgentEvent = vi.fn();
   const onExecutionPhase = vi.fn();
   const warn = vi.fn();
-  const trace = vi.fn();
-  const isEnabled = vi.fn<NonNullable<ToolHandlerContext["log"]["isEnabled"]>>(() => false);
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
@@ -41,38 +42,10 @@ export function createTestContext() {
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
-      trace,
-      isEnabled,
       info: vi.fn(),
       warn,
     },
-    state: {
-      toolMetaById: new Map<string, ToolCallSummary>(),
-      toolMetas: [],
-      acceptedSessionSpawns: [],
-      toolSummaryById: new Set<string>(),
-      liveEditDiffStateById: new Map(),
-      itemActiveIds: new Set<string>(),
-      itemStartedCount: 0,
-      itemCompletedCount: 0,
-      pendingToolMediaUrls: [],
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      pendingToolAudioAsVoice: false,
-      deterministicApprovalPromptPending: false,
-      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      messagingToolSentTexts: [],
-      messagingToolSentTextsNormalized: [],
-      currentSourceMessagingToolSentTextsNormalized: [],
-      messagingToolSentMediaUrls: [],
-      messagingToolSourceReplyPayloads: [],
-      messageToolOnlySourceReplyDelivered: false,
-      messagingToolSentTargets: [],
-      successfulCronAdds: 0,
-      deterministicApprovalPromptSent: false,
-      toolExecutionSinceLastBlockReply: false,
-      assistantMessageIndex: 0,
-    },
+    state: new EmbeddedAgentSubscribeState({}),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
     emitToolSummary: vi.fn(),
@@ -80,5 +53,5 @@ export function createTestContext() {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase, trace, isEnabled };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
 }

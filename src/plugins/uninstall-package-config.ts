@@ -1,7 +1,9 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { CHANNEL_CONFIG_METADATA_KEYS } from "../channels/config-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { normalizePluginId, normalizePluginTargetConfig } from "./config-state.js";
 import { resetPluginSlotsToDefaults } from "./slots.js";
 
 export type PluginConfigUninstallActions = {
@@ -14,8 +16,6 @@ export type PluginConfigUninstallActions = {
   contextEngineSlot: boolean;
   channelConfig: boolean;
 };
-
-const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 export function mergePluginConfigUninstallActions(
   ...sources: PluginConfigUninstallActions[]
@@ -55,7 +55,7 @@ export function resolveUninstallChannelConfigKeys(
   opts?: { channelIds?: string[] },
 ): string[] {
   return uniqueStrings(
-    (opts?.channelIds ?? [pluginId]).filter((key) => !SHARED_CHANNEL_CONFIG_KEYS.has(key)),
+    (opts?.channelIds ?? [pluginId]).filter((key) => !CHANNEL_CONFIG_METADATA_KEYS.has(key)),
   );
 }
 
@@ -82,23 +82,19 @@ function removeMatchingLoadPaths(
   ownedPaths: readonly string[],
 ): { load: NonNullable<OpenClawConfig["plugins"]>["load"] | undefined; changed: boolean } {
   const loadPaths = load?.paths;
-  if (
-    ownedPaths.length === 0 ||
-    !Array.isArray(loadPaths) ||
-    !loadPaths.some((candidate) =>
-      ownedPaths.some((ownedPath) => loadPathMatchesInstallPath(candidate, ownedPath)),
-    )
-  ) {
+  if (ownedPaths.length === 0 || !Array.isArray(loadPaths)) {
     return { load, changed: false };
   }
   const nextLoadPaths = loadPaths.filter(
     (candidate) =>
       !ownedPaths.some((ownedPath) => loadPathMatchesInstallPath(candidate, ownedPath)),
   );
-  return {
-    load: nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined,
-    changed: true,
-  };
+  return nextLoadPaths.length === loadPaths.length
+    ? { load, changed: false }
+    : {
+        load: nextLoadPaths.length > 0 ? { ...load, paths: nextLoadPaths } : undefined,
+        changed: true,
+      };
 }
 
 export function removePluginRuntimePolicyFromConfig(
@@ -107,25 +103,26 @@ export function removePluginRuntimePolicyFromConfig(
   opts?: { channelIds?: string[]; loadPaths?: string[] },
 ): { config: OpenClawConfig; actions: PluginConfigUninstallActions } {
   const actions = createEmptyConfigUninstallActions();
-  const pluginsConfig = cfg.plugins ?? {};
+  const policyPluginId = normalizePluginId(pluginId);
+  const pluginsConfig = normalizePluginTargetConfig(cfg, pluginId).plugins ?? {};
 
-  let entries = pluginsConfig.entries;
-  if (entries && Object.hasOwn(entries, pluginId)) {
-    const { [pluginId]: _, ...rest } = entries;
+  let entries = cfg.plugins?.entries ? pluginsConfig.entries : undefined;
+  if (entries && Object.hasOwn(entries, policyPluginId)) {
+    const { [policyPluginId]: _, ...rest } = entries;
     entries = Object.keys(rest).length > 0 ? rest : undefined;
     actions.entry = true;
   }
 
   let allow = pluginsConfig.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
-    allow = allow.filter((id) => id !== pluginId);
+  if (Array.isArray(allow) && allow.includes(policyPluginId)) {
+    allow = allow.filter((id) => id !== policyPluginId);
     allow = allow.length > 0 ? allow : undefined;
     actions.allowlist = true;
   }
 
   let deny = pluginsConfig.deny;
-  if (Array.isArray(deny) && deny.includes(pluginId)) {
-    deny = deny.filter((id) => id !== pluginId);
+  if (Array.isArray(deny) && deny.includes(policyPluginId)) {
+    deny = deny.filter((id) => id !== policyPluginId);
     deny = deny.length > 0 ? deny : undefined;
     actions.denylist = true;
   }

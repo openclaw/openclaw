@@ -112,7 +112,8 @@ export function registerDefaultAuthTokenSuite(): void {
     });
 
     test("hello policy counts canonical session-sharing identities", async () => {
-      const { ensureProfileForEmail, linkEmail } = await import("../state/user-profiles.js");
+      const { ensureProfileForEmail } = await import("../state/user-profiles.js");
+      const { linkEmail } = await import("../state/user-profile-writes.worker.js");
       const suffix = `${process.pid}-${Date.now()}`;
       ensureProfileForEmail(`hello-a-${suffix}@example.invalid`);
       const target = ensureProfileForEmail(`hello-b-${suffix}@example.invalid`);
@@ -214,12 +215,13 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
       const deviceIdentityPath = path.join(
-        os.homedir(),
-        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `shared-auth-scope-reuse-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
@@ -291,7 +293,6 @@ export function registerDefaultAuthTokenSuite(): void {
       const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       // Fresh identity avoids inheriting a previously paired device's grant.
       const { device } = await createSignedDevice({
@@ -299,7 +300,13 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.homedir(), `openclaw-test-device-${randomUUID()}.sqlite`),
+        identityPath: path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "test-device-identities",
+          randomUUID(),
+          "client",
+          "credentials.sqlite",
+        ),
         nonce,
       });
 
@@ -367,7 +374,7 @@ export function registerDefaultAuthTokenSuite(): void {
       ws.close();
     });
 
-    test("retains authenticated previous-protocol node-host maintenance commands", async () => {
+    test("auto-approves authenticated previous-protocol local node-host maintenance commands", async () => {
       const nodeWs = await openWs(port);
       const operatorWs = await openWs(port);
       try {
@@ -385,6 +392,7 @@ export function registerDefaultAuthTokenSuite(): void {
         const operatorRes = await connectReq(operatorWs);
         expect(operatorRes.ok).toBe(true);
         type LegacyNodeStatus = {
+          approvalState?: string;
           commands?: string[];
           connected?: boolean;
           deviceFamily?: string;
@@ -393,18 +401,21 @@ export function registerDefaultAuthTokenSuite(): void {
           platform?: string;
           version?: string;
         };
-        const pendingList = await rpcReq<{
+        const nodeList = await rpcReq<{
           nodes?: LegacyNodeStatus[];
         }>(operatorWs, "node.list", {});
-        const pendingNode = pendingList.payload?.nodes?.find(
+        expect(nodeList.ok).toBe(true);
+        const legacyNode = nodeList.payload?.nodes?.find(
           (node) => node.connected === true && node.version === legacyVersion,
         );
-        expect(pendingNode).toMatchObject({
+        expect(legacyNode).toMatchObject({
+          approvalState: "approved",
+          commands: ["system.which"],
           deviceFamily: "Linux",
-          pendingDeclaredCommands: ["system.which"],
           platform: "linux",
         });
-        expect(pendingNode?.pendingRequestId).toBeTypeOf("string");
+        expect(legacyNode?.pendingDeclaredCommands).toBeUndefined();
+        expect(legacyNode?.pendingRequestId).toBeUndefined();
       } finally {
         nodeWs.close();
         operatorWs.close();

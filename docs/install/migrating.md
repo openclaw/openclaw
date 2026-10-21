@@ -38,6 +38,12 @@ Copy the **state directory** (`~/.openclaw/` by default) and your **workspace** 
 Run `openclaw status` on the old machine to confirm your state directory path. Custom profiles use `~/.openclaw-<profile>/` or a path set via `OPENCLAW_STATE_DIR`.
 </Tip>
 
+After moving or renaming the state directory, run `openclaw gateway restart`.
+The Gateway keeps its state and install paths from startup, so a full restart is
+required; a reload is not enough. Then run `openclaw doctor` to confirm there is
+no CLI/Gateway state-directory mismatch. Use the intended profile or
+`OPENCLAW_STATE_DIR` for both commands.
+
 ### Migration steps
 
 <Steps>
@@ -122,7 +128,7 @@ awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.
   </Accordion>
 
   <Accordion title="Permissions and ownership">
-    If you copied as root or switched users, the gateway may fail to read credentials. Ensure the state directory and workspace are owned by the user running the gateway.
+    If you copied as root or switched users, the gateway may fail to read credentials. Check that the state directory and workspace are owned by the user running the gateway.
   </Accordion>
 
   <Accordion title="Remote mode">

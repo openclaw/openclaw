@@ -2,10 +2,7 @@ import { lstatSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import {
-  AgentDatabaseRegistryChangedError,
-  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
-} from "../../state/openclaw-agent-db-registry-listing.js";
+import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   inspectOpenClawAgentDatabaseOwner,
@@ -14,6 +11,7 @@ import {
 import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
+  parseSqliteTargetSuffixIndex,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,
 } from "./session-sqlite-target-paths.js";
 import {
@@ -78,56 +76,28 @@ export async function prepareSqliteTargetFromSessionStorePath(
   signal?: AbortSignal,
 ): Promise<ResolvedSqliteStoreTarget> {
   signal?.throwIfAborted();
-  const pathname = path.resolve(storePath);
-  const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(pathname);
+  const unsuffixed = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   if (unsuffixed.agentId) {
     return unsuffixed;
   }
   const env = captureSessionTranscriptStorageEnvironment(options.env ?? process.env);
   const registryRead = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env });
   const input = {
-    storePath: pathname,
+    storePath: path.resolve(storePath.trim()),
     agentId: options.agentId,
     defaultAgentId: options.defaultAgentId,
     env,
   };
   const { resolveSessionSqliteTargetInWorker } =
     await import("./session-transcript-read-worker-runtime.js");
-  let refreshed = false;
-  for (;;) {
-    signal?.throwIfAborted();
-    let registry: Awaited<ReturnType<typeof registryRead.read>>;
-    try {
-      registry = await registryRead.read();
-      registry.assertCurrent();
-    } catch (error) {
-      if (!refreshed && error instanceof AgentDatabaseRegistryChangedError) {
-        refreshed = true;
-        continue;
-      }
-      throw error;
-    }
-    const registeredDatabases = readSessionStoreRegistryRows(
-      registry.result.status === "available" ? registry.result.entries : registry.result,
-    );
-    signal?.throwIfAborted();
-    const target = await resolveSessionSqliteTargetInWorker(
-      { ...input, registeredDatabases },
-      signal,
-    );
-    signal?.throwIfAborted();
-    try {
-      registry.assertCurrent();
-    } catch (error) {
-      if (!refreshed && error instanceof AgentDatabaseRegistryChangedError) {
-        // Repeat only pure discovery, retaining the preparer's original source admission.
-        refreshed = true;
-        continue;
-      }
-      throw error;
-    }
-    return target;
-  }
+  const registry = await registryRead.read(signal);
+  const registeredDatabases = readSessionStoreRegistryRows(
+    registry.result.status === "available" ? registry.result.entries : registry.result,
+  );
+  signal?.throwIfAborted();
+  // Discovery keeps its captured roster. A later registration affects the next
+  // preparation; the storage owner validates the selected target at its effect.
+  return resolveSessionSqliteTargetInWorker({ ...input, registeredDatabases }, signal);
 }
 
 function resolvePersistedOwners(
@@ -218,35 +188,19 @@ function resolveCustomStoreSqlitePath(params: {
     resolvePersistedOwner(unsuffixedPath);
   const resolveSuffixedTarget = (ownerAgentId: string) => {
     const prefix = `${sqliteBaseName}.${ownerAgentId}`;
-    const parseIndex = (fileName: string): number | undefined => {
-      if (fileName === `${prefix}.sqlite`) {
-        return 1;
-      }
-      if (!fileName.startsWith(`${prefix}.`) || !fileName.endsWith(".sqlite")) {
-        return undefined;
-      }
-      const rawValue = fileName.slice(prefix.length + 1, -".sqlite".length);
-      if (!/^[1-9]\d*$/.test(rawValue)) {
-        return undefined;
-      }
-      const value = Number(rawValue);
-      return Number.isSafeInteger(value) && value >= 2 && String(value) === rawValue
-        ? value
-        : undefined;
-    };
     const occupiedIndexes = new Set<number>();
     for (const registered of registeredDatabases) {
       if (!isSameDatabasePath(path.dirname(registered.path), sessionsDir)) {
         continue;
       }
-      const index = parseIndex(path.basename(registered.path));
+      const index = parseSqliteTargetSuffixIndex(path.basename(registered.path), prefix);
       if (index !== undefined) {
         occupiedIndexes.add(index);
       }
     }
     try {
       for (const fileName of readdirSync(sessionsDir)) {
-        const index = parseIndex(fileName);
+        const index = parseSqliteTargetSuffixIndex(fileName, prefix);
         if (index !== undefined) {
           occupiedIndexes.add(index);
         }

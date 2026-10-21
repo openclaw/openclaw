@@ -11,145 +11,115 @@ import {
 
 const MAX_FEISHU_DIRECTORY_PAGES = 100;
 
-export async function listFeishuDirectoryPeersLive(
-  params: DirectoryConfigParams & {
-    fallbackToStatic?: boolean;
+type LiveDirectoryParams = DirectoryConfigParams & { fallbackToStatic?: boolean };
+type DirectoryEntry = FeishuDirectoryPeer | FeishuDirectoryGroup;
+
+async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
+  params: LiveDirectoryParams & { filter?: (entry: TEntry) => boolean },
+  options: {
+    kind: "peer" | "group";
+    fallback: (params: DirectoryConfigParams) => Promise<TEntry[]>;
+    fetchPage: (
+      client: ReturnType<typeof createFeishuClient>,
+      pageSize: number,
+      pageToken?: string,
+    ) => Promise<{
+      code?: number;
+      msg?: string;
+      data?: { items?: TItem[]; has_more?: boolean; page_token?: string };
+    }>;
+    toEntry: (item: TItem) => TEntry | undefined;
   },
-): Promise<FeishuDirectoryPeer[]> {
+): Promise<TEntry[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
-    return listFeishuDirectoryPeers(params);
+    return options.fallback(params);
   }
-
+  const label = `Feishu live ${options.kind}`;
   try {
     const client = createFeishuClient(account);
-    const peers: FeishuDirectoryPeer[] = [];
+    const entries: TEntry[] = [];
     const limit = params.limit ?? 50;
     const q = normalizeLowercaseStringOrEmpty(params.query);
-    const pageSize = q ? 50 : Math.min(limit, 50);
+    const peers = options.kind === "peer";
+    const pageSize = peers && q ? 50 : Math.min(limit, peers ? 50 : 100);
     let pageToken: string | undefined;
     const seenPageTokens = new Set<string>();
-
-    for (let page = 0; page < MAX_FEISHU_DIRECTORY_PAGES; page += 1) {
-      const response = await client.contact.user.list({
-        params: {
-          page_size: pageSize,
-          page_token: pageToken,
-        },
-      });
+    for (let page = 1; page <= MAX_FEISHU_DIRECTORY_PAGES; page += 1) {
+      const response = await options.fetchPage(client, pageSize, pageToken);
       if (response.code !== 0) {
         throw new Error(response.msg || `code ${response.code}`);
       }
-      for (const user of response.data?.items ?? []) {
-        if (user.open_id) {
-          const name = user.name || "";
-          if (
-            !q ||
-            normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
-            normalizeLowercaseStringOrEmpty(name).includes(q)
-          ) {
-            peers.push({
-              kind: "user",
-              id: user.open_id,
-              name: name || undefined,
-            });
+      for (const item of response.data?.items ?? []) {
+        const entry = options.toEntry(item);
+        if (
+          entry &&
+          (!q ||
+            normalizeLowercaseStringOrEmpty(entry.id).includes(q) ||
+            normalizeLowercaseStringOrEmpty(entry.name).includes(q)) &&
+          (peers || !params.filter || params.filter(entry))
+        ) {
+          entries.push(entry);
+        }
+        if (entries.length >= limit) {
+          // Peer lookup accepts the limit before examining continuation; groups
+          // retain their page-token validation even when the result limit is met.
+          if (peers) {
+            return entries;
           }
-        }
-        if (peers.length >= limit) {
-          return peers;
-        }
-      }
-      if (!response.data?.has_more) {
-        return peers;
-      }
-
-      const nextPageToken = response.data.page_token;
-      if (!nextPageToken) {
-        throw new Error("Feishu live peer directory returned an empty page token");
-      }
-      if (seenPageTokens.has(nextPageToken)) {
-        throw new Error("Feishu live peer directory returned a repeated page token");
-      }
-      seenPageTokens.add(nextPageToken);
-      pageToken = nextPageToken;
-    }
-    throw new Error("Feishu live peer directory pagination limit exceeded");
-  } catch (err) {
-    if (params.fallbackToStatic === false) {
-      throw err instanceof Error ? err : new Error("Feishu live peer lookup failed");
-    }
-    return listFeishuDirectoryPeers(params);
-  }
-}
-
-export async function listFeishuDirectoryGroupsLive(
-  params: DirectoryConfigParams & {
-    fallbackToStatic?: boolean;
-    filter?: (group: FeishuDirectoryGroup) => boolean;
-  },
-): Promise<FeishuDirectoryGroup[]> {
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  if (!account.configured) {
-    return listFeishuDirectoryGroups(params);
-  }
-
-  try {
-    const client = createFeishuClient(account);
-    const groups: FeishuDirectoryGroup[] = [];
-    const limit = params.limit ?? 50;
-    const q = normalizeLowercaseStringOrEmpty(params.query);
-    let pageToken: string | undefined;
-    let pages = 0;
-    const seenPageTokens = new Set<string>();
-    do {
-      const response = await client.im.chat.list({
-        params: {
-          page_size: Math.min(limit, 100),
-          page_token: pageToken,
-        },
-      });
-      if (response.code !== 0) {
-        throw new Error(response.msg || `code ${response.code}`);
-      }
-      for (const chat of response.data?.items ?? []) {
-        if (chat.chat_id) {
-          const name = chat.name || "";
-          const group = {
-            kind: "group",
-            id: chat.chat_id,
-            name: name || undefined,
-          } satisfies FeishuDirectoryGroup;
-          const matchesQuery =
-            !q ||
-            normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
-            normalizeLowercaseStringOrEmpty(name).includes(q);
-          if (matchesQuery && (!params.filter || params.filter(group))) {
-            groups.push(group);
-          }
-        }
-        if (groups.length >= limit) {
           break;
         }
       }
-      pages += 1;
       const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
+      if (peers && response.data?.has_more && !nextPageToken) {
+        throw new Error(`${label} directory returned an empty page token`);
+      }
       if (nextPageToken && seenPageTokens.has(nextPageToken)) {
-        throw new Error("Feishu live group directory returned a repeated page token");
+        throw new Error(`${label} directory returned a repeated page token`);
       }
-      if (nextPageToken) {
-        seenPageTokens.add(nextPageToken);
+      if (!nextPageToken) {
+        return entries;
       }
+      seenPageTokens.add(nextPageToken);
       pageToken = nextPageToken;
-    } while (pageToken && groups.length < limit && pages < MAX_FEISHU_DIRECTORY_PAGES);
-    if (pageToken && pages >= MAX_FEISHU_DIRECTORY_PAGES) {
-      throw new Error("Feishu live group directory pagination limit exceeded");
+      if (page === MAX_FEISHU_DIRECTORY_PAGES) {
+        throw new Error(`${label} directory pagination limit exceeded`);
+      }
+      if (!peers && !(entries.length < limit)) {
+        return entries;
+      }
     }
-
-    return groups;
+    throw new Error(`${label} directory pagination limit exceeded`);
   } catch (err) {
     if (params.fallbackToStatic === false) {
-      throw err instanceof Error ? err : new Error("Feishu live group lookup failed");
+      throw err instanceof Error ? err : new Error(`${label} lookup failed`);
     }
-    return listFeishuDirectoryGroups(params);
+    return options.fallback(params);
   }
+}
+
+export function listFeishuDirectoryPeersLive(
+  params: LiveDirectoryParams,
+): Promise<FeishuDirectoryPeer[]> {
+  return listFeishuDirectoryLive(params, {
+    kind: "peer",
+    fallback: listFeishuDirectoryPeers,
+    fetchPage: (client, pageSize, pageToken) =>
+      client.contact.user.list({ params: { page_size: pageSize, page_token: pageToken } }),
+    toEntry: (user) =>
+      user.open_id ? { kind: "user", id: user.open_id, name: user.name || undefined } : undefined,
+  });
+}
+
+export function listFeishuDirectoryGroupsLive(
+  params: LiveDirectoryParams & { filter?: (group: FeishuDirectoryGroup) => boolean },
+): Promise<FeishuDirectoryGroup[]> {
+  return listFeishuDirectoryLive(params, {
+    kind: "group",
+    fallback: listFeishuDirectoryGroups,
+    fetchPage: (client, pageSize, pageToken) =>
+      client.im.chat.list({ params: { page_size: pageSize, page_token: pageToken } }),
+    toEntry: (chat) =>
+      chat.chat_id ? { kind: "group", id: chat.chat_id, name: chat.name || undefined } : undefined,
+  });
 }

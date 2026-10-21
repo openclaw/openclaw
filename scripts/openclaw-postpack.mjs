@@ -11,10 +11,12 @@ import {
 import { restorePackageChangelog } from "./package-changelog.mjs";
 import { restorePackageDocsMap } from "./package-docs-map.mjs";
 import { restorePackageManifest } from "./package-manifest.mjs";
+import { restorePackagedWorkerBundle } from "./package-worker-bundle-lifecycle.mjs";
 
 export async function restorePrepackArtifacts(cwd = process.cwd()) {
   await restorePackageChangelog(cwd);
   await restorePackageManifest(cwd);
+  await restorePackagedWorkerBundle(cwd);
   await Promise.all(
     [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH, LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH].map(
       (relativePath) => rm(path.join(cwd, relativePath), { force: true }),

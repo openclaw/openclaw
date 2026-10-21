@@ -1,6 +1,6 @@
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, beforeEach, expect, it } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   runExclusiveSqliteSessionWrite,
@@ -17,6 +17,7 @@ import {
   type SessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   readCodexSessionTranscriptEventsBeforeAdmission,
   withCodexSessionTranscriptMirrorWriteLock,
@@ -26,254 +27,184 @@ import {
   readSessionTranscriptVisibleMessageDelta,
 } from "./session-transcript-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-mirror-");
 
-describe("private session transcript mirror runtime", () => {
-  let storePath: string;
+let storePath: string;
 
-  beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-sdk-transcript-mirror-");
-    storePath = path.join(tempDir, "sessions.json");
-  });
+beforeEach(() => {
+  storePath = path.join(sessionDirs.make(), "sessions.json");
+});
 
-  it("rechecks idempotency and publishes only committed visible sequences", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "indexed-mirror-session",
-      sessionKey: "agent:main:indexed-mirror",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+function target(name: string) {
+  const sessionId = `${name}-session`,
+    sessionKey = `agent:main:${name}`;
+  return { agentId: "main", sessionId, sessionKey, storePath };
+}
+async function seed(name: string) {
+  const scope = target(name);
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  return scope;
+}
+function message(role: string, text: string, idempotencyKey: string, timestamp: number) {
+  return { role, content: [{ type: "text", text }], idempotencyKey, timestamp };
+}
+const userFacts = {
+  existingIdempotencyKeys: new Set(["mirror-user"]),
+  messagesByIdempotencyKey: new Map([["mirror-user", expect.objectContaining({ role: "user" })]]),
+};
+type Append = { result?: unknown; messageSeq?: number };
+function expectAppend(value: Append, role: string, seq?: number) {
+  expect(value.result).toMatchObject({ appended: true, message: { role } });
+  expect(value.messageSeq).toBe(seq);
+}
 
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
-      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
-        anchorsByIdempotencyKey: new Map(),
-        existingIdempotencyKeys: new Set(),
-        messagesByIdempotencyKey: new Map(),
-      });
-      const first = await locked.appendMessageWithMessageSequence({
-        idempotencyLookup: "scan",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "persist once" }],
-          idempotencyKey: "mirror-user",
-          timestamp: 1,
-        },
-      });
-      expect(first).toMatchObject({
-        messageSeq: 1,
-        result: { appended: true, message: { role: "user" } },
-      });
-      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({
-        existingIdempotencyKeys: new Set(["mirror-user"]),
-        messagesByIdempotencyKey: new Map([
-          ["mirror-user", expect.objectContaining({ role: "user" })],
-        ]),
-      });
-      const replay = await locked.appendMessageWithMessageSequence({
-        idempotencyLookup: "scan",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "persist once" }],
-          idempotencyKey: "mirror-user",
-          timestamp: 2,
-        },
-      });
-      expect(replay).toMatchObject({
-        result: {
-          appended: false,
-          message: { content: [{ text: "persist once", type: "text" }], role: "user" },
-        },
-      });
-      expect(replay.messageSeq).toBeUndefined();
+it("rechecks idempotency and publishes only committed visible sequences", async () => {
+  const scope = await seed("indexed-mirror");
 
-      if (!first.result) {
-        throw new Error("expected initial mirror append");
-      }
-      await locked.appendMessage({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "abandoned branch" }],
-          idempotencyKey: "mirror-abandoned",
-          timestamp: 3,
-        },
-        parentId: first.result.messageId,
-      });
-      const activeBranch = await locked.appendMessageWithMessageSequence({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "final active branch" }],
-          idempotencyKey: "mirror-active",
-          timestamp: 4,
-        },
-        parentId: first.result.messageId,
-      });
-      expect(activeBranch).toMatchObject({
-        result: { appended: true, message: { role: "assistant" } },
-      });
-      expect(activeBranch.messageSeq).toBeUndefined();
+  await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toEqual({
+      anchorsByIdempotencyKey: new Map(),
+      existingIdempotencyKeys: new Set(),
+      messagesByIdempotencyKey: new Map(),
     });
-
-    const resolvedScope = resolveSqliteTranscriptScope(scope);
-    await expect(
-      readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 }),
-    ).resolves.toEqual({
-      kind: "unavailable",
-      reason: "projection_rebuilding",
+    const first = await locked.appendMessageWithMessageSequence({
+      idempotencyLookup: "scan",
+      message: message("user", "persist once", "mirror-user", 1),
     });
-    await waitForSessionTranscriptProjection(scope);
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
-      const afterReconcile = await locked.appendMessageWithMessageSequence({
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "after active branch" }],
-          idempotencyKey: "mirror-after-reconcile",
-          timestamp: 5,
-        },
-      });
-      expect(afterReconcile).toMatchObject({
-        messageSeq: 3,
-        result: { appended: true, message: { role: "assistant" } },
-      });
-    });
-    await waitForSessionTranscriptProjection(scope);
-
-    await runExclusiveSqliteSessionWrite(
-      resolvedScope,
-      async () => {
-        runOpenClawAgentWriteTransaction((database) => {
-          database.db
-            .prepare(
-              "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
-            )
-            .run(scope.sessionId);
-        }, toDatabaseOptions(resolvedScope));
-      },
-      "session.transcript.batch",
+    expectAppend(first, "user", 1);
+    expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject(
+      userFacts,
     );
-
-    await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
-      expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject({
-        existingIdempotencyKeys: new Set(["mirror-user"]),
-        messagesByIdempotencyKey: new Map([
-          ["mirror-user", expect.objectContaining({ role: "user" })],
-        ]),
-      });
-      const dirtyProjection = await locked.appendMessageWithMessageSequence({
-        idempotencyLookup: "scan",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "projection fallback" }],
-          idempotencyKey: "mirror-dirty",
-          timestamp: 6,
-        },
-      });
-      expect(dirtyProjection).toMatchObject({
-        result: { appended: true, message: { role: "assistant" } },
-      });
-      expect(dirtyProjection.messageSeq).toBeUndefined();
+    const replay = await locked.appendMessageWithMessageSequence({
+      idempotencyLookup: "scan",
+      message: message("user", "persist once", "mirror-user", 2),
     });
+    expect(replay.result).toMatchObject({
+      appended: false,
+      message: { content: [{ text: "persist once", type: "text" }], role: "user" },
+    });
+    expect(replay.messageSeq).toBeUndefined();
+
+    assert(first.result, "expected initial mirror append");
+    await locked.appendMessage({
+      message: message("assistant", "abandoned branch", "mirror-abandoned", 3),
+      parentId: first.result.messageId,
+    });
+    const activeBranch = await locked.appendMessageWithMessageSequence({
+      message: message("assistant", "final active branch", "mirror-active", 4),
+      parentId: first.result.messageId,
+    });
+    expectAppend(activeBranch, "assistant");
   });
 
-  it("publishes the append's lifecycle after the session row is replaced", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "owned-mirror-session",
-      sessionKey: "agent:main:owned-mirror",
-      storePath,
-    };
-    const entry = {
-      sessionId: scope.sessionId,
-      activeWriterRunId: "mirror-writer",
+  const resolvedScope = resolveSqliteTranscriptScope(scope);
+  await waitForSessionTranscriptProjection(scope);
+  await expect(
+    readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 }),
+  ).resolves.toMatchObject({
+    kind: "page",
+    entries: [
+      { idempotencyKey: "mirror-user", seq: 1 },
+      { idempotencyKey: "mirror-active", seq: 2 },
+    ],
+    hasMore: false,
+  });
+  await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    const afterReconcile = await locked.appendMessageWithMessageSequence({
+      message: message("assistant", "after active branch", "mirror-after-reconcile", 5),
+    });
+    expectAppend(afterReconcile, "assistant", 3);
+  });
+  await waitForSessionTranscriptProjection(scope);
+
+  await runExclusiveSqliteSessionWrite(
+    resolvedScope,
+    async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        database.db
+          .prepare(
+            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      }, toDatabaseOptions(resolvedScope));
+    },
+    "session.transcript.batch",
+  );
+
+  await withCodexSessionTranscriptMirrorWriteLock(scope, async (locked) => {
+    expect(await locked.readMessageFacts({ idempotencyKeys: ["mirror-user"] })).toMatchObject(
+      userFacts,
+    );
+    const dirtyProjection = await locked.appendMessageWithMessageSequence({
+      idempotencyLookup: "scan",
+      message: message("assistant", "projection fallback", "mirror-dirty", 6),
+    });
+    expectAppend(dirtyProjection, "assistant");
+  });
+});
+
+it("publishes the append's lifecycle after the session row is replaced", async () => {
+  const scope = target("owned-mirror");
+  const entry = {
+    sessionId: scope.sessionId,
+    activeWriterRunId: "mirror-writer",
+    lifecycleRevision: "committed-lifecycle",
+    updatedAt: 1,
+  };
+  await upsertSessionEntryCore(scope, entry);
+  const sessionTarget = {
+    ...scope,
+    expectedLifecycleRevision: entry.lifecycleRevision,
+    expectedWriterRunId: entry.activeWriterRunId,
+  };
+  const reply = { role: "assistant", content: "Committed reply" };
+  const append = () =>
+    withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+      locked.appendMessageWithMessageSequence({ message: reply }),
+    );
+  const appended = await withOwnedSessionTranscriptWrites(
+    { sessionTarget, withTranscriptWrite: async (run) => run() },
+    append,
+  );
+  expect(appended).toMatchObject({ lifecycleRevision: entry.lifecycleRevision, messageSeq: 1 });
+  const result = appended.result;
+  assert(result, "expected committed mirror reply");
+  await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement-lifecycle" });
+  const internalUpdates: InternalSessionTranscriptUpdate[] = [];
+  const publicUpdates: SessionTranscriptUpdate[] = [];
+  using subscriptions = new DisposableStack();
+  subscriptions.defer(onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update)));
+  subscriptions.defer(onSessionTranscriptUpdate((update) => publicUpdates.push(update)));
+  await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
+    locked.publishUpdate({
+      lifecycleRevision: appended.lifecycleRevision,
+      message: result.message,
+      messageId: result.messageId,
+      messageSeq: appended.messageSeq,
+    }),
+  );
+  expect(internalUpdates).toMatchObject([
+    {
       lifecycleRevision: "committed-lifecycle",
-      updatedAt: 1,
-    };
-    await upsertSessionEntryCore(scope, entry);
-    const appended = await withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: {
-          ...scope,
-          expectedLifecycleRevision: entry.lifecycleRevision,
-          expectedWriterRunId: entry.activeWriterRunId,
-        },
-        withTranscriptWrite: async (run) => await run(),
-      },
-      () =>
-        withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
-          locked.appendMessageWithMessageSequence({
-            message: { role: "assistant", content: "Committed reply" },
-          }),
-        ),
-    );
-    expect(appended.lifecycleRevision).toBe(entry.lifecycleRevision);
-    expect(appended.messageSeq).toBe(1);
-    const result = appended.result;
-    if (!result) {
-      throw new Error("expected committed mirror reply");
-    }
-    await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement-lifecycle" });
-    const internalUpdates: InternalSessionTranscriptUpdate[] = [];
-    const publicUpdates: SessionTranscriptUpdate[] = [];
-    const offInternal = onInternalSessionTranscriptUpdate((update) => internalUpdates.push(update));
-    const offPublic = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
-    try {
-      await withCodexSessionTranscriptMirrorWriteLock(scope, (locked) =>
-        locked.publishUpdate({
-          lifecycleRevision: appended.lifecycleRevision,
-          message: result.message,
-          messageId: result.messageId,
-          messageSeq: appended.messageSeq,
-        }),
-      );
-      expect(internalUpdates).toMatchObject([
-        {
-          lifecycleRevision: "committed-lifecycle",
-          messageId: result.messageId,
-          messageSeq: 1,
-        },
-      ]);
-      expect(publicUpdates).toHaveLength(1);
-      expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
-    } finally {
-      offInternal();
-      offPublic();
-    }
-  });
+      messageId: result.messageId,
+      messageSeq: 1,
+    },
+  ]);
+  expect(publicUpdates).toHaveLength(1);
+  expect(publicUpdates[0]).not.toHaveProperty("lifecycleRevision");
+});
 
-  it("rejects an admission receipt for a different transcript target", async () => {
-    const admittedScope = {
-      agentId: "main",
-      sessionId: "admitted-session",
-      sessionKey: "agent:main:admitted-session",
-      storePath,
-    };
-    const requestedScope = {
-      ...admittedScope,
-      sessionId: "requested-session",
-      sessionKey: "agent:main:requested-session",
-    };
-    await upsertSessionEntryCore(admittedScope, {
-      sessionId: admittedScope.sessionId,
-      updatedAt: 1,
-    });
-    await upsertSessionEntryCore(requestedScope, {
-      sessionId: requestedScope.sessionId,
-      updatedAt: 1,
-    });
-    const admitted = await appendSessionTranscriptMessageByIdentity({
-      ...admittedScope,
-      message: { role: "user", content: "admitted elsewhere" },
-    });
-    if (!admitted?.anchor) {
-      throw new Error("expected admitted transcript anchor");
-    }
-
-    await expect(
-      readCodexSessionTranscriptEventsBeforeAdmission(requestedScope, {
-        ...admitted.anchor,
-        logicalTurnId: "admitted-turn",
-        role: "user",
-      }),
-    ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
+it("rejects an admission receipt for a different transcript target", async () => {
+  const admittedScope = await seed("admitted");
+  const requestedScope = await seed("requested");
+  const admitted = await appendSessionTranscriptMessageByIdentity({
+    ...admittedScope,
+    message: { role: "user", content: "admitted elsewhere" },
   });
+  assert(admitted?.anchor, "expected admitted transcript anchor");
+
+  const admission = { ...admitted.anchor, logicalTurnId: "admitted-turn", role: "user" as const };
+  await expect(
+    readCodexSessionTranscriptEventsBeforeAdmission(requestedScope, admission),
+  ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
 });

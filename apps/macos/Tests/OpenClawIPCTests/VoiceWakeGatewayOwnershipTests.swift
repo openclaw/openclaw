@@ -5,8 +5,7 @@ import Testing
 @testable import OpenClawKit
 
 extension VoiceWakeGlobalSettingsSyncTests {
-    // Reload waits have no deadline of their own; the limit only bounds a lost reload.
-    @Test(.timeLimit(.minutes(2)), arguments: [false, true])
+    @Test(arguments: [false, true])
     func `new primary connection reloads its current voice wake triggers`(switchGateway: Bool) async throws {
         try await TestIsolation.withIsolatedState {
             let previous = AppStateStore.shared.swabbleTriggerWords
@@ -45,12 +44,16 @@ extension VoiceWakeGlobalSettingsSyncTests {
             let sync = VoiceWakeGlobalSettingsSync(gateway: gateway)
             sync.start()
             do {
-                try await self.waitForTriggers(["gateway-a"])
+                try await TestWait.observed("gateway-a voice wake triggers") {
+                    AppStateStore.shared.swabbleTriggerWords == ["gateway-a"]
+                }
                 await gateway.shutdown()
                 if switchGateway { port.setValue(49261) }
                 triggers.setValue("gateway-b")
                 _ = try await gateway.acquireServerLease()
-                try await self.waitForTriggers(["gateway-b"])
+                try await TestWait.observed("gateway-b voice wake triggers") {
+                    AppStateStore.shared.swabbleTriggerWords == ["gateway-b"]
+                }
             } catch {
                 sync.stop()
                 await gateway.shutdown()
@@ -58,23 +61,6 @@ extension VoiceWakeGlobalSettingsSyncTests {
             }
             sync.stop()
             await gateway.shutdown()
-        }
-    }
-
-    /// Each reload crosses the connection actor and the fake socket before it lands
-    /// on the main actor. Wait on the observed triggers, not a wall-clock deadline
-    /// that native-suite load can exceed.
-    private func waitForTriggers(_ expected: [String]) async throws {
-        while true {
-            try Task.checkCancellation()
-            let changed = AsyncTestGate()
-            let ready = withObservationTracking {
-                AppStateStore.shared.swabbleTriggerWords == expected
-            } onChange: {
-                changed.open()
-            }
-            if ready { return }
-            await changed.wait()
         }
     }
 }

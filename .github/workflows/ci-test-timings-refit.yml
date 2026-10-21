@@ -24,6 +24,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
 
       - name: Verify generated PR App permissions
@@ -65,7 +66,7 @@ jobs:
       - name: Upload full timing refit report
         id: report
         if: ${{ !cancelled() && steps.refit.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-test-timings-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ci-test-timings-report.md
@@ -89,6 +90,7 @@ jobs:
             config/ci-test-timings.json
             scripts/ci-refit-test-timings.mts
             scripts/ci-run-timings.mjs
+            scripts/lib/arg-utils.runtime.mjs
             scripts/lib/ci-test-timings-refit.mts
             scripts/lib/ci-node-test-groups-codec.mts
             scripts/lib/ci-test-timings-schema.mts
@@ -107,7 +109,7 @@ jobs:
           pr-body: |
             ## What Problem This Solves
 
-            Refresh stale CI shard weights from successful jobs in completed main-push workflows, successful release-check runs, and exact compact selectors and tooling files from successful pull-request CI runs.
+            Refresh stale CI shard weights from successful jobs in completed scheduled main CI workflows, successful release-check runs, and exact compact selectors and tooling files from successful pull-request CI runs.
 
             ## Why This Change Was Made
 

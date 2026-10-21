@@ -35,7 +35,6 @@ export async function fixture(
   const firstRemoval = createDeferred();
   const removalEntered = createDeferred();
   const retryRemoval = createDeferred();
-  const retryEntered = createDeferred();
   const snapshots: number[] = [];
   const onPersist: { call?: () => void } = {};
   let launch: NodeWorkerLaunchReceipt | undefined;
@@ -91,16 +90,16 @@ export async function fixture(
     launch && (launch.state === "pending" || launch.state === "running") ? 1 : 0,
   );
   mocks.launchPrune.mockResolvedValue(0);
-  mocks.launchRunning.mockImplementation(async (params) => {
-    launch = {
-      ...currentLaunch(),
-      state: "running",
-      worker: params.worker,
-      workerCleanupMode: params.cleanupMode,
-      container: params.container,
-    };
-    return launch;
-  });
+  mocks.launchRunning.mockImplementation(
+    async (params) =>
+      (launch = {
+        ...currentLaunch(),
+        state: "running",
+        worker: params.worker,
+        workerCleanupMode: params.cleanupMode,
+        container: params.container,
+      }),
+  );
   mocks.launchFinish.mockImplementation(async (params) => {
     launch = { ...currentLaunch(), state: params.state };
     if (turn?.state === "running") {
@@ -140,8 +139,7 @@ export async function fixture(
     if (!receipt) {
       throw new Error("Synthetic turn disappeared");
     }
-    turn = { ...receipt, state: params.state, resultJson: params.resultJson ?? null };
-    return turn;
+    return (turn = { ...receipt, state: params.state, resultJson: params.resultJson ?? null });
   });
   mocks.drain.mockImplementation(async () => {
     if (refusal) {
@@ -153,7 +151,6 @@ export async function fixture(
       removalEntered.resolve();
       await firstRemoval.promise;
     } else {
-      retryEntered.resolve();
       await retryRemoval.promise;
     }
   });
@@ -240,18 +237,15 @@ export async function fixture(
     firstRemoval,
     removalEntered,
     retryRemoval,
-    retryEntered,
     snapshots,
     onPersist,
     readTurn: () => turn,
     turnSettled: () => turnSettled,
     readReceipt: currentTurn,
     async dispose() {
-      persistence.resolve();
-      emitResult.resolve();
-      exited.resolve();
-      firstRemoval.resolve();
-      retryRemoval.resolve();
+      for (const gate of [persistence, emitResult, exited, firstRemoval, retryRemoval]) {
+        gate.resolve();
+      }
       try {
         await supervisor.close();
       } catch (error) {
@@ -296,14 +290,8 @@ export function recoveryFixture(container = false) {
   mocks.launchGet.mockImplementation(async () => receipt);
   mocks.launchMatching.mockImplementation(async () => receipt);
   mocks.launchCount.mockImplementation(async () => (receipt.state === "running" ? 1 : 0));
-  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (
-    params,
-    authority,
-  ) => {
-    authority?.assertCurrent();
-    receipt = { ...receipt, state: params.state };
-    return receipt;
-  };
+  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (params) =>
+    (receipt = { ...receipt, state: params.state });
   mocks.launchFinish.mockImplementation(finish);
   mocks.remove.mockResolvedValue(undefined);
   const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({}));

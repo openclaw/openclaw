@@ -10,6 +10,37 @@ sidebarTitle: "Background work"
 
 Start agent work in the background: hook-dispatched turns for external content and subagent runs. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference.
 
+## Requester-bound native children
+
+Use optional `api.runtime.subagent.native` inside an eligible `reply_dispatch` handler when a plugin controller needs the same native children as `sessions_spawn`, rather than a separate agent turn. The Gateway supplies the actual current request; plugins cannot choose a parent session, requester, credentials, or permission scope.
+
+`spawn` returns native accepted IDs and always uses collector completion. Reuse a nonempty `requestId` within the same plugin and parent turn to replay the same request. Reusing it with different arguments fails instead of creating another child. Normal tool hooks still run; incompatible rewrites of the native runtime, run mode, collector completion, or replay identity are rejected before creating a child.
+
+`collect({ ids, timeoutSeconds: 0 })` reads current status. A bounded wait returns when a result is available or the timeout expires. `collect({ ids, awaitResults: true })` joins all requested results without polling; do not combine it with `timeoutSeconds`. Pending IDs are not failures. Completion states are `done`, `failed`, `killed`, or `timeout`, with native result, structured output, and error fields when available.
+
+`model`, `thinking`, and `fastMode` select native child overrides, subject to the existing model and requester policies. `context` selects `fork` or `isolated`; native defaults apply when omitted. No ACP runtime is exposed by this facade.
+
+```typescript
+const native = api.runtime.subagent.native;
+if (!native) throw new Error("Native children are unavailable in this runtime");
+
+const child = await native.spawn({
+  requestId: "review-implementation",
+  task: "Review the implementation and report actionable findings.",
+  context: "isolated",
+  thinking: "high",
+  fastMode: "auto",
+});
+const results = await native.collect({ ids: [child.runId], awaitResults: true });
+// The claiming handler decides how to present results and completes its reply.
+```
+
+Supported ingress is the Gateway's normal reply-dispatch path with an existing admitted requester session, current operator authority, and the host's user-turn transcript recorder. Before spawning, the host adopts the turn when necessary and commits its actual input through that recorder. Existing restricted-ingress hook exclusions remain unchanged. Direct embedded/CLI `before_agent_reply` hooks, direct ACP dispatch, services, timers, and detached callbacks do not acquire this capability merely by holding its object. Custom runtimes may omit `native`; absence or an unsupported invocation fails explicitly.
+
+Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow `sessions_spawn` or `agents_wait`, respectively; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
+
+A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
+
 ## Background work namespaces
 
 <AccordionGroup>
@@ -76,8 +107,9 @@ Start agent work in the background: hook-dispatched turns for external content a
     support fresh, tool-free isolated inference; unsupported runtimes fail
     before inference.
 
-    Completions use the [shared background queue](/concepts/queue#background-work),
-    with up to three runs per plugin within the three-run total budget.
+    Completions use the [subagent queue](/concepts/queue#background-work) at
+    background priority, sharing `agents.defaults.subagents.maxConcurrent`
+    across plugins and workspaces. Set this existing limit to `1` to serialize them.
     Cancellation removes queued work immediately. Running work keeps its slot
     until underlying runtime cleanup finishes, then rejects; late output is not
     returned after cancellation, timeout, or runtime retirement. Calls require
@@ -117,16 +149,16 @@ Start agent work in the background: hook-dispatched turns for external content a
     });
     ```
 
-    Gateway-backed runs return the canonical accepted `sessionKey` alongside `runId`. The field is optional in the TypeScript result only so explicit custom runtimes remain compatible.
+    Gateway-backed runs return the normalized accepted `sessionKey` alongside `runId`. The field is optional in the TypeScript result only so explicit custom runtimes remain compatible.
 
-    `waitForRun(...)` returns the canonical Gateway wait result. `status` is `"ok"`, `"error"`, `"timeout"`, or `"pending"`; pending is a normal nonterminal observation, not an exception. Optional `error`, `startedAt`, `endedAt`, `stopReason`, `livenessState`, `yielded`, `pendingError`, `timeoutPhase`, `providerStarted`, and `terminalReply` metadata is preserved so callers can distinguish observation timeouts from terminal outcomes. `timeoutMs` bounds the wait call; it does not cancel the run.
+    `waitForRun(...)` returns the standard Gateway wait result. `status` is `"ok"`, `"error"`, `"timeout"`, or `"pending"`; pending is a normal nonterminal observation, not an exception. Optional `error`, `startedAt`, `endedAt`, `stopReason`, `livenessState`, `yielded`, `pendingError`, `timeoutPhase`, `providerStarted`, and `terminalReply` metadata is preserved so callers can distinguish observation timeouts from terminal outcomes. `timeoutMs` bounds the wait call; it does not cancel the run.
 
     <Warning>
     Outside an authorized Gateway request, model overrides require operator opt-in via `plugins.entries.<id>.subagent.allowModelOverride: true` in config. Plugins without that opt-in can use the configured model, but override requests are rejected.
     </Warning>
 
     `plugins.entries.<id>.subagent.allowedModels` can restrict overrides to
-    canonical `provider/model` targets. The same policy applies to `complete`;
+    normalized `provider/model` targets. The same policy applies to `complete`;
     request-scoped calls retain their authenticated client's override authority.
     The check uses the destination agent's model configuration, including exact
     configured model IDs, and applies to the plugin's initial override. Configured
@@ -144,12 +176,30 @@ Start agent work in the background: hook-dispatched turns for external content a
 
     `promptMode: "minimal"` selects the bounded subagent prompt instead of the full conversation prompt. The plugin runtime exposes only this mode; omission keeps the full prompt. Use `disableTools: true` as well when the run must have an exact empty tool surface.
 
-    `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the canonical requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
+    `completionDelivery: "current-requester"` is default-off and is only available while a `before_dispatch` hook is handling an authenticated inbound request. OpenClaw captures the resolved requester session and delivery route before invoking the plugin, then delivers the subagent completion through the normal announce path. Plugins cannot provide or override requester lineage or destination fields. Calls outside that requester-bound hook context are rejected.
 
     `deleteSession(...)` can delete sessions created by the same plugin through `api.runtime.subagent.run(...)`. Deleting arbitrary user or operator sessions still requires an admin-scoped Gateway request.
 
   </Accordion>
 </AccordionGroup>
+
+## Native harness continuation retry settings
+
+`AgentHarnessHostCapabilities.prepareContinuationRetryCount?.({ cwd })` prepares
+the host's continuation retry count from the native owner's admitted **Gateway-local**
+execution directory. Call it after permission and workspace resolution, before tools
+or inference, inside the attempt's cleanup owner. Do not pass a remote or container
+path, infer a Gateway mirror, or call it from isolated finalization.
+
+The host freezes `retry.provider.maxRetries`, including absence, and applies an
+explicit count over the harness result's `providerRetryMaxRetries`. Repeated calls
+with the same cwd reuse that prepared value; changing cwd throws. Retained callbacks
+reject after their host or admission closes. Native request retries, delay policy,
+and timeouts remain harness-owned.
+
+The capability is additive and optional. Harnesses that do not participate retain
+their result budget/default. Local Codex, Copilot, and Muse participate; ACP and
+remote/provider-hosted settings projection require a separate owner contract.
 
 ## Native harness completion delivery
 

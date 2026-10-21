@@ -236,13 +236,7 @@ impl GatewayProfiles {
     }
 
     pub fn set_keep_computer_awake(&self, enabled: bool) -> Result<(), String> {
-        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
-        let mut next = self.load(&mut cache)?.clone();
-        if next.keep_computer_awake == enabled {
-            return Ok(());
-        }
-        next.keep_computer_awake = enabled;
-        self.commit(&mut cache, next)
+        self.set_preference(|next| Ok((&mut next.keep_computer_awake, enabled)))
     }
 
     pub fn selected(&self) -> Result<Option<String>, String> {
@@ -256,25 +250,29 @@ impl GatewayProfiles {
     }
 
     pub fn set_desktop_sharing_enabled(&self, enabled: bool) -> Result<(), String> {
-        let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
-        let mut next = self.load(&mut cache)?.clone();
-        if next.desktop_sharing_enabled == Some(enabled) {
-            return Ok(());
-        }
-        next.desktop_sharing_enabled = Some(enabled);
-        self.commit(&mut cache, next)
+        self.set_preference(|next| Ok((&mut next.desktop_sharing_enabled, Some(enabled))))
     }
 
     pub fn remember(&self, id: Option<&str>) -> Result<(), String> {
+        self.set_preference(|next| {
+            if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
+                return Err(NOT_FOUND.to_string());
+            }
+            Ok((&mut next.selected, id.map(str::to_string)))
+        })
+    }
+
+    fn set_preference<T: PartialEq>(
+        &self,
+        field: impl FnOnce(&mut Registry) -> Result<(&mut T, T), String>,
+    ) -> Result<(), String> {
         let mut cache = self.registry.lock().map_err(|_| CORRUPT)?;
         let mut next = self.load(&mut cache)?.clone();
-        if id.is_some_and(|id| !next.profiles.iter().any(|profile| profile.id == id)) {
-            return Err(NOT_FOUND.to_string());
-        }
-        if next.selected.as_deref() == id {
+        let (current, value) = field(&mut next)?;
+        if *current == value {
             return Ok(());
         }
-        next.selected = id.map(str::to_string);
+        *current = value;
         self.commit(&mut cache, next)
     }
 
@@ -341,28 +339,19 @@ fn canonical_request(
     mut request: RemoteGatewayRequest,
 ) -> Result<(RemoteGatewayRequest, String), String> {
     remote_gateway::validate_request(&request)?;
-    request.token = request
-        .token
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    request.password = request
-        .password
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    request.token = remote_gateway::normalize_optional(request.token);
+    request.password = remote_gateway::normalize_optional(request.password);
     let url = request
         .url
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(remote_gateway::normalize_gateway_url)
         .transpose()?;
-    if request.tls_fingerprint.is_some() {
-        // Explicit pins use the pure validation branch; saved profiles never
-        // inherit credentials or pins from the primary Gateway configuration.
-        let validation_url = url
-            .clone()
-            .unwrap_or_else(|| tauri::Url::parse("ws://127.0.0.1:18789").expect("loopback URL"));
-        remote_gateway::resolve_remote_tls_fingerprint(&mut request, &validation_url)?;
-    }
+    request.tls_fingerprint = request
+        .tls_fingerprint
+        .as_deref()
+        .map(remote_gateway::normalize_tls_fingerprint)
+        .transpose()?;
     request.url = url.as_ref().map(ToString::to_string);
     let endpoint = if request.transport == "ssh" {
         let (target, port) = remote_gateway::validate_ssh_target(

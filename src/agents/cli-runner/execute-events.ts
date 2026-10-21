@@ -1,3 +1,5 @@
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -5,24 +7,23 @@ import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
+import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import {
-  extractToolErrorMessage,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../embedded-agent-tool-results.js";
+import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -46,14 +47,23 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
-  const compactionChangeListeners = new Set<() => void>();
-  let signaledToolExecutionStarted = false;
-  let signaledAssistantOutputStarted = false;
+  let onCompactionActiveChange: (() => void) | undefined;
+  const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
+  const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
+    if (signaledPhases.has(phase)) {
+      return;
+    }
+    signaledPhases.add(phase);
+    runParams.onExecutionPhase?.({
+      phase,
+      provider: runParams.provider,
+      model: context.modelId,
+      backend: context.backendResolved.id,
+    });
+  };
   let commentaryCounter = 0;
-  const toolSummaryById = new Map<
-    string,
-    { name: string; failed: boolean; terminalObserved?: boolean }
-  >();
+  let assistantVisibleText = "";
+  const toolSummaryById = new Map<string, { failed: boolean; terminalObserved?: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
@@ -99,11 +109,8 @@ export function createCliEventHandlers(params: {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
-      if (!current.name && event.name) {
-        current.name = event.name;
-      }
     } else {
-      current = { name: event.name, failed };
+      current = { failed };
       toolSummaryById.set(event.toolCallId, current);
     }
     if (event.name) {
@@ -126,15 +133,7 @@ export function createCliEventHandlers(params: {
       startedAt: Date.now(),
     });
     recordToolSummary(event, false);
-    if (!signaledToolExecutionStarted) {
-      signaledToolExecutionStarted = true;
-      runParams.onExecutionPhase?.({
-        phase: "tool_execution_started",
-        provider: runParams.provider,
-        model: context.modelId,
-        backend: context.backendResolved.id,
-      });
-    }
+    signalExecutionPhase("tool_execution_started");
     if (tracked) {
       params.toolTracking.handleCliToolUseStart(event);
     }
@@ -143,12 +142,13 @@ export function createCliEventHandlers(params: {
         phase: "start",
         name: event.name,
         toolCallId: event.toolCallId,
-        args: sanitizeToolArgs(event.args),
+        args: event.args,
       });
     }
   };
   const emitToolResult = (event: CliToolResultDelta, tracked: boolean) => {
     observedCliActivity = true;
+    const readResult = prepareToolResult(event.result);
     const summary = recordToolSummary(event, event.isError);
     const firstTerminal = !summary.terminalObserved;
     summary.terminalObserved = true;
@@ -166,7 +166,7 @@ export function createCliEventHandlers(params: {
       !loopbackOutcome &&
       stripOpenClawMcpToolPrefix(event.name) === event.name
     ) {
-      const result = sanitizeToolResult(event.result);
+      const result = readResult();
       void runAgentHarnessAfterToolCallHook({
         toolName: normalizeCliToolName(event.name),
         toolCallId: event.toolCallId,
@@ -215,8 +215,8 @@ export function createCliEventHandlers(params: {
           name: event.name,
           toolCallId: event.toolCallId,
           isError: event.isError,
-          result: sanitizeToolResult(event.result),
-          ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
+          result: readResult(),
+          ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
         // An ambiguous MCP loopback has no authoritative executed args; native tools do.
@@ -231,12 +231,6 @@ export function createCliEventHandlers(params: {
       );
     }
   };
-  // Display-only native events never enter host-tool correlation or delivery accounting.
-  const emitCliToolUseStart = (event: CliToolUseStartDelta) => emitToolUseStart(event, true);
-  const emitCliToolResult = (event: CliToolResultDelta) => emitToolResult(event, true);
-  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) =>
-    emitToolUseStart(event, false);
-  const emitCliDisplayToolResult = (event: CliToolResultDelta) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     activeParsedTools.set(event.toolCallId, {
@@ -258,14 +252,22 @@ export function createCliEventHandlers(params: {
     // Claude enforces this MCP response timeout. Keep recovery behind that
     // deadline while the request is still in the CLI's own tool runtime.
     const timeoutMs = context.managedMcpToolTimeoutMs;
-    emitTrustedDiagnosticEvent(
+    const deadlineAtMs =
       timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
-        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
-            deadlineAtMs: startedAt + timeoutMs,
-          })
-        : diagnosticEvent,
+        ? startedAt + timeoutMs
+        : undefined;
+    runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+      phase: "start",
+      toolName: event.name,
+      toolCallId: event.toolCallId,
+      deadlineAtMs,
+    });
+    emitTrustedDiagnosticEvent(
+      deadlineAtMs === undefined
+        ? diagnosticEvent
+        : markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, { deadlineAtMs }),
     );
-    emitCliToolUseStart(event);
+    emitToolUseStart(event, true);
   };
   const emitParsedToolTerminal = (event: {
     toolCallId: string;
@@ -277,6 +279,13 @@ export function createCliEventHandlers(params: {
     activeParsedTools.delete(event.toolCallId);
     const trustedOutcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
     const toolName = activeTool?.toolName ?? event.name;
+    if (!event.incomplete) {
+      runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+        phase: "end",
+        toolName,
+        toolCallId: event.toolCallId,
+      });
+    }
     const now = Date.now();
     const trustedTerminalReason =
       trustedOutcome &&
@@ -348,7 +357,7 @@ export function createCliEventHandlers(params: {
   };
   const emitParsedToolResult = (event: CliToolResultDelta) => {
     emitParsedToolTerminal(event);
-    emitCliToolResult(event);
+    emitToolResult(event, true);
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
@@ -358,9 +367,7 @@ export function createCliEventHandlers(params: {
     const previous = compactionActive;
     compactionActive = event.phase === "start";
     if (compactionActive !== previous) {
-      for (const listener of compactionChangeListeners) {
-        listener();
-      }
+      onCompactionActiveChange?.();
     }
     emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };
@@ -375,7 +382,15 @@ export function createCliEventHandlers(params: {
     }
   };
   const emitCliCommentaryText = (text: string) => {
-    if (!emitLiveEvents) {
+    if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
+    const prepared = prepareAgentRunTerminalReply({ rawText: text });
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
+    if (!visibleText) {
       return;
     }
     commentaryCounter += 1;
@@ -387,46 +402,73 @@ export function createCliEventHandlers(params: {
       phase: "end",
       title: "commentary",
       status: "running",
-      progressText: applyPluginTextReplacements(
-        text,
-        context.backendResolved.textTransforms?.output,
-      ),
+      progressText: visibleText,
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
-    if (text || delta) {
-      observedCliActivity = true;
-      if (!signaledAssistantOutputStarted) {
-        signaledAssistantOutputStarted = true;
-        runParams.onExecutionPhase?.({
-          phase: "assistant_output_started",
-          provider: runParams.provider,
-          model: context.modelId,
-          backend: context.backendResolved.id,
-        });
-      }
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
     }
+    if (text || delta) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
+      observedCliActivity = true;
+      signalExecutionPhase("assistant_output_started");
+    }
+    const candidate = text.trimStart().toUpperCase();
+    const stripped = stripMixedSilentReplyTokens(text);
+    if (
+      stripped === null &&
+      (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate))
+    ) {
+      return;
+    }
+    const sourceText = stripped ?? text;
+    const sourceDelta = sourceText.startsWith(assistantVisibleText)
+      ? sourceText.slice(assistantVisibleText.length)
+      : sourceText;
+    assistantVisibleText = sourceText;
+    const preparedText = applyPluginTextReplacements(
+      sourceText,
+      context.backendResolved.textTransforms?.output,
+    );
     emitLiveEvent("assistant", () => ({
-      text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
-      delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
+      itemId: cliAssistantItemId(runParams.runId),
+      text: preparedText,
+      delta: applyPluginTextReplacements(
+        sourceDelta,
+        context.backendResolved.textTransforms?.output,
+      ),
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
+    }
+    assistantVisibleText = "";
+    const prepared = prepareAgentRunTerminalReply({ rawText: text });
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
+    if (!visibleText) {
+      return;
     }
     emitLiveEvent("assistant", () => ({
       assistantMessageIndex,
-      completedText: applyPluginTextReplacements(
-        text,
-        context.backendResolved.textTransforms?.output,
-      ),
+      completedText: visibleText,
     }));
   };
 
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
   const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       observedCliActivity = true;
     }
@@ -442,12 +484,17 @@ export function createCliEventHandlers(params: {
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };
 
+  const emitCliToolInputDelta = (progress: CliToolInputDelta) => {
+    observedCliActivity = true;
+    emitLiveEvent("tool", () => ({ phase: "input_delta", ...progress }));
+  };
+
   return {
     emitLiveEvents,
-    emitCliToolUseStart,
-    emitCliToolResult,
-    emitCliDisplayToolUseStart,
-    emitCliDisplayToolResult,
+    emitCliToolInputDelta,
+    // Display-only native events never enter host-tool correlation or delivery accounting.
+    emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
+    emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),
     emitParsedToolUseStart,
     emitParsedToolResult,
     emitCliCompaction,
@@ -459,9 +506,8 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     hasActiveCompaction: () => compactionActive,
-    onCompactionActiveChange: (listener: () => void) => {
-      compactionChangeListeners.add(listener);
-      return () => compactionChangeListeners.delete(listener);
+    setOnCompactionActiveChange: (listener: (() => void) | undefined) => {
+      onCompactionActiveChange = listener;
     },
     activeParsedToolCount: () => activeParsedTools.size,
     isActiveForegroundAgentTool: (toolCallId: string) => {

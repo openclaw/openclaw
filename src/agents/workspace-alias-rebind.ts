@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,7 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   applyWorkspaceMigrationReceiptMove,
   prepareWorkspaceMigrationReceiptMove,
@@ -45,10 +45,7 @@ function directoryIdentity(workspacePath: string): string | undefined {
     const stat = fs.statSync(workspacePath, { bigint: true });
     return stat.isDirectory() ? `${stat.dev}:${stat.ino}:${stat.birthtimeNs}` : undefined;
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-    return undefined;
+    return ignoreMissingPath(error);
   }
 }
 
@@ -66,10 +63,7 @@ function existingWorkspacePathSpellings(storedPath: string): string[] {
           .toSorted()
           .map((entry) => path.join(parent, entry));
       } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
+        return ignoreMissingPath(error) ?? [];
       }
     });
   }
@@ -127,45 +121,49 @@ export function detectRepointedWorkspaceAlias(
   }
   return withExistingOpenClawStateDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
-        const kysely = getNodeSqliteKysely<WorkspaceDatabase>(database.db);
-        const alias = executeSqliteQueryTakeFirstSync(
-          database.db,
-          kysely
-            .selectFrom("workspace_path_aliases")
-            .selectAll()
-            .where("alias_key", "=", lexical.workspaceKey),
-        );
-        if (!alias) {
-          return undefined;
-        }
-        const stored = createWorkspaceStateIdentity(alias.workspace_path);
-        if (
-          alias.alias_path !== lexical.workspacePath ||
-          alias.workspace_key !== stored.workspaceKey
-        ) {
-          throw new Error("workspace path alias identity is invalid");
-        }
-        if (stored.workspaceKey === current.workspaceKey) {
-          return undefined;
-        }
-        return {
-          aliasPath: lexical.workspacePath,
-          storedWorkspacePath: stored.workspacePath,
-          currentWorkspacePath: current.workspacePath,
-          currentDirectoryPath,
-          currentTargetHasOwnState:
-            executeSqliteQueryTakeFirstSync(
-              database.db,
-              kysely
-                .selectFrom("workspace_setup_state")
-                .select("workspace_key")
-                .where("workspace_key", "=", current.workspaceKey),
-            ) !== undefined,
-          targetDirectoryIdentity,
-          state: readWorkspaceMoveState(database, stored),
-        };
-      }),
+      runSqliteReadSnapshotSync(
+        database.db,
+        () => {
+          const kysely = getNodeSqliteKysely<WorkspaceDatabase>(database.db);
+          const alias = executeSqliteQueryTakeFirstSync(
+            database.db,
+            kysely
+              .selectFrom("workspace_path_aliases")
+              .selectAll()
+              .where("alias_key", "=", lexical.workspaceKey),
+          );
+          if (!alias) {
+            return undefined;
+          }
+          const stored = createWorkspaceStateIdentity(alias.workspace_path);
+          if (
+            alias.alias_path !== lexical.workspacePath ||
+            alias.workspace_key !== stored.workspaceKey
+          ) {
+            throw new Error("workspace path alias identity is invalid");
+          }
+          if (stored.workspaceKey === current.workspaceKey) {
+            return undefined;
+          }
+          return {
+            aliasPath: lexical.workspacePath,
+            storedWorkspacePath: stored.workspacePath,
+            currentWorkspacePath: current.workspacePath,
+            currentDirectoryPath,
+            currentTargetHasOwnState:
+              executeSqliteQueryTakeFirstSync(
+                database.db,
+                kysely
+                  .selectFrom("workspace_setup_state")
+                  .select("workspace_key")
+                  .where("workspace_key", "=", current.workspaceKey),
+              ) !== undefined,
+            targetDirectoryIdentity,
+            state: readWorkspaceMoveState(database, stored),
+          };
+        },
+        { operationLabel: "workspace.alias.inspect" },
+      ),
     options,
   );
 }

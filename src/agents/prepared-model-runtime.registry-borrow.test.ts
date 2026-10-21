@@ -2,8 +2,8 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
@@ -12,8 +12,12 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-selection.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
+import {
+  bindPluginRegistryGatewayOwner,
+  isPluginRegistryRetired,
+} from "../plugins/registry-lifecycle.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -33,7 +37,10 @@ import * as runtimePlugins from "./runtime-plugins.js";
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-registry-borrow" });
 const { mocks } = fixture;
 
-async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "owned") {
+async function acquireBorrower(
+  resources: AsyncDisposableStack,
+  source: "owned" | "gateway" = "owned",
+) {
   mocks.configuredAgentIds = ["default"];
   const config = {};
   const workspaceDir = "/tmp/unused-workspace";
@@ -46,12 +53,8 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
   });
   const registry = createEmptyPluginRegistry();
   const manifest = metadata.plugins[0]!;
-  const record = createPluginRecord({
-    id: manifest.id,
-    rootDir: manifest.rootDir,
-    source: manifest.source,
-    origin: manifest.origin,
-  });
+  const { id, rootDir, source: entrySource, origin } = manifest;
+  const record = createPluginRecord({ id, rootDir, source: entrySource, origin });
   registry.plugins.push(record);
   const instance = new PluginInstance(record.id, { record, registry });
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
@@ -60,7 +63,10 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
     workspaceDir,
     ...(source === "gateway" ? { allowGatewaySubagentBinding: true } : {}),
   };
+  const runInScope = <T>(run: () => T) =>
+    withPluginRuntimeRegistryScope(source === "gateway" ? registry : undefined, run);
   if (source === "gateway") {
+    bindPluginRegistryGatewayOwner(registry, { current: () => registry });
     bindPluginRuntimeArtifactSelection(record, {
       runtimeEntry: resolvePluginRuntimeArtifactSelection({
         ...manifest,
@@ -80,184 +86,163 @@ async function acquireConfiguredRegistryBorrower(source: "owned" | "gateway" = "
       logger: { info() {}, warn() {}, error() {}, debug() {} },
     });
     setActivePluginRegistry(registry, undefined, "gateway-bindable", workspaceDir);
-    expect(loadPreparedInboundPluginRegistry(input, metadata)).toBe(registry);
+    resources.defer(() => clearActivePluginRegistry(registry));
+    expect(runInScope(() => loadPreparedInboundPluginRegistry(input, metadata))).toBe(registry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
   }
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    gatewayLifecycle: true,
-    catalogMode: "static",
-    ...(source === "gateway"
-      ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
-      : {}),
+  const refresh = (catalogMode: "static" | "live" = "static") =>
+    refreshPreparedModelRuntimeSnapshots(config, {
+      gatewayLifecycle: true,
+      catalogMode,
+      ...(source === "gateway"
+        ? { allowGatewaySubagentBinding: true, pluginMetadataSnapshot: metadata }
+        : {}),
+    });
+  return await runInScope(async () => {
+    await refresh();
+    const borrower = resources.use(await acquirePublishedPreparedModelRuntime(input));
+    await borrower.snapshot.loadFullModelCatalog?.();
+    return { registry, input, borrower, instance, refresh, runInScope };
   });
-  const borrower = await acquirePublishedPreparedModelRuntime(input);
-  await borrower.snapshot.loadFullModelCatalog?.();
-  return { registry, config, input, borrower, instance, metadata };
 }
 
-describe("prepared registry construction borrows", () => {
-  it("retires a prepared registry after its borrowing request scope has closed", async () => {
-    const caller = new AsyncWorkScope();
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id: "late-catalog-lease", status: "loaded" });
-    registry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry });
-    const entered = createDeferred();
-    const finish = createDeferred();
-    const cleaned = vi.fn();
-    instance.lifecycle.onDispose(async () => {
-      entered.resolve();
-      await finish.promise;
-      cleaned();
-    });
-    const borrower = await caller.track(() => {
-      const release = retainPreparedPluginRegistry(registry);
-      expect(release).toBeDefined();
-      return { release: release!, run: AsyncLocalStorage.snapshot() };
-    });
-    await caller.drain();
-    let retired = false;
-    const closing = borrower
-      .run(async () => {
-        await borrower.release();
-      })
-      .then(() => {
-        retired = true;
-      });
-    void closing.catch(() => {});
-    try {
-      await Promise.race([entered.promise, closing]);
-      expect(retired).toBe(false);
-      finish.resolve();
-      await closing;
-      expect(cleaned).toHaveBeenCalledOnce();
-      expect(retired).toBe(true);
-      await expect(caller.track(() => undefined)).rejects.toThrow("Async work scope is closed");
-      expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
-    } finally {
-      finish.resolve();
-      await closing.catch(() => {});
-    }
+it("retires a prepared registry after its borrowing request scope has closed", async () => {
+  const caller = new AsyncWorkScope();
+  const registry = createEmptyPluginRegistry();
+  const record = createPluginRecord({ id: "late-catalog-lease", status: "loaded" });
+  registry.plugins.push(record);
+  const instance = new PluginInstance(record.id, { record, registry });
+  const entered = createDeferred();
+  const finish = createDeferred();
+  const cleaned = vi.fn();
+  instance.lifecycle.onDispose(async () => {
+    entered.resolve();
+    await finish.promise;
+    cleaned();
   });
-
-  it("reacquires a refused source and rejects admission after construction closes", async () => {
-    const { registry, borrower, instance } = await acquireConfiguredRegistryBorrower();
-    const construction = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
-    await borrower[Symbol.asyncDispose]();
-    const releaseReplacement = instance.reserveReplacement();
-    try {
-      expect(() => construction.retainRegistry(registry)).toThrow("replacement is in progress");
-      releaseReplacement();
-      construction.retainRegistry(registry);
-      instance.reserveReplacement()();
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      await construction[Symbol.asyncDispose]();
-      expect(instance.retainedWorkCount).toBe(0);
-      expect(() => construction.retainRegistry(registry)).toThrow(
-        "construction resources have been released",
-      );
-      const loads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-      await expect(construction.load({ config: {} }, () => {})).rejects.toThrow(
-        "construction resources have been released",
-      );
-      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loads);
-      markPreparedModelRuntimeSnapshotsStale("construction owner closed");
-      expect(isPluginRegistryRetired(registry)).toBe(true);
-    } finally {
-      releaseReplacement();
-      await construction[Symbol.asyncDispose]();
-      await borrower[Symbol.asyncDispose]();
-    }
+  const borrower = await caller.track(() => {
+    const release = retainPreparedPluginRegistry(registry);
+    expect(release).toBeDefined();
+    return { release: release!, run: AsyncLocalStorage.snapshot() };
   });
+  await caller.drain();
+  const retired = vi.fn();
+  const closing = Promise.resolve(borrower.run(borrower.release)).then(retired);
+  void closing.catch(() => {});
+  try {
+    await Promise.race([entered.promise, closing]);
+    expect(retired).not.toHaveBeenCalled();
+    finish.resolve();
+    await closing;
+    expect(cleaned).toHaveBeenCalledOnce();
+    expect(retired).toHaveBeenCalledOnce();
+    await expect(caller.track(() => undefined)).rejects.toThrow("Async work scope is closed");
+    expect(() => instance.run(() => "retired")).toThrow("reloaded or disabled");
+  } finally {
+    finish.resolve();
+    await closing.catch(() => {});
+  }
+});
 
-  it("retains selected inbound resources until a cancelled initial run inspection settles", async () => {
-    const { registry, input, borrower, instance } = await acquireConfiguredRegistryBorrower();
-    const inspecting = createDeferred();
-    const finishInspection = createDeferred();
-    const acquire = runtimePlugins.acquireAgentRuntimePluginRegistry;
-    mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(createEmptyPluginRegistry());
-    const inspection = vi
-      .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
-      .mockImplementationOnce(async (...args) => {
-        const acquired = await acquire(...args);
-        inspecting.resolve();
-        await finishInspection.promise;
-        return acquired;
-      });
-    const pending = acquireAgentRunPreparedModelRuntime(
-      {
-        ...input,
-        runtimePluginSelections: [{ provider: "custom", modelId: "selected", runtime: "openclaw" }],
-      },
-      { catalogMode: "static", pluginGeneration: borrower.pluginGeneration },
+it("rejects admission after construction closes", async () => {
+  await using resources = new AsyncDisposableStack();
+  const { registry, borrower, instance } = await acquireBorrower(resources);
+  const construction = resources.use(
+    new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry),
+  );
+  await borrower[Symbol.asyncDispose]();
+  construction.retainRegistry(registry);
+  expect(instance.retainedWorkCount).toBeGreaterThan(0);
+  await construction[Symbol.asyncDispose]();
+  expect(instance.retainedWorkCount).toBe(0);
+  const released = "construction resources have been released";
+  expect(() => construction.retainRegistry(registry)).toThrow(released);
+  const loads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+  await expect(construction.load({ config: {} }, () => {})).rejects.toThrow(released);
+  expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loads);
+  markPreparedModelRuntimeSnapshotsStale("construction owner closed");
+  expect(isPluginRegistryRetired(registry)).toBe(true);
+});
+
+it("retains selected inbound resources until a cancelled initial run inspection settles", async () => {
+  await using resources = new AsyncDisposableStack();
+  const { registry, input, borrower, instance } = await acquireBorrower(resources);
+  const inspecting = createDeferred();
+  const finishInspection = createDeferred();
+  const acquire = runtimePlugins.acquireAgentRuntimePluginRegistry;
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValueOnce(createEmptyPluginRegistry());
+  const inspection = vi
+    .spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry")
+    .mockImplementationOnce(async (...args) => {
+      const acquired = await acquire(...args);
+      inspecting.resolve();
+      await finishInspection.promise;
+      return acquired;
+    });
+  const pending = acquireAgentRunPreparedModelRuntime(
+    {
+      ...input,
+      runtimePluginSelections: [{ provider: "custom", modelId: "selected", runtime: "openclaw" }],
+    },
+    { catalogMode: "static", pluginGeneration: borrower.pluginGeneration },
+  ).then((lease) => resources.use(lease));
+  const settled = Promise.allSettled([pending]);
+  try {
+    await awaitGateBeforeSettlement(
+      inspecting.promise,
+      pending,
+      "Initial run skipped inspection acquisition",
     );
-    const settled = Promise.allSettled([pending]);
-    try {
-      await Promise.race([
-        inspecting.promise,
-        pending.then(() => {
-          throw new Error("Initial run skipped inspection acquisition");
-        }),
-      ]);
-      markPreparedModelRuntimeSnapshotsStale("configuration replaced during run admission");
-      await borrower[Symbol.asyncDispose]();
-      expect(isPluginRegistryRetired(registry)).toBe(false);
-      instance.reserveReplacement()();
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      finishInspection.resolve();
-      await expect(pending).rejects.toThrow("superseded");
-      await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
-      expect(isPluginRegistryRetired(registry)).toBe(true);
-      expect(instance.retainedWorkCount).toBe(0);
-    } finally {
-      finishInspection.resolve();
-      const [outcome] = await settled;
-      if (outcome.status === "fulfilled") {
-        await outcome.value[Symbol.asyncDispose]();
-      }
-      await borrower[Symbol.asyncDispose]();
-      inspection.mockRestore();
-    }
-  });
+    markPreparedModelRuntimeSnapshotsStale("configuration replaced during run admission");
+    await borrower[Symbol.asyncDispose]();
+    expect(isPluginRegistryRetired(registry)).toBe(false);
+    expect(instance.retainedWorkCount).toBeGreaterThan(0);
+    finishInspection.resolve();
+    await expect(pending).rejects.toThrow("superseded");
+    await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+    expect(isPluginRegistryRetired(registry)).toBe(true);
+    expect(instance.retainedWorkCount).toBe(0);
+  } finally {
+    finishInspection.resolve();
+    await settled;
+    inspection.mockRestore();
+  }
+});
 
-  it("retains borrowed Gateway work through post-facts projection, then releases it", async () => {
-    const { registry, config, input, borrower, instance, metadata } =
-      await acquireConfiguredRegistryBorrower("gateway");
-    const projecting = createDeferred();
-    const finishProjection = createDeferred();
-    mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
-      projecting.resolve();
-      await finishProjection.promise;
-      return { entries: [], routeVariants: [] };
-    });
-    const pending = refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "live",
-      allowGatewaySubagentBinding: true,
-      pluginMetadataSnapshot: metadata,
-    }).then(() => prepareModelRuntimeSnapshot(input));
-    const settled = Promise.allSettled([pending]);
-    try {
-      await Promise.race([
-        projecting.promise,
-        pending.then(() => {
-          throw new Error("Preparation skipped live catalog projection");
-        }),
-      ]);
-      await borrower[Symbol.asyncDispose]();
-      expect(isPluginRegistryRetired(registry)).toBe(false);
-      instance.reserveReplacement()();
-      expect(instance.retainedWorkCount).toBeGreaterThan(0);
-      finishProjection.resolve();
-      const snapshot = await pending;
-      expect(snapshot.pluginRegistry).toBe(registry);
-      expect(isPluginRegistryRetired(registry)).toBe(false);
-      expect(instance.retainedWorkCount).toBe(0);
-    } finally {
-      finishProjection.resolve();
-      await settled;
-      await borrower[Symbol.asyncDispose]();
-      await clearActivePluginRegistry(registry);
-    }
+it("retains borrowed Gateway work through post-facts projection, then releases it", async () => {
+  await using resources = new AsyncDisposableStack();
+  const { registry, input, borrower, instance, refresh, runInScope } = await acquireBorrower(
+    resources,
+    "gateway",
+  );
+  const projecting = createDeferred();
+  const finishProjection = createDeferred();
+  mocks.buildPreparedModelCatalogSnapshot.mockImplementationOnce(async () => {
+    projecting.resolve();
+    await finishProjection.promise;
+    return { entries: [], routeVariants: [] };
   });
+  const pending = runInScope(async () => {
+    await refresh("live");
+    return await prepareModelRuntimeSnapshot(input);
+  });
+  const settled = Promise.allSettled([pending]);
+  try {
+    await awaitGateBeforeSettlement(
+      projecting.promise,
+      pending,
+      "Preparation skipped live catalog projection",
+    );
+    await borrower[Symbol.asyncDispose]();
+    expect(isPluginRegistryRetired(registry)).toBe(false);
+    expect(instance.retainedWorkCount).toBeGreaterThan(0);
+    finishProjection.resolve();
+    const snapshot = await pending;
+    expect(snapshot.pluginRegistry).toBe(registry);
+    expect(isPluginRegistryRetired(registry)).toBe(false);
+    expect(instance.retainedWorkCount).toBe(0);
+  } finally {
+    finishProjection.resolve();
+    await settled;
+  }
 });

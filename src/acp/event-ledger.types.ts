@@ -53,14 +53,6 @@ export type AcpLedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
   maxSerializedBytes?: number;
-  now?: () => number;
-};
-
-export type AcpMutableLedgerState = {
-  maxSessions: number;
-  maxEventsPerSession: number;
-  maxSerializedBytes: number;
-  now: () => number;
 };
 
 export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
@@ -76,7 +68,6 @@ export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
       DEFAULT_MAX_SERIALIZED_BYTES,
       { min: 1_024 },
     ),
-    now: options.now ?? Date.now,
   };
 }
 
@@ -115,6 +106,6 @@ export function normalizeAcpLedgerEvent(raw: unknown): AcpEventLedgerEntry | und
     sessionId,
     sessionKey,
     ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: structuredClone(raw.update) as SessionUpdate,
+    update: raw.update as SessionUpdate,
   };
 }

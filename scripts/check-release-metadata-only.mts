@@ -123,24 +123,13 @@ function readBlob(ref: string, filePath: string) {
   return git(["show", `${ref}:${filePath}`]);
 }
 
-function refsFor(args: ReturnType<typeof parseArgs>) {
-  return {
-    before: args.base ?? (args.staged ? "HEAD" : "origin/main"),
-    after: args.staged ? "" : args.head,
-  };
-}
-
 function readBeforeAfter(args: ReturnType<typeof parseArgs>, filePath: string) {
-  const refs = refsFor(args);
-  const before = readBlob(refs.before, filePath);
-  let after = readBlob(refs.after, filePath);
+  const before = readBlob(args.base ?? (args.staged ? "HEAD" : "origin/main"), filePath);
+  let after = readBlob(args.staged ? "" : args.head, filePath);
   // The worktree overlay covers uncommitted edits; an explicit --head SHA is
   // a request for SHA-exact comparison and must not read the checkout.
   if (!args.staged && args.head === "HEAD" && existsSync(filePath)) {
-    const worktree = readBlob("WORKTREE", filePath);
-    if (worktree !== after) {
-      after = worktree;
-    }
+    after = readBlob("WORKTREE", filePath);
   }
   return {
     before,

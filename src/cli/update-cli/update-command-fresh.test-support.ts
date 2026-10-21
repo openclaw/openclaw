@@ -5,8 +5,8 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
-import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { createSystemPackageOwnershipInspection } from "../../infra/update-system-package-ownership.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -20,7 +20,6 @@ import * as commandRun from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
 
 export const targetMetadata = {
-  target: "2026.9.2",
   version: "2026.9.2",
   nodeEngine: null,
   schemaVersions: { state: 16, agent: 19 },
@@ -71,7 +70,7 @@ export function installFreshUpdateFixture() {
       discoveredRoot: fixture.root,
       installKind: "package",
       servicePlan: { rootRedirect: null, nodeRunner: fixture.managedServiceNodeRunner },
-      pkgOwnership: createFreeBsdPkgOwnershipInspection(5_000),
+      pkgOwnership: createSystemPackageOwnershipInspection(5_000),
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({

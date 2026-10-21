@@ -41,10 +41,6 @@
   box-shadow: var(--shadow-xl);
 }
 
-.approval-page__card--severity-info {
-  --approval-page-accent: var(--border);
-}
-
 .approval-page__card--severity-warning {
   --approval-page-accent: var(--warn);
 }
@@ -379,7 +375,7 @@
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: approval-page-spin 800ms linear infinite;
+  animation: btn-spinner-spin 800ms linear infinite;
 }
 
 .approval-page__state-mark {
@@ -406,12 +402,6 @@
 
 .approval-page__back-link:hover {
   color: var(--text-strong);
-}
-
-@keyframes approval-page-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (max-width: 640px) {

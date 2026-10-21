@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { performance } from "node:perf_hooks";
+import { stripVTControlCharacters } from "node:util";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import * as channels from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
   sessionStoreMocks,
@@ -21,17 +20,16 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
-  "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.";
-const databaseIdentity = Symbol("restart-tombstone-database");
+  "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: () => void;
+let resetSessionControllerForTest: () => void;
 beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  const { testing } = await import("./reply-run-registry.test-support.js");
-  resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
+  const { testing } = await import("../../sessions/session-controller.test-support.js");
+  resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
 });
 
 describe("restart tombstone channel feedback", () => {
@@ -43,12 +41,16 @@ describe("restart tombstone channel feedback", () => {
 
   beforeEach(() => {
     clearAgentHarnesses();
-    resetReplyRunRegistry();
+    resetSessionControllerForTest();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "buzz", source: "test", plugin: createChannelTestPluginBase({ id: "buzz" }) },
+      channels.createTestRegistry([
+        {
+          pluginId: "buzz",
+          source: "test",
+          plugin: channels.createChannelTestPluginBase({ id: "buzz" }),
+        },
       ]),
     );
     mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
@@ -80,12 +82,6 @@ describe("restart tombstone channel feedback", () => {
   });
 
   afterEach(() => {
-    emitSessionIdentityMutation({
-      kind: "delete",
-      agentId: "main",
-      databaseIdentity,
-      previous: { sessionId: "failed-session", sessionKeys: [sessionKey] },
-    });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
   });
@@ -129,40 +125,56 @@ describe("restart tombstone channel feedback", () => {
     await dispatcher.waitForIdle();
   }
 
-  it.each(["message_tool"] as const)(
-    "delivers one room notice under %s and warns for every rejected inbound",
-    async (visibleReplies) => {
-      await rejectInbound({ visibleReplies });
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: notice }),
-        expect.objectContaining({ kind: "final" }),
-      );
-      await rejectInbound({ visibleReplies });
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledTimes(2);
-      for (const [line] of warn.mock.calls) {
-        expect(line).toContain(sessionKey);
-        expect(line).toContain("automatic recovery exhausted");
-        expect(line).toContain("/reset");
-      }
-      expect(sessionStoreMocks.currentEntry).toMatchObject({
-        sessionId: "failed-session",
-        mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-      });
-    },
-  );
-
-  it("clears notice suppression on reset", async () => {
-    await rejectInbound();
-    const previous = { sessionId: "failed-session", sessionKeys: [sessionKey] };
-    emitSessionIdentityMutation({
-      kind: "reset",
-      agentId: "main",
-      databaseIdentity,
-      previous,
-      current: previous,
+  it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
+    let elapsedMs = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const diagnosticsWereEnabled = diagnostics.areDiagnosticsEnabledForProcess();
+    diagnostics.setDiagnosticsEnabledForProcess(true);
+    onTestFinished(() => {
+      clock.mockRestore();
+      diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
     });
+    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+      elapsedMs += 1_500;
+      return sessionStoreMocks.currentEntry;
+    });
+    // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
+    const rejectionWarnings = () =>
+      warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(rejectionWarnings()).toHaveLength(1);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: notice }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(rejectionWarnings()).toHaveLength(2);
+    for (const [line] of rejectionWarnings()) {
+      expect(line).toContain(sessionKey);
+      expect(line).toContain("automatic recovery exhausted");
+      expect(line).toContain("/reset");
+    }
+    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
+      expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
+    );
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "failed-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+  });
+
+  it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
+    await rejectInbound();
+    if (change === "session") {
+      sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
+    } else {
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        ...sessionStoreMocks.currentEntry!.mainRestartRecovery!,
+        cycleId: "replacement-cycle",
+      };
+    }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
@@ -172,33 +184,10 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound();
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        text: expect.stringContaining("WebChat and use Resume in new session"),
+        text: expect.stringContaining("WebChat and use Resume."),
       }),
       expect.objectContaining({ kind: "final" }),
     );
-  });
-
-  it.each([
-    { label: "room event", context: { InboundEventKind: "room_event" as const } },
-    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
-    { label: "system turn", context: { InputProvenance: { kind: "internal_system" as const } } },
-  ])("does not notify for $label", async ({ context }) => {
-    await rejectInbound({ context });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("honors explicit send-policy denial", async () => {
-    await rejectInbound({ sendPolicy: "deny" });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("logs failed notice delivery without replacing the rejection or repeating the notice", async () => {
-    deliver.mockRejectedValueOnce(new Error("transport failed"));
-    await rejectInbound();
-    await rejectInbound();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
-    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("warns about ambiguous routed delivery without repeating the notice", async () => {
@@ -211,24 +200,26 @@ describe("restart tombstone channel feedback", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
   });
 
-  it("rechecks ACP privacy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      acpMocks.readAcpSessionEntry.mockReturnValue({
-        entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
-        acp: { backend: "acpx", mode: "persistent" },
+  it.each([
+    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
+    { label: "explicit send-policy denial", sendPolicy: "deny" as const },
+    { label: "ACP privacy after waiting for admission", acp: true },
+    { label: "send policy after waiting for admission", latePolicy: true },
+  ])("does not notify for $label", async ({ context, sendPolicy, acp, latePolicy }) => {
+    if (acp || latePolicy) {
+      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+        if (acp) {
+          acpMocks.readAcpSessionEntry.mockReturnValue({
+            entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
+            acp: { backend: "acpx", mode: "persistent" },
+          });
+        } else {
+          sessionStoreMocks.currentEntry!.sendPolicy = "deny";
+        }
+        return sessionStoreMocks.currentEntry;
       });
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("rechecks send policy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      sessionStoreMocks.currentEntry!.sendPolicy = "deny";
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
+    }
+    await rejectInbound({ context, sendPolicy });
     expect(deliver).not.toHaveBeenCalled();
   });
 });

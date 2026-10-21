@@ -50,10 +50,7 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(),
-        getSystemPrompt: () => "Required instructions. ".repeat(1_000),
-      },
+      systemPrompt: "Required instructions. ".repeat(1_000),
     });
     const before = structuredClone(sessionManager.getBranch());
     await expect(
@@ -156,25 +153,16 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => ({
-                  compaction: {
-                    summary: "Earlier work completed.",
-                    firstKeptEntryId: userId,
-                    tokensBefore: 0,
-                  },
-                }),
-              ],
-            ],
-          ]),
-        ),
-        getSystemPrompt: () => "Preserve project requirements.",
-      },
+      resourceLoader: await createResourceLoader((api) => {
+        api.on("session_before_compact", async () => ({
+          compaction: {
+            summary: "Earlier work completed.",
+            firstKeptEntryId: userId,
+            tokensBefore: 0,
+          },
+        }));
+      }),
+      systemPrompt: "Preserve project requirements.",
     });
     const before = structuredClone(sessionManager.getBranch());
     const budget = createCompactionRequestBudget({
@@ -227,10 +215,7 @@ describe("AgentSession small-context compaction", () => {
         model,
         settingsManager,
         sessionManager,
-        resourceLoader: {
-          ...createResourceLoader(),
-          getSystemPrompt: () => "Preserve project decisions.",
-        },
+        systemPrompt: "Preserve project decisions.",
       });
       const generatedSummary = "保留项目的蓝色按钮和归档决策。".repeat(300);
       streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
@@ -339,22 +324,15 @@ describe("AgentSession small-context compaction", () => {
         settingsManager: SettingsManager.inMemory({
           compaction: { keepRecentTokens: 1, reserveTokens: 1_024 },
         }),
-        resourceLoader: createResourceLoader(
-          new Map([
-            [
-              "session_before_compact",
-              [
-                async () => ({
-                  compaction: {
-                    summary: "Earlier request answered.",
-                    firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
-                    tokensBefore: 100,
-                  },
-                }),
-              ],
-            ],
-          ]),
-        ),
+        resourceLoader: await createResourceLoader((api) => {
+          api.on("session_before_compact", async () => ({
+            compaction: {
+              summary: "Earlier request answered.",
+              firstKeptEntryId: mode === "drop" ? carrierId : pendingId,
+              tokensBefore: 100,
+            },
+          }));
+        }),
       });
       const before = structuredClone(sessionManager.getBranch());
       const work = session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
@@ -404,10 +382,7 @@ describe("AgentSession small-context compaction", () => {
       model,
       settingsManager,
       sessionManager,
-      resourceLoader: {
-        ...createResourceLoader(),
-        getSystemPrompt: () => "Preserve project requirements.",
-      },
+      systemPrompt: "Preserve project requirements.",
     });
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
@@ -561,7 +536,7 @@ describe("AgentSession small-context compaction", () => {
       const { session } = await createTestSession({
         model,
         settingsManager,
-        resourceLoader: { ...createResourceLoader(), getSystemPrompt: () => systemPrompt },
+        systemPrompt,
         customTools: [
           {
             name: "lookup_fixture",

@@ -15,7 +15,7 @@ import {
 } from "../provider-model-route.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-type RuntimeRouteModel = {
+export type RuntimeRouteModel = {
   provider?: string;
   id?: string;
   api?: string | null;

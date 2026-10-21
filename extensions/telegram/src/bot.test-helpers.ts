@@ -21,9 +21,7 @@ export type TelegramTestMiddleware = (
   next: () => Promise<void>,
 ) => Promise<void> | void;
 
-type MiddlewareUseSpy = {
-  mock: { calls: unknown[][] };
-};
+type MiddlewareUseSpy = { mock: { calls: unknown[][] } };
 
 type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound");
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
@@ -31,18 +29,25 @@ type BufferedReplyDispatcher =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 
 export function makeTelegramKeyedStoreTestMock<Value>(
-  overrides: Partial<PluginStateKeyedStore<Value>> = {},
-): PluginStateKeyedStore<Value> {
+  overrides: Partial<PluginStateKeyedStore<Value, 2>> = {},
+): PluginStateKeyedStore<Value, 2> {
   const unexpectedCall = async (operation: string): Promise<never> => {
     throw new Error(`unexpected Telegram keyed-store ${operation} call`);
   };
   return {
+    observe: () => unexpectedCall("observe"),
+    compareAndApply: () => unexpectedCall("compareAndApply"),
     register: () => unexpectedCall("register"),
     registerIfAbsent: () => unexpectedCall("registerIfAbsent"),
     lookup: () => unexpectedCall("lookup"),
+    lookupMany: () => unexpectedCall("lookupMany"),
     consume: () => unexpectedCall("consume"),
     delete: () => unexpectedCall("delete"),
+    deleteIfEqual: () => unexpectedCall("deleteIfEqual"),
     entries: () => unexpectedCall("entries"),
+    entriesInKeyRange: () => unexpectedCall("entriesInKeyRange"),
+    moveEntriesFrom: () => unexpectedCall("moveEntriesFrom"),
+    count: () => unexpectedCall("count"),
     clear: () => unexpectedCall("clear"),
     ...overrides,
   };
@@ -142,11 +147,7 @@ export async function runTelegramTestMiddlewareChain(
     }
     index = nextIndex;
     const middleware = middlewares[nextIndex];
-    if (!middleware) {
-      await finalHandler(ctx);
-      return;
-    }
-    await middleware(ctx, async () => dispatch(nextIndex + 1));
+    await (middleware ? middleware(ctx, async () => dispatch(nextIndex + 1)) : finalHandler(ctx));
   };
   await dispatch(0);
 }

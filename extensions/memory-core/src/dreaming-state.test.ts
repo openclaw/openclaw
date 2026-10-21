@@ -65,14 +65,20 @@ async function readValues(scope: ReturnType<typeof createFixture>["scope"]) {
   );
 }
 
+type Scope = ReturnType<typeof createFixture>["scope"];
+const writeValues = (scope: Scope, values: Record<string, unknown>) =>
+  writeMemoryCoreWorkspaceEntries({
+    ...scope,
+    entries: Object.entries(values).map(([key, value]) => ({ key, value })),
+  });
+const writeValue = (scope: Scope, key: string, value: string) =>
+  writeMemoryCoreWorkspaceEntry({ ...scope, key, value });
+
 test("workspace enumeration isolates corrupt neighbors while preserving order and expiry", async () => {
   const { scope, foreignWorkspace, foreignNamespace, database } = createFixture();
-  await writeMemoryCoreWorkspaceEntries({
-    ...scope,
-    entries: ["a", "b", "c", "expired"].map((key) => ({ key, value: key })),
-  });
-  await writeMemoryCoreWorkspaceEntry({ ...foreignWorkspace, key: "foreign", value: "foreign" });
-  await writeMemoryCoreWorkspaceEntry({ ...foreignNamespace, key: "other", value: "other" });
+  await writeValues(scope, { a: "a", b: "b", c: "c", expired: "expired" });
+  await writeValue(foreignWorkspace, "foreign", "foreign");
+  await writeValue(foreignNamespace, "other", "other");
   const prefix = `${memoryCoreWorkspaceStateKey(scope.workspaceDir)}:`;
   const foreignPrefix = `${memoryCoreWorkspaceStateKey(foreignWorkspace.workspaceDir)}:`;
   database.db
@@ -95,10 +101,7 @@ test("workspace enumeration isolates corrupt neighbors while preserving order an
     { key: "b", value: "b" },
     { key: "a", value: "a" },
   ]);
-  await writeMemoryCoreWorkspaceEntries({
-    ...scope,
-    entries: [{ key: "replacement", value: "new" }],
-  });
+  await writeValues(scope, { replacement: "new" });
   expect(await readValues(scope)).toEqual({ replacement: "new" });
   await clearMemoryCoreWorkspaceNamespace(scope);
   expect(await readValues(scope)).toEqual({});
@@ -112,11 +115,11 @@ test("workspace enumeration isolates corrupt neighbors while preserving order an
       .get(scope.namespace, `${foreignPrefix}%`),
   ).toEqual({ value_json: "{" });
 
-  await writeMemoryCoreWorkspaceEntry({ ...scope, key: "corrupt", value: "selected" });
+  await writeValue(scope, "corrupt", "selected");
   corrupt.run(scope.namespace, `${prefix}%`);
   for (const operation of [
     () => readMemoryCoreWorkspaceEntries(scope),
-    () => writeMemoryCoreWorkspaceEntries({ ...scope, entries: [] }),
+    () => writeValues(scope, {}),
     () => clearMemoryCoreWorkspaceNamespace(scope),
   ]) {
     await expect(operation()).rejects.toMatchObject({
@@ -128,10 +131,10 @@ test("workspace enumeration isolates corrupt neighbors while preserving order an
 
 test("supports existing keyed-store adapters without range reads", async () => {
   const { scope, foreignWorkspace } = createFixture(undefined, false);
-  await writeMemoryCoreWorkspaceEntry({ ...foreignWorkspace, key: "foreign", value: "foreign" });
-  await writeMemoryCoreWorkspaceEntry({ ...scope, key: "old", value: "old" });
+  await writeValue(foreignWorkspace, "foreign", "foreign");
+  await writeValue(scope, "old", "old");
   expect(await readValues(scope)).toEqual({ old: "old" });
-  await writeMemoryCoreWorkspaceEntries({ ...scope, entries: [{ key: "new", value: "new" }] });
+  await writeValues(scope, { new: "new" });
   expect(await readValues(scope)).toEqual({ new: "new" });
   await clearMemoryCoreWorkspaceNamespace(scope);
   expect(await readValues(scope)).toEqual({});
@@ -154,8 +157,8 @@ test.each(["replacement", "cleanup", "clear"] as const)(
     const initial =
       phase === "replacement" ? [...originals, { key: "stale", value: "old" }] : originals;
     await writeMemoryCoreWorkspaceEntries({ ...scope, entries: initial });
-    await writeMemoryCoreWorkspaceEntry({ ...foreignWorkspace, key: "entry-0", value: "foreign" });
-    await writeMemoryCoreWorkspaceEntry({ ...foreignNamespace, key: "stale", value: "other" });
+    await writeValue(foreignWorkspace, "entry-0", "foreign");
+    await writeValue(foreignNamespace, "stale", "other");
     const entries =
       phase === "clear"
         ? []
@@ -221,31 +224,17 @@ test.each(["replacement", "cleanup", "clear"] as const)(
 
 test("a rejected replacement preserves its committed prefix and skips cleanup", async () => {
   const { scope, foreignWorkspace, foreignNamespace } = createFixture();
-  await writeMemoryCoreWorkspaceEntries({
-    ...scope,
-    entries: [
-      { key: "first", value: "old" },
-      { key: "tail", value: "old" },
-      { key: "stale", value: "old" },
-    ],
-  });
-  await writeMemoryCoreWorkspaceEntry({ ...foreignWorkspace, key: "first", value: "foreign" });
-  await writeMemoryCoreWorkspaceEntry({ ...foreignNamespace, key: "stale", value: "other" });
+  await writeValues(scope, { first: "old", tail: "old", stale: "old" });
+  await writeValue(foreignWorkspace, "first", "foreign");
+  await writeValue(foreignNamespace, "stale", "other");
 
   await expect(
-    writeMemoryCoreWorkspaceEntries<unknown>({
-      ...scope,
-      entries: [
-        { key: "first", value: "new" },
-        { key: "invalid", value: 1n },
-        { key: "tail", value: "unreached" },
-      ],
-    }),
+    writeValues(scope, { first: "new", invalid: 1n, tail: "unreached" }),
   ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" });
   expect(await readValues(scope)).toEqual({ first: "new", tail: "old", stale: "old" });
   expect(await readValues(foreignWorkspace)).toEqual({ first: "foreign" });
   expect(await readValues(foreignNamespace)).toEqual({ stale: "other" });
 
-  await writeMemoryCoreWorkspaceEntry({ ...scope, key: "tail", value: "scalar" });
+  await writeValue(scope, "tail", "scalar");
   expect(await readValues(scope)).toEqual({ first: "new", tail: "scalar", stale: "old" });
 });

@@ -1,4 +1,3 @@
-// Pre-auth connection budget caps unauthenticated WebSocket handshakes per client IP before full gateway auth runs.
 import {
   parseStrictPositiveInteger,
   resolveIntegerOption,
@@ -12,14 +11,7 @@ function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.e
   const configured =
     env.OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP ||
     (isVitestRuntimeEnv(env) ? env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP : undefined);
-  if (!configured) {
-    return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
-  }
-  const parsed = parseStrictPositiveInteger(configured);
-  if (parsed === undefined) {
-    return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
-  }
-  return parsed;
+  return parseStrictPositiveInteger(configured) ?? DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
 }
 
 export type PreauthConnectionBudget = {

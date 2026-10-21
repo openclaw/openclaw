@@ -1,0 +1,153 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getXApi } from "./client.js";
+import type { XAccountConfig } from "./config-schema.js";
+
+const fixture = vi.hoisted(() => {
+  const rows = new Map<string, unknown>();
+  const store = {
+    lookup: async (key: string) => rows.get(key),
+    entries: async () => [...rows].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    delete: async (key: string) => rows.delete(key),
+    register: async (key: string, value: unknown, options?: { assertCurrent?: () => void }) => {
+      options?.assertCurrent?.();
+      rows.set(key, structuredClone(value));
+    },
+  };
+  let generation = 0;
+  const state = {
+    openKeyedStore: () => store,
+    resolveStateDir: () => `synthetic-x-client:${generation}`,
+  };
+  const logging = { getChildLogger: () => ({ warn: vi.fn() }) };
+  return {
+    nextTest: () => {
+      generation++;
+    },
+    rows,
+    runtime: { state, logging },
+    fetch: vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(),
+  };
+});
+
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getXRuntime: () => fixture.runtime,
+}));
+vi.mock("./api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api.js")>();
+  return {
+    ...actual,
+    createXApiClient(options: Parameters<typeof actual.createXApiClient>[0]) {
+      options.fetch = fixture.fetch;
+      return actual.createXApiClient(options);
+    },
+  };
+});
+
+const account: XAccountConfig = {
+  userId: "9",
+  username: "roboclawbot",
+  clientId: "client",
+  clientSecret: "secret-initial",
+  refreshToken: "seed-initial",
+  bearerToken: "bearer-initial",
+};
+const config = (overrides: Partial<XAccountConfig> = {}): OpenClawConfig => ({
+  channels: { x: { ...account, ...overrides } },
+});
+
+function restartRuntime() {
+  fixture.runtime = { ...fixture.runtime };
+}
+
+beforeEach(() => {
+  fixture.rows.clear();
+  fixture.nextTest();
+  fixture.fetch.mockReset();
+  restartRuntime();
+});
+
+afterEach(() => vi.useRealTimers());
+
+const tokenResponse = (refresh_token: string, expires_in?: number) =>
+  Response.json({ access_token: "access", refresh_token, expires_in });
+
+describe("X OAuth client ownership", () => {
+  it.each(["transport", "seed"] as const)(
+    "preserves refresh ownership across %s rotation and restart",
+    async (rotation) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const refreshStarted = Promise.withResolvers<void>();
+      const releaseRefresh = Promise.withResolvers<void>();
+      const refreshes: { token: string | null; auth: string | null }[] = [];
+      const bearerHeaders: (string | null)[] = [];
+      fixture.fetch.mockImplementation(async (input, init) => {
+        if (input.endsWith("/oauth2/token")) {
+          const index = refreshes.push({
+            token: new URLSearchParams(await new Request(input, init).text()).get("refresh_token"),
+            auth: new Headers(init?.headers).get("authorization"),
+          });
+          if (refreshes.length === 1) {
+            refreshStarted.resolve();
+            await releaseRefresh.promise;
+          }
+          return tokenResponse(`rotated-${index}`, 3600);
+        }
+        if (rotation === "transport" && input.endsWith("/activity/subscriptions")) {
+          bearerHeaders.push(new Headers(init?.headers).get("authorization"));
+          return Response.json({
+            data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }],
+          });
+        }
+        return Response.json({ data: [] });
+      });
+      const initial = await getXApi("default", config());
+      const first = initial.getMentions({ userId: "9" });
+      const firstResult =
+        rotation === "seed"
+          ? expect(first).rejects.toThrow("X token refresh failed")
+          : expect(first).resolves.toBeDefined();
+      await refreshStarted.promise;
+      const rotatedConfig = config(
+        rotation === "seed"
+          ? { refreshToken: "seed-new" }
+          : { bearerToken: "bearer-new", clientSecret: "secret-new" },
+      );
+      const updated = await getXApi("default", rotatedConfig);
+      const concurrent = updated.getMentions({ userId: "9" });
+      if (rotation === "seed") {
+        await concurrent;
+      }
+      releaseRefresh.resolve();
+      await Promise.all([firstResult, concurrent]);
+      if (rotation === "transport") {
+        expect(refreshes.map(({ token }) => token)).toEqual(["seed-initial"]);
+        await updated.ensureActivitySubscriptions("9");
+        expect(bearerHeaders).toEqual(["Bearer bearer-new"]);
+        vi.setSystemTime(Date.now() + 3_600_000);
+        await updated.getMentions({ userId: "9" });
+        expect(refreshes[1]).toEqual({
+          token: "rotated-1",
+          auth: `Basic ${Buffer.from("client:secret-new").toString("base64")}`,
+        });
+      }
+
+      restartRuntime();
+      await (await getXApi("default", rotatedConfig)).getMentions({ userId: "9" });
+      expect(refreshes.at(-1)?.token).toBe("rotated-2");
+      if (rotation === "seed") {
+        expect(refreshes.map(({ token }) => token)).toEqual([
+          "seed-initial",
+          "seed-new",
+          "rotated-2",
+        ]);
+      } else {
+        await (
+          await getXApi("default", config({ refreshToken: "seed-new" }))
+        ).getMentions({ userId: "9" });
+        expect(refreshes.at(-1)?.token).toBe("seed-new");
+      }
+    },
+  );
+});

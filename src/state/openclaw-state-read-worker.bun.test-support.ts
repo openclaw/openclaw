@@ -1,47 +1,72 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "./openclaw-state-db-cache.js";
-import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
+import * as stateCache from "./openclaw-state-db-cache.js";
+import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 
 const root = process.argv[2] ?? "";
-assert(root);
-assert(process.versions.bun);
-ensureSqliteLibrarySelected();
+assert(root && process.versions.bun);
+sqliteRuntime.ensureSqliteLibrarySelected();
+const { explicitSqliteCloseReleasesNativeResources: capable } =
+  process.argv[3] === "admitted"
+    ? await sqliteRuntime.initializeSqliteRuntimeCapabilities()
+    : sqliteRuntime.getSqliteRuntimeCapabilities();
+const { workerCount: admissionCount, workerLifecycle: admissionWorkers } =
+  getTrackedWorkerLifecycleSnapshot();
+for (const worker of admissionWorkers) {
+  assert.deepEqual([worker.script, worker.started], ["other", 1], "one builtins-only probe");
+}
+assert.ok(
+  admissionCount === 0 || (!capable && admissionCount === 1 && admissionWorkers.length === 1),
+  "only conservative admission may retain one private probe",
+);
 const filename = path.join(root, "state.sqlite");
 const privateLocation = path.join(root, "private.sqlite");
+function seed(location: string, sql: string) {
+  using database = openNodeSqliteDatabase(location);
+  database.exec(sql);
+}
 for (const location of [filename, privateLocation]) {
-  const seed = openNodeSqliteDatabase(location);
-  seed.exec(
+  seed(
+    location,
     "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '1', 1)",
   );
-  seed.close();
 }
 
-function lifecycle() {
+const READER = "openclaw-state-read.worker.js";
+const SUPERVISOR = "worker-native-lifecycle.worker.js";
+function assertLifecycle(expected: [number, number], message: string) {
   const snapshot = getTrackedWorkerLifecycleSnapshot();
-  const worker = snapshot.workerLifecycle.find(
-    ({ script }) => script === "openclaw-state-read.worker.js",
+  const rows = snapshot.workerLifecycle.map(({ script, started, retired }) => ({
+    script,
+    started,
+    retired: retired.reduce((sum, { count }) => sum + count, 0),
+  }));
+  const worker = rows.find(({ script }) => script === READER);
+  assert(worker);
+  const probes = rows.filter(({ script }) => script !== READER && script !== SUPERVISOR);
+  // Conservative admission can finish while its unreferenced probe is still retiring.
+  assert.deepEqual(
+    probes.map(({ script, started }) => [script, started]),
+    admissionWorkers.map(({ script, started }) => [script, started]),
   );
-  return {
-    started: worker?.started ?? 0,
-    retired: worker?.retired.reduce((total, { count }) => total + count, 0) ?? 0,
-    live: snapshot.workerCount,
-  };
+  assert.deepEqual(
+    rows.find(({ script }) => script === SUPERVISOR),
+    { script: SUPERVISOR, started: 1, retired: 0 },
+  );
+  const live = rows.reduce((sum, row) => sum + row.started - row.retired, 0);
+  assert.equal(snapshot.workerCount, live);
+  assert.deepEqual([worker.started, worker.retired], expected, message);
 }
 
 async function read(location = filename, checkFreshAdmission = false) {
-  const admission = captureOpenClawStateDatabaseReadAdmission(filename);
-  const transport = createOpenClawStateReadTransport({ type: "nodeHost.config" });
+  const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(filename);
+  const transport = captureOpenClawStateReadSource().createTransport({ type: "nodeHost.config" });
   try {
-    const outcome = await transport.read(
+    const outcome = await transport.startRead(
       {
         context: { environment: { OPENCLAW_STATE_DIR: root }, admission },
         location,
@@ -55,7 +80,7 @@ async function read(location = filename, checkFreshAdmission = false) {
     assert(outcome.value.ok && outcome.value.type === "nodeHost.config");
     assert.equal(outcome.value.row?.updated_at_ms, 1);
   } finally {
-    await transport.close();
+    await transport.startClose();
   }
 }
 
@@ -63,20 +88,18 @@ try {
   for (let index = 0; index < 5; index++) {
     await read();
   }
-  assert.deepEqual(lifecycle(), { started: 1, retired: 0, live: 1 }, "successful reads reuse");
-  await closeOpenClawStateDatabaseByPathAsync(filename);
-  assert.deepEqual(lifecycle(), { started: 1, retired: 1, live: 0 }, "host close joins exit");
+  assertLifecycle([1, 0], "successful reads reuse");
+  await stateCache.closeOpenClawStateDatabaseByPathAsync(filename);
+  assertLifecycle([1, capable ? 0 : 1], "host close joins native cleanup");
   await read();
-  assert.deepEqual(lifecycle(), { started: 2, retired: 1, live: 1 }, "closed pool reopens");
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 1], "closed reader reopens");
   await read(privateLocation);
-  assert.deepEqual(lifecycle(), { started: 2, retired: 2, live: 0 }, "internal close joins exit");
+  assertLifecycle([capable ? 1 : 2, capable ? 0 : 2], "internal close settles");
   fs.mkdirSync(path.join(root, "state"));
-  const quarantine = openNodeSqliteDatabase(path.join(root, "state", "openclaw-quarantine.sqlite"));
-  quarantine.exec("PRAGMA user_version = 0");
-  quarantine.close();
+  seed(path.join(root, "state", "openclaw-quarantine.sqlite"), "PRAGMA user_version = 0");
   await read(filename, true);
-  assert.deepEqual(lifecycle(), { started: 3, retired: 3, live: 0 }, "admission close joins exit");
-  console.log("Bun shared-state worker reuse and native-exit cleanup passed");
+  assertLifecycle([capable ? 1 : 3, capable ? 0 : 3], "admission close settles");
+  console.log(`Bun shared-state worker reuse and native cleanup passed (capable=${capable})`);
 } finally {
-  await closeOpenClawStateDatabaseAsync();
+  await stateCache.closeOpenClawStateDatabaseAsync();
 }

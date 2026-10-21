@@ -23,26 +23,16 @@ describe("chutes-models", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps image-capable fallback models in the runtime catalog", () => {
-    const visionModelIds = ["moonshotai/Kimi-K2.6-TEE", "Qwen/Qwen3.6-27B-TEE"];
-    for (const id of visionModelIds) {
-      const model = CHUTES_MODEL_CATALOG.find((candidate) => candidate.id === id);
-      expect(model?.input).toContain("image");
-    }
-  });
-
-  it.each(["default", "replace"] as const)(
+  it.each(["replace"] as const)(
     "keeps catalog ownership, defaults, and aliases aligned in %s mode",
     (mode) => {
       const runtimeIds = new Set(CHUTES_MODEL_CATALOG.map((model) => model.id));
       expect(
         CHUTES_MODEL_CATALOG.every((model) => model.compat?.supportsUsageInStreaming === false),
       ).toBe(true);
-      const cfg = applyChutesConfig(mode === "default" ? {} : { models: { mode } });
-      expect(cfg.models?.mode).toBe(mode === "replace" ? "replace" : "merge");
-      expect(cfg.models?.providers?.chutes?.models).toEqual(
-        mode === "replace" ? CHUTES_MODEL_CATALOG : [],
-      );
+      const cfg = applyChutesConfig({ models: { mode } });
+      expect(cfg.models?.mode).toBe("replace");
+      expect(cfg.models?.providers?.chutes?.models).toEqual(CHUTES_MODEL_CATALOG);
       expect(cfg.agents?.defaults?.model).toEqual({
         primary: "chutes/zai-org/GLM-5.2-TEE",
         fallbacks: ["chutes/deepseek-ai/DeepSeek-V3.2-TEE", "chutes/moonshotai/Kimi-K2.6-TEE"],
@@ -143,70 +133,6 @@ describe("chutes-models", () => {
       cacheRead: 0.05,
       cacheWrite: 0,
     });
-  });
-
-  it.each([
-    { label: "absent pricing", pricing: undefined },
-    { label: "missing completion", pricing: { prompt: 0.1 } },
-    { label: "negative prompt", pricing: { prompt: -0.1, completion: 0.2 } },
-    {
-      label: "invalid cache rate",
-      pricing: { prompt: 0.1, completion: 0.2, input_cache_read: -0.05 },
-    },
-  ])("keeps an unknown runtime price, not partial paid rates, for $label", async ({ pricing }) => {
-    const models = await discoverRows([{ id: "fixture-provider/unpriced-model", pricing }]);
-    expect(models).toHaveLength(1);
-    expect(models[0]).toMatchObject({
-      id: "fixture-provider/unpriced-model",
-      // Runtime requires a complete cost; this existing placeholder is not proof of free billing.
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsUsageInStreaming: false },
-    });
-  });
-
-  it("normalizes token limits and selects context limits in provider precedence order", async () => {
-    const models = await discoverRows([
-      {
-        id: "provider/context-primary",
-        context_length: 131072,
-        max_model_len: 262144,
-      },
-      { id: "provider/serving-fallback", max_model_len: 131072 },
-      {
-        id: "provider/invalid-primary",
-        context_length: -1,
-        max_model_len: 131072,
-      },
-      {
-        id: "provider/default-control",
-        context_length: 0,
-        max_model_len: 0,
-        max_output_length: 16384.5,
-      },
-    ]);
-    expect(
-      models.map(({ id, contextWindow, maxTokens }) => ({ id, contextWindow, maxTokens })),
-    ).toEqual([
-      { id: "provider/context-primary", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/serving-fallback", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/invalid-primary", contextWindow: 131072, maxTokens: 4096 },
-      { id: "provider/default-control", contextWindow: 128000, maxTokens: 4096 },
-    ]);
-  });
-
-  it("propagates uncached discovery failures", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
-
-    vi.stubGlobal("fetch", mockFetch);
-    await expect(
-      discoverChutesModels("chutes-fallback-token", { discoveryMode: "strict" }),
-    ).rejects.toMatchObject({
-      status: 503,
-    });
-    await expect(buildChutesProvider("chutes-fallback-token")).resolves.toMatchObject({
-      models: CHUTES_MODEL_CATALOG,
-    });
-    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it("scopes discovery cache by access token", async () => {

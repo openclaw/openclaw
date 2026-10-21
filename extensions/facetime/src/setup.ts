@@ -52,7 +52,6 @@ type SetupParams = {
   runtimeStatus?: FaceTimeRuntimeStatus | Promise<FaceTimeRuntimeStatus>;
   runtimeError?: string;
   preflight?: FaceTimePreflightResult | Promise<FaceTimePreflightResult>;
-  readAssertionsFile?: () => Promise<string>;
 };
 
 const XCODE_APP = "/Applications/Xcode.app";
@@ -196,12 +195,11 @@ function hasActiveFocusAssertion(raw: string): boolean {
   return visit(parsed);
 }
 
-async function checkFocusMode(params: SetupParams): Promise<FaceTimeSetupCheck> {
-  const readAssertions =
-    params.readAssertionsFile ??
-    (() => readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"));
+async function checkFocusMode(): Promise<FaceTimeSetupCheck> {
   try {
-    const active = hasActiveFocusAssertion(await readAssertions());
+    const active = hasActiveFocusAssertion(
+      await readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"),
+    );
     return {
       id: "focus-mode",
       label: "Focus mode",
@@ -236,41 +234,30 @@ async function checkNotificationsDuringSharing(
     "/usr/bin/plutil -extract dnd_prefs raw -o - - | " +
     "/usr/bin/base64 --decode | " +
     "/usr/bin/plutil -extract dndMirrored raw -o - -";
+  let ready = false;
+  let message: string;
   try {
     const result = await runCommandWithTimeout(["/bin/bash", "-c", script], {
       timeoutMs: 5_000,
     });
     const value = firstLine(result.stdout)?.toLowerCase();
-    if (result.code === 0 && value === "true") {
-      return {
-        id: "notifications-while-sharing",
-        label: "Notifications while sharing the display",
-        status: "ready",
-        required: true,
-        message: "Notifications are allowed while mirroring or sharing the display",
-      };
-    }
-    return {
-      id: "notifications-while-sharing",
-      label: "Notifications while sharing the display",
-      status: "action-required",
-      required: true,
-      message:
-        value === "false"
-          ? "Incoming call notifications are suppressed while mirroring or sharing the display"
-          : "Could not verify the notification setting used during display sharing",
-      actionId: "allow-sharing-notifications",
-    };
+    ready = result.code === 0 && value === "true";
+    message = ready
+      ? "Notifications are allowed while mirroring or sharing the display"
+      : value === "false"
+        ? "Incoming call notifications are suppressed while mirroring or sharing the display"
+        : "Could not verify the notification setting used during display sharing";
   } catch (error) {
-    return {
-      id: "notifications-while-sharing",
-      label: "Notifications while sharing the display",
-      status: "action-required",
-      required: true,
-      message: `Could not verify notification behavior: ${formatErrorMessage(error)}`,
-      actionId: "allow-sharing-notifications",
-    };
+    message = `Could not verify notification behavior: ${formatErrorMessage(error)}`;
   }
+  return {
+    id: "notifications-while-sharing",
+    label: "Notifications while sharing the display",
+    status: ready ? "ready" : "action-required",
+    required: true,
+    message,
+    ...(!ready ? { actionId: "allow-sharing-notifications" as const } : {}),
+  };
 }
 
 async function checkCommand(
@@ -484,7 +471,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     }
   }
 
-  checks.push(await checkFocusMode(params));
+  checks.push(await checkFocusMode());
   checks.push(await checkNotificationsDuringSharing(params.runCommandWithTimeout));
 
   checks.push({

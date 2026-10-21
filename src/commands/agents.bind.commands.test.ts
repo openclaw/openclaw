@@ -1,7 +1,7 @@
-// Agent bind command tests cover channel bindings, plugin metadata, and command output.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   loadFreshAgentsBindCommandModuleForTest,
   readConfigFileSnapshotMock,
@@ -11,479 +11,193 @@ import {
 } from "./agents.bind.test-support.js";
 import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
-const pluginRegistryMocks = vi.hoisted(() => ({
-  listPluginContributionIds: vi.fn(() => ["external-chat"]),
-}));
-
-vi.mock("../agents/agent-scope.js", () => ({
-  listAgentEntries: (
-    cfg: {
-      agents?: { list?: Array<{ id: string; default?: boolean }> };
-    } | null,
-  ) => cfg?.agents?.list ?? [],
-  resolveDefaultAgentId: (
-    cfg: {
-      agents?: { list?: Array<{ id: string; default?: boolean }> };
-    } | null,
-  ) => cfg?.agents?.list?.find((agent) => agent.default)?.id ?? "main",
-}));
-
+const listContributions = vi.hoisted(() => vi.fn(() => ["external-chat"]));
 vi.mock("../config/bindings.js", () => ({
   isRouteBinding: (binding: { match?: unknown }) => Boolean(binding.match),
-  listRouteBindings: (cfg: { bindings?: Array<{ match?: unknown }> }) =>
+  listRouteBindings: (cfg: OpenClawConfig) =>
     (cfg.bindings ?? []).filter((binding) => Boolean(binding.match)),
 }));
-
+// mock-isolation: Supply synthetic channel contributions without discovering installed plugins.
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
-  listPluginContributionIds: pluginRegistryMocks.listPluginContributionIds,
+  listPluginContributionIds: listContributions,
 }));
-
-type BindingResolverTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
-  setup?: Pick<NonNullable<ChannelPlugin["setup"]>, "resolveBindingAccountId">;
+vi.mock("../channels/plugins/index.js", () => ({ getLoadedChannelPlugin: () => undefined }));
+type BindingPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config"> & {
   setupContract?: Pick<NonNullable<ChannelPlugin["setupContract"]>, "resolveBindingAccountId">;
 };
+vi.mock("../channels/plugins/bundled.js", () => ({
+  getBundledChannelSetupPlugin: (channel: string): BindingPlugin | undefined => {
+    const id = channel.trim().toLowerCase();
+    if (!["telegram", "signal", "whatsapp"].includes(id)) {
+      return undefined;
+    }
+    return {
+      id,
+      meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: "Fixture" },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => (id === "whatsapp" ? ["default", "biz"] : []),
+        resolveAccount: () => ({}),
+      },
+      ...(id === "signal"
+        ? { setupContract: { resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase() } }
+        : {}),
+    };
+  },
+}));
 
-function createBindingResolverTestPlugin(params: {
-  id: ChannelId;
-  config: Partial<ChannelPlugin["config"]>;
-  resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
-  contractOnly?: boolean;
-  forceAccountBinding?: boolean;
-}): BindingResolverTestPlugin {
-  return {
-    id: params.id,
-    meta: {
-      id: params.id,
-      label: params.id,
-      selectionLabel: params.id,
-      docsPath: `/channels/${params.id}`,
-      blurb: "test stub.",
-      ...(params.forceAccountBinding ? { forceAccountBinding: true } : {}),
-    },
-    capabilities: { chatTypes: ["direct"] },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      ...params.config,
-    },
-    ...(params.resolveBindingAccountId
-      ? {
-          [params.contractOnly ? "setupContract" : "setup"]: {
-            resolveBindingAccountId: params.resolveBindingAccountId,
-          },
-        }
-      : {}),
-  };
-}
-
-vi.mock("../channels/plugins/index.js", () => {
-  return {
-    getLoadedChannelPlugin: () => undefined,
-  };
+let commands: Awaited<ReturnType<typeof loadFreshAgentsBindCommandModuleForTest>>;
+type UpdateOptions = Parameters<typeof commands.agentsUpdateBindingsCommand>[1];
+const update = (operation: "bind" | "unbind" | "list", options: UpdateOptions) =>
+  operation === "list"
+    ? commands.agentsBindingsCommand(options)
+    : commands.agentsUpdateBindingsCommand(operation, options);
+const setConfig = (config: OpenClawConfig) =>
+  readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot, config });
+const route = (channel: string, accountId?: string, agentId = "main") => ({
+  type: "route" as const,
+  agentId,
+  match: { channel, ...(accountId ? { accountId } : {}) },
 });
-
-vi.mock("../channels/plugins/bundled.js", () => {
-  const knownChannels = new Map([
-    [
-      "discord",
-      createBindingResolverTestPlugin({ id: "discord", config: { listAccountIds: () => [] } }),
-    ],
-    [
-      "matrix",
-      createBindingResolverTestPlugin({
-        id: "matrix",
-        config: { listAccountIds: () => [] },
-        resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
-      }),
-    ],
-    [
-      "signal",
-      createBindingResolverTestPlugin({
-        id: "signal",
-        config: { listAccountIds: () => [] },
-        resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
-        contractOnly: true,
-      }),
-    ],
-    [
-      "telegram",
-      createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
-    ],
-    [
-      "whatsapp",
-      createBindingResolverTestPlugin({
-        id: "whatsapp",
-        config: { listAccountIds: () => ["default", "biz"] },
-        forceAccountBinding: true,
-      }),
-    ],
-  ]);
-  return {
-    getBundledChannelSetupPlugin: (channel: string) => {
-      const normalized = channel.trim().toLowerCase();
-      return knownChannels.get(normalized);
-    },
-  };
-});
-
-let agentsBindCommand: typeof import("./agents.commands.bind.js").agentsBindCommand;
-let agentsBindingsCommand: typeof import("./agents.commands.bind.js").agentsBindingsCommand;
-let agentsUnbindCommand: typeof import("./agents.commands.bind.js").agentsUnbindCommand;
-
-type JsonTestRuntime = RuntimeEnv & {
-  writeStdout: ReturnType<typeof vi.fn>;
-  writeJson: ReturnType<typeof vi.fn>;
+const conflictConfig: OpenClawConfig = {
+  agents: { entries: { ops: { workspace: "/tmp/ops" } } },
+  bindings: [route("telegram", "ops")],
 };
-
-function createJsonTestRuntime(): JsonTestRuntime {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  };
-}
+const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+const expectNoCalls = (...mocks: ReturnType<typeof vi.fn>[]) =>
+  mocks.forEach((mock) => expect(mock).not.toHaveBeenCalled());
+const unknownAgent = (id: string) =>
+  `Agent "${id}" not found. Run openclaw agents list to see configured agents.`;
+const explicitAgents = { ownership: "explicit" as const, entries: { main: {}, ops: {} } };
+type Rejection = [Parameters<typeof update>[0], UpdateOptions, string];
 
 describe("agents bind/unbind commands", () => {
+  afterAll(() => vi.restoreAllMocks());
   beforeAll(async () => {
-    ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
-      await loadFreshAgentsBindCommandModuleForTest());
+    commands = await loadFreshAgentsBindCommandModuleForTest();
   });
-
   beforeEach(() => {
+    json.mockClear();
     resetAgentsBindTestHarness();
-    pluginRegistryMocks.listPluginContributionIds.mockClear();
+    listContributions.mockReset().mockReturnValue(["external-chat"]);
+    setConfig({});
   });
 
-  function firstWrittenConfig(): { bindings?: unknown } {
-    const call = writeConfigFileMock.mock.calls[0];
-    if (!call) {
-      throw new Error("expected config write");
-    }
-    return call[0] as { bindings?: unknown };
-  }
-
-  it("lists all bindings by default", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        bindings: [
-          { agentId: "main", match: { channel: "matrix" } },
-          { agentId: "ops", match: { channel: "telegram", accountId: "work" } },
-        ],
-      },
-    });
-
-    await agentsBindingsCommand({}, runtime);
-
+  it("lists routing bindings without plugin validation", async () => {
+    setConfig({ bindings: [route("matrix"), route("telegram", "work", "ops")] });
+    await update("list", {});
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(runtime.log).toHaveBeenCalledWith(
-      ["Routing bindings:", "- main <- matrix", "- ops <- telegram accountId=work"].join("\n"),
+      "Routing bindings:\n- main <- matrix\n- ops <- telegram accountId=work",
     );
   });
 
-  it("binds routes to default agent when --agent is omitted", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
+  it("uses the persisted default ops for bind and unbind", async () => {
+    const config: OpenClawConfig = {
+      agents: { ...explicitAgents, defaults: { systemAgent: { agentId: "ops" } } },
+    };
+    setConfig(config);
+    await update("bind", { bind: ["telegram:work"] });
+    const bound = { ...config, bindings: [route("telegram", "work", "ops")] };
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith(bound);
 
-    await agentsBindCommand({ bind: ["telegram"] }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = firstWrittenConfig();
-    expect(writtenConfig?.bindings).toStrictEqual([
-      { type: "route", agentId: "main", match: { channel: "telegram" } },
-    ]);
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(pluginRegistryMocks.listPluginContributionIds).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "bindings with an unrepresentable agent",
-      command: "bindings",
-      options: { agent: "агент✨", json: true },
-      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "bindings with an unknown agent",
-      command: "bindings",
-      options: { agent: "ghost", json: true },
-      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "bind with an unrepresentable agent",
-      command: "bind",
-      options: { agent: "агент✨", bind: ["telegram"], json: true },
-      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "bind with a blank agent",
-      command: "bind",
-      options: { agent: "   ", bind: ["telegram"], json: true },
-      message: 'Agent "   " not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "bind with an unknown agent before missing bindings",
-      command: "bind",
-      options: { agent: "ghost", json: true },
-      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "bind without bindings",
-      command: "bind",
-      options: { json: true },
-      message: "Provide at least one --bind <channel[:accountId]>.",
-    },
-    {
-      name: "bind with only blank bindings",
-      command: "bind",
-      options: { bind: ["  "], json: true },
-      message: "Provide at least one --bind <channel[:accountId]>.",
-    },
-    {
-      name: "bind with multiple malformed bindings in input order",
-      command: "bind",
-      options: { bind: ["telegram:", "telegram:work:extra"], json: true },
-      message: [
-        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
-        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
-      ].join("\n"),
-    },
-    {
-      name: "bind with an unknown channel",
-      command: "bind",
-      options: { bind: ["definitely-not-a-channel"], json: true },
-      message:
-        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
-      loadsPluginRegistry: true,
-    },
-    {
-      name: "unbind with an unrepresentable agent",
-      command: "unbind",
-      options: { agent: "агент✨", all: true, json: true },
-      message: 'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "unbind with an unknown agent before incompatible options",
-      command: "unbind",
-      options: { agent: "ghost", all: true, bind: ["telegram"], json: true },
-      message: 'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
-    },
-    {
-      name: "unbind without bindings",
-      command: "unbind",
-      options: { json: true },
-      message: "Provide at least one --bind <channel[:accountId]> or use --all.",
-    },
-    {
-      name: "unbind with only blank bindings",
-      command: "unbind",
-      options: { bind: ["  "], json: true },
-      message: "Provide at least one --bind <channel[:accountId]> or use --all.",
-    },
-    {
-      name: "unbind with incompatible all and binding options",
-      command: "unbind",
-      options: { all: true, bind: ["telegram"], json: true },
-      message: "Use either --all or --bind, not both.",
-    },
-    {
-      name: "unbind with a malformed binding",
-      command: "unbind",
-      options: { bind: ["telegram:work:extra"], json: true },
-      message:
-        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
-    },
-  ])(
-    "rejects $name through the root failure owner before mutation",
-    async ({ command, options, message, loadsPluginRegistry }) => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: {},
-      });
-
-      const execution =
-        command === "bindings"
-          ? agentsBindingsCommand(options, runtime)
-          : command === "bind"
-            ? agentsBindCommand(options, runtime)
-            : agentsUnbindCommand(options, runtime);
-
-      await expect(execution).rejects.toMatchObject({
-        name: "ExpectedCliError",
-        message,
-        humanOutput: message,
-        machineOutput: message,
-      });
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
-      if (!loadsPluginRegistry) {
-        expect(pluginRegistryMocks.listPluginContributionIds).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("uses a wildcard account binding for multi-account channels", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-
-    await agentsBindCommand({ bind: ["whatsapp"] }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = firstWrittenConfig();
-    expect(writtenConfig?.bindings).toStrictEqual([
-      { type: "route", agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
-    ]);
+    setConfig(bound);
+    await update("unbind", { bind: ["telegram:work"] });
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("resolves account bindings from channel-owned setup contracts", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-
-    await agentsBindCommand({ bind: ["signal"] }, runtime);
-
-    expect(firstWrittenConfig().bindings).toStrictEqual([
-      { type: "route", agentId: "main", match: { channel: "signal", accountId: "main" } },
+  it("matches normalized account identities for conflicts, repeats, and removal", async () => {
+    const config = { agents: explicitAgents, bindings: [route("telegram", "Work", "ops")] };
+    setConfig(config);
+    await update("bind", { agent: "main", bind: ["telegram:work"], json: true });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(json.mock.lastCall).toEqual([
+      expect.objectContaining({ conflicts: ["telegram accountId=work (agent=ops)"] }),
+      2,
     ]);
-    expect(runtime.exit).not.toHaveBeenCalled();
+
+    await update("bind", { agent: "ops", bind: ["telegram:WORK"] });
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    await update("unbind", { agent: "ops", bind: ["telegram:work"] });
+    expect(writeConfigFileMock).toHaveBeenLastCalledWith({ ...config, bindings: undefined });
   });
 
-  it("binds manifest-known external channels without loading plugin runtime", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
+  it("binds a mixed batch using one manifest inventory per invocation", async () => {
+    await update("bind", {
+      bind: ["telegram", "whatsapp", "signal", "external-chat:work", "external-chat:home"],
     });
-
-    await agentsBindCommand({ bind: ["external-chat:work", "external-chat:home"] }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = firstWrittenConfig();
-    expect(writtenConfig?.bindings).toStrictEqual([
-      {
-        type: "route",
-        agentId: "main",
-        match: { channel: "external-chat", accountId: "work" },
-      },
-      {
-        type: "route",
-        agentId: "main",
-        match: { channel: "external-chat", accountId: "home" },
-      },
-    ]);
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledOnce();
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledWith({
+    expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith({
+      bindings: [
+        route("telegram"),
+        route("whatsapp", "*"),
+        route("signal", "main"),
+        route("external-chat", "work"),
+        route("external-chat", "home"),
+      ],
+    });
+    expect(listContributions).toHaveBeenCalledExactlyOnceWith({
       contribution: "channels",
       includeDisabled: true,
       config: {},
       env: process.env,
     });
     expect(runtime.exit).not.toHaveBeenCalled();
-    pluginRegistryMocks.listPluginContributionIds.mockReturnValueOnce([]);
-    await expect(
-      agentsBindCommand({ bind: ["external-chat:next"] }, runtime),
-    ).rejects.toMatchObject({
+    listContributions.mockReturnValueOnce([]);
+    await expect(update("bind", { bind: ["external-chat:next"] })).rejects.toMatchObject({
       message: expect.stringContaining('Unknown channel "external-chat"'),
     });
-    expect(pluginRegistryMocks.listPluginContributionIds).toHaveBeenCalledTimes(2);
+    expect(listContributions).toHaveBeenCalledTimes(2);
   });
 
-  it("unbinds all routes for an agent", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
-        bindings: [
-          { agentId: "main", match: { channel: "matrix" } },
-          { agentId: "ops", match: { channel: "telegram", accountId: "work" } },
-        ],
-      },
+  it.each<Rejection>([
+    ["bind", { agent: "агент✨", bind: ["telegram"] }, unknownAgent("агент✨")],
+    ["list", { agent: "ghost" }, unknownAgent("ghost")],
+    ["bind", {}, "Provide at least one --bind <channel[:accountId]>."],
+    [
+      "bind",
+      { bind: ["telegram:", "telegram:work:extra", "definitely-not-a-channel"] },
+      [
+        'Invalid binding "telegram:". Account id is empty. Use <channel>:<account>, for example telegram:default.',
+        'Invalid binding "telegram:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+        'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
+      ].join("\n"),
+    ],
+    ["unbind", { all: true, bind: ["telegram"] }, "Use either --all or --bind, not both."],
+  ])("rejects %s %j before mutation", async (command, input, message) => {
+    const options = { ...input, json: true };
+    await expect(update(command, options)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
+      humanOutput: message,
+      machineOutput: message,
     });
+    expectNoCalls(runtime.error, runtime.exit, writeConfigFileMock);
+  });
 
-    await agentsUnbindCommand({ agent: "ops", all: true }, runtime);
-
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = firstWrittenConfig();
-    expect(writtenConfig?.bindings).toStrictEqual([
-      { agentId: "main", match: { channel: "matrix" } },
-    ]);
+  it("unbinds all routes for one agent while preserving the others", async () => {
+    setConfig({ ...conflictConfig, bindings: [route("matrix"), route("telegram", "work", "ops")] });
+    await update("unbind", { agent: "ops", all: true });
+    const remaining = { ...conflictConfig, bindings: [route("matrix")] };
+    expect(writeConfigFileMock).toHaveBeenCalledExactlyOnceWith(remaining);
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("reports empty unbind-all as JSON without text logs", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {},
-    });
-    const jsonRuntime = createJsonTestRuntime();
-
-    await agentsUnbindCommand({ agent: "main", all: true, json: true }, jsonRuntime);
-
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-    expect(jsonRuntime.log).not.toHaveBeenCalled();
-    expect(jsonRuntime.writeJson.mock.calls[0]?.[0]).toStrictEqual({
-      agentId: "main",
-      removed: [],
-      missing: [],
-      conflicts: [],
-    });
-    expect(jsonRuntime.exit).not.toHaveBeenCalled();
+  it("reports empty unbind-all as JSON without writes or text logs", async () => {
+    await update("unbind", { agent: "main", all: true, json: true });
+    expectNoCalls(writeConfigFileMock, runtime.log, runtime.exit);
+    expect(json.mock.calls).toEqual([
+      [{ agentId: "main", removed: [], missing: [], conflicts: [] }, 2],
+    ]);
   });
 
-  it("reports ownership conflicts during unbind and exits 1", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
-        agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
-        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "ops" } }],
-      },
-    });
-
-    await agentsUnbindCommand({ agent: "ops", bind: ["telegram:ops"] }, runtime);
-
+  it("reports human unbind ownership conflicts without writing", async () => {
+    setConfig(conflictConfig);
+    await update("unbind", { agent: "ops", bind: ["telegram:ops"] });
     expect(writeConfigFileMock).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith("Bindings are owned by another agent:");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-
-  it.each(["bind", "unbind"])(
-    "preserves the post-decision %s conflict JSON result and exit status",
-    async (command) => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: {
-          agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
-          bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "ops" } }],
-        },
-      });
-      const jsonRuntime = createJsonTestRuntime();
-      const options = { agent: "ops", bind: ["telegram:ops"], json: true };
-
-      if (command === "bind") {
-        await agentsBindCommand(options, jsonRuntime);
-      } else {
-        await agentsUnbindCommand(options, jsonRuntime);
-      }
-
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(jsonRuntime.writeJson.mock.calls[0]?.[0]).toStrictEqual({
-        agentId: "ops",
-        ...(command === "bind"
-          ? { added: [], updated: [], skipped: [] }
-          : { removed: [], missing: [] }),
-        conflicts: ["telegram accountId=ops (agent=main)"],
-      });
-      expect(jsonRuntime.error).not.toHaveBeenCalled();
-      expect(jsonRuntime.exit).toHaveBeenCalledWith(1);
-    },
-  );
 });

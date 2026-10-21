@@ -1,8 +1,8 @@
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
 } from "../../config/runtime-snapshot.js";
-import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -11,6 +11,7 @@ import type {
   ActivateSetupInferenceResult,
   VerifySetupInferenceResult,
 } from "../../system-agent/setup-inference.js";
+import type { WizardProgress } from "../../wizard/prompts.js";
 import type { GatewayRequestContext } from "./types.js";
 
 // Hosted setup must reject a failing sub-step without exiting the Gateway.
@@ -23,8 +24,7 @@ export function createSystemAgentGatewayRuntime(): RuntimeEnv {
   };
 }
 
-const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
-const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
+const withSystemAgentExecution = createAsyncLock();
 
 export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Promise<T> {
   // Track every accepted RPC as active, never queued: restart draining snapshots
@@ -34,7 +34,7 @@ export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Prom
     // Bound expensive detection, activation, and agent turns without hiding
     // accepted work from restart draining. This also makes session eviction and
     // setup writes atomic with respect to other OpenClaw gateway requests.
-    systemAgentGatewayExecutionQueue.enqueue(SYSTEM_AGENT_GATEWAY_EXECUTION_KEY, task),
+    withSystemAgentExecution(task),
   );
 }
 
@@ -87,16 +87,25 @@ export async function verifyGatewaySetupInference(params: {
 }
 
 export async function activateGatewaySetupInference(
-  params: Omit<ActivateSetupInferenceParams, "onActivationCompletion">,
+  params: Omit<ActivateSetupInferenceParams, "onActivationCompletion" | "onActivationStarted">,
 ): Promise<ActivateSetupInferenceResult> {
   let complete: (() => Promise<boolean>) | undefined;
   let restartRequired: boolean | undefined;
+  let activationProgress: WizardProgress | undefined;
   let result: ActivateSetupInferenceResult;
   try {
     result = await runSystemAgentGatewayTask(async () => {
       const { activateSetupInference } = await import("../../system-agent/setup-inference.js");
       return activateSetupInference({
         ...params,
+        onActivationStarted: () => {
+          const message = "Turning on your AI connection…";
+          if (activationProgress) {
+            activationProgress.update(message);
+          } else {
+            activationProgress = params.prompter?.progress(message);
+          }
+        },
         onActivationCompletion: (completion) => {
           complete = completion;
         },
@@ -104,7 +113,11 @@ export async function activateGatewaySetupInference(
     });
   } finally {
     // Reload drains setup's queue. Keep the admitted request through application and recovery.
-    restartRequired = await complete?.();
+    try {
+      restartRequired = await complete?.();
+    } finally {
+      activationProgress?.stop();
+    }
   }
   return result.ok && restartRequired ? { ...result, gatewayRestartRequired: true } : result;
 }

@@ -2,14 +2,6 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../tokens.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
 
 // A delivered or discarded final must lose the whole record. Keeping this list
@@ -19,7 +11,12 @@ export const PENDING_FINAL_DELIVERY_CLEAR_PATCH = {
 } as const satisfies Partial<SessionEntry>;
 
 export function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
-  const stripped = stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars });
+  // The pending reply may belong to an ordinary turn interrupted by this heartbeat.
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+    allowTruncated: false,
+  });
   return {
     shouldClear: stripped.shouldSkip,
     replayText: stripped.didStrip && stripped.text ? stripped.text : text,
@@ -28,27 +25,5 @@ export function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars:
 
 /** Sanitizes pending final delivery text before channel-visible output. */
 export function sanitizePendingFinalDeliveryText(text: string): string {
-  let stripped = trimTextPreservingCode(stripInternalMetadataForDisplay(text));
-  if (isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)) {
-    return "";
-  }
-  if (stripped && !isSilentReplyText(stripped, SILENT_REPLY_TOKEN)) {
-    const hasLeadingSilentToken = startsWithSilentToken(stripped, SILENT_REPLY_TOKEN);
-    if (hasLeadingSilentToken) {
-      stripped = stripLeadingSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-    // Remove stray silent tokens only after confirming the payload is not entirely silent.
-    if (
-      hasLeadingSilentToken ||
-      stripped.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())
-    ) {
-      stripped = stripSilentToken(stripped, SILENT_REPLY_TOKEN);
-    }
-  }
-  if (!stripped.trim()) {
-    return "";
-  }
-  return isSilentReplyPayloadText(stripped, SILENT_REPLY_TOKEN)
-    ? ""
-    : trimTextPreservingCode(stripped);
+  return trimTextPreservingCode(stripInternalMetadataForDisplay(text));
 }

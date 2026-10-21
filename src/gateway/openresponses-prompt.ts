@@ -1,4 +1,3 @@
-// Prompt adapter from OpenAI Responses input items to OpenClaw agent messages.
 import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
@@ -52,7 +51,6 @@ function resolveActiveUserMessage(input: ItemParam[]): ResponseMessageItem | und
   return undefined;
 }
 
-/** Build the user message and optional system prompt from Responses API input. */
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
@@ -69,11 +67,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      // Substitute a placeholder for an image-only or file-only active user turn
-      // so the turn is not dropped and the downstream agent command (which requires
-      // non-empty message text) still runs with the attached image or file context,
-      // matching /v1/chat/completions. Historical media-only turns stay skipped
-      // because their bytes are not replayed.
+      // Preserve media-only active turns; historical media bytes are not replayed.
       const body =
         content || (item === activeUserMessage ? placeholderForActiveTurn(item.content) : "");
       if (!body) {

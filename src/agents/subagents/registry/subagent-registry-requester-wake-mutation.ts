@@ -1,56 +1,55 @@
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
-import type { RequesterWakeMutation } from "../completion/subagent-completion-mutation.types.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import type {
-  PendingRequesterSettleWakeCommit,
-  SubagentLifecycleWakeContext,
-} from "./subagent-registry-lifecycle-context.js";
+  RequesterWakeCommittedWrite,
+  RequesterWakeMutation,
+} from "../completion/subagent-completion-mutation.types.js";
+import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
-import { getPendingWakeCommit } from "./subagent-registry-requester-wake-commit.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-export const isCurrentRequesterSettleWakeBatch = (
+export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
+
+/** A retired peer releases only its own obligation; acknowledged retirements remain reconcilable. */
+export function isRetainedRequesterSettleWakeMember(
+  context: SubagentLifecycleWakeContext,
+  entry: SubagentRunRecord,
+  rearmGeneration: number | undefined,
+  receipt: RequesterWakeMutationReceipt,
+): boolean {
+  const current = context.options.runs.get(entry.runId);
+  if (!current) {
+    return receipt.committed?.result.retiredRunIds.includes(entry.runId) === true;
+  }
+  return (
+    isSameSubagentRunOwner(current, entry) &&
+    ((current.requesterSettleWake !== undefined &&
+      current.requesterSettleWake.rearmGeneration === rearmGeneration) ||
+      (receipt.committed !== undefined && current.requesterSettleWake === undefined))
+  );
+}
+
+/** A recorded visible final can finish bookkeeping after its Gateway owner closes. */
+export function assertRequesterSettleWakeBatchCurrent(
   context: SubagentLifecycleWakeContext,
   batch: readonly SubagentRunRecord[],
-  rearmGeneration?: number,
-  visibleFinalDelivered = false,
-): boolean => {
-  // Closure can precede replacement activation. Only a recorded visible final
-  // may settle then; cancellation or an in-flight handoff must retain the wake.
-  try {
-    return (
-      batch.length > 0 &&
-      (visibleFinalDelivered ||
-        batch.every((entry) => {
-          const resolve = getGatewayContextResolver(entry);
-          return !resolve || Boolean(resolve());
-        })) &&
-      // Validate every row and generation after calling the captured owner fences.
-      batch.every(
-        (entry) =>
-          context.options.runs.get(entry.runId) === entry &&
-          entry.requesterSettleWake &&
-          entry.requesterSettleWake.rearmGeneration === rearmGeneration,
-      )
-    );
-  } catch {
-    return false;
-  }
-};
-
-export function assertRequesterWakeCommitCurrent(
-  context: SubagentLifecycleWakeContext,
-  entries: readonly SubagentRunRecord[],
-  stateContext: OpenClawStateWorkerContext,
-  pending: PendingRequesterSettleWakeCommit,
-  visibleFinalDelivered = false,
+  rearmGeneration: number | undefined,
+  visibleFinalDelivered: boolean,
 ): void {
-  assertSubagentRegistryWriteSourceCurrent(stateContext);
-  if (!entries.every((entry) => getPendingWakeCommit(context, entry) === pending)) {
-    throw new Error("Requester wake lost its current commit episode");
-  }
-  for (const entry of entries) {
+  for (const entry of batch) {
+    const current = context.options.runs.get(entry.runId);
+    if (
+      !isSameSubagentRunOwner(current, entry) ||
+      !current?.requesterSettleWake ||
+      current.requesterSettleWake.rearmGeneration !== rearmGeneration ||
+      (current.requesterSettleWake.yieldedFinalDeliverable === true) !==
+        (entry.requesterSettleWake?.yieldedFinalDeliverable === true)
+    ) {
+      throw new Error("Requester wake batch changed before its outcome was recorded");
+    }
     const resolve = getGatewayContextResolver(entry);
     if (!visibleFinalDelivered && resolve && !resolve()) {
       throw new Error("Requester wake Gateway owner is closed");
@@ -58,33 +57,63 @@ export function assertRequesterWakeCommitCurrent(
   }
 }
 
-export async function commitRequesterSettleWakeMutation(
+/** Storage records dispatch and terminal facts; the controller owns when work runs. */
+export async function mutateRequesterSettleWakeBatch(
   context: SubagentLifecycleWakeContext,
-  entries: readonly SubagentRunRecord[],
-  operation: RequesterWakeMutation,
+  batch: readonly SubagentRunRecord[],
+  rearmGeneration: number | undefined,
+  operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult },
   stateContext: OpenClawStateWorkerContext,
-  pending: PendingRequesterSettleWakeCommit,
+  receipt: RequesterWakeMutationReceipt,
+  onPublished?: (entries: readonly SubagentRunRecord[]) => void,
 ): Promise<boolean> {
-  if (
-    !pending.committedWake &&
-    !isCurrentRequesterSettleWakeBatch(context, entries, pending.generation)
-  ) {
+  const visibleFinalDelivered =
+    operation.kind === "settle" &&
+    operation.outcome.delivered &&
+    operation.outcome.requesterVisibleFinalDelivered === true;
+  const assertCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    // An acknowledged write must reconcile its own postimages rather than replaying it.
+    if (!receipt.committed) {
+      assertRequesterSettleWakeBatchCurrent(context, batch, rearmGeneration, visibleFinalDelivered);
+    }
+  };
+  try {
+    assertCurrent();
+  } catch {
     return false;
   }
-  const assertCurrent = () =>
-    assertRequesterWakeCommitCurrent(context, entries, stateContext, pending);
-  assertCurrent();
-  const result = await mutateRequesterSettleWakeBatch({
-    entries,
+  const result = await mutateRequesterCompletionBatch({
+    entries: batch,
     operation,
-    committed: pending.committedWake,
     context: stateContext,
     assertCurrent,
+    committed: receipt.committed,
     onCommitted: (write) => {
-      pending.committedWake = write;
+      receipt.committed = write;
     },
-    onPublished: () => pending.adoptPublished(entries),
-    retiredPreimages: new Set(entries.filter((entry) => pending.isPublishedRetirement(entry))),
+    onPublished: () => {
+      onPublished?.(batch.map((entry) => context.options.runs.get(entry.runId) ?? entry));
+    },
   });
   return result.applied === true && result.publication === "published";
+}
+
+/** Records one observed outcome, or retires a wake that owes no delivery. */
+export function settleRequesterSettleWakeBatch(
+  context: SubagentLifecycleWakeContext,
+  batch: readonly SubagentRunRecord[],
+  rearmGeneration: number | undefined,
+  outcome: SubagentAnnounceDeliveryResult | undefined,
+  stateContext: OpenClawStateWorkerContext,
+  receipt: RequesterWakeMutationReceipt = {},
+): Promise<boolean> {
+  return mutateRequesterSettleWakeBatch(
+    context,
+    batch,
+    rearmGeneration,
+    outcome ? { kind: "settle", outcome } : { kind: "complete" },
+    stateContext,
+    receipt,
+  );
 }

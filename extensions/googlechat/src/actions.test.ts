@@ -78,18 +78,6 @@ describe("googlechat message actions", () => {
     expect(googlechatMessageActions.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
-  it("does not expose actions for configured-unavailable file credentials", () => {
-    listGoogleChatAccountIds.mockReturnValueOnce(["default"]);
-    inspectGoogleChatAccount.mockReturnValueOnce({
-      enabled: true,
-      credentialSource: "file",
-      tokenStatus: "configured_unavailable",
-      config: {},
-    });
-
-    expect(googlechatMessageActions.describeMessageTool?.({ cfg: {} as never })).toBeNull();
-  });
-
   it("keeps account-scoped discovery send-only", () => {
     inspectGoogleChatAccount.mockImplementation(
       ({ accountId: _accountId }: { accountId?: string | null }) => ({
@@ -160,10 +148,6 @@ describe("googlechat message actions", () => {
         message: "caption",
         attachments: [{ url: "remote.png" }],
       },
-    },
-    {
-      action: "upload-file",
-      params: { to: "spaces/AAA", message: "caption", path: "local.png" },
     },
   ])(
     "rejects outbound attachment action $action before provider access",

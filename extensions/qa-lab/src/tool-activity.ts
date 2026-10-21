@@ -1,4 +1,9 @@
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 
 function isCorrelationId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 1024;
@@ -160,17 +165,9 @@ type QaToolActivity = {
 function activityInput(input: unknown) {
   let value = isRecord(input) && typeof input.arguments === "string" ? input.arguments : input;
   if (typeof value === "string") {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return undefined;
-    }
+    value = safeParseQaJson(value);
   }
   return isRecord(value) ? value : undefined;
-}
-
-function finiteTimestamp(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function nativeCodeModeCellId(result: Record<string, unknown>) {
@@ -187,12 +184,7 @@ function nativeCodeModeCellId(result: Record<string, unknown>) {
   let text = content;
   if (text.startsWith("[")) {
     // The Codex transcript adapter preserves response arrays as JSON text.
-    let output: unknown;
-    try {
-      output = JSON.parse(text);
-    } catch {
-      return undefined;
-    }
+    const output = safeParseQaJson(text);
     const header = Array.isArray(output) ? output[0] : undefined;
     const headerText = isRecord(header) && header.type === "input_text" ? header.text : undefined;
     if (typeof headerText !== "string") {
@@ -244,7 +236,7 @@ export function projectQaToolActivity(messages: readonly unknown[]): QaToolActiv
       conflictingIds.add(id);
       return;
     }
-    const timestamp = finiteTimestamp(result.timestamp);
+    const timestamp = asFiniteNumber(result.timestamp);
     const isError = typeof result.isError === "boolean" ? result.isError : undefined;
     const details = isRecord(result.details) ? result.details : undefined;
     const shell =
@@ -352,7 +344,7 @@ export function projectQaToolActivity(messages: readonly unknown[]): QaToolActiv
             : "tool",
         callIndex: index,
         startAfterIndex: index - 1,
-        startedAt: finiteTimestamp(block.timestamp) ?? finiteTimestamp(message.timestamp),
+        startedAt: asFiniteNumber(block.timestamp) ?? asFiniteNumber(message.timestamp),
         completed: false,
         successful: false,
       });

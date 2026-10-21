@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyCliProfileEnv } from "../cli/profile.js";
@@ -11,7 +10,7 @@ import {
 } from "./installation-target-context.js";
 
 describe("installation target ownership", () => {
-  it.each(["default", "custom", "relative", "profile", "legacy"])(
+  it.each(["default", "custom", "relative", "profile"])(
     "captures the canonical %s installation before selectors change",
     async (selector) => {
       await withOpenClawTestState({ layout: "home" }, async (state) => {
@@ -36,12 +35,6 @@ describe("installation target ownership", () => {
           stateDir = path.join(state.home, ".openclaw-diagnostic");
           configPath = path.join(stateDir, "openclaw.json");
           defaultWorkspaceDir = path.join(stateDir, "workspace");
-        } else if (selector === "legacy") {
-          await fs.rm(stateDir, { recursive: true });
-          stateDir = path.join(state.home, ".clawdbot");
-          configPath = path.join(stateDir, "clawdbot.json");
-          await fs.mkdir(stateDir);
-          await fs.writeFile(configPath, "{}");
         }
         const target = resolveInstallationTarget(env);
         env.OPENCLAW_STATE_DIR = state.path("scratch");

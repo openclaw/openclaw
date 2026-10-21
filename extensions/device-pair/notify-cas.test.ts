@@ -1,34 +1,26 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
-  notifySubscriberStoreKey,
-  type NotifySubscription,
-} from "./notify-state.js";
+  createTestPluginServiceScheduler,
+  createTestPluginApi,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { notifySubscriberStoreKey, type NotifySubscription } from "./notify-state.js";
 
+// mock-isolation: Supply deterministic requests without reading real device-pair state.
 vi.mock("openclaw/plugin-sdk/device-bootstrap", () => ({
   listDevicePairing: async () => ({
     pending: [{ requestId: "request-1", deviceId: "device-1", ts: 2_000 }],
-    paired: [],
   }),
 }));
 
-import { createPairingNotifierService } from "./notify.js";
+import { startPairingNotifier } from "./notify.js";
+type SubscriberStore = PluginStateKeyedStore<NotifySubscription>;
 
 describe("device-pair notify CAS", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
 
   function createHarness(delivered: NotifySubscription) {
-    const settled = createDeferred<void>();
-    let pollStarted = false;
     let current: NotifySubscription | undefined = delivered;
     let revision = 0;
     const snapshot = () => ({ value: current, comparison: String(revision) });
@@ -37,70 +29,56 @@ describe("device-pair notify CAS", () => {
       revision++;
     };
     const sendText = vi.fn(async () => ({ channel: "telegram", to: delivered.to }));
+    const loadAdapter = vi.fn(async () => ({ sendText }));
     const observe = vi.fn(async () => snapshot());
-    const compareAndApply = vi.fn<
-      NonNullable<PluginStateKeyedStore<NotifySubscription>["compareAndApply"]>
-    >(async (_key, comparison, intent) => {
-      if (comparison !== String(revision)) {
-        return { status: "conflict", current: snapshot() };
-      }
-      if (intent.operation === "delete" && intent.action === "delete" && current) {
-        replace(undefined);
-        return { status: "applied" };
-      }
-      return { status: "unchanged" };
-    });
-    const subscriberStore: PluginStateKeyedStore<NotifySubscription> = {
+    const compareAndApply = vi.fn<NonNullable<SubscriberStore["compareAndApply"]>>(
+      async (_key, comparison, intent) => {
+        if (comparison !== String(revision)) {
+          return { status: "conflict", current: snapshot() };
+        }
+        if (intent.operation === "delete" && intent.action === "delete" && current) {
+          replace(undefined);
+          return { status: "applied" };
+        }
+        return { status: "unchanged" };
+      },
+    );
+    const subscriberStore: Pick<SubscriberStore, "observe" | "compareAndApply" | "entries"> = {
       observe,
       compareAndApply,
-      register: vi.fn(async () => {}),
-      registerIfAbsent: vi.fn(async () => false),
-      lookup: vi.fn(async () => current),
-      consume: vi.fn(async () => undefined),
-      delete: vi.fn(async () => false),
-      deleteIf: vi.fn(async () => false),
       entries: vi.fn(async () => [
         { key: notifySubscriberStoreKey(delivered), value: delivered, createdAt: 1_000 },
       ]),
-      clear: vi.fn(async () => {}),
     };
-    const recordSeen = vi.fn(async () => settled.resolve());
-    const warn = vi.fn(() => settled.resolve());
+    const recordSeen = vi.fn(async () => {});
+    const warn = vi.fn();
     const api = createTestPluginApi({
       logger: { info() {}, warn, error() {} },
       runtime: {
         state: {
-          openKeyedStore: ({ namespace }: { namespace: string }) => {
-            pollStarted = true;
-            return namespace === DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE
-              ? subscriberStore
-              : { entries: async () => [], register: recordSeen };
-          },
+          openKeyedStore: () => ({ entries: async () => [], register: recordSeen }),
+          openKeyedStoreV2: () => subscriberStore,
         },
-        channel: { outbound: { loadAdapter: async () => ({ sendText }) } },
+        channel: { outbound: { loadAdapter } },
       } as never,
     });
     return {
-      subscriberStore,
       observe,
       compareAndApply,
       sendText,
-      recordSeen,
+      loadAdapter,
+      calls: () =>
+        [sendText, observe, compareAndApply, recordSeen].map((mock) => mock.mock.calls.length),
       warn,
       snapshot,
       replace,
       async poll() {
-        const service = createPairingNotifierService(api);
+        const scheduler = createTestPluginServiceScheduler();
         try {
-          await service.start({} as never);
+          startPairingNotifier(api, scheduler);
           await vi.advanceTimersByTimeAsync(10_000);
-          await settled.promise;
         } finally {
-          await service.stop?.({} as never);
-          if (pollStarted) {
-            await settled.promise;
-            await vi.advanceTimersByTimeAsync(0);
-          }
+          await scheduler.stop();
         }
       },
     };
@@ -113,83 +91,57 @@ describe("device-pair notify CAS", () => {
     armId: "arm-1",
   };
 
-  it.each(["observe", "compareAndApply"] as const)(
-    "rejects missing %s before delivery",
-    async (capability) => {
-      const harness = createHarness(delivered);
-      delete harness.subscriberStore[capability];
-
-      await harness.poll();
-
-      expect(harness.sendText).not.toHaveBeenCalled();
-      expect(harness.snapshot().value).toEqual(delivered);
-      expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("compare-and-apply"));
-    },
-  );
-
-  it.each([
-    { label: "same arm", current: delivered, action: "delete" },
-    { label: "new arm", current: { ...delivered, armId: "arm-2" }, action: "keep" },
-    { label: "removed arm", current: undefined, action: "keep" },
-  ])("reconsiders a conflict for $label without sending again", async ({ current, action }) => {
-    const harness = createHarness(delivered);
-    delete harness.subscriberStore.deleteIf;
-    harness.observe.mockImplementationOnce(async () => {
-      const original = harness.snapshot();
-      harness.replace(current);
-      return original;
-    });
-
-    await harness.poll();
-
-    expect(harness.sendText).toHaveBeenCalledTimes(1);
-    expect(harness.observe).toHaveBeenCalledTimes(1);
-    expect(harness.observe.mock.invocationCallOrder[0]).toBeGreaterThan(
-      harness.sendText.mock.invocationCallOrder[0]!,
+  type Case = [
+    string,
+    "delivery" | "adapter" | "sendText" | "observe" | "compareAndApply",
+    NotifySubscription | undefined,
+    [sent: number, observed: number, compared: number, recorded: number],
+  ];
+  it.each<Case>([
+    ["changed metadata", "delivery", delivered, [1, 1, 1, 1]],
+    ["new arm", "delivery", { ...delivered, armId: "arm-2" }, [1, 1, 1, 1]],
+    ["removed arm", "delivery", undefined, [1, 1, 1, 1]],
+    ["disabled", "adapter", undefined, [0, 1, 0, 0]],
+    ["later arm", "adapter", { ...delivered, addedAtMs: 3_000 }, [0, 1, 0, 0]],
+    [
+      "current thread",
+      "adapter",
+      { ...delivered, mode: "persistent", addedAtMs: 3_000, messageThreadId: "0271" },
+      [1, 1, 0, 1],
+    ],
+    ["failed send", "sendText", delivered, [1, 1, 0, 0]],
+    ["failed observation", "observe", delivered, [0, 1, 0, 0]],
+    ["failed settlement", "compareAndApply", delivered, [1, 1, 1, 0]],
+  ])("preserves state and delivery: %s", async (_label, stage, current, calls) => {
+    const h = createHarness(
+      stage === "adapter" ? { ...delivered, messageThreadId: 271 } : delivered,
     );
-    expect(harness.compareAndApply).toHaveBeenCalledTimes(2);
-    expect(harness.snapshot().value).toEqual(action === "delete" ? undefined : current);
-    expect(harness.recordSeen).toHaveBeenCalledTimes(1);
+    if (stage === "delivery") {
+      h.sendText.mockImplementationOnce(async () => {
+        h.replace(current);
+        return { channel: "telegram", to: delivered.to };
+      });
+    } else if (stage === "adapter") {
+      h.loadAdapter.mockImplementationOnce(async () => {
+        h.replace(current);
+        return { sendText: h.sendText };
+      });
+    } else {
+      h[stage].mockRejectedValueOnce(new Error("outcome unavailable"));
+    }
+    await h.poll();
+    expect(h.calls()).toEqual(calls);
+    expect(h.snapshot().value).toEqual(current);
+    if (stage === "delivery") {
+      expect(h.observe.mock.invocationCallOrder[0]).toBeLessThan(
+        h.sendText.mock.invocationCallOrder[0]!,
+      );
+    } else if (stage === "adapter" && calls[0]) {
+      expect(h.sendText).toHaveBeenCalledWith(
+        expect.objectContaining({ to: current?.to, threadId: "0271" }),
+      );
+    } else if (stage !== "adapter") {
+      expect(h.warn).toHaveBeenCalledWith(expect.stringContaining("outcome unavailable"));
+    }
   });
-
-  it.each([
-    { label: "normalized thread", change: { messageThreadId: "0271" }, action: "delete" },
-    { label: "new arm", change: { armId: "new-arm" }, action: "keep" },
-    { label: "new mode", change: { mode: "persistent" as const }, action: "keep" },
-    { label: "new time", change: { addedAtMs: 1_001 }, action: "keep" },
-    { label: "new target", change: { to: "other-chat" }, action: "keep" },
-  ])("preserves legacy generation matching for $label", async ({ change, action }) => {
-    const legacy: NotifySubscription = {
-      to: "chat-123",
-      accountId: "telegram-default",
-      messageThreadId: 271,
-      mode: "once",
-      addedAtMs: 1_000,
-    };
-    const harness = createHarness(legacy);
-    const current = { ...legacy, ...change };
-    harness.replace(current);
-
-    await harness.poll();
-
-    expect(harness.snapshot().value).toEqual(action === "delete" ? undefined : current);
-    expect(harness.sendText).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["observe", "compareAndApply"] as const)(
-    "does not retry a rejected %s or replay delivery",
-    async (operation) => {
-      const harness = createHarness(delivered);
-      harness[operation].mockRejectedValueOnce(new Error("outcome unavailable"));
-
-      await harness.poll();
-
-      expect(harness.sendText).toHaveBeenCalledTimes(1);
-      expect(harness.observe).toHaveBeenCalledTimes(1);
-      expect(harness.compareAndApply).toHaveBeenCalledTimes(operation === "observe" ? 0 : 1);
-      expect(harness.warn).toHaveBeenCalledWith(expect.stringContaining("outcome unavailable"));
-      expect(harness.recordSeen).not.toHaveBeenCalled();
-      expect(harness.snapshot().value).toEqual(delivered);
-    },
-  );
 });

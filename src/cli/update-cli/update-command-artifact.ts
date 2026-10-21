@@ -22,7 +22,7 @@ import { stagePackageInstallUpdate } from "./update-command-package.js";
 type StageParams = Parameters<typeof stagePackageInstallUpdate>[0];
 type ArtifactInitialization = Pick<InitializedUpdate, "stagedPackage"> & {
   target: Pick<
-    InitializedUpdate["target"],
+    NonNullable<InitializedUpdate["target"]>,
     | "currentVersion"
     | "targetVersion"
     | "packageTargetSchemaVersions"

@@ -2,6 +2,7 @@ package ai.openclaw.app.gateway
 
 import ai.openclaw.app.asJsonStringOrNull
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Call
@@ -102,8 +103,7 @@ internal class GatewaySourceFaviconLoader(
         credentials.forEach { add("Bearer $it") }
         if (isEmpty()) add(null)
       }.distinct()
-    mutex.lock()
-    try {
+    mutex.withLock {
       if (cache.containsKey(key)) return cache[key]
       for (authorization in authorizations) {
         val request = baseRequest.newBuilder()
@@ -115,8 +115,6 @@ internal class GatewaySourceFaviconLoader(
       }
       cache[key] = null
       return null
-    } finally {
-      mutex.unlock()
     }
   }
 

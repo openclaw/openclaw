@@ -72,16 +72,15 @@ function resolveDiscordConversationIdFromTargets(
       if (target?.normalized) {
         return target.normalized;
       }
-    } catch {}
+    } catch {
+      // A malformed fallback target must not hide a later usable conversation target.
+    }
   }
   return undefined;
 }
 
 function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
   const sessionKey = normalizeLowercaseStringOrEmpty(raw);
-  if (!sessionKey) {
-    return undefined;
-  }
   const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }

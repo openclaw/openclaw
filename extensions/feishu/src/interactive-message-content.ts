@@ -186,26 +186,13 @@ function extractInteractiveElementsText(
 
 function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
   const body = isRecord(parsed.body) ? parsed.body : undefined;
-  const elementArrays: unknown[][] = [];
-
-  for (const candidate of [parsed.elements, body?.elements]) {
-    if (Array.isArray(candidate)) {
-      elementArrays.push(candidate);
-    }
-  }
-
-  for (const candidate of [parsed.i18n_elements, body?.i18n_elements]) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-    for (const localeElements of Object.values(candidate)) {
-      if (Array.isArray(localeElements)) {
-        elementArrays.push(localeElements);
-      }
-    }
-  }
-
-  return elementArrays;
+  return [
+    parsed.elements,
+    body?.elements,
+    ...[parsed.i18n_elements, body?.i18n_elements].flatMap((candidate) =>
+      isRecord(candidate) ? Object.values(candidate) : [],
+    ),
+  ].filter(Array.isArray);
 }
 
 function readInteractiveCardTitle(

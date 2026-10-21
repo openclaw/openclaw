@@ -1,83 +1,106 @@
-// Tests prepared reply queue state resolution before get-reply starts a run.
-import { describe, expect, it, vi } from "vitest";
-import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
+import { expect, it, vi } from "vitest";
+import {
+  interruptReplyRunTarget,
+  createReplyOperation,
+} from "../../sessions/session-controller.js";
+import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
+import { captureCurrentSessionRunInterruptTarget } from "../../sessions/session-controller.stop-runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 
-describe("resolvePreparedReplyQueueState", () => {
-  it("continues immediately when queue policy does not require waiting", async () => {
-    const resolveBusyState = vi.fn(() => ({
-      activeSessionId: undefined,
-      isActive: false,
-      isStreaming: false,
-    }));
-
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "enqueue-followup",
-      activeSessionId: undefined,
-      queueMode: "followup",
-      interruptActiveRun: vi.fn(),
-      waitForActiveRunEnd: vi.fn(),
-      refreshPreparedState: vi.fn(),
-      resolveBusyState,
-    });
-
-    expect(result).toEqual({
-      kind: "continue",
-      busyState: { activeSessionId: undefined, isActive: false, isStreaming: false },
-    });
-    expect(resolveBusyState).toHaveBeenCalledOnce();
+it("waits for the active session before refreshing and rechecking admission", async () => {
+  const order: string[] = [];
+  const interruptActiveRun = vi.fn();
+  const result = await waitForPreparedReplyQueue({
+    activeSessionId: "session-active",
+    queueMode: "followup",
+    interruptActiveRun,
+    waitForActiveRunEnd: async (sessionId) => {
+      order.push(`wait:${sessionId}`);
+    },
+    refreshPreparedState: async () => {
+      order.push("refresh");
+    },
+    resolveBusyState: () => {
+      order.push("recheck");
+      return { isActive: false };
+    },
   });
+  expect(result).toBeUndefined();
+  expect(order).toEqual(["wait:session-active", "refresh", "recheck"]);
+  expect(interruptActiveRun).not.toHaveBeenCalled();
+});
 
-  it("aborts and waits for interrupt mode before continuing", async () => {
-    const interruptActiveRun = vi.fn(async () => true);
+it.each([
+  ["interrupt", false, false, undefined],
+  [
+    "interrupt",
+    true,
+    false,
+    "⚠️ Previous run is still shutting down. Please try again in a moment.",
+  ],
+  ["followup", true, true, expect.stringMatching(/separate session or restart the Gateway/u)],
+] as const)(
+  "%s admission with active=%s, blocked=%s",
+  async (queueMode, isActive, terminalProducerBlocked, text) => {
+    const interruptActiveRun = vi.fn(async () => queueMode === "interrupt");
     const waitForActiveRunEnd = vi.fn(async () => {
-      throw new Error("interrupt mode must use session-work admission settling");
+      if (queueMode === "interrupt") {
+        throw new Error("interrupt mode must use session-work admission settling");
+      }
     });
-    const refreshPreparedState = vi.fn(async () => undefined);
-    const resolveBusyState = vi.fn(() => ({
-      activeSessionId: undefined,
-      isActive: false,
-      isStreaming: false,
-    }));
-
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "run-now",
+    const refreshPreparedState = vi.fn(async () => {});
+    const result = await waitForPreparedReplyQueue({
       activeSessionId: "session-active",
-      queueMode: "interrupt",
+      queueMode,
       interruptActiveRun,
       waitForActiveRunEnd,
       refreshPreparedState,
-      resolveBusyState,
+      resolveBusyState: () => ({ isActive, terminalProducerBlocked }),
     });
-
-    expect(interruptActiveRun).toHaveBeenCalledOnce();
-    expect(waitForActiveRunEnd).not.toHaveBeenCalled();
+    expect(result).toEqual(text === undefined ? undefined : { text });
+    expect(interruptActiveRun).toHaveBeenCalledTimes(queueMode === "interrupt" ? 1 : 0);
+    expect(waitForActiveRunEnd).toHaveBeenCalledTimes(queueMode === "followup" ? 1 : 0);
     expect(refreshPreparedState).toHaveBeenCalledOnce();
-    expect(result).toEqual({
-      kind: "continue",
-      busyState: { activeSessionId: undefined, isActive: false, isStreaming: false },
-    });
+  },
+);
+it("does not admit after interrupt timeout merely because the old slot cleared", async () => {
+  vi.useFakeTimers();
+  const operation = createReplyOperation({
+    sessionKey: "agent:main:interrupt-settlement",
+    sessionId: "old-writer",
+    resetTriggered: false,
   });
-
-  it("rechecks after wait and returns shutdown reply when still busy", async () => {
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "run-now",
-      activeSessionId: "session-active",
+  const delivery = createDeferredCore();
+  const refreshPreparedState = vi.fn(async () => {});
+  try {
+    operation.setPhase("running");
+    const target = captureCurrentSessionRunInterruptTarget(operation.key);
+    if (!target) {
+      throw new Error("Missing interrupt owner");
+    }
+    const waiting = waitForPreparedReplyQueue({
+      activeSessionId: operation.sessionId,
       queueMode: "interrupt",
-      interruptActiveRun: vi.fn(async () => true),
-      waitForActiveRunEnd: vi.fn(async () => undefined),
-      refreshPreparedState: vi.fn(async () => undefined),
+      interruptActiveRun: async () => (await interruptReplyRunTarget(target, 100)).settled,
+      waitForActiveRunEnd: async () => {
+        throw new Error("wrong wait owner");
+      },
+      refreshPreparedState,
       resolveBusyState: () => ({
-        activeSessionId: "session-after-wait",
-        isActive: true,
-        isStreaming: false,
+        isActive: isSessionRunActiveForKey(operation.key),
       }),
     });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: {
-        text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
-      },
-    });
-  });
+    expect(operation.abortSignal.aborted).toBe(true);
+    operation.completeWithAfterClearBarrier(delivery.promise);
+    expect(isSessionRunActiveForKey(operation.key)).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await waiting)?.text).toContain("shutting down");
+    expect(refreshPreparedState).not.toHaveBeenCalled();
+  } finally {
+    delivery.resolve();
+    operation.complete();
+    await operation.ownerSettlement;
+    vi.useRealTimers();
+  }
 });

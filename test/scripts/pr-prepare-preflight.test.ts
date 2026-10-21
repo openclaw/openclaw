@@ -11,7 +11,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const repoRoot = process.cwd();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,47 +38,38 @@ function runGatesBash(script: string, options: { env?: NodeJS.ProcessEnv } = {})
 
 describe("resolve_pr_gates_remote_mode", () => {
   it.each([
-    { value: undefined, expected: "local" },
-    { value: "", expected: "local" },
-    { value: "testbox", expected: "testbox" },
-    { value: "crabbox-aws", expected: "crabbox-aws" },
-    { value: "github", expected: "github" },
-  ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
-    const env: NodeJS.ProcessEnv = {};
-    if (value !== undefined) {
-      env.OPENCLAW_PR_GATES_REMOTE = value;
-    }
-    const result = runGatesBash("resolve_pr_gates_remote_mode", { env });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("preserves explicitly selected completed hosted proof", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_TESTBOX: "1" },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("local");
-  });
-
-  it("rejects unsupported values", () => {
-    const result = runGatesBash("resolve_pr_gates_remote_mode", {
-      env: { OPENCLAW_PR_GATES_REMOTE: "azure" },
-    });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Unsupported OPENCLAW_PR_GATES_REMOTE=azure");
-  });
-
-  it.each(["testbox", "crabbox-aws", "github"])(
-    "rejects the %s hosted-gates conflict before touching the worktree",
-    (mode) => {
-      const result = runGatesBash("prepare_gates 424242", {
-        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: "1" },
-      });
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain("conflicts with OPENCLAW_TESTBOX=1");
+    { mode: undefined, hosted: undefined, code: 0, output: "github" },
+    { mode: "", hosted: "1", code: 0, output: "local" },
+    { mode: "local", hosted: undefined, code: 0, output: "local" },
+    { mode: "testbox", hosted: undefined, code: 0, output: "testbox" },
+    { mode: "crabbox-aws", hosted: undefined, code: 0, output: "crabbox-aws" },
+    { mode: "github", hosted: undefined, code: 0, output: "github" },
+    {
+      mode: "azure",
+      hosted: undefined,
+      code: 1,
+      output: "Unsupported OPENCLAW_PR_GATES_REMOTE=azure",
     },
-  );
+    ...["local", "testbox", "crabbox-aws", "github"].map((mode) => ({
+      mode,
+      hosted: "1",
+      code: 2,
+      output: "conflicts with OPENCLAW_TESTBOX=1",
+    })),
+  ])("resolves gate mode $mode with hosted=$hosted", ({ mode, hosted, code, output }) => {
+    const result = runGatesBash(
+      hosted === "1" && mode ? "prepare_gates 424242" : "resolve_pr_gates_remote_mode",
+      {
+        env: { OPENCLAW_PR_GATES_REMOTE: mode, OPENCLAW_TESTBOX: hosted },
+      },
+    );
+    expect(result.status).toBe(code);
+    if (code === 0) {
+      expect(result.stdout.trim()).toBe(output);
+    } else {
+      expect(result.stderr).toContain(output);
+    }
+  });
 });
 
 describe("scripts/pr prepare mode preflight", () => {
@@ -86,7 +77,8 @@ describe("scripts/pr prepare mode preflight", () => {
     "rejects invalid gate modes before prepare observations, locks, or evidence retirement",
     () => {
       const root = tempDirs.make("openclaw-pr-gate-preflight-");
-      copyPrWrapperSources(root);
+      const components = copyPrWrapperSources(root);
+      linkPrWrapperDependencies(root);
       const bin = join(root, "bin");
       mkdirSync(bin);
       const env = {
@@ -102,7 +94,23 @@ describe("scripts/pr prepare mode preflight", () => {
         expect(result.status, result.stderr).toBe(0);
         return result.stdout.trim();
       };
-      git("init", "-q");
+      git("init", "-q", "-b", "main");
+      git("add", "--", ...components);
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "Wrapper",
+      );
+      git("remote", "add", "origin", root);
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
       const reviewRoot = join(root, ".worktrees/pr-123");
       const head = "a".repeat(40);
       const review = validReview(head);

@@ -52,7 +52,7 @@ function parseOptions(argv: string[], repoRoot = process.cwd()): HeartbeatRuntim
 function heartbeatConfig(quietHours: boolean): OpenClawConfig {
   return {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         heartbeat: {
           activeHours: quietHours

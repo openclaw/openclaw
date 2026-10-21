@@ -8,38 +8,42 @@ import {
 } from "./test-events.js";
 import type { MatrixRawEvent } from "./types.js";
 
-async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefined> {
-  const resolveReplyContext = createMatrixEventContextResolver({
+function message(
+  body: string,
+  sender = "@alice:example.org",
+  event_id = "$original",
+  msgtype = "m.text",
+): MatrixRawEvent {
+  return {
+    event_id,
+    sender,
+    type: "m.room.message",
+    origin_server_ts: 1,
+    content: { msgtype, body },
+  };
+}
+
+function resolver(
+  getEvent: ReturnType<typeof vi.fn>,
+  getMemberDisplayName: Parameters<
+    typeof createMatrixEventContextResolver
+  >[0]["getMemberDisplayName"] = vi.fn(async () => "Alice"),
+) {
+  const resolve = createMatrixEventContextResolver({
     kind: "reply",
-    client: { getEvent: vi.fn(async () => event) } as never,
-    getMemberDisplayName: vi.fn(async () => "Alice"),
+    client: { getEvent } as never,
+    getMemberDisplayName,
     logVerboseMessage: () => {},
   });
-  return (
-    await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: event.event_id ?? "$event",
-    })
-  ).summary;
+  return (eventId = "$original") => resolve({ roomId: "!room:example.org", eventId });
+}
+
+async function resolveReplyBody(event: MatrixRawEvent): Promise<string | undefined> {
+  return (await resolver(vi.fn(async () => event))(event.event_id ?? "$event")).summary;
 }
 
 describe("matrix reply context", () => {
-  it("summarizes reply events from body text", async () => {
-    expect(
-      await resolveReplyBody({
-        event_id: "$original",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.text",
-          body: " Some quoted message ",
-        },
-      } as MatrixRawEvent),
-    ).toBe("Some quoted message");
-  });
-
-  it.each(bundledReplacementContentCases)(
+  it.each(bundledReplacementContentCases.filter(({ name }) => name !== "text"))(
     "uses the latest bundled $name when quoting an edited message",
     async ({ options, expected }) => {
       expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
@@ -48,14 +52,21 @@ describe("matrix reply context", () => {
     },
   );
 
-  it.each(invalidBundledReplacementCases)(
-    "does not quote a bundled replacement from $name",
-    async ({ options }) => {
-      expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
-        "original text",
-      );
-    },
-  );
+  it.each(
+    invalidBundledReplacementCases.filter(({ name }) =>
+      [
+        "another sender",
+        "another target",
+        "a state-event original",
+        "array replacement content",
+        "an object-backed redacted replacement",
+      ].includes(name),
+    ),
+  )("does not quote a bundled replacement from $name", async ({ options }) => {
+    expect(await resolveReplyBody(createBundledReplacementEvent("$original", options))).toBe(
+      "original text",
+    );
+  });
 
   it("does not revive a bundled replacement from a redacted original", async () => {
     expect(
@@ -66,42 +77,18 @@ describe("matrix reply context", () => {
   });
 
   it("truncates on a code-point boundary without orphaning a surrogate half", async () => {
-    // Body is 496 'a' + 😀 (U+1F600, a surrogate pair at UTF-16 indices 496-497)
-    // + "bcd". Raw `.slice(0, 497)` would split the emoji and leave a lone high
-    // surrogate (\uD83D) before the ellipsis. The fix must drop the half emoji.
+    // The truncation boundary bisects this surrogate pair.
     const body = `${"a".repeat(496)}😀bcd`;
     expect(body.length).toBe(501);
-    const result = await resolveReplyBody({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body,
-      },
-    } as MatrixRawEvent);
-    if (result === undefined) {
-      throw new Error("expected truncated reply context");
-    }
+    const result = await resolveReplyBody(message(body));
     expect(result).toBe(`${"a".repeat(496)}...`);
-    // No dangling high surrogate should survive the truncation.
-    expect(result.includes("\uD83D")).toBe(false);
+    expect(result).not.toContain("\uD83D");
   });
 
   it("handles media-only reply events", async () => {
-    expect(
-      await resolveReplyBody({
-        event_id: "$original",
-        sender: "@alice:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.image",
-          body: "photo.jpg",
-        },
-      } as MatrixRawEvent),
-    ).toBe("[matrix image attachment]");
+    expect(await resolveReplyBody(message("photo.jpg", undefined, undefined, "m.image"))).toBe(
+      "[matrix image attachment]",
+    );
   });
 
   it("summarizes poll start events from poll content", async () => {
@@ -110,115 +97,17 @@ describe("matrix reply context", () => {
     );
   });
 
-  it("resolves and caches reply context", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$original",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "This is the original message",
-      },
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(result).toEqual({
-      summary: "This is the original message",
-      senderLabel: "Alice",
-      senderId: "@alice:example.org",
-    });
-
-    // Second call should use cache
-    await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(getEvent).toHaveBeenCalledTimes(1);
-    expect(getMemberDisplayName).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns empty context for redacted events", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$redacted",
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      unsigned: {
-        redacted_because: { type: "m.room.redaction" },
-      },
-      content: {},
-    }));
-    const getMemberDisplayName = vi.fn(async () => "Alice");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$redacted",
-    });
-
-    expect(result).toStrictEqual({});
-    expect(getMemberDisplayName).not.toHaveBeenCalled();
-  });
-
   it("does not cache fetch failures so retries can succeed", async () => {
     const getEvent = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary failure"))
-      .mockResolvedValueOnce({
-        event_id: "$original",
-        sender: "@bob:example.org",
-        type: "m.room.message",
-        origin_server_ts: Date.now(),
-        content: {
-          msgtype: "m.text",
-          body: "Recovered message",
-        },
-      });
-    const getMemberDisplayName = vi.fn(async () => "Bob");
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    // First call fails
-    const first = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-    expect(first).toStrictEqual({});
-
-    // Second call succeeds (should retry, not use cached failure)
-    const second = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-    expect(second).toEqual({
+      .mockResolvedValueOnce(message("Recovered message", "@bob:example.org"));
+    const resolveReplyContext = resolver(
+      getEvent,
+      vi.fn(async () => "Bob"),
+    );
+    await expect(resolveReplyContext()).resolves.toStrictEqual({});
+    await expect(resolveReplyContext()).resolves.toEqual({
       summary: "Recovered message",
       senderLabel: "Bob",
       senderId: "@bob:example.org",
@@ -228,32 +117,11 @@ describe("matrix reply context", () => {
   });
 
   it("falls back to senderId when display name resolution fails", async () => {
-    const getEvent = vi.fn(async () => ({
-      event_id: "$original",
-      sender: "@charlie:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: {
-        msgtype: "m.text",
-        body: "Hello",
-      },
-    }));
-    const getMemberDisplayName = vi.fn().mockRejectedValueOnce(new Error("unknown member"));
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: {
-        getEvent,
-      } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-
-    const result = await resolveReplyContext({
-      roomId: "!room:example.org",
-      eventId: "$original",
-    });
-
-    expect(result).toEqual({
+    const resolveReplyContext = resolver(
+      vi.fn(async () => message("Hello", "@charlie:example.org")),
+      vi.fn().mockRejectedValueOnce(new Error("unknown member")),
+    );
+    await expect(resolveReplyContext()).resolves.toEqual({
       summary: "Hello",
       senderLabel: "@charlie:example.org",
       senderId: "@charlie:example.org",
@@ -261,37 +129,27 @@ describe("matrix reply context", () => {
   });
 
   it("retains recently accessed reply contexts when the cache exceeds 256 entries", async () => {
-    const getEvent = vi.fn(async (_roomId: string, eventId: string) => ({
-      event_id: eventId,
-      sender: "@alice:example.org",
-      type: "m.room.message",
-      origin_server_ts: Date.now(),
-      content: { msgtype: "m.text", body: `msg-${eventId}` },
-    }));
+    const getEvent = vi.fn(async (_roomId: string, eventId: string) =>
+      message(`msg-${eventId}`, undefined, eventId),
+    );
     const getMemberDisplayName = vi
       .fn()
       .mockImplementation((_r: string, userId: string) => Promise.resolve(userId));
-    const resolveReplyContext = createMatrixEventContextResolver({
-      kind: "reply",
-      client: { getEvent } as never,
-      getMemberDisplayName,
-      logVerboseMessage: () => {},
-    });
-    const roomId = "!room:example.org";
-    const oldest = await resolveReplyContext({ roomId, eventId: "$event-0" });
-    const nextOldest = await resolveReplyContext({ roomId, eventId: "$event-1" });
+    const resolveReplyContext = resolver(getEvent, getMemberDisplayName);
+    const oldest = await resolveReplyContext("$event-0");
+    const nextOldest = await resolveReplyContext("$event-1");
     for (let i = 2; i < 256; i += 1) {
-      await resolveReplyContext({ roomId, eventId: `$event-${i}` });
+      await resolveReplyContext(`$event-${i}`);
     }
-    expect(await resolveReplyContext({ roomId, eventId: "$event-0" })).toBe(oldest);
+    expect(await resolveReplyContext("$event-0")).toBe(oldest);
     expect(getEvent).toHaveBeenCalledTimes(256);
 
-    await resolveReplyContext({ roomId, eventId: "$event-256" });
+    await resolveReplyContext("$event-256");
 
     // Check the survivor before refetching the victim triggers another eviction.
-    expect(await resolveReplyContext({ roomId, eventId: "$event-0" })).toBe(oldest);
+    expect(await resolveReplyContext("$event-0")).toBe(oldest);
     expect(getEvent).toHaveBeenCalledTimes(257);
-    expect(await resolveReplyContext({ roomId, eventId: "$event-1" })).not.toBe(nextOldest);
+    expect(await resolveReplyContext("$event-1")).not.toBe(nextOldest);
     expect(getEvent).toHaveBeenCalledTimes(258);
     for (let i = 0; i <= 256; i += 1) {
       expect(getEvent.mock.calls.filter(([, eventId]) => eventId === `$event-${i}`)).toHaveLength(

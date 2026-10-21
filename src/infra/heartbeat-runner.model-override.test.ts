@@ -3,6 +3,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
+import { bindHeartbeatReply } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
@@ -28,6 +29,7 @@ async function replyOptions(
   } = {},
 ) {
   return withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+    bindHeartbeatReply(replySpy);
     const agentId = params.perAgent ? "ops" : "main";
     const cfg: OpenClawConfig = {
       agents: {
@@ -38,10 +40,10 @@ async function replyOptions(
         },
         ...(params.perAgent
           ? {
-              list: [
-                { id: "main", default: true },
-                { id: "ops", workspace: tmpDir, heartbeat: params.perAgent },
-              ],
+              entries: {
+                main: {},
+                ops: { workspace: tmpDir, heartbeat: params.perAgent },
+              },
             }
           : {}),
       },
@@ -59,14 +61,13 @@ async function replyOptions(
       enqueueSystemEvent(params.event.text, { sessionKey, contextKey: params.event.contextKey });
     }
     replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-    await runHeartbeatOnce({
+    const result = await runHeartbeatOnce({
       cfg,
       agentId,
       sessionKey,
       ...params.wake,
-      deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0, nowMs: () => 0 },
     });
-    expect(replySpy).toHaveBeenCalledOnce();
+    expect(replySpy, JSON.stringify(result)).toHaveBeenCalledOnce();
     const [ctx, options, passedConfig] = replySpy.mock.calls[0]!;
     expect(passedConfig).toBe(cfg);
     expect(options?.isHeartbeat).toBe(true);
@@ -76,29 +77,15 @@ async function replyOptions(
 
 it("keeps configured run options when a direct wake overrides only the destination", async () => {
   const { options } = await replyOptions({
-    heartbeat: { timeoutSeconds: 45, lightContext: true },
+    heartbeat: { timeoutSeconds: 45, lightContext: true, model: "openai/gpt-5.4" },
+    perAgent: { model: "  ollama/llama3.2:1b  " },
     wake: { source: "manual", heartbeat: { target: "last" } },
   });
   expect(options).toMatchObject({
     timeoutOverrideSeconds: 45,
     bootstrapContextMode: "lightweight",
+    heartbeatModelOverride: "ollama/llama3.2:1b",
   });
-});
-
-it("passes the trimmed per-agent model override after merging defaults", async () => {
-  const { options } = await replyOptions({
-    heartbeat: { model: "openai/gpt-5.4" },
-    perAgent: { model: "  ollama/llama3.2:1b  " },
-  });
-  expect(options?.heartbeatModelOverride).toBe("ollama/llama3.2:1b");
-});
-
-it("retires the bundle MCP runtime only for isolated heartbeat runs", async () => {
-  expect((await replyOptions({ heartbeat: { isolatedSession: true } })).options).toHaveProperty(
-    "cleanupBundleMcpOnRunEnd",
-    true,
-  );
-  expect((await replyOptions()).options).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
 });
 
 it.each([
@@ -149,5 +136,14 @@ it.each([
     expect(resolveAgentTimeoutMs({ cfg, overrideSeconds: options?.timeoutOverrideSeconds })).toBe(
       expected,
     );
+    if (isolated) {
+      expect(options).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
+    } else {
+      expect(options).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+    }
+    if (scheduled) {
+      expect(ctx.Body).toContain("- status: Check service status");
+      expect(ctx.Body).toContain("After completing all due tasks");
+    }
   },
 );

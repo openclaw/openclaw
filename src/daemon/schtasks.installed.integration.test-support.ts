@@ -18,6 +18,7 @@ import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
   assertInstalledSiblingBuildRefusal,
+  assertInstalledTaskDefinition,
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
   inspectInstalledUpdateFailure,
@@ -78,12 +79,9 @@ export async function runInstalledLifecycle(
   const { resolveTaskScriptPath } = await import("./schtasks.js");
   const { probeScheduledTaskExists, probeScheduledTaskState, ScheduledTaskInspectionError } =
     await import("./schtasks-state-probe.js");
-  const {
-    assertInteractiveLeastPrivilegeTask,
-    readTaskPrincipal,
-    readTaskXml,
-    readRelatedProcessDiagnostics,
-  } = await import("./schtasks.integration-observation.test-support.js");
+  const { readTaskPrincipal, readTaskXml, readRelatedProcessDiagnostics } =
+    await import("./schtasks.integration-observation.test-support.js");
+  const { waitForProcessExit } = await import("./schtasks.task-supervisor.native-test-support.js");
   const key = z.enum(keys).parse(process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL);
   const cellIndex = keys.indexOf(key);
   const input = await readInput(inputPath);
@@ -97,10 +95,8 @@ export async function runInstalledLifecycle(
   samePath(path.dirname(proofPath), cellEvidence(inputPath, key));
   await fs.mkdir(path.dirname(proofPath), { recursive: true });
   const admissions: Array<Record<string, unknown>> = [];
-  const results: Array<Record<string, unknown>> = [];
   const defaultBefore = await owners.readTaskDefinitionSnapshot("OpenClaw Gateway");
   const admissionPath = path.join(path.dirname(proofPath), "installed-cleanup.json");
-  let failure: Error | undefined;
   const rootDir = path.join(input.stateRoot, key);
   await fs.mkdir(rootDir);
   const installRoot = prefix(input, key);
@@ -161,7 +157,7 @@ export async function runInstalledLifecycle(
     const readiness = await waitForGatewayHttpReadiness({
       port: task.gatewayPort,
       attempts: Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS),
-      deadlineAt: Date.now() + deadlineMs,
+      deadlineAt: started + deadlineMs,
       delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
       signal,
       onObservation: (value) => {
@@ -286,6 +282,7 @@ export async function runInstalledLifecycle(
   const status = async (
     task: Task,
     expected: Awaited<ReturnType<typeof readInstalledBuildIdentity>>,
+    definition: "published" | "candidate",
   ) => {
     const value = installedStatusSchema.parse(
       JSON.parse(await cli(task, ["gateway", "status", "--json"])),
@@ -305,12 +302,7 @@ export async function runInstalledLifecycle(
           arg.toLowerCase().startsWith((packageRoot(task.installRoot) + path.sep).toLowerCase()),
       ),
     );
-    const xml = await readTaskXml(task.taskName);
-    assert.ok(xml);
-    assertInteractiveLeastPrivilegeTask({
-      taskXml: xml,
-      principal: readTaskPrincipal(task.taskName),
-    });
+    await assertInstalledTaskDefinition(task, definition);
     return value;
   };
   try {
@@ -324,7 +316,11 @@ export async function runInstalledLifecycle(
       installRoot,
       key === "fresh" ? input.candidate.version : key,
     );
-    const before = await status(selected, beforeIdentity);
+    const before = await status(
+      selected,
+      beforeIdentity,
+      key === "fresh" ? "candidate" : "published",
+    );
     observations.before = before;
     await recordProgress("selected-status-verified");
     let candidateStatus = before;
@@ -333,7 +329,7 @@ export async function runInstalledLifecycle(
       const peer = await createTask("peer");
       authorityPeerRoot = peer.installRoot;
       const peerIdentity = await readInstalledBuildIdentity(peer.installRoot, key);
-      const peerBefore = await status(peer, peerIdentity);
+      const peerBefore = await status(peer, peerIdentity, "published");
       const peerXml = await readTaskXml(peer.taskName);
       const peerConfig = await fs.readFile(peer.configPath);
       const peerInstallBefore = await hashInstall(peer.installRoot);
@@ -348,11 +344,11 @@ export async function runInstalledLifecycle(
           recordProgress,
           verifyContinuity: async () => {
             assert.equal(
-              (await status(selected, beforeIdentity)).service.runtime.pid,
+              (await status(selected, beforeIdentity, "published")).service.runtime.pid,
               before.service.runtime.pid,
             );
             assert.equal(
-              (await status(peer, peerIdentity)).service.runtime.pid,
+              (await status(peer, peerIdentity, "published")).service.runtime.pid,
               peerBefore.service.runtime.pid,
             );
           },
@@ -382,7 +378,7 @@ export async function runInstalledLifecycle(
         input.candidate.version,
       );
       await awaitReadiness(selected, "candidate-startup");
-      const after = await status(selected, candidateIdentity);
+      const after = await status(selected, candidateIdentity, "candidate");
       assert.notEqual(after.service.runtime.pid, before.service.runtime.pid);
       observations.after = after;
       candidateStatus = after;
@@ -392,7 +388,7 @@ export async function runInstalledLifecycle(
       );
       assert.equal(await readTaskXml(peer.taskName), peerXml);
       assert.deepEqual(await fs.readFile(peer.configPath), peerConfig);
-      const peerAfter = await status(peer, peerIdentity);
+      const peerAfter = await status(peer, peerIdentity, "published");
       assert.equal(peerAfter.service.runtime.pid, peerBefore.service.runtime.pid);
       observations.peer = { before: peerBefore, after: peerAfter };
       const extras = await doctor(selected, 0);
@@ -476,6 +472,24 @@ export async function runInstalledLifecycle(
         admissionPath,
       });
     }
+    const beforeRestartPid = candidateStatus.service.runtime.pid;
+    const beforeRestartXml = await readTaskXml(selected.taskName);
+    assert.ok(beforeRestartXml);
+    const restartIdentity = await readInstalledBuildIdentity(installRoot, input.candidate.version);
+    await cli(selected, ["gateway", "restart", "--json"]);
+    await waitForProcessExit(beforeRestartPid);
+    await awaitReadiness(selected, "candidate-restart");
+    const restarted = await status(selected, restartIdentity, "candidate");
+    assert.notEqual(restarted.service.runtime.pid, beforeRestartPid);
+    assert.equal(await readTaskXml(selected.taskName), beforeRestartXml);
+    observations.restart = {
+      beforePid: beforeRestartPid,
+      after: restarted,
+      oldProcessExited: true,
+      taskDefinitionUnchanged: true,
+    };
+    candidateStatus = restarted;
+    await recordProgress("candidate-restart-verified");
     const configBeforePreview = await fs.readFile(selected.configPath);
     const healthy = await preview();
     assert.equal(
@@ -662,33 +676,29 @@ export async function runInstalledLifecycle(
     );
   }
   await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
-  results.push({
+  const result = {
     key,
     result: cellFailure ? "failed" : "passed",
     commands,
     observations,
     failure: cellFailure ? describeFailure(cellFailure) : undefined,
-  });
-  if (cellFailure) {
-    failure = cellFailure;
-  }
+  };
   await fs.writeFile(
     proofPath,
     JSON.stringify(
       {
-        result: failure ? "failed" : "pass",
+        result: cellFailure ? "failed" : "pass",
         head: input.toolingSha,
         candidate: input.candidate,
         published: input.published,
         cell: key,
-        cells: results,
+        cells: [result],
       },
       null,
       2,
     ),
   );
-  if (failure) {
-    throw failure;
+  if (cellFailure) {
+    throw cellFailure;
   }
-  assert.equal(results.length, 1);
 }

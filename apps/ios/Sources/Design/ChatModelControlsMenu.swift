@@ -1,5 +1,6 @@
 import Observation
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 enum ChatActionMenuMetric {
@@ -16,7 +17,7 @@ struct ChatActionSystemRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: self.systemImage)
-                .foregroundStyle(OpenClawBrand.accentForeground)
+                .foregroundStyle(OpenClawBrand.accent)
                 .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                 .accessibilityHidden(true)
             Text(self.title)
@@ -26,7 +27,7 @@ struct ChatActionSystemRow: View {
             if self.isSelected {
                 Image(systemName: "checkmark")
                     .font(OpenClawType.body)
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .accessibilityIdentifier("chat-menu-selection-checkmark")
             }
         }
@@ -77,17 +78,10 @@ private struct ChatActionResetButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(OpenClawBrand.accentForeground)
+        .foregroundStyle(OpenClawBrand.accent)
         .accessibilityLabel(String(localized: "Use default"))
         .accessibilityIdentifier(self.accessibilityIdentifier)
     }
-}
-
-enum ChatModelProviderPalette: Equatable {
-    case openAI
-    case anthropic
-    case google
-    case adaptiveMonochrome
 }
 
 enum ChatModelMenuPresentation {
@@ -112,24 +106,24 @@ enum ChatModelMenuPresentation {
         }
     }
 
-    static func brandPalette(providerID: String?) -> ChatModelProviderPalette {
+    static func brandColor(providerID: String?) -> Color {
         switch self.normalizedProviderID(providerID) {
-        case "openai": .openAI
-        case "anthropic", "claude-cli": .anthropic
-        case "google", "google-gemini-cli": .google
-        default: .adaptiveMonochrome
+        case "openai": OpenClawBrand.providerOpenAI
+        case "anthropic", "claude-cli": OpenClawBrand.providerAnthropic
+        case "google", "google-gemini-cli": OpenClawBrand.providerGoogle
+        default: .primary
         }
     }
 
     static func providerID(forModelReference modelReference: String?) -> String? {
-        guard let modelReference = trimmedValue(modelReference) else { return nil }
+        guard let modelReference = modelReference?.trimmedNonEmpty else { return nil }
         let parts = modelReference.split(separator: "/", maxSplits: 1).map(String.init)
         guard parts.count == 2 else { return nil }
         return self.normalizedProviderID(parts[0])
     }
 
     static func qualifiedModelReference(modelID: String?, providerID: String?) -> String? {
-        guard let modelID = trimmedValue(modelID) else { return nil }
+        guard let modelID = modelID?.trimmedNonEmpty else { return nil }
         if self.providerID(forModelReference: modelID) != nil {
             return modelID
         }
@@ -139,7 +133,7 @@ enum ChatModelMenuPresentation {
 
     static func resolvedDefaultLabel(sessionDefaultLabel: String, agentModelReference: String?) -> String {
         guard sessionDefaultLabel.trimmingCharacters(in: .whitespacesAndNewlines) == "Default",
-              let agentModelReference = trimmedValue(agentModelReference)
+              let agentModelReference = agentModelReference?.trimmedNonEmpty
         else {
             return sessionDefaultLabel
         }
@@ -152,13 +146,7 @@ enum ChatModelMenuPresentation {
     }
 
     private static func normalizedProviderID(_ providerID: String?) -> String? {
-        self.trimmedValue(providerID)?.lowercased()
-    }
-
-    private static func trimmedValue(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else { return nil }
-        return trimmed
+        providerID?.trimmedNonEmpty?.lowercased()
     }
 }
 
@@ -177,10 +165,6 @@ enum ChatThinkingSliderPresentation {
     static func selectionID(index: Int, options: [OpenClawChatThinkingLevelOption]) -> String? {
         guard options.indices.contains(index) else { return nil }
         return options[index].id
-    }
-
-    static func notchIndices(options: [OpenClawChatThinkingLevelOption]) -> [Int] {
-        Array(options.indices)
     }
 
     static func valueLabel(
@@ -244,21 +228,12 @@ private struct ChatModelProviderIcon: View {
                     .background(.secondary.opacity(0.16), in: Circle())
             }
         }
-        .foregroundStyle(self.brandColor)
+        .foregroundStyle(ChatModelMenuPresentation.brandColor(providerID: self.providerID))
         .frame(width: 18, height: 18)
         .accessibilityIdentifier("chat-model-provider-icon-\(self.providerID ?? "unknown")")
         .accessibilityLabel(String(
             format: String(localized: "%@ provider"),
             self.providerID ?? String(localized: "Unknown")))
-    }
-
-    private var brandColor: Color {
-        switch ChatModelMenuPresentation.brandPalette(providerID: self.providerID) {
-        case .openAI: OpenClawBrand.providerOpenAI
-        case .anthropic: OpenClawBrand.providerAnthropic
-        case .google: OpenClawBrand.providerGoogle
-        case .adaptiveMonochrome: .primary
-        }
     }
 }
 
@@ -268,16 +243,6 @@ struct ChatModelControlsMenuItems: View {
     let agentModelReference: String?
     let onSelection: @MainActor () -> Void
     @State private var expandedProviderIDs: Set<String> = []
-
-    init(
-        viewModel: OpenClawChatViewModel,
-        agentModelReference: String? = nil,
-        onSelection: @escaping @MainActor () -> Void = {})
-    {
-        self.viewModel = viewModel
-        self.agentModelReference = agentModelReference
-        self.onSelection = onSelection
-    }
 
     var body: some View {
         if self.viewModel.showsModelPicker {
@@ -325,6 +290,7 @@ struct ChatModelControlsMenuItems: View {
             self.thinkingSlider(options: options)
         } else if let option = options.first {
             let selectionID = self.viewModel.thinkingSelectionID
+            let isSelected = selectionID == option.id
             VStack(spacing: 0) {
                 ChatActionMenuSectionHeader(
                     title: "Thinking",
@@ -334,12 +300,20 @@ struct ChatModelControlsMenuItems: View {
                     resetAction: selectionID == OpenClawChatViewModel.inheritedThinkingSelectionID
                         ? nil
                         : { self.viewModel.selectThinkingLevel(OpenClawChatViewModel.inheritedThinkingSelectionID) })
-                self.settingsOption(
-                    title: option.label,
-                    systemImage: "brain.head.profile",
-                    selectionID: option.id,
-                    selectedID: selectionID,
-                    select: self.viewModel.selectThinkingLevel)
+                Button {
+                    self.viewModel.selectThinkingLevel(option.id)
+                    self.onSelection()
+                } label: {
+                    ChatActionSystemRow(
+                        title: option.label,
+                        systemImage: "brain.head.profile",
+                        isSelected: isSelected)
+                }
+                .buttonStyle(.plain)
+                .disabled(self.viewModel.isUpdatingSessionSettings)
+                .accessibilityLabel(option.label)
+                .accessibilityValue(isSelected ? String(localized: "Selected") : "")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
         }
     }
@@ -378,13 +352,13 @@ struct ChatModelControlsMenuItems: View {
                         }),
                     in: 0...Double(options.count - 1),
                     step: 1)
-                    .tint(OpenClawBrand.accentForeground)
+                    .tint(OpenClawBrand.accent)
                     .disabled(self.viewModel.isUpdatingSessionSettings)
                     .accessibilityIdentifier("chat-thinking-slider")
                     .accessibilityLabel(String(localized: "Thinking level"))
                     .accessibilityValue(valueLabel)
                 HStack(spacing: 0) {
-                    ForEach(ChatThinkingSliderPresentation.notchIndices(options: options), id: \.self) { index in
+                    ForEach(options.indices, id: \.self) { index in
                         Circle()
                             .fill(index == committedIndex ? Color.clear : Color.secondary.opacity(0.62))
                             .frame(width: 5, height: 5)
@@ -427,7 +401,7 @@ struct ChatModelControlsMenuItems: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "bolt.fill")
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -465,7 +439,7 @@ struct ChatModelControlsMenuItems: View {
                             self.viewModel.selectFastMode(
                                 ChatFastModeControlPresentation.selectionID(isOn: !isOn))
                         })
-                        .tint(OpenClawBrand.accentForeground)
+                        .tint(OpenClawBrand.accent)
                         .disabled(self.viewModel.isUpdatingSessionSettings)
                         .accessibilityIdentifier("chat-fast-mode-toggle")
                         .disabled(!self.viewModel.selectedModelSupportsFastMode)
@@ -488,7 +462,7 @@ struct ChatModelControlsMenuItems: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "text.alignleft")
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -583,7 +557,7 @@ struct ChatModelControlsMenuItems: View {
                     Spacer(minLength: 12)
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(OpenClawType.caption)
-                        .foregroundStyle(OpenClawBrand.accentForeground)
+                        .foregroundStyle(OpenClawBrand.accent)
                         .accessibilityHidden(true)
                 }
                 .frame(maxWidth: .infinity, minHeight: ChatActionMenuMetric.rowHeight, alignment: .leading)
@@ -644,7 +618,7 @@ struct ChatModelControlsMenuItems: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(OpenClawType.body)
-                        .foregroundStyle(OpenClawBrand.accentForeground)
+                        .foregroundStyle(OpenClawBrand.accent)
                         .accessibilityIdentifier("chat-menu-selection-checkmark")
                 }
             }
@@ -657,27 +631,6 @@ struct ChatModelControlsMenuItems: View {
         .accessibilityLabel(title)
         .accessibilityValue(isSelected ? String(localized: "Selected") : "")
         .accessibilityHint(unavailableDescription ?? "")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private func settingsOption(
-        title: String,
-        systemImage: String,
-        selectionID: String,
-        selectedID: String,
-        select: @escaping (String) -> Void) -> some View
-    {
-        let isSelected = selectedID == selectionID
-        return Button {
-            select(selectionID)
-            self.onSelection()
-        } label: {
-            ChatActionSystemRow(title: title, systemImage: systemImage, isSelected: isSelected)
-        }
-        .buttonStyle(.plain)
-        .disabled(self.viewModel.isUpdatingSessionSettings)
-        .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? String(localized: "Selected") : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }

@@ -6,6 +6,7 @@ import {
   fetchWithSsrFGuard,
 } from "../infra/net/fetch-guard.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import {
@@ -14,9 +15,9 @@ import {
 } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
 import {
-  markRemoteModelCatalogChecked,
-  readRemoteModelCatalog,
-  writeRemoteModelCatalog,
+  markRemoteModelCatalogCheckedAsync,
+  readRemoteModelCatalogAsync,
+  writeRemoteModelCatalogAsync,
 } from "./remote-store.js";
 
 export const REMOTE_MODEL_CATALOG_TTL_MS = 6 * 60 * 60_000;
@@ -34,7 +35,7 @@ function bundleCounts(bundle: RemoteModelCatalogWireBundle): RefreshCounts {
   return {
     providers: Object.keys(bundle.providers).length,
     models:
-      bundle.schemaVersion === 2
+      bundle.schemaVersion !== 1
         ? bundle.models.length
         : Object.values(bundle.providers).reduce(
             (total, provider) => total + provider.models.length,
@@ -80,19 +81,19 @@ export async function refreshRemoteModelCatalog(params: {
   config: OpenClawConfig;
   force?: boolean;
   signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
-  bundledGeneratedAt?: () => number | undefined;
+  databaseOptions?: Pick<OpenClawStateDatabaseOptions, "path" | "env" | "initializationAgentPaths">;
 }): Promise<RemoteModelCatalogRefreshResult> {
   if (!isRemoteModelCatalogRefreshEnabled(params.config)) {
     return { status: "disabled", providers: 0, models: 0 };
   }
   const databaseOptions = params.databaseOptions ?? {};
-  const now = (params.now ?? Date.now)();
+  const now = Date.now();
   try {
+    const context = captureOpenClawStateWorkerContext(databaseOptions);
     const url = resolveRemoteCatalogUrl(params.config);
-    const stored = readRemoteModelCatalog(databaseOptions);
+    params.signal?.throwIfAborted();
+    const stored = await readRemoteModelCatalogAsync(context);
+    params.signal?.throwIfAborted();
     const activeStored = stored?.source_url === url ? stored : undefined;
     if (
       !params.force &&
@@ -117,7 +118,6 @@ export async function refreshRemoteModelCatalog(params: {
       init: { headers },
       timeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
       signal: params.signal,
-      fetchImpl: params.fetchImpl,
       auditContext: "remote-model-catalog",
     } as const;
     const explicitOverride = Boolean(params.config.models?.catalogRefresh?.url);
@@ -139,7 +139,8 @@ export async function refreshRemoteModelCatalog(params: {
         if (!activeStored) {
           throw new Error("remote catalog returned 304 without a stored bundle");
         }
-        const marked = markRemoteModelCatalogChecked(
+        params.signal?.throwIfAborted();
+        const marked = await markRemoteModelCatalogCheckedAsync(
           now,
           {
             expected: activeStored,
@@ -147,9 +148,9 @@ export async function refreshRemoteModelCatalog(params: {
             lastModified:
               guarded.response.headers.get("last-modified") ?? activeStored.last_modified,
           },
-          databaseOptions,
+          context,
         );
-        const current = marked ? activeStored : readRemoteModelCatalog(databaseOptions);
+        const current = marked ? activeStored : await readRemoteModelCatalogAsync(context);
         return {
           status: "unchanged",
           ...storedCounts(current?.bundle_json ?? activeStored.bundle_json),
@@ -158,16 +159,16 @@ export async function refreshRemoteModelCatalog(params: {
       if (!guarded.response.ok) {
         throw new Error(`remote catalog request failed: HTTP ${guarded.response.status}`);
       }
-      const body = await readResponseWithLimit(guarded.response, REMOTE_MODEL_CATALOG_MAX_BYTES, {
-        chunkTimeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
-      });
+      const body = await readResponseWithLimit(guarded.response, REMOTE_MODEL_CATALOG_MAX_BYTES);
       const bundle = parseRemoteModelCatalogWireBundle(
         JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)),
       );
       assertCompatibleMinVersion(bundle);
       const bundleJson = JSON.stringify(bundle);
       const unchanged = activeStored?.bundle_json === bundleJson;
-      const writeResult = writeRemoteModelCatalog(
+      params.signal?.throwIfAborted();
+      // Download cancellation fences new work; accepted persistence settles before lifecycle close.
+      const writeResult = await writeRemoteModelCatalogAsync(
         {
           bundle_json: bundleJson,
           generated_at: bundle.generatedAt,
@@ -177,12 +178,12 @@ export async function refreshRemoteModelCatalog(params: {
           last_modified: guarded.response.headers.get("last-modified"),
           checked_at: now,
         },
-        databaseOptions,
+        context,
       );
       if (writeResult.status === "retained-newer") {
         return { status: "unchanged", ...storedCounts(writeResult.row.bundle_json) };
       }
-      const bundledGeneratedAt = (params.bundledGeneratedAt ?? bundledCatalogGeneratedAt)();
+      const bundledGeneratedAt = bundledCatalogGeneratedAt();
       return {
         status:
           unchanged || bundledGeneratedAt === undefined || bundle.generatedAt <= bundledGeneratedAt

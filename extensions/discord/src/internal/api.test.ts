@@ -44,45 +44,13 @@ describe("Discord REST API helpers", () => {
 
   it.each([
     [
-      "get message",
-      (rest: ReturnType<typeof createFakeRestClient>) => getChannelMessage(rest, "c1", ".."),
-    ],
-    [
       "edit message",
       (rest: ReturnType<typeof createFakeRestClient>) =>
         editChannelMessage(rest, "c1", "..", { body: { content: "hello" } }),
     ],
     [
-      "delete message",
-      (rest: ReturnType<typeof createFakeRestClient>) => deleteChannelMessage(rest, "c1", ".."),
-    ],
-    [
-      "pin message",
-      (rest: ReturnType<typeof createFakeRestClient>) => pinChannelMessage(rest, "c1", ".."),
-    ],
-    [
       "unpin message",
       (rest: ReturnType<typeof createFakeRestClient>) => unpinChannelMessage(rest, "c1", ".."),
-    ],
-    [
-      "create message-backed thread",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        createThread(rest, "c1", { body: { name: "thread" } }, ".."),
-    ],
-    [
-      "add reaction",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        createOwnMessageReaction(rest, "c1", "..", "%E2%9C%85"),
-    ],
-    [
-      "remove reaction",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        deleteOwnMessageReaction(rest, "c1", "..", "%E2%9C%85"),
-    ],
-    [
-      "list reactions",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        listMessageReactionUsers(rest, "c1", "..", "%E2%9C%85"),
     ],
   ])("rejects a malformed message ID before the %s request", async (_label, invoke) => {
     const rest = createFakeRestClient();

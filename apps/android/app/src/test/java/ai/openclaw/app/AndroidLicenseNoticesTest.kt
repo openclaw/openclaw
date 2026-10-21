@@ -44,6 +44,7 @@ class AndroidLicenseNoticesTest {
         "AndroidX Room",
         "AndroidX SQLite",
         "AndroidX Wear",
+        "AndroidX WebKit",
         "AndroidX WindowManager",
         "Bouncy Castle Provider",
         "Chevrotain",

@@ -1,13 +1,7 @@
-/**
- * sessions_yield transcript detectors.
- *
- * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
- */
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isContractToolCallBlock, readToolCallName } from "../../../shared/tool-block-contract.js";
 
-/** Returns true when an assistant message requested the sessions_yield tool. */
 export function assistantCallsSessionsYield(message: unknown): boolean {
   const record = asOptionalRecord(message);
   if (!record || record.role !== "assistant") {
@@ -43,11 +37,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
     return undefined;
   }
   for (const block of content) {
-    const blockRecord = asOptionalRecord(block);
-    if (!blockRecord) {
-      continue;
-    }
-    const text = blockRecord.text;
+    const text = asOptionalRecord(block)?.text;
     if (typeof text !== "string") {
       continue;
     }
@@ -59,7 +49,6 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
   return undefined;
 }
 
-/** Returns true when a tool result represents a completed sessions_yield handoff. */
 export function isSessionsYieldToolResult(
   message: unknown,
   previousAssistantCalledYield: boolean,

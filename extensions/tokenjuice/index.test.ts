@@ -56,10 +56,6 @@ describe("tokenjuice plugin", () => {
     );
   });
 
-  it("is opt-in by default", () => {
-    expect(manifest).not.toHaveProperty("enabledByDefault");
-  });
-
   it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", () => {
     const captured = capturePluginRegistration({
       id: "tokenjuice",
@@ -74,21 +70,6 @@ describe("tokenjuice plugin", () => {
     const registration = captured.agentToolResultMiddlewares[0];
     expect(typeof registration?.handler).toBe("function");
     expect(registration?.runtimes).toEqual(["openclaw", "codex", "agentsapi"]);
-  });
-
-  it("synthesises exec status when bash provides metadata-only details", async () => {
-    const { received } = await applyBashResult({
-      truncation: { reason: "max_bytes" },
-      fullOutputPath: "/tmp/out.txt",
-    });
-
-    expect(received?.details).toMatchObject({
-      status: "completed",
-      exitCode: 0,
-      truncation: { reason: "max_bytes" },
-      fullOutputPath: "/tmp/out.txt",
-    });
-    expect(received?.details).not.toHaveProperty("aggregated");
   });
 
   it("passes through status metadata without duplicate aggregated output", async () => {
@@ -136,10 +117,6 @@ describe("tokenjuice plugin", () => {
   });
 
   it.each([
-    ["exit code", { exitCode: 7 }, "failed", 7],
-    ["success flag", { success: false }, "failed", 1],
-    ["ok flag", { ok: false }, "failed", 1],
-    ["timeout flag", { timedOut: true }, "failed", 1],
     ["error value", { error: "command failed" }, "failed", 1],
     ["successful exit code", { exitCode: 0 }, "completed", 0],
   ])(

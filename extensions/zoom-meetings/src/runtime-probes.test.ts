@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingsConfig } from "./config.js";
-import { zoomMeetingsProbes } from "./runtime-probes.js";
-import type { ZoomMeetingsSession } from "./transports/types.js";
+import { zoomMeetingsPlugin } from "../index.js";
 
 const URL = "https://zoom.us/j/12345678902?pwd=probe";
-type ZoomMeetingsProbeContext = Parameters<typeof zoomMeetingsProbes.testListening>[0];
+type ZoomMeetingsProbeContext = Parameters<typeof zoomMeetingsPlugin.probes.testListening>[0];
 
 describe("Zoom meeting runtime probes", () => {
   it.each([
@@ -23,7 +21,7 @@ describe("Zoom meeting runtime probes", () => {
         id: "zoom-listen",
         mode: "transcribe",
         transport: "chrome",
-      } as ZoomMeetingsSession;
+      } as ReturnType<ZoomMeetingsProbeContext["list"]>[number];
       const refreshCaptionHealth = vi.fn(async () => {
         session.chrome!.health = {
           ...session.chrome!.health,
@@ -31,7 +29,7 @@ describe("Zoom meeting runtime probes", () => {
         };
       });
       const context = {
-        config: zoomMeetingsConfig.resolveConfig({}),
+        config: zoomMeetingsPlugin.config.resolveConfig({}),
         hasHealthHandle: () => false,
         isReusable: () => false,
         join: vi.fn(async () => ({ session, spoken: false })),
@@ -41,20 +39,18 @@ describe("Zoom meeting runtime probes", () => {
         resolveAgentId: () => "main",
       } satisfies ZoomMeetingsProbeContext;
 
-      const result = await zoomMeetingsProbes.testListening(context, {
+      const result = await zoomMeetingsPlugin.probes.testListening(context, {
         mode: "transcribe",
         timeoutMs: 100,
         url: URL,
       });
 
+      expect(refreshCaptionHealth).toHaveBeenCalledTimes(shouldWait ? 1 : 0);
       if (shouldWait) {
-        expect(refreshCaptionHealth).toHaveBeenCalledOnce();
         expect(result.manualAction).toEqual({
           reason: "zoom-admission-required",
           message: "Waiting",
         });
-      } else {
-        expect(refreshCaptionHealth).not.toHaveBeenCalled();
       }
     },
   );

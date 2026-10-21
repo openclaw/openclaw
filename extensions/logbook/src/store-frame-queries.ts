@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   prepareSqliteQuerySync,
   type getNodeSqliteKysely,
@@ -7,7 +7,7 @@ import { MAX_FRAMES_PER_CALL } from "./analyze.js";
 import type { LogbookDatabase, toFrame } from "./store-schema.js";
 
 export function createLogbookFrameQueries(
-  db: DatabaseSync,
+  db: EngineConnection,
   query: ReturnType<typeof getNodeSqliteKysely<LogbookDatabase>>,
 ) {
   // Timestamp ties follow insertion ids, matching existing SQLite reads.
@@ -58,12 +58,15 @@ export function createLogbookFrameQueries(
           return eb.or([
             eb("total", "<=", MAX_FRAMES_PER_CALL),
             ...Array.from({ length: MAX_FRAMES_PER_CALL }, (_, index) =>
-              // Positive ordinals use Math.round(index * ((total - 1) / 15)) + 1.
+              // FLOOR keeps positive Math.round ordinals independent of integer-cast rounding.
               eb(
                 "ordinal",
                 "=",
                 eb(
-                  eb.cast<number>(eb(eb(eb.val(index), "*", step), "+", eb.val(0.5)), "integer"),
+                  eb.cast<number>(
+                    eb.fn<number>("floor", [eb(eb(eb.val(index), "*", step), "+", eb.val(0.5))]),
+                    "integer",
+                  ),
                   "+",
                   eb.val(1),
                 ),

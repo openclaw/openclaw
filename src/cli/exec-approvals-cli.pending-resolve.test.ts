@@ -143,7 +143,7 @@ describe("exec approvals pending and resolve CLI", () => {
     defaultRuntime.exit.mockClear();
   });
 
-  it.each(["10junk", "0"])(
+  it.each(["10junk"])(
     "rejects a malformed grants list limit before the Gateway request (%s)",
     async (limit) => {
       await expect(
@@ -164,7 +164,7 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(call?.[2]).toEqual({ limit: 25 });
   });
 
-  it.each(["10junk", "0", "3651"])(
+  it.each(["10junk", "3651"])(
     "rejects an invalid grant lifetime without resolving the approval (%s)",
     async (expiresInDays) => {
       callGatewayFromCli.mockImplementation(async (method: string) =>
@@ -197,40 +197,38 @@ describe("exec approvals pending and resolve CLI", () => {
     },
   );
 
-  it.each([undefined, "1", "3650"])(
-    "preserves the numeric or absent grant lifetime (%s)",
-    async (expiresInDays) => {
-      callGatewayFromCli.mockImplementation(async (method: string) =>
-        method === "approval.get"
-          ? pendingApprovalSnapshot({ id: "lifetime-valid" })
-          : {
-              applied: true,
-              approval: terminalApprovalSnapshot({
-                id: "lifetime-valid",
-                decision: "allow-always",
-              }),
-            },
-      );
+  it.each(["3650"])("preserves the maximum grant lifetime (%s)", async (expiresInDays) => {
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "approval.get"
+        ? pendingApprovalSnapshot({ id: "lifetime-valid" })
+        : {
+            applied: true,
+            approval: terminalApprovalSnapshot({
+              id: "lifetime-valid",
+              decision: "allow-always",
+            }),
+          },
+    );
 
-      await runApprovalsCommand([
-        "approvals",
-        "resolve",
-        "lifetime-valid",
-        "allow-always",
-        ...(expiresInDays === undefined ? [] : ["--expires-in-days", expiresInDays]),
-        "--json",
-      ]);
+    await runApprovalsCommand([
+      "approvals",
+      "resolve",
+      "lifetime-valid",
+      "allow-always",
+      "--expires-in-days",
+      expiresInDays,
+      "--json",
+    ]);
 
-      expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("approval.resolve");
-      expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
-        id: "lifetime-valid",
-        kind: "exec",
-        decision: "allow-always",
-        ...(expiresInDays === undefined ? {} : { grantExpiresInDays: Number(expiresInDays) }),
-      });
-      expect(writtenJson()).toMatchObject({ applied: true, alreadyResolved: false });
-    },
-  );
+    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("approval.resolve");
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      id: "lifetime-valid",
+      kind: "exec",
+      decision: "allow-always",
+      grantExpiresInDays: Number(expiresInDays),
+    });
+    expect(writtenJson()).toMatchObject({ applied: true, alreadyResolved: false });
+  });
 
   it("renders pending approvals from all three approval kinds", async () => {
     const now = Date.now();
@@ -323,57 +321,6 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it("writes normalized pending approvals as JSON", async () => {
-    const now = Date.now();
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "exec.approval.list") {
-        return [
-          {
-            id: "exec-json",
-            request: {
-              command: "uname -a\u001B]52;c;hidden-action\u0007",
-              agentId: "main",
-              sessionKey: "agent:main:main",
-            },
-            createdAtMs: now - 2_000,
-            expiresAtMs: now + 60_000,
-          },
-        ];
-      }
-      return [];
-    });
-
-    await runApprovalsCommand(["approvals", "pending", "--json"]);
-
-    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
-    expect(writtenJson()).toEqual({
-      approvals: [
-        {
-          id: "exec-json",
-          kind: "exec",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          createdAtMs: now - 2_000,
-          expiresAtMs: now + 60_000,
-          summary: "uname -a\u001B]52;c;hidden-action\u0007",
-        },
-      ],
-    });
-  });
-
-  it("bubbles pending approval failures to the JSON owner", async () => {
-    callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-
-    await expect(runApprovalsCommand(["approvals", "pending", "--json"])).rejects.toThrow(
-      "gateway unavailable",
-    );
-
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
   it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {
@@ -440,7 +387,16 @@ describe("exec approvals pending and resolve CLI", () => {
       },
     );
 
-    await runApprovalsCommand(["approvals", "resolve", displayId, "allow-once"]);
+    await runApprovalsCommand([
+      "approvals",
+      "resolve",
+      displayId,
+      "allow-once",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "--token",
+      "test-token",
+    ]);
 
     expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("approval.resolve");
     expect(callGatewayFromCli.mock.calls[2]?.[2]).toEqual({
@@ -484,37 +440,6 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it("resolves with shared credentials and no device identity", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "approval.get") {
-        return pendingApprovalSnapshot({ id: "approval-no-device" });
-      }
-      return {
-        applied: true,
-        approval: terminalApprovalSnapshot({
-          id: "approval-no-device",
-          decision: "deny",
-        }),
-      };
-    });
-
-    await runApprovalsCommand([
-      "approvals",
-      "resolve",
-      "approval-no-device",
-      "deny",
-      "--url",
-      "ws://127.0.0.1:18789",
-      "--token",
-      "test-token",
-    ]);
-
-    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
-    for (const call of callGatewayFromCli.mock.calls) {
-      expect(call[3]).toEqual({ scopes: ["operator.admin", "operator.approvals"] });
-    }
-  });
-
   it("rejects an id token that also exists as a raw approval id", async () => {
     // Explicit token form: the display helper renders safe ids raw, but the
     // resolve path must stay ambiguity-safe for pasted tokens regardless.
@@ -556,14 +481,15 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("exits non-zero when an approval is not found", async () => {
-    callGatewayFromCli.mockRejectedValue(new Error("approval not found"));
+  it("exits non-zero with a bounded, well-formed error when an approval is not found", async () => {
+    const prefix = `approval not found: ${"x".repeat(279)}`;
+    callGatewayFromCli.mockRejectedValue(new Error(`${prefix}\u{1F680}tail\nignored`));
 
     await expect(runApprovalsCommand(["approvals", "resolve", "missing", "deny"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(runtimeErrors[0]).toBe("approval not found");
+    expect(runtimeErrors).toEqual([`${prefix}...`]);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 

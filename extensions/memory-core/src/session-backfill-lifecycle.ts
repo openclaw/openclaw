@@ -9,10 +9,6 @@ import {
   SESSION_BACKFILL_REWIND_NAMESPACE,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import type {
-  SessionBackfillExecution,
-  SessionBackfillResult,
-} from "./session-backfill-contract.js";
 
 // Batch keys are SHA-256 hex digests, so this colon-delimited marker cannot collide.
 const SESSION_BACKFILL_BASELINE_KEY_PREFIX = "complete-baseline:";
@@ -177,10 +173,6 @@ async function deleteSessionBackfillRewindBatches(
   }
 }
 
-function belongsToAgentFileState(key: string, agentId: string): boolean {
-  return key.startsWith(`${agentId}:`);
-}
-
 function belongsToAgentSeenState(key: string, agentId: string): boolean {
   const archivePrefix = "archive:";
   if (!key.startsWith(archivePrefix)) {
@@ -201,7 +193,7 @@ export async function resetSessionBackfillIngestionState(params: {
   await writeSessionIngestionState(params.workspaceDir, {
     ...state,
     files: Object.fromEntries(
-      Object.entries(state.files).filter(([key]) => !belongsToAgentFileState(key, params.agentId)),
+      Object.entries(state.files).filter(([key]) => !key.startsWith(`${params.agentId}:`)),
     ),
     seenMessages: Object.fromEntries(
       Object.entries(state.seenMessages).filter(
@@ -209,70 +201,4 @@ export async function resetSessionBackfillIngestionState(params: {
       ),
     ),
   });
-}
-
-export async function drainSessionBackfill(params: {
-  executeBatch: () => Promise<SessionBackfillExecution>;
-  maxBatches: number;
-  topCandidateLimit: number;
-}): Promise<SessionBackfillResult> {
-  const batches: SessionBackfillExecution[] = [];
-  for (let batch = 1; batch <= params.maxBatches; batch += 1) {
-    const execution = await params.executeBatch();
-    batches.push(execution);
-    if (!execution.continuation.hasMore) {
-      return aggregateSessionBackfillBatches(batches, params.topCandidateLimit);
-    }
-    if (!execution.continuation.advanced) {
-      throw new Error(
-        `Memory session-backfill stopped after ${batch} batches because the ingestion cursor did not advance.`,
-      );
-    }
-  }
-  throw new Error(`Memory session-backfill exceeded the ${params.maxBatches}-batch safety limit.`);
-}
-
-function aggregateSessionBackfillBatches(
-  executions: SessionBackfillExecution[],
-  topCandidateLimit: number,
-): SessionBackfillResult {
-  const first = executions[0]?.result;
-  if (!first) {
-    throw new Error("Memory session-backfill completed without executing a batch.");
-  }
-  const days = new Map<string, SessionBackfillResult["days"][number]>();
-  for (const execution of executions) {
-    for (const day of execution.result.days) {
-      const current = days.get(day.day);
-      days.set(day.day, {
-        day: day.day,
-        candidateCount: (current?.candidateCount ?? 0) + day.candidateCount,
-        topCandidates: [...(current?.topCandidates ?? []), ...day.topCandidates].slice(
-          0,
-          topCandidateLimit,
-        ),
-      });
-    }
-  }
-  return {
-    ...first,
-    days: [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day)),
-    candidateCount: executions.reduce((sum, execution) => sum + execution.result.candidateCount, 0),
-    stagedEntries: executions.reduce((sum, execution) => sum + execution.result.stagedEntries, 0),
-    writtenDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.writtenDiaryEntries,
-      0,
-    ),
-    replacedDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.replacedDiaryEntries,
-      0,
-    ),
-    batchCount: executions.length,
-    batches: executions.map((execution, index) => ({
-      batch: index + 1,
-      days: execution.result.days.length,
-      candidates: execution.result.candidateCount,
-      stagedEntries: execution.result.stagedEntries,
-    })),
-  };
 }

@@ -36,7 +36,7 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
@@ -122,8 +122,16 @@ type ApplyApprovalDecisionResult<TPayload> =
     }
   | { ok: false };
 
+type ApprovalPayload =
+  | ExecApprovalRequestPayload
+  | PluginApprovalRequestPayload
+  | SystemAgentApprovalRequestPayload;
+
 async function applyApprovalDecision<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
+  manager: Pick<
+    ExecApprovalManager<TPayload>,
+    "forceDenyDetailed" | "resolveDetailed" | "getLiveSnapshot"
+  >;
   id: string;
   decision: ApprovalDecision | null;
   forceMalformedDeny: boolean;
@@ -222,17 +230,16 @@ export function createApprovalHandlers(
         respondApprovalNotFound(respond);
         return;
       }
+      using sessionAccess = await prepareApprovalSessionAccess({
+        client,
+        getCfg: context.getRuntimeConfig,
+        sources: history.records.map((record) => record.source),
+      });
+      authority.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
-        if (
-          !canAccessApprovalSession({
-            cfg,
-            client,
-            sessionKey: record.source.sessionKey,
-            agentId: record.source.agentId,
-          })
-        ) {
+        if (!sessionAccess.canAccess(record.source)) {
           return [];
         }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
@@ -259,16 +266,13 @@ export function createApprovalHandlers(
       const id = readExactApprovalId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
-        const prepared = id
+        using prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -307,16 +311,13 @@ export function createApprovalHandlers(
       try {
         prepared = id
           ? await loadVisibleApproval({
+              ...params,
               id,
               authority,
               client,
               getCfg: () => context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
-              execApprovalManager: params.execApprovalManager,
-              pluginApprovalManager: params.pluginApprovalManager,
-              systemAgentApprovalManager: params.systemAgentApprovalManager,
-              databaseOptions: params.databaseOptions,
             })
           : null;
         record = prepared?.readCurrent() ?? null;
@@ -328,26 +329,41 @@ export function createApprovalHandlers(
         respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
-      if (!id || !record || !prepared) {
+      using retainedApproval = prepared;
+      if (!id || !record || !retainedApproval) {
         respondApprovalNotFound(respond);
         return;
       }
-      const { guard: approvalGuard, readCurrent } = prepared;
-      const custody = resolveParams?.reviewer
-        ? prepareApprovalChannelCustody({
-            cfg: context.getRuntimeConfig(),
-            approvalKind: record.kind,
-            reviewer: resolveParams.reviewer,
-          })
-        : null;
+      const { guard: approvalGuard, readCurrent } = retainedApproval;
       const liveRecord =
         record.kind === "exec"
           ? params.execApprovalManager.getLiveSnapshot(record.id)
           : record.kind === "plugin"
             ? params.pluginApprovalManager.getLiveSnapshot(record.id)
             : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
-      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
-        respondApprovalNotFound(respond);
+      using custody = resolveParams?.reviewer
+        ? prepareApprovalChannelCustody({
+            cfg: context.getRuntimeConfig(),
+            getCfg: context.getRuntimeConfig,
+            assertCurrent: () => approvalGuard.assertCurrent(),
+            approvalKind: record.kind,
+            reviewer: resolveParams.reviewer,
+          })
+        : null;
+      try {
+        if (
+          resolveParams?.reviewer &&
+          (!custody || !liveRecord || !(await custody.authorizes(liveRecord)))
+        ) {
+          respondApprovalNotFound(respond);
+          return;
+        }
+      } catch (error) {
+        if (!authority.isCurrent()) {
+          respondApprovalNotFound(respond);
+        } else {
+          respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
+        }
         return;
       }
       if (record.status !== "pending") {
@@ -379,14 +395,6 @@ export function createApprovalHandlers(
       const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
-        const currentCfg = context.getRuntimeConfig();
-        const currentCustody = resolveParams?.reviewer
-          ? prepareApprovalChannelCustody({
-              cfg: currentCfg,
-              approvalKind: record.kind,
-              reviewer: resolveParams.reviewer,
-            })
-          : null;
         if (
           client?.invalidated ||
           !canAccessOperatorApproval({
@@ -394,55 +402,38 @@ export function createApprovalHandlers(
             allowApprovalRuntime: true,
             binding: { reviewerDeviceIds: record.reviewerDeviceIds },
           }) ||
-          (approvalGuard.family === "native-compatibility" &&
-            !canAccessApprovalSession({
-              cfg: currentCfg,
-              client,
-              sessionKey: record.source.sessionKey,
-              agentId: record.source.agentId,
-            })) ||
-          (resolveParams?.reviewer && (!liveRecord || !currentCustody?.authorizes(liveRecord)))
+          (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
+          (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {
           throw new Error("approval resolver authority is no longer active");
         }
       };
-      let resolution:
-        | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<PluginApprovalRequestPayload>
-        | ApplyApprovalDecisionResult<SystemAgentApprovalRequestPayload>;
+      let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;
       try {
-        const decisionParams = {
+        resolution = await applyApprovalDecision<ApprovalPayload>({
           id: record.id,
           decision: requestedDecision,
           forceMalformedDeny,
           resolver,
           localResolvedBy,
           guard: { family: approvalGuard.family, assertCurrent },
-        };
-        resolution =
-          record.kind === "exec"
-            ? await applyApprovalDecision({
-                ...decisionParams,
-                manager: params.execApprovalManager,
-                // Grant terms freeze at resolve; an explicit per-resolve
-                // override (custom operator UIs, CLI) beats the config default.
-                ...(requestedDecision === "allow-always" &&
-                typeof resolveParams?.grantExpiresInDays === "number"
-                  ? {
-                      grantExpiresAtMs:
-                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
-                    }
-                  : {}),
-              })
-            : record.kind === "plugin"
-              ? await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.pluginApprovalManager,
-                })
-              : await applyApprovalDecision({
-                  ...decisionParams,
-                  manager: params.systemAgentApprovalManager!,
-                });
+          manager:
+            record.kind === "exec"
+              ? params.execApprovalManager
+              : record.kind === "plugin"
+                ? params.pluginApprovalManager
+                : params.systemAgentApprovalManager!,
+          // Grant terms freeze at resolve; an explicit per-resolve
+          // override (custom operator UIs, CLI) beats the config default.
+          ...(record.kind === "exec" &&
+          requestedDecision === "allow-always" &&
+          typeof resolveParams?.grantExpiresInDays === "number"
+            ? {
+                grantExpiresAtMs:
+                  Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+              }
+            : {}),
+        });
       } catch (error) {
         if (!readCurrent()) {
           respondApprovalNotFound(respond);
@@ -473,12 +464,10 @@ export function createApprovalHandlers(
         // SQLite CAS is canonical. Never make the winning surface wait for
         // best-effort channel, push, or legacy-event reconciliation.
         void publishAppliedApprovalResolution({
+          ...params,
           record: terminalRecord,
           liveRecord: resolution.liveRecord,
           context,
-          forwarder: params.forwarder,
-          iosPushDelivery: params.iosPushDelivery,
-          pluginIosPushDelivery: params.pluginIosPushDelivery,
         }).catch((error: unknown) => {
           context.logGateway?.error?.(
             `${terminalRecord.kind} approvals: unified resolve publication failed: ${String(error)}`,

@@ -8,8 +8,6 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveModelRuntimeEntry, type ModelRuntimeEntry } from "../model-runtime-choice.ts";
-import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { areUiSessionKeysEquivalent } from "../sessions/session-key.ts";
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
@@ -57,6 +55,8 @@ export function resolveThinkingProfileForSession(
     target?.model ?? null,
     session?.agentRuntime?.id,
   );
+  const sessionRuntime = session?.agentRuntime?.id?.trim();
+  const defaultRuntime = defaults?.agentRuntime?.id?.trim();
   const candidates: Array<
     | Pick<
         ChatThinkingTarget,
@@ -65,7 +65,11 @@ export function resolveThinkingProfileForSession(
     | undefined
   > = [
     session,
-    sessionModelMatchesDefaults(session, defaults) ? defaults : undefined,
+    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
+    (!session?.model || session.model === defaults?.model) &&
+    (!sessionRuntime || !defaultRuntime || sessionRuntime === defaultRuntime)
+      ? defaults
+      : undefined,
     catalogEntry,
   ];
   const profile = candidates.find(
@@ -90,22 +94,13 @@ export function resolveThinkingProfileForSession(
   };
 }
 
-function resolveThinkingLevelOptionsForSession(
-  session: ChatThinkingTarget | undefined,
-  defaults: ThinkingSessionDefaults,
-  catalog: readonly ModelCatalogEntry[] = [],
-): GatewayThinkingLevelOption[] {
-  return resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [];
-}
-
 export function resolveThinkingCommandArgOptionsForSession(
   session: ChatThinkingTarget | undefined,
   defaults?: SessionsListResult["defaults"],
   catalog: readonly ModelCatalogEntry[] = [],
 ): string[] {
-  const options = resolveThinkingLevelOptionsForSession(session, defaults, catalog).map((level) =>
-    normalizeThinkingOptionValue(level.id),
-  );
+  const levels = resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [];
+  const options = levels.map((level) => normalizeThinkingOptionValue(level.id));
   return options.length > 0
     ? ["default", ...new Set(options.filter((option) => option && option !== "default"))]
     : [];
@@ -137,7 +132,7 @@ export function resolveThinkingLevelInput(
     return normalized;
   }
   const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
-  return resolveThinkingLevelOptionsForSession(session, defaults, catalog)
+  return (resolveThinkingProfileForSession(session, defaults, catalog)?.thinkingLevels ?? [])
     .map((option) => ({
       id: normalizeThinkingOptionValue(option.id),
       label: normalizeLowercaseStringOrEmpty(option.label),
@@ -183,10 +178,12 @@ function buildThinkingOptions(
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
   for (const level of levels) {
-    const normalizedValue = normalizeThinkingOptionValue(level.id);
-    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
-      formatThinkingOverrideLabel(normalizedValue, level.label),
-    );
+    const value = normalizeThinkingOptionValue(level.id);
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    options.push({ value, label: formatThinkingOverrideLabel(value, level.label) });
   }
   return options;
 }
@@ -286,30 +283,24 @@ export function formatThinkingOverrideLabel(value: string, label?: string | null
   return formatThinkingLevelDisplayLabel(label?.trim() || normalized);
 }
 
+const THINKING_LEVEL_LABELS = new Map([
+  ["adaptive", "Adaptive"],
+  ["minimal", "Minimal"],
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"],
+  ["xhigh", "Extra high"],
+  ["max", "Maximum"],
+  ["ultra", "Ultra"],
+]);
+
 function formatThinkingLevelDisplayLabel(value: string): string {
   const raw = normalizeLowercaseStringOrEmpty(value);
   if (["on", "enable", "enabled"].includes(raw)) {
     return "On";
   }
-  const normalized = normalizeThinkingOptionValue(value);
-  switch (normalized) {
-    case "adaptive":
-      return "Adaptive";
-    case "minimal":
-      return "Minimal";
-    case "low":
-      return "Low";
-    case "medium":
-      return "Medium";
-    case "high":
-      return "High";
-    case "xhigh":
-      return "Extra high";
-    case "max":
-      return "Maximum";
-    case "ultra":
-      return "Ultra";
-    default:
-      return value.charAt(0).toUpperCase() + value.slice(1);
-  }
+  return (
+    THINKING_LEVEL_LABELS.get(normalizeThinkingOptionValue(value)) ??
+    value.charAt(0).toUpperCase() + value.slice(1)
+  );
 }

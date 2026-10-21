@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
 
 type FakeEntry = { id: string; parentId: string | null; type: string; customType?: string };
@@ -26,53 +27,26 @@ describe("resolveTerminalMessageEntryId", () => {
     customType: "projection-snapshot",
   };
 
-  it("returns the leaf when it is already a message entry", () => {
-    const entryId = resolveTerminalMessageEntryId({
-      getLeafId: () => "leaf-1",
-      getEntry: (id) =>
-        id === "leaf-1" ? { id: "leaf-1", parentId: null, type: "message" } : undefined,
-    });
-
-    expect(entryId).toBe("leaf-1");
-  });
-
-  it("skips stacked cache-TTL markers", () => {
-    const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
-    expect(
-      resolveTerminalMessageEntryId(managerFor([base, marker, secondMarker], secondMarker.id)),
-    ).toBe(base.id);
-  });
-
-  it("preserves unrelated custom terminal entries", () => {
-    expect(resolveTerminalMessageEntryId(managerFor([base, marker, snapshot], snapshot.id))).toBe(
+  const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
+  const trailingMarker = { ...marker, id: "trailing", parentId: snapshot.id };
+  it.each<[string, FakeEntry[], string | null, string | null]>([
+    ["message leaf", [base], base.id, base.id],
+    ["stacked markers", [base, marker, secondMarker], secondMarker.id, base.id],
+    ["custom leaf", [base, marker, snapshot], snapshot.id, snapshot.id],
+    [
+      "marker after custom leaf",
+      [base, marker, snapshot, trailingMarker],
+      trailingMarker.id,
       snapshot.id,
-    );
-    const trailingMarker = { ...marker, id: "trailing", parentId: snapshot.id };
-    expect(
-      resolveTerminalMessageEntryId(
-        managerFor([base, marker, snapshot, trailingMarker], trailingMarker.id),
-      ),
-    ).toBe(snapshot.id);
+    ],
+    ["parentless marker", [{ ...marker, parentId: null }], marker.id, null],
+    ["missing parent", [marker], marker.id, null],
+    ["no leaf", [], null, null],
+  ])("resolves %s", (_name, entries, leaf, expected) => {
+    expect(resolveTerminalMessageEntryId(managerFor(entries, leaf))).toBe(expected);
   });
 
-  it("returns null for a marker without an available parent", () => {
-    expect(
-      resolveTerminalMessageEntryId(managerFor([{ ...marker, parentId: null }], marker.id)),
-    ).toBeNull();
-    expect(resolveTerminalMessageEntryId(managerFor([marker], marker.id))).toBeNull();
-  });
-
-  it("returns null when there is no leaf", () => {
-    const entryId = resolveTerminalMessageEntryId({
-      getLeafId: () => null,
-      getEntry: () => undefined,
-    });
-
-    expect(entryId).toBeNull();
-  });
-
-  it("cuts through a real cache-ttl marker on a SessionManager leaf", async () => {
-    const { SessionManager } = await import("../../sessions/session-manager.js");
+  it("cuts through a real cache-ttl marker on a SessionManager leaf", () => {
     const timestamp = new Date().toISOString();
     const sessionManager = SessionManager.fromEntries([
       {

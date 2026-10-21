@@ -3,10 +3,6 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.R
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawTheme
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -88,10 +84,7 @@ internal fun aboutBuildIdentity(
 internal fun aboutCommitAccessibilityValue(
   fullCommit: String?,
   unknownLabel: String,
-): String =
-  fullCommit?.let { commit ->
-    commit.toCharArray().joinToString(" ")
-  } ?: unknownLabel
+): String = fullCommit?.toCharArray()?.joinToString(" ") ?: unknownLabel
 
 @Composable
 internal fun AboutBuildIdentityPanel(
@@ -119,27 +112,9 @@ internal fun AboutBuildIdentityPanel(
   val copyCommitLabel = stringResource(R.string.about_build_copy_commit)
   val copyTimestampLabel = stringResource(R.string.about_build_copy_timestamp)
   val commitClick: (() -> Unit)? =
-    identity.fullCommit?.let { commit ->
-      {
-        copyAboutBuildValue(
-          context = context,
-          label = commitClipboardLabel,
-          value = commit,
-          confirmation = commitCopiedConfirmation,
-        )
-      }
-    }
+    identity.fullCommit?.let { commit -> { context.copyTextWithConfirmation(commitClipboardLabel, commit, commitCopiedConfirmation) } }
   val timestampClick: (() -> Unit)? =
-    identity.buildTimestamp?.let { timestamp ->
-      {
-        copyAboutBuildValue(
-          context = context,
-          label = timestampClipboardLabel,
-          value = timestamp,
-          confirmation = timestampCopiedConfirmation,
-        )
-      }
-    }
+    identity.buildTimestamp?.let { timestamp -> { context.copyTextWithConfirmation(timestampClipboardLabel, timestamp, timestampCopiedConfirmation) } }
   val builtAccessibilityLabel =
     identity.buildTimestamp?.let { timestamp ->
       stringResource(R.string.about_build_built_accessibility, identity.built, timestamp)
@@ -199,27 +174,22 @@ private fun AboutBuildIdentityCell(
   cell: AboutBuildCell,
   modifier: Modifier,
 ) {
-  val clickModifier =
-    cell.onClick?.let { action ->
-      Modifier.clickable(onClickLabel = cell.onClickLabel, onClick = action)
-    } ?: Modifier
-  val accessibilityModifier =
-    Modifier.clearAndSetSemantics {
-      contentDescription = cell.accessibilityLabel
-      cell.onClick?.let { action ->
-        onClick(label = cell.onClickLabel) {
-          action()
-          true
-        }
-      }
-    }
-
   Column(
     modifier =
       modifier
-        .then(clickModifier)
-        .then(accessibilityModifier)
-        .heightIn(min = 54.dp)
+        .then(
+          cell.onClick?.let { action ->
+            Modifier.clickable(onClickLabel = cell.onClickLabel, onClick = action)
+          } ?: Modifier,
+        ).clearAndSetSemantics {
+          contentDescription = cell.accessibilityLabel
+          cell.onClick?.let { action ->
+            onClick(label = cell.onClickLabel) {
+              action()
+              true
+            }
+          }
+        }.heightIn(min = 54.dp)
         .padding(horizontal = 5.dp, vertical = 6.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,
@@ -243,15 +213,4 @@ private fun AboutBuildIdentityCell(
       textAlign = TextAlign.Center,
     )
   }
-}
-
-private fun copyAboutBuildValue(
-  context: Context,
-  label: String,
-  value: String,
-  confirmation: String,
-) {
-  val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-  clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
-  Toast.makeText(context, confirmation, Toast.LENGTH_SHORT).show()
 }

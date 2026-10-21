@@ -15,6 +15,8 @@ import {
   resolveOfficialExternalPluginId,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "../plugins/plugin-provider-request-policy.js";
+import { PLUGIN_ORIGIN_PRIORITIES } from "../plugins/record-groups.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -36,14 +38,6 @@ export type ChannelDmPolicyMetadata = {
 
 type ChannelDmPolicyMetadataRecord = ChannelDmPolicyMetadata & {
   originRank: number;
-};
-
-const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
-  // Lower ranks are closer to the operator and should override farther bundled/global metadata.
-  config: 0,
-  workspace: 1,
-  global: 2,
-  bundled: 3,
 };
 
 const CHANNEL_HEARTBEAT_VISIBILITY_JSON_SCHEMA =
@@ -158,6 +152,7 @@ function normalizeCoreOwnedChannelSchema(schema: Record<string, unknown>): Recor
 export function collectPluginSchemaMetadataCore(
   registry: PluginManifestRegistry,
 ): PluginUiMetadata[] {
+  const requestOwners = collectPluginProviderRequestOwners(registry.plugins);
   const deduped = new Map<
     string,
     PluginUiMetadata & {
@@ -167,7 +162,7 @@ export function collectPluginSchemaMetadataCore(
 
   for (const record of registry.plugins) {
     const current = deduped.get(record.id);
-    const nextRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const nextRank = PLUGIN_ORIGIN_PRIORITIES[record.origin]?.explicit ?? Number.MAX_SAFE_INTEGER;
     // Prefer the closest install origin when the same plugin id appears in multiple registries.
     if (current && current.originRank <= nextRank) {
       continue;
@@ -182,6 +177,15 @@ export function collectPluginSchemaMetadataCore(
       configUiHints: record.configUiHints,
       configGroups: record.configGroups,
       configSchema: record.configSchema,
+      providerRequest: record.providerRequest
+        ? {
+            providers: Object.fromEntries(
+              [...requestOwners]
+                .filter(([, owner]) => owner.plugin === record)
+                .map(([provider, { policy }]) => [provider, policy]),
+            ),
+          }
+        : undefined,
       originRank: nextRank,
     });
   }
@@ -222,7 +226,9 @@ function collectSelectedChannelOwners(
 ): ReadonlyMap<string, string> {
   const selectedOwners = new Map<string, string>();
   for (const record of registry.plugins.toSorted(
-    (left, right) => PLUGIN_ORIGIN_RANK[left.origin] - PLUGIN_ORIGIN_RANK[right.origin],
+    (left, right) =>
+      PLUGIN_ORIGIN_PRIORITIES[left.origin]?.explicit -
+      PLUGIN_ORIGIN_PRIORITIES[right.origin]?.explicit,
   )) {
     if (!selectedPluginIds?.has(record.id)) {
       continue;
@@ -246,7 +252,7 @@ export function collectChannelSchemaMetadataWithOwnership(
   const selectedOwners = collectSelectedChannelOwners(registry, selectedPluginIds);
 
   for (const record of registry.plugins) {
-    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const originRank = PLUGIN_ORIGIN_PRIORITIES[record.origin]?.explicit ?? Number.MAX_SAFE_INTEGER;
     const rootLabel = record.channelCatalogMeta?.label;
     const rootDescription = record.channelCatalogMeta?.blurb;
 
@@ -389,7 +395,7 @@ export function collectChannelDmPolicyMetadata(
   };
 
   for (const record of registry.plugins) {
-    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+    const originRank = PLUGIN_ORIGIN_PRIORITIES[record.origin]?.explicit ?? Number.MAX_SAFE_INTEGER;
     const packageChannelId = record.packageChannel?.id?.trim();
     const officialEntry = getOfficialExternalPluginCatalogEntryForPackage(record.packageName);
     const officialChannel =

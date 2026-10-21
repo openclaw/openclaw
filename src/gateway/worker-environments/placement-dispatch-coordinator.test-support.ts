@@ -101,6 +101,7 @@ export function createCoordinatorTestService(overrides: Partial<DispatchService>
     readEnvironmentSessionIds: async () => [],
     reconcile: unexpected,
     reconcileActive: unexpected,
+    isInterruptedTurn: () => false,
     resumeProvisioning: unexpected,
     ...overrides,
   };

@@ -4,10 +4,36 @@ import { describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
 
+type SessionEntry = ReturnType<
+  OpenClawPluginApi["runtime"]["agent"]["session"]["listSessionEntries"]
+>[number]["entry"];
+const threadId = "shared-thread";
+function session(sessionKey: string, entry: Partial<SessionEntry> = {}) {
+  return {
+    sessionKey,
+    entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } }, ...entry },
+  };
+}
+
+function boundSessions(entries: { sessionKey: string; entry: Partial<SessionEntry> }[]) {
+  return listBoundClaudeSessions({
+    id: "anthropic",
+    config: {},
+    runtime: {
+      config: { current: () => ({}) },
+      agent: { session: { listSessionEntries: () => entries } },
+    },
+  } as unknown as OpenClawPluginApi);
+}
+
 describe("Claude bound session resolution", () => {
   it("reuses revision-bound projections and reads unversioned entries every time", () => {
     const config = {};
-    const api = { id: "anthropic", config, runtime: {} } as OpenClawPluginApi;
+    const api = {
+      id: "anthropic",
+      config,
+      runtime: { config: { current: () => config } },
+    } as OpenClawPluginApi;
     const entries = [
       {
         agentId: "main",
@@ -64,36 +90,15 @@ describe("Claude bound session resolution", () => {
     {
       label: "exec binding",
       nodeAdopted: false,
-      nodeEntry: { execHost: "node", execNode: "node-a" },
+      nodeEntry: { execHost: "node" as const, execNode: "node-a" },
     },
   ])("keeps local and paired-node bindings distinct via $label", ({ nodeAdopted, nodeEntry }) => {
-    const threadId = "shared-thread";
-    const api = {
-      id: "anthropic",
-      config: {},
-      runtime: {
-        config: { current: () => ({}) },
-        agent: {
-          session: {
-            listSessionEntries: () => [
-              {
-                sessionKey: "agent:main:local",
-                entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
-              },
-              {
-                sessionKey: "agent:main:node",
-                entry: {
-                  cliSessionBindings: { "claude-cli": { sessionId: threadId } },
-                  ...nodeEntry,
-                },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawPluginApi;
+    const bound = boundSessions([
+      session("agent:main:local"),
+      session("agent:main:node", nodeEntry),
+    ]);
 
-    expect(listBoundClaudeSessions(api)).toEqual(
+    expect(bound).toEqual(
       new Map([
         [
           adoptedSourceKey("gateway:local", threadId),
@@ -108,43 +113,15 @@ describe("Claude bound session resolution", () => {
   });
 
   it("keeps an adopted session on a source key a sibling agent's CLI binding shares", () => {
-    const threadId = "shared-thread";
-    const api = {
-      id: "anthropic",
-      config: {},
-      runtime: {
-        config: { current: () => ({}) },
-        agent: {
-          session: {
-            listSessionEntries: () => [
-              {
-                sessionKey: "plugin:anthropic:catalog-adopt:claude:adopted",
-                entry: {
-                  cliSessionBindings: { "claude-cli": { sessionId: threadId } },
-                  pluginOwnerId: "anthropic",
-                  modelSelectionLocked: true,
-                },
-              },
-              // Listed last on purpose: the source key carries no agent, so
-              // last-write-wins would report this thread unadopted and drop the
-              // adopted row out of the catalog entirely.
-              {
-                sessionKey: "agent:other:routed",
-                entry: { cliSessionBindings: { "claude-cli": { sessionId: threadId } } },
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawPluginApi;
+    const sessionKey = "plugin:anthropic:catalog-adopt:claude:adopted";
+    const bound = boundSessions([
+      session(sessionKey, { pluginOwnerId: "anthropic", modelSelectionLocked: true }),
+      // A later sibling binding must not displace the adopted owner of this source key.
+      session("agent:other:routed"),
+    ]);
 
-    expect(listBoundClaudeSessions(api)).toEqual(
-      new Map([
-        [
-          adoptedSourceKey("gateway:local", threadId),
-          { adopted: true, sessionKey: "plugin:anthropic:catalog-adopt:claude:adopted" },
-        ],
-      ]),
+    expect(bound).toEqual(
+      new Map([[adoptedSourceKey("gateway:local", threadId), { adopted: true, sessionKey }]]),
     );
   });
 });

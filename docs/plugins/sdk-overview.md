@@ -42,7 +42,7 @@ Backend plugin APIs and ordinary plugin loading do not require that setting.
 ## What each page covers
 
 - [Imports and module layout](/plugins/sdk-overview/imports) — which subpath to import from, the subpath catalog, and the internal barrel convention.
-- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus the worker-provider and embedding runtime contracts.
+- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus storage, worker, and embedding runtime contracts.
 - [Tools and commands](/plugins/sdk-overview/tools-and-commands) — agent tools, custom commands, node-host commands, and widget presenters.
 - [Infrastructure registration](/plugins/sdk-overview/infrastructure) — hooks, HTTP routes, Gateway methods, services, and the webhook and SQLite helpers.
 - [Host hooks](/plugins/sdk-overview/host-hooks) — session extensions, trusted tool policies, Control UI descriptors, and runtime lifecycle.

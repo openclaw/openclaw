@@ -1,11 +1,13 @@
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
-import { render } from "lit";
 import { describe, expect, it } from "vitest";
-import { renderCapabilityChips } from "./capability-chips.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { CapabilityChips } from "./capability-chips.tsx";
 
 function renderChips(caps: string[]) {
   const container = document.createElement("div");
-  render(renderCapabilityChips(caps), container);
+  mountSolid(() => CapabilityChips({ caps }), { container });
+  flush();
   return container;
 }
 

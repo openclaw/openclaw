@@ -3,11 +3,11 @@ import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from 
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "./session-pull-requests.ts";
 
-export function createHello(): GatewayHelloOk {
+export function createHello(scopes: string[] = ["operator.read"]): GatewayHelloOk {
   return {
     type: "hello-ok",
     protocol: 1,
-    auth: { role: "operator", scopes: [] },
+    auth: { role: "operator", scopes },
     features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
   };
 }
@@ -57,6 +57,7 @@ export function createGatewayHarness() {
     subscribeEvents,
     subscribeEventLog: () => () => {},
     connect: vi.fn(),
+    defer: () => false,
     setSessionKey: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),

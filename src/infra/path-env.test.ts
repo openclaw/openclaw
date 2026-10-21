@@ -1,5 +1,6 @@
 // Covers OpenClaw CLI PATH construction.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOpenClawCliOnPath } from "./path-env.js";
@@ -81,12 +82,17 @@ describe("ensureOpenClawCliOnPath", () => {
 
   function bootstrapPath(params: {
     execPath: string;
-    cwd: string;
+    cwd?: string;
     homeDir: string;
     platform: NodeJS.Platform;
-    allowProjectLocalBin?: boolean;
   }) {
-    ensureOpenClawCliOnPath(params);
+    vi.spyOn(process, "execPath", "get").mockReturnValue(params.execPath);
+    if (params.cwd !== undefined) {
+      vi.spyOn(process, "cwd").mockReturnValue(params.cwd);
+    }
+    vi.spyOn(os, "homedir").mockReturnValue(params.homeDir);
+    vi.spyOn(process, "platform", "get").mockReturnValue(params.platform);
+    ensureOpenClawCliOnPath();
     return (process.env.PATH ?? "").split(path.delimiter);
   }
 
@@ -151,12 +157,7 @@ describe("ensureOpenClawCliOnPath", () => {
   it("is idempotent", () => {
     process.env.PATH = "/bin";
     process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
-    ensureOpenClawCliOnPath({
-      execPath: "/tmp/does-not-matter",
-      cwd: "/tmp",
-      homeDir: "/tmp",
-      platform: "darwin",
-    });
+    ensureOpenClawCliOnPath();
     expect(process.env.PATH).toBe("/bin");
   });
 
@@ -224,54 +225,35 @@ describe("ensureOpenClawCliOnPath", () => {
     }
   });
 
-  it.each([
-    {
-      name: "explicit option",
-      envValue: undefined,
-      allowProjectLocalBin: true,
-    },
-    {
-      name: "truthy env",
-      envValue: "1",
-      allowProjectLocalBin: undefined,
-    },
-  ])(
-    "only appends project-local node_modules/.bin when enabled via $name",
-    ({ envValue, allowProjectLocalBin }) => {
-      const { tmp, appCli } = setupAppCliRoot("case-project-local");
-      const localBinDir = path.join(tmp, "node_modules", ".bin");
-      const localCli = path.join(localBinDir, "openclaw");
-      setDir(path.join(tmp, "node_modules"));
-      setDir(localBinDir);
-      setExe(localCli);
+  it("only appends project-local node_modules/.bin when enabled via the environment", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-project-local");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    const localCli = path.join(localBinDir, "openclaw");
+    setDir(path.join(tmp, "node_modules"));
+    setDir(localBinDir);
+    setExe(localCli);
 
-      resetBootstrapEnv();
+    resetBootstrapEnv();
 
-      const withoutOptIn = bootstrapPath({
-        execPath: appCli,
-        cwd: tmp,
-        homeDir: tmp,
-        platform: "darwin",
-      });
-      expect(withoutOptIn.includes(localBinDir)).toBe(false);
+    const withoutOptIn = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expect(withoutOptIn.includes(localBinDir)).toBe(false);
 
-      resetBootstrapEnv();
-      if (envValue === undefined) {
-        delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
-      } else {
-        process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = envValue;
-      }
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
 
-      const withOptIn = bootstrapPath({
-        execPath: appCli,
-        cwd: tmp,
-        homeDir: tmp,
-        platform: "darwin",
-        ...(allowProjectLocalBin === undefined ? {} : { allowProjectLocalBin }),
-      });
-      expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
-    },
-  );
+    const withOptIn = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+    expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
+  });
 
   it("skips project-local bins when the working directory was deleted", () => {
     const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
@@ -285,7 +267,7 @@ describe("ensureOpenClawCliOnPath", () => {
     });
 
     try {
-      ensureOpenClawCliOnPath({ execPath: appCli, homeDir: tmp, platform: "darwin" });
+      bootstrapPath({ execPath: appCli, homeDir: tmp, platform: "darwin" });
     } finally {
       cwdSpy.mockRestore();
     }

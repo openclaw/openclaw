@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
@@ -21,12 +22,8 @@ import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
-import {
-  callGatewayTool,
-  fetchBrowserJson,
-  persistBrowserProxyResultFiles,
-} from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
+import { BrowserServiceError, fetchBrowserJson } from "./browser/client-fetch.js";
+import { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
@@ -63,11 +60,7 @@ function unwrapBrowserProxyPayload(
   if (typeof payload?.payloadJSON !== "string" || !payload.payloadJSON.trim()) {
     return null;
   }
-  try {
-    return JSON.parse(payload.payloadJSON) as BrowserProxyEnvelope;
-  } catch {
-    return null;
-  }
+  return safeParseJson<BrowserProxyEnvelope>(payload.payloadJSON);
 }
 
 async function callBrowserProxy(

@@ -1,4 +1,3 @@
-// Delivery context types describe normalized channel route delivery inputs.
 import type { ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
 
 /** Deferred outbound delivery intent attached to a session or task. */

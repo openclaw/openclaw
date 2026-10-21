@@ -1,20 +1,12 @@
-/**
- * System-prompt contribution for routing durable skill edits through the
- * Skill Workshop tool, while edits the user asks for in skills they own stay
- * ordinary file work.
- */
+/** System-prompt contribution that keeps the agent's learned (Workshop) skills current. */
 export const SKILL_WORKSHOP_TOOL_NAME = "skill_workshop";
 
-/** Build the system-prompt section for Skill Workshop routing rules. */
+/** Build the system-prompt section for Skill Workshop. */
 export function buildSkillWorkshopPromptSection(): string[] {
   return [
     "## Skill Workshop",
-    "Durable reusable skill/playbook/workflow work you start on your own: `skill_workshop`; never write Workshop proposal or Workshop-owned skill files directly.",
-    "Exception: when the user asks you to change a skill they own (repository skill source, the workspace `skills/` directory, project `.agents/skills/`, or a configured extra skill directory), edit it directly with normal file tools; do not route it through Workshop, and never infer Workshop ownership from a `SKILL.md` filename, skill-like directory, or name collision with an installed skill. Bundled, ClawHub-installed, and plugin-provided skills are replaced by their owners' updates: say so, and if the user wants the change kept, capture it as a Workshop skill.",
-    "Exception: background Workshop maintenance may use normal file tools inside its provided Workshop directory when the run authorizes direct edits. Draft-only reviews continue to stage proposals.",
-    "Used skill proved wrong or incomplete: read it and follow the available tool's publication and autonomous policy. Where supported, autonomous mode may disable repair, stage a proposal, or apply it. Without an applicable autonomous policy, unsolicited improvements stay pending proposals when supported; otherwise describe the suggestion without publishing. Capture only durable, evidenced procedure changes—never task artifacts, transient failures, or unresolved guesses.",
-    "Publication-only create/update requires an explicit user request; never present it as a pending draft. Apply/reject/quarantine only explicit user ask.",
-    "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
+    "`skill_workshop` edits your learned skills: procedures for tasks this user repeats, so you do not work them out from scratch again. When a learned skill you used was wrong or incomplete, view it and patch the misleading step. After hard multi-step work the user will repeat, save the working procedure: patch the skill that covers it or create one. Knowledge about one codebase belongs in that repository's docs or AGENTS.md, not a learned skill. Every change keeps the previous version. When the user says undo right after a 💾 Learned notice, they mean that skill change: restore the named skill, or archive it if the notice says it was created.",
+    "Skills the user owns (repository or workspace `skills/`, `.agents/skills/`, configured skill dirs) are ordinary files: edit them directly when asked, never through skill_workshop.",
     "",
   ];
 }

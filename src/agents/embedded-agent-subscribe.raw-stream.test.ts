@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fsSafe from "../infra/fs-safe.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,13 +34,18 @@ describe("appendRawStream", () => {
     });
   });
 
-  it("snapshots the factory result before appending exact JSONL", async () => {
+  it("snapshots the factory result before appending exact JSONL", async ({ signal }) => {
+    const append = vi.spyOn(fsSafe, "appendRegularFile");
     const payload = { event: "test", ts: 1 };
-    appendRawStream(() => payload, undefined);
-    payload.ts = 2;
-    await vi.waitFor(() => {
+    try {
+      appendRawStream(() => payload, undefined);
+      payload.ts = 2;
+      // The real append owns both the write and handle close; keep its completion promise.
+      await withinTest(append.mock.results[0]!.value, signal);
       expect(fs.readFileSync(target, "utf8")).toBe('{"event":"test","ts":1}\n');
-    });
+    } finally {
+      append.mockRestore();
+    }
   });
 
   it("does not evaluate Incognito stream content or create a log file", () => {

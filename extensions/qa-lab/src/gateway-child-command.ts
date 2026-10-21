@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeSync } from "node:fs";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -54,8 +54,29 @@ export async function runQaGatewayCliCommand(params: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   stdin?: string;
+  bootstrapPhase?: "mock-auth" | "repair-help" | "repair";
 }): Promise<string> {
   params.lifetime.assertOpen();
+  const startedAt = performance.now();
+  const report = (event: string, fields: Record<string, string | number | boolean | null> = {}) => {
+    if (!params.bootstrapPhase) {
+      return;
+    }
+    try {
+      writeSync(
+        2,
+        `[qa-bootstrap] ${JSON.stringify({
+          command: params.bootstrapPhase,
+          event,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          ...fields,
+        })}\n`,
+      );
+    } catch {
+      // Observability must never replace command or cleanup failures.
+    }
+  };
+  report("start");
   const hasStdin = params.stdin !== undefined;
   const child = spawn(params.executablePath, [...params.argsPrefix, ...params.args], {
     cwd: params.cwd,
@@ -68,7 +89,7 @@ export async function runQaGatewayCliCommand(params: {
   const owned = params.lifetime.register(child, null, "cli");
   const repair =
     params.args[0] === "update" && params.args[1] === "repair" && !params.args.includes("--help");
-  const result = readQaGatewayCliCommand(child, params.lifetime, owned, repair);
+  const result = readQaGatewayCliCommand(child, params.lifetime, owned, repair, report);
   params.lifetime.completeCli(owned, result);
   if (hasStdin) {
     child.stdin?.end(params.stdin);
@@ -81,6 +102,7 @@ async function readQaGatewayCliCommand(
   lifetime: QaGatewayChildLifecycle,
   owned: ReturnType<QaGatewayChildLifecycle["register"]>,
   repair: boolean,
+  report: (event: string, fields?: Record<string, string | number | boolean | null>) => void,
 ): Promise<string> {
   const stdout = createQaChildOutputCapture();
   const stderr = createQaChildOutputTail();
@@ -98,7 +120,10 @@ async function readQaGatewayCliCommand(
   child.stdin?.once("error", (error) =>
     fail(`qa gateway cli stdin failed: ${createQaGatewayCliError(error).message}`),
   );
-  child.once("exit", (code) => finish(code ?? 1));
+  child.once("exit", (code, signal) => {
+    report("exit", { exitCode: code, signalled: signal !== null });
+    finish(code ?? 1);
+  });
   const onAbort = () => fail("qa gateway CLI cancelled: lifecycle is closed");
   lifetime.signal.addEventListener("abort", onAbort, { once: true });
   // Repair has serial phases, each with its own runtime budget. Do not spend the
@@ -114,9 +139,10 @@ async function readQaGatewayCliCommand(
   );
   let observingProgress = true;
   const observeProgress = repair
-    ? createQaRepairProgressObserver(() => {
+    ? createQaRepairProgressObserver((progress) => {
         if (observingProgress) {
           executionTimer.refresh();
+          report("repair-phase", progress);
         }
       })
     : undefined;
@@ -124,6 +150,7 @@ async function readQaGatewayCliCommand(
     appendQaChildOutputTail(stderr, chunk);
     observeProgress?.(chunk);
   });
+  let pipesClosed = false;
   let exitCode: number | undefined;
   let stopped: Awaited<ReturnType<QaGatewayChildLifecycle["stopProcess"]>>;
   try {
@@ -136,10 +163,12 @@ async function readQaGatewayCliCommand(
     if (stopped.process !== "unconfirmed") {
       try {
         await lifetime.waitForClose(owned);
+        pipesClosed = true;
       } catch (error) {
         fail(error);
       }
     }
+    report("settled", { processStopped: stopped.process !== "unconfirmed", pipesClosed });
   } finally {
     observingProgress = false;
     clearTimeout(executionTimer);

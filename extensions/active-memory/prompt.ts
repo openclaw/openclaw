@@ -2,7 +2,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_CLOSE_TAG,
@@ -165,9 +165,9 @@ export function readExplicitMemoryEvidence(source: Record<string, unknown>): boo
   if (status !== undefined && STRUCTURED_MEMORY_EMPTY_STATUSES.has(status)) {
     return false;
   }
-  const resultCollections = [source.results, source.memories, source.items];
-  if (resultCollections.some((entry) => Array.isArray(entry))) {
-    return resultCollections.some((entry) => Array.isArray(entry) && entry.length > 0);
+  const resultCollections = [source.results, source.memories, source.items].filter(Array.isArray);
+  if (resultCollections.length > 0) {
+    return resultCollections.some((entry) => entry.length > 0);
   }
   const resultCounts = [
     source.count,
@@ -175,11 +175,9 @@ export function readExplicitMemoryEvidence(source: Record<string, unknown>): boo
     source.memoryCount,
     source.resultCount,
     source.totalMatches,
-  ];
-  if (resultCounts.some((entry) => typeof entry === "number" && Number.isFinite(entry))) {
-    return resultCounts.some(
-      (entry) => typeof entry === "number" && Number.isFinite(entry) && entry > 0,
-    );
+  ].filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+  if (resultCounts.length > 0) {
+    return resultCounts.some((entry) => entry > 0);
   }
   if (typeof source.found === "boolean" || typeof source.hasResults === "boolean") {
     return source.found === true || source.hasResults === true;
@@ -227,20 +225,18 @@ function readStructuredContentState(
   const parts = extractTextContentParts(content);
   let sawOtherState = false;
   for (const part of parts) {
-    try {
-      const state = readState(JSON.parse(part));
-      if (state === decisiveState) {
-        return decisiveState;
-      }
-      sawOtherState ||= state === !decisiveState;
-    } catch {}
+    const state = readState(safeParseJson(part));
+    if (state === decisiveState) {
+      return decisiveState;
+    }
+    sawOtherState ||= state === !decisiveState;
   }
-  try {
-    const state = readState(JSON.parse(parts.join(" ").trim()));
+  if (parts.length > 1) {
+    const state = readState(safeParseJson(parts.join(" ").trim()));
     if (state !== undefined) {
       return state;
     }
-  } catch {}
+  }
   return sawOtherState ? !decisiveState : undefined;
 }
 

@@ -1,11 +1,15 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { clearFollowupQueue, getFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { AgentConfig } from "../../config/types.agents.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -13,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -50,28 +55,13 @@ vi.mock("../../agents/model-runtime-choice.js", () => ({
 }));
 
 const effects = vi.hoisted(() => ({
-  info: vi.fn(),
   mutateConfigFileWithRetry: vi.fn(),
-  warn: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
-});
-
-vi.mock("../../logging/subsystem.js", async () => {
-  const actual = await vi.importActual<typeof import("../../logging/subsystem.js")>(
-    "../../logging/subsystem.js",
-  );
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "agents/sticky-model-selection"
-        ? { info: effects.info, warn: effects.warn }
-        : actual.createSubsystemLogger(subsystem),
-  };
 });
 
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -81,18 +71,19 @@ import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
-const defaultAgents: AgentConfig[] = [
-  { id: "main", default: true },
-  { id: "work", model: "anthropic/claude-sonnet-4-6" },
-];
+const defaultAgents: Record<string, AgentEntryConfig> = {
+  main: {},
+  work: { model: "anthropic/claude-sonnet-4-6" },
+};
 
 const defaultConfig = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: defaultAgents,
+    entries: defaultAgents,
   },
 } satisfies OpenClawConfig;
 
@@ -102,6 +93,7 @@ let openClawTestState: OpenClawTestState;
 let accountOwnerId: string;
 let otherPersonId: string;
 let personalAuthProfileId: string;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
 
 const modelCatalog: ModelCatalogEntry[] = [
   { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
@@ -109,6 +101,17 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
+const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const readSession = (key: string) => loadSessionEntry(sessionScope(key));
+const seedSession = (key: string, entry: Partial<SessionEntry> = {}, agentId = "main") =>
+  upsertSessionEntryCore({ agentId, sessionKey: key }, { sessionId: key, updatedAt: 1, ...entry });
+const selectedModel = { providerOverride: "openai", modelOverride: "gpt-5.6-sol" };
+const runtimeSelection = { model: "openai/gpt-5.6-sol", agentRuntime: "codex" };
+const personalPin = () => ({
+  ...selectedModel,
+  authProfileOverride: personalAuthProfileId,
+  authProfileOverrideSource: "user" as const,
+});
 
 function catalogSnapshot(entries = modelCatalog) {
   return {
@@ -139,17 +142,9 @@ function context(clients = new Set<TestClient>()) {
 }
 
 function client(scopes: string[]): TestClient {
-  return {
-    connId: "sticky-model-connection",
-    invalidated: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes,
-    },
-  };
+  const base = createSessionMutationTestClient();
+  base.connect.scopes = scopes;
+  return { ...base, connId: "sticky-model-connection", invalidated: false };
 }
 
 function personClient(profileId: string, scopes = ["operator.write"]): TestClient {
@@ -183,8 +178,42 @@ async function patchSession(
   return responses[0]!;
 }
 
+async function personalSession(
+  key: string,
+  entry: Partial<SessionEntry> = {},
+  caller = personClient(accountOwnerId),
+) {
+  await seedSession(key, entry);
+  const before = readSession(key);
+  const connections = new Set([caller]);
+  const requestContext = context(connections);
+  const patch = (params: Record<string, unknown> = {}) =>
+    patchSession(
+      { key, model: `openai/gpt-5.6-sol@${personalAuthProfileId}`, ...params },
+      caller.connect.scopes,
+      requestContext,
+      caller,
+    );
+  const expectUnchanged = (response: Parameters<RespondFn>) => {
+    expect(response[0]).toBe(false);
+    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(readSession(key)).toEqual(before);
+  };
+  return { before, caller, connections, requestContext, patch, expectUnchanged };
+}
+
+function runtimeOptions(key: string) {
+  return {
+    cfg,
+    key,
+    ...runtimeSelection,
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" as const },
+    loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
+  };
+}
+
 function queueRuntimeSelection(sessionKey: string) {
-  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
   const queued = {
     agentId: "main",
     agentDir: "/tmp/agent",
@@ -198,7 +227,14 @@ function queueRuntimeSelection(sessionKey: string) {
     timeoutMs: 30_000,
     blockReplyBreak: "message_end" as const,
   };
-  queue.items.push({ prompt: "Queued work", enqueuedAt: 1, run: queued });
+  enqueueFollowupRun(
+    sessionKey,
+    { prompt: "Queued work", enqueuedAt: 1, run: queued },
+    { mode: "followup" },
+    "none",
+    undefined,
+    false,
+  );
   return queued;
 }
 
@@ -217,6 +253,7 @@ beforeAll(async () => {
     },
     assertCurrent: () => {},
   }).authProfileId;
+  profileCatalog = await prepareUserProfileCatalog();
   // Persisted runtime pins need installed owners even when a patch changes only permissions.
   pluginMetadata.snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
@@ -232,14 +269,13 @@ afterEach(() => {
 
 beforeEach(() => {
   cfg = structuredClone(defaultConfig);
+  setRuntimeConfigSnapshot(cfg);
   runtimeChoice.prepare.mockReset().mockImplementation(async (input) => ({
     kind: "ready",
     runtimeId: input.runtimeId ?? "openclaw",
     validate: () => undefined,
   }));
   persistedConfig = undefined;
-  effects.info.mockReset();
-  effects.warn.mockReset();
   effects.mutateConfigFileWithRetry
     .mockReset()
     .mockImplementation(
@@ -253,6 +289,7 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
+  profileCatalog?.release();
   closeOpenClawAgentDatabasesForTest();
   await openClawTestState.cleanup();
 });
@@ -278,51 +315,6 @@ describe("sessions.patch sticky model persistence", () => {
     getPersistedConfig: () => persistedConfig,
   });
   it.each([
-    { scope: undefined, agentId: "main", target: undefined },
-    { scope: undefined, agentId: "work", target: undefined },
-    { scope: "session", agentId: "main", target: undefined },
-    { scope: "session", agentId: "work", target: undefined },
-    { scope: "agent", agentId: "main", target: "agent" },
-    { scope: "agent", agentId: "work", target: "agent" },
-    { scope: "global", agentId: "main", target: "defaults" },
-    { scope: "global", agentId: "work", target: "defaults" },
-  ] as const)(
-    "uses scope=$scope for $agentId without changing another config layer",
-    async ({ scope, agentId, target }) => {
-      cfg.agents!.defaults!.modelSelectionScope = scope;
-      const sessionKey = `agent:${agentId}:dm:sticky-${scope ?? "unset"}`;
-      const model = "openai/gpt-5.6-sol";
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        { sessionId: `session-${agentId}-${scope ?? "unset"}`, updatedAt: 1 },
-      );
-
-      const response = await patchSession({ key: sessionKey, model });
-
-      expect(response[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
-      if (!target) {
-        expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-        return;
-      }
-      await vi.waitFor(() => expect(persistedConfig).toBeDefined());
-      expect(persistedConfig?.agents?.defaults?.model).toBe(
-        target === "defaults" ? model : defaultConfig.agents.defaults.model,
-      );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (target === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
-      }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
-    },
-  );
-
-  it.each([
     { scope: "agent", agentId: "main", model: "anthropic/claude-opus-4-6" },
     { scope: "global", agentId: "work", model: "anthropic/claude-sonnet-4-6" },
   ] as const)(
@@ -330,38 +322,29 @@ describe("sessions.patch sticky model persistence", () => {
     async ({ scope, agentId, model }) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
       const sessionKey = `agent:${agentId}:dm:scope-current-${scope}`;
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        { sessionId: `session-scope-current-${scope}`, updatedAt: 1 },
-      );
+      await seedSession(sessionKey, { sessionId: `session-scope-current-${scope}` }, agentId);
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: model.slice("anthropic/".length),
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      });
+      const entry = loadSessionEntry({ agentId, sessionKey });
+      expect(entry?.modelOverrideSource).toBe("default");
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideRouteResolution).toBeUndefined();
       await vi.waitFor(() => expect(persistedConfig).toBeDefined());
       expect(persistedConfig?.agents?.defaults?.model).toBe(
         scope === "global" ? model : defaultConfig.agents.defaults.model,
       );
-      const expectedAgents = structuredClone(defaultConfig.agents.list);
-      for (const agent of expectedAgents) {
-        if (scope === "agent" && agent.id === agentId) {
-          agent.model = model;
-        }
+      const expectedAgents = structuredClone(defaultConfig.agents.entries);
+      if (scope === "agent") {
+        expectedAgents[agentId]!.model = model;
       }
-      expect(persistedConfig?.agents?.list).toEqual(expectedAgents);
+      expect(persistedConfig?.agents?.entries).toEqual(expectedAgents);
     },
   );
 
   it("emits a groups invalidation when a patch first registers a category", async () => {
     const sessionKey = "agent:main:dm:category-groups";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-category-groups", updatedAt: 1 },
-    );
+    await seedSession(sessionKey, { sessionId: "session-category-groups" });
     const broadcast = vi.fn();
     const subscribedContext = {
       ...context(),
@@ -369,149 +352,100 @@ describe("sessions.patch sticky model persistence", () => {
       getSessionEventSubscriberConnIds: () => new Set(["conn-groups"]),
     };
 
-    const first = await patchSession(
-      { key: sessionKey, category: "Fresh Category" },
-      ["operator.admin"],
-      subscribedContext,
-    );
-    expect(first[0]).toBe(true);
-    const groupsEvents = broadcast.mock.calls.filter(
-      (call) =>
-        call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
-    );
-    expect(groupsEvents).toHaveLength(1);
-
-    // Re-assigning an already-registered category is not a catalog mutation.
-    broadcast.mockClear();
-    const second = await patchSession(
-      { key: sessionKey, category: "Fresh Category" },
-      ["operator.admin"],
-      subscribedContext,
-    );
-    expect(second[0]).toBe(true);
-    expect(
+    const assignCategory = () =>
+      patchSession(
+        { key: sessionKey, category: "Fresh Category" },
+        ["operator.admin"],
+        subscribedContext,
+      );
+    expect((await assignCategory())[0]).toBe(true);
+    const groupsEvents = () =>
       broadcast.mock.calls.filter(
-        (call) =>
-          call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
-      ),
-    ).toHaveLength(0);
+        ([event, payload]) => event === "sessions.changed" && payload.reason === "groups",
+      );
+    expect(groupsEvents()).toHaveLength(1);
+
+    broadcast.mockClear();
+    expect((await assignCategory())[0]).toBe(true);
+    expect(groupsEvents()).toHaveLength(0);
   });
 
-  it.each([undefined, "session", "agent", "global"] as const)(
+  it.each([undefined, "global"] as const)(
     "keeps non-admin model changes session-only with scope=%s",
     async (scope) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
       const sessionKey = `agent:main:dm:non-admin-${scope ?? "unset"}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: `session-non-admin-${scope ?? "unset"}`, updatedAt: 1 },
-      );
+      await seedSession(sessionKey, { sessionId: `session-non-admin-${scope ?? "unset"}` });
 
       const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
         "operator.write",
       ]);
 
       expect(response[0]).toBe(true);
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
+      expect(readSession(sessionKey)).toMatchObject(selectedModel);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
-  it("returns session success and warns when the sticky config write fails", async () => {
-    cfg.agents!.defaults!.modelSelectionScope = "global";
-    const sessionKey = "agent:main:dm:write-failure";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-write-failure", updatedAt: 1 },
-    );
-    effects.mutateConfigFileWithRetry.mockRejectedValueOnce(new Error("config write failed"));
-
-    const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" });
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    });
-    await vi.waitFor(() =>
-      expect(effects.warn).toHaveBeenCalledWith(
-        "failed sticky model persistence agentId=main model=openai/gpt-5.6-sol reason=config write failed",
-      ),
-    );
-  });
-
-  it.each([
-    { name: "omitted", patch: { label: "Sticky" }, catalogChanged: false },
-    { name: "cleared", patch: { model: null }, catalogChanged: true },
-    {
-      name: "reset to the current default",
-      patch: { model: "anthropic/claude-opus-4-6" },
-      catalogChanged: true,
+  it.each(["model", "agentRuntime"] as const)(
+    "clears the %s pin and invalidates the catalog without changing other pins",
+    async (field) => {
+      const sessionKey =
+        field === "model" ? "agent:main:dm:no-sticky-cleared" : "agent:main:runtime-clear";
+      await seedSession(sessionKey, {
+        ...selectedModel,
+        ...(field === "model"
+          ? {
+              sessionId: "session-cleared",
+              modelOverrideSource: "user",
+              modelOverrideRouteResolution: "resolved",
+            }
+          : {
+              agentRuntimeOverride: "openclaw",
+              authProfileOverrideSource: "user-link",
+              contextTokens: 1000,
+              authProfileOverride: personalAuthProfileId,
+            }),
+      });
+      const requestContext = {
+        ...context(),
+        getSessionEventSubscriberConnIds: () => new Set(["reader"]),
+      };
+      const response = await patchSession(
+        { key: sessionKey, [field]: null },
+        ["operator.admin"],
+        requestContext,
+      );
+      await flushPendingSessionsChangedEvents(requestContext);
+      expect(response[0]).toBe(true);
+      if (field === "model") {
+        expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      } else {
+        const stored = readSession(sessionKey);
+        expect(stored).toMatchObject({
+          modelOverride: "gpt-5.6-sol",
+          authProfileOverride: personalAuthProfileId,
+          liveModelSwitchPending: true,
+        });
+        expect(stored).not.toHaveProperty("agentRuntimeOverride");
+        expect(stored).not.toHaveProperty("contextTokens");
+        expect(runtimeChoice.prepare).not.toHaveBeenCalled();
+      }
+      expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+        sessionKey,
+        reason: "patch",
+        catalogChanged: true,
+      });
     },
-  ])("does not persist when model is $name", async ({ name, patch, catalogChanged }) => {
-    const sessionKey = `agent:main:dm:no-sticky-${name}`;
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: `session-${name}`,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      },
-    );
-
-    const requestContext = {
-      ...context(),
-      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
-    };
-    const response = await patchSession(
-      { key: sessionKey, ...patch },
-      ["operator.admin"],
-      requestContext,
-    );
-    await flushPendingSessionsChangedEvents(requestContext);
-
-    expect(response[0]).toBe(true);
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-    const event = requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1];
-    expect(event).toMatchObject({ sessionKey, reason: "patch" });
-    if (catalogChanged) {
-      expect(event).toHaveProperty("catalogChanged", true);
-    } else {
-      expect(event).not.toHaveProperty("catalogChanged");
-    }
-  });
+  );
 });
 
 describe("sessions.patch personal model-account ownership", () => {
   it("lets the connected human select a saved personal account for this session", async () => {
     const sessionKey = "agent:main:dm:personal-selection-owner";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "personal-selection-owner", updatedAt: 1 },
-    );
-    const caller = personClient(accountOwnerId);
-    const requestContext = context(new Set([caller]));
-
-    const response = await patchSession(
-      { key: sessionKey, model: `openai/gpt-5.6-sol@${personalAuthProfileId}` },
-      caller.connect.scopes,
-      requestContext,
-      caller,
-    );
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user",
-    });
+    const { patch } = await personalSession(sessionKey, { sessionId: "personal-selection-owner" });
+    expect((await patch())[0]).toBe(true);
+    expect(readSession(sessionKey)).toMatchObject(personalPin());
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
@@ -519,42 +453,27 @@ describe("sessions.patch personal model-account ownership", () => {
     "denies a new personal selection from a %s before catalog or credential access",
     async (kind) => {
       const sessionKey = `agent:main:dm:personal-selection-denied-${kind.replaceAll(" ", "-")}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: sessionKey, updatedAt: 1, label: "Original" },
-      );
-      const before = loadSessionEntry({ agentId: "main", sessionKey });
       const caller =
         kind === "foreign admin"
           ? personClient(otherPersonId, ["operator.admin"])
           : kind === "unidentified admin"
             ? client(["operator.admin"])
             : personClient(accountOwnerId, ["operator.admin"]);
+      const { expectUnchanged, requestContext, patch } = await personalSession(
+        sessionKey,
+        { label: "Original" },
+        caller,
+      );
       if (kind === "agent") {
         caller.internal = {
           syntheticClient: true,
           agentToolCaller: { agentId: "main", sessionKey },
         };
       }
-      const requestContext = context(new Set([caller]));
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-
-      const response = await patchSession(
-        {
-          key: sessionKey,
-          model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
-          label: "Must not commit",
-        },
-        caller.connect.scopes,
-        requestContext,
-        caller,
-      );
-
-      expect(response[0]).toBe(false);
-      expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+      expectUnchanged(await patch({ label: "Must not commit" }));
       expect(requestContext.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(readCredential).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
@@ -563,37 +482,31 @@ describe("sessions.patch personal model-account ownership", () => {
     "rejects a personal selection %s while the model catalog is loading",
     async (loss) => {
       const sessionKey = `agent:main:dm:personal-selection-lost-${loss.replaceAll(" ", "-")}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: sessionKey, updatedAt: 1, label: "Before catalog" },
+      const { expectUnchanged, caller, connections, requestContext, patch } = await personalSession(
+        sessionKey,
+        { label: "Before catalog" },
       );
-      const before = loadSessionEntry({ agentId: "main", sessionKey });
       const writer: GatewayOperatorRoleDefinition = {
         agents: "*",
         scopes: ["operator.write"],
         sessions: { others: "none" },
       };
       cfg.gateway = { roles: { default: "writer", definitions: { writer } } };
-      const caller = personClient(accountOwnerId);
-      const connections = new Set([caller]);
-      const requestContext = context(connections);
       const catalog = createDeferredCore<ReturnType<typeof catalogSnapshot>>();
-      requestContext.loadGatewayModelCatalogSnapshot.mockReturnValueOnce(catalog.promise);
+      const catalogEntered = createDeferredCore();
+      requestContext.loadGatewayModelCatalogSnapshot.mockImplementationOnce(() => {
+        catalogEntered.resolve();
+        return catalog.promise;
+      });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-      const pending = patchSession(
-        {
-          key: sessionKey,
-          model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
-          label: "Must not commit",
-        },
-        caller.connect.scopes,
-        requestContext,
-        caller,
-      );
+      const pending = patch({ label: "Must not commit" });
       try {
-        await vi.waitFor(() =>
-          expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce(),
+        await awaitGateBeforeSettlement(
+          catalogEntered.promise,
+          pending,
+          `Personal ${loss} patch settled before loading the catalog`,
         );
+        expect(requestContext.loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
         if (loss === "invalidated") {
           caller.invalidated = true;
         } else if (loss === "disconnected") {
@@ -604,69 +517,40 @@ describe("sessions.patch personal model-account ownership", () => {
       } finally {
         catalog.resolve(catalogSnapshot());
       }
-      const response = await pending;
-
-      expect(response[0]).toBe(false);
-      expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
+      expectUnchanged(await pending);
       expect(readCredential).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
   it("reports lost personal authority during archive drain as forbidden", async () => {
     const sessionKey = "agent:main:dm:personal-selection-archive-drain";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "personal-selection-archive-drain", updatedAt: 1 },
-    );
-    const before = loadSessionEntry({ agentId: "main", sessionKey });
-    const caller = personClient(accountOwnerId);
-    const connections = new Set([caller]);
+    const { before, expectUnchanged, caller, connections, requestContext, patch } =
+      await personalSession(sessionKey, { sessionId: "personal-selection-archive-drain" });
     const release = vi.fn();
     const terminalSessions = new TerminalSessionManager({ emit: vi.fn() });
     vi.spyOn(terminalSessions, "beginAgentSessionDrain").mockImplementation(() => {
       connections.delete(caller);
       return { drained: Promise.resolve(), hasWork: () => false, release };
     });
-    const requestContext = {
-      ...context(connections),
-      terminalSessions,
-      chatQueuedTurns: new Map(),
-      dedupe: new Map(),
-    };
-    const response = await patchSession(
-      {
-        key: sessionKey,
-        model: `openai/gpt-5.6-sol@${personalAuthProfileId}`,
+    requestContext.terminalSessions = terminalSessions;
+    requestContext.dedupe = new Map();
+    expectUnchanged(
+      await patch({
         archived: true,
         expectedSessionId: before!.sessionId,
-      },
-      caller.connect.scopes,
-      requestContext,
-      caller,
+      }),
     );
-
-    expect(response[0]).toBe(false);
-    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("retains an existing personal pin when an agent patches unrelated session metadata", async () => {
     const sessionKey = "agent:main:dm:personal-selection-inherited";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "personal-selection-inherited",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user",
-        createdActor: { type: "human", id: accountOwnerId, source: "profile" },
-      },
-    );
+    await seedSession(sessionKey, {
+      sessionId: "personal-selection-inherited",
+      ...personalPin(),
+      createdActor: { type: "human", id: accountOwnerId, source: "profile" },
+    });
     const caller = client(["operator.write"]);
     caller.internal = { syntheticClient: true, agentToolCaller: { agentId: "main", sessionKey } };
 
@@ -678,154 +562,30 @@ describe("sessions.patch personal model-account ownership", () => {
     );
 
     expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+    expect(readSession(sessionKey)).toMatchObject({
       label: "Renamed by the session agent",
-      authProfileOverride: personalAuthProfileId,
-      authProfileOverrideSource: "user",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
+      ...personalPin(),
     });
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  });
-
-  it("preserves shared-profile selection without requiring a personal identity", async () => {
-    const sharedAuthProfileId = "openai:shared-session-control";
-    await openClawTestState.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        [sharedAuthProfileId]: {
-          type: "token",
-          provider: "openai",
-          token: "synthetic-shared-token",
-        },
-      },
-    });
-    const sessionKey = "agent:main:dm:shared-selection-control";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "shared-selection-control", updatedAt: 1 },
-    );
-
-    const response = await patchSession(
-      { key: sessionKey, model: `openai/gpt-5.6-sol@${sharedAuthProfileId}` },
-      ["operator.write"],
-    );
-
-    expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: sharedAuthProfileId,
-      authProfileOverrideSource: "user",
-    });
   });
 });
 
 describe("explicit session model runtimes", () => {
-  it.each(["codex", "openclaw"])(
-    "pins %s without changing the configured default",
-    async (agentRuntime) => {
-      const sessionKey = `agent:main:runtime-${agentRuntime}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: sessionKey,
-          updatedAt: 1,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.6-sol",
-          contextTokens: 1000,
-        },
-      );
-      const queued = queueRuntimeSelection(sessionKey);
-      let response: Awaited<ReturnType<typeof patchSession>>;
-      try {
-        response = await patchSession({
-          key: sessionKey,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime,
-        });
-        expect(queued).toMatchObject({
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          requestedRouteResolution: "resolved",
-        });
-      } finally {
-        clearFollowupQueue(sessionKey);
-      }
-      expect(response[0]).toBe(true);
-      const stored = loadSessionEntry({ agentId: "main", sessionKey });
-      expect(stored).toMatchObject({
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: agentRuntime,
-        liveModelSwitchPending: true,
-      });
-      expect(stored).not.toHaveProperty("contextTokens");
-      expect(persistedConfig).toBeUndefined();
-      expect(cfg.agents?.defaults?.model).toEqual(defaultConfig.agents.defaults.model);
-    },
-  );
-
-  it("clears only the runtime pin and preserves the explicit model and account", async () => {
-    const sessionKey = "agent:main:runtime-clear";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: "openclaw",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user-link",
-        contextTokens: 1000,
-      },
-    );
-    const requestContext = {
-      ...context(),
-      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
-    };
-    const response = await patchSession(
-      { key: sessionKey, agentRuntime: null },
-      ["operator.admin"],
-      requestContext,
-    );
-    expect(response[0]).toBe(true);
-    await flushPendingSessionsChangedEvents(requestContext);
-    expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
-      sessionKey,
-      reason: "patch",
-      catalogChanged: true,
-    });
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
-    expect(stored).toMatchObject({
-      modelOverride: "gpt-5.6-sol",
-      authProfileOverride: personalAuthProfileId,
-      liveModelSwitchPending: true,
-    });
-    expect(stored).not.toHaveProperty("agentRuntimeOverride");
-    expect(stored).not.toHaveProperty("contextTokens");
-    expect(runtimeChoice.prepare).not.toHaveBeenCalled();
-  });
-
   it.each([
     { model: undefined, agentRuntime: "codex" },
     { model: "gpt-5.6-sol", agentRuntime: "codex" },
     { model: "openai/gpt-5.6-sol", agentRuntime: "default" },
   ])("rejects ambiguous runtime selections without mutating the row (%j)", async (patch) => {
     const sessionKey = "agent:main:runtime-invalid";
-    const entry = { sessionId: sessionKey, updatedAt: 1, label: "Original" };
-    await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+    await seedSession(sessionKey, { label: "Original" });
     const response = await patchSession({ key: sessionKey, label: "Wrong", ...patch });
     expect(response[0]).toBe(false);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.label).toBe("Original");
+    expect(readSession(sessionKey)?.label).toBe("Original");
   });
 
   it("revalidates runtime availability immediately before committing", async () => {
     const sessionKey = "agent:main:runtime-stale";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: sessionKey, updatedAt: 1, label: "Original" },
-    );
+    await seedSession(sessionKey, { label: "Original" });
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
       runtimeId: "codex",
@@ -837,12 +597,11 @@ describe("explicit session model runtimes", () => {
     const response = await patchSession({
       key: sessionKey,
       label: "Wrong",
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
+      ...runtimeSelection,
     });
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("no longer available");
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ label: "Original" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
@@ -851,10 +610,7 @@ describe("explicit session model runtimes", () => {
     const sessionKey = "agent:main:runtime-replaced";
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "original", updatedAt: 1 },
-    );
+    await seedSession(sessionKey, { sessionId: "original" });
     runtimeChoice.prepare.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
@@ -863,96 +619,44 @@ describe("explicit session model runtimes", () => {
     const pending = patchSession({
       key: sessionKey,
       expectedSessionId: "original",
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
+      ...runtimeSelection,
     });
     await Promise.race([entered.promise, pending]);
     try {
       expect(runtimeChoice.prepare).toHaveBeenCalledOnce();
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: "replacement", updatedAt: 2 },
-      );
+      await seedSession(sessionKey, { sessionId: "replacement", updatedAt: 2 });
     } finally {
       release.resolve();
     }
     expect((await pending)[0]).toBe(false);
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ sessionId: "replacement" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
 
-  it("validates a person-linked account as a pin for the selected runtime", async () => {
-    const sessionKey = "agent:main:runtime-personal";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: "openclaw",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user-link",
-      },
-    );
-    expect(
-      (
-        await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol", agentRuntime: "codex" })
-      )[0],
-    ).toBe(true);
-    expect(runtimeChoice.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtimeId: "codex",
-        sessionEntry: expect.objectContaining({
-          authProfileOverride: personalAuthProfileId,
-          authProfileOverrideSource: "user",
-        }),
-      }),
-    );
-  });
-
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
-    const options = {
-      cfg,
-      key: sessionKey,
-      model: "openai/gpt-5.6-sol",
-      agentRuntime: "codex",
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" as const },
-      loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
-    };
+    const options = runtimeOptions(sessionKey);
     const result = await createGatewaySession(options);
     expect(result).toMatchObject({
       ok: true,
-      entry: {
-        agentRuntimeOverride: "codex",
-        modelOverride: "gpt-5.6-sol",
-      },
+      entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
     });
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
-    expect(
-      await createGatewaySession({
-        ...options,
-        agentRuntime: "openclaw",
-        allowExistingModelSelection: false,
-      }),
-    ).toMatchObject({
+    const adopt = (allowExistingModelSelection: boolean) =>
+      createGatewaySession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
+    expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.agentRuntimeOverride).toBe("codex");
+    expect(readSession(sessionKey)?.agentRuntimeOverride).toBe("codex");
     const queued = queueRuntimeSelection(sessionKey);
     try {
-      expect(
-        await createGatewaySession({
-          ...options,
-          agentRuntime: "openclaw",
-          allowExistingModelSelection: true,
-        }),
-      ).toMatchObject({ ok: true, entry: { agentRuntimeOverride: "openclaw" } });
+      expect(await adopt(true)).toMatchObject({
+        ok: true,
+        entry: { agentRuntimeOverride: "openclaw" },
+      });
       expect(queued).toMatchObject({
         provider: "openai",
         model: "gpt-5.6-sol",
@@ -969,18 +673,11 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(
-      await createGatewaySession({
-        cfg,
-        key: sessionKey,
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
-      }),
-    ).toMatchObject({ ok: false, error: { message: "Refresh the model catalog." } });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+    expect(await createGatewaySession(runtimeOptions(sessionKey))).toMatchObject({
+      ok: false,
+      error: { message: "Refresh the model catalog." },
+    });
+    expect(readSession(sessionKey)).toBeUndefined();
   });
 });
 

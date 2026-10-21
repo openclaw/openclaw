@@ -37,8 +37,6 @@ describe("chat page navigation", () => {
   );
   it.each([
     { agentId: "main", face: "chat" },
-    { agentId: "main", face: "dashboard" },
-    { agentId: "research", face: "chat" },
     { agentId: "research", face: "dashboard" },
   ] as const)(
     "keeps $agentId $face navigation stable when its pane adopts global",

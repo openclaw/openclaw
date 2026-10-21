@@ -14,6 +14,7 @@ struct SettingsHubScreen: View {
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             self.root
+                .background(SidebarNavigationMarginAnchor())
                 .navigationDestination(for: SettingsRoute.self) { route in
                     self.nativeScreen(route: route)
                 }
@@ -22,7 +23,7 @@ struct SettingsHubScreen: View {
 
     @ViewBuilder private var root: some View {
         let config = self.appModel.activeGatewayConnectConfig
-        if Self.usesDashboard(
+        if config?.ingressAuthorization == nil, Self.usesDashboard(
             isOperatorConnected: self.appModel.isOperatorGatewayConnected,
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
@@ -122,7 +123,7 @@ struct SettingsHubScreen: View {
         case .diagnostics: .diagnostics
         case .licenses: .licenses
         case .about: .about
-        case .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
+        case .aiSetup, .quickChatShortcut, .microphoneTest, .browserImport, .debug: nil
         }
     }
 }

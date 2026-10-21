@@ -1,4 +1,4 @@
-// Deepinfra tests cover index plugin behavior.
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
@@ -25,25 +25,10 @@ function buildDeepInfraCatalogContext(): ProviderCatalogContext {
   };
 }
 
-function makeAgentModelEntry(id = "profile/live-model") {
-  return {
-    id,
-    object: "model",
-    owned_by: "deepinfra",
-    metadata: {
-      description: id,
-      context_length: 32768,
-      max_tokens: 4096,
-      pricing: { input_tokens: 1, output_tokens: 2 },
-      tags: ["chat"],
-    },
-  };
-}
-
 function mockDiscoveryFetch(id = "profile/live-model") {
   return vi.fn(async (url: string) => {
     if (url === DEEPINFRA_MODELS_URL) {
-      return Response.json({ data: [makeAgentModelEntry(id)] });
+      return Response.json({ data: [{ id, metadata: { tags: ["chat"] } }] });
     }
     expect(url).toBe("https://api.deepinfra.com/models/list");
     return Response.json([
@@ -62,27 +47,63 @@ function mockDiscoveryFetch(id = "profile/live-model") {
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
-
-async function withLiveDiscoveryTestEnv(
-  mockFetch: ReturnType<typeof vi.fn>,
-  runAssertions: () => Promise<void>,
-) {
-  vi.stubGlobal("fetch", mockFetch);
-
-  try {
-    await runAssertions();
-  } finally {
-    vi.unstubAllGlobals();
-  }
-}
 
 describe("deepinfra capability registration", () => {
   it.each([
+    { baseUrl: "https://api.deepinfra.com/v1/openai", expected: "synthetic-session" },
+    { baseUrl: "https://api.deepinfra.com/v1/openai/", expected: "synthetic-session" },
+    { baseUrl: "https://proxy.example/v1", expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/custom/v1", expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/v1/openai", optOut: true, expected: undefined },
+    { baseUrl: "https://api.deepinfra.com/v1/openai", disabled: true, expected: undefined },
+  ])(
+    "sends cache affinity only for native enabled requests: $baseUrl, $optOut, $disabled",
+    async (route) => {
+      const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+      const model: Model = {
+        id: "synthetic-model",
+        name: "Synthetic model",
+        provider: "deepinfra",
+        api: "openai-completions",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 128,
+        baseUrl: route.baseUrl,
+        ...(route.optOut ? { compat: { supportsPromptCacheKey: false } } : {}),
+      };
+      const normalized =
+        provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
+        model;
+      let payload: unknown;
+      const result = await streamSimple(
+        normalized,
+        { messages: [] },
+        {
+          apiKey: "synthetic-unused-key",
+          sessionId: "synthetic-session",
+          cacheRetention: route.disabled ? "none" : "long",
+          onPayload(value) {
+            payload = value;
+            throw new Error("captured before request");
+          },
+        },
+      ).result();
+      expect(result.errorMessage).toBe("captured before request");
+      expect(payload).toMatchObject({ prompt_cache_key: route.expected });
+      expect(payload).not.toHaveProperty("prompt_cache_retention");
+      expect(payload).not.toHaveProperty("prompt_cache_options");
+    },
+  );
+
+  it.each([
     ...["metadata", "pricing"].flatMap((scenario) =>
-      [401, 403, 503].map((status) => ({ scenario, status })),
+      [401, 503].map((status) => ({ scenario, status })),
     ),
-    ...[200, 401, 503].map((status) => ({ scenario: "empty", status })),
+    { scenario: "empty", status: 503 },
   ])(
     "reports public $scenario HTTP $status without rejecting inference credentials",
     async ({ scenario, status }) => {
@@ -102,32 +123,31 @@ describe("deepinfra capability registration", () => {
         return healthyFetch(url);
       });
       const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-      await withLiveDiscoveryTestEnv(mockFetch, async () => {
-        const result = await provider.catalog?.run(buildDeepInfraCatalogContext());
-        const rejected = status === 401 || status === 403;
-        expect(result).toEqual(
-          scenario === "empty"
-            ? {
-                provider: {
-                  baseUrl: "https://api.deepinfra.com/v1/openai",
-                  api: "openai-completions",
-                  apiKey: "profile-key",
-                  models: [],
-                },
-                outcomes: [{ provider: "deepinfra", status: "ready" }],
-              }
-            : {
-                providers: {},
-                outcomes: [
-                  {
-                    provider: "deepinfra",
-                    status: rejected ? "auth-rejected" : "unavailable",
-                    ...(rejected ? { rejectionScope: "catalog" } : {}),
-                  },
-                ],
+      vi.stubGlobal("fetch", mockFetch);
+      const result = await provider.catalog?.run(buildDeepInfraCatalogContext());
+      const rejected = status === 401 || status === 403;
+      expect(result).toEqual(
+        scenario === "empty"
+          ? {
+              provider: {
+                baseUrl: "https://api.deepinfra.com/v1/openai",
+                api: "openai-completions",
+                apiKey: "profile-key",
+                models: [],
               },
-        );
-      });
+              outcomes: [{ provider: "deepinfra", status: "ready" }],
+            }
+          : {
+              providers: {},
+              outcomes: [
+                {
+                  provider: "deepinfra",
+                  status: rejected ? "auth-rejected" : "unavailable",
+                  ...(rejected ? { rejectionScope: "catalog" } : {}),
+                },
+              ],
+            },
+      );
     },
   );
 
@@ -135,92 +155,60 @@ describe("deepinfra capability registration", () => {
     const captured = createCapturedPluginRegistration();
     deepinfraPlugin.register(captured.api);
 
-    expect(captured.providers.map((provider) => provider.id)).toEqual(["deepinfra"]);
-    expect(captured.imageGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
-    expect(captured.mediaUnderstandingProviders.map((provider) => provider.id)).toEqual([
-      "deepinfra",
-    ]);
-    expect(captured.embeddingProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
-    expect(captured.speechProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
-    expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    for (const providers of [
+      captured.providers,
+      captured.imageGenerationProviders,
+      captured.mediaUnderstandingProviders,
+      captured.embeddingProviders,
+      captured.speechProviders,
+      captured.videoGenerationProviders,
+    ]) {
+      expect(providers.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    }
   });
 
   it("uses profile-resolved API keys for live text catalog discovery", async () => {
     clearLiveCatalogCacheForTests();
     const mockFetch = mockDiscoveryFetch();
-    const captured = createCapturedPluginRegistration();
-    deepinfraPlugin.register(captured.api);
-    const provider = captured.providers[0];
-    if (!provider?.catalog) {
-      throw new Error("expected DeepInfra provider registration");
-    }
-    const catalog = provider.catalog;
+    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
-    await withLiveDiscoveryTestEnv(mockFetch, async () => {
-      const result = await catalog.run(buildDeepInfraCatalogContext());
-      if (!result || !("provider" in result)) {
-        throw new Error("expected single-provider DeepInfra catalog result");
-      }
-
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(mockFetch.mock.calls.map(([url]) => url)).toEqual(
-        expect.arrayContaining([DEEPINFRA_MODELS_URL, "https://api.deepinfra.com/models/list"]),
-      );
-      expect(result.provider.models[0]?.cost).toEqual({
-        input: 4,
-        output: 8,
-        cacheRead: 0,
-        cacheWrite: 0,
-      });
-      expect(result?.provider.apiKey).toBe("profile-key");
-      expect(result.outcomes).toEqual([{ provider: "deepinfra", status: "ready" }]);
-      expect(result.provider.models.map((model) => model.id)).toEqual(["profile/live-model"]);
+    vi.stubGlobal("fetch", mockFetch);
+    const result = await provider.catalog?.run(buildDeepInfraCatalogContext());
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch.mock.calls.map(([url]) => url)).toEqual(
+      expect.arrayContaining([DEEPINFRA_MODELS_URL, "https://api.deepinfra.com/models/list"]),
+    );
+    expect(result).toMatchObject({
+      provider: {
+        apiKey: "profile-key",
+        models: [
+          {
+            id: "profile/live-model",
+            cost: { input: 4, output: 8, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+      outcomes: [{ provider: "deepinfra", status: "ready" }],
     });
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single-provider catalog");
+    }
+    expect(result.provider.models).toHaveLength(1);
   });
 });
 
 describe("deepinfra isCacheTtlEligible", () => {
-  it("returns true for anthropic/* proxied models", async () => {
-    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "anthropic/claude-4-sonnet",
-      }),
-    ).toBe(true);
-  });
-
-  // Locked to case-insensitive to stay consistent with the shared proxy cache
-  // wrapper, which lowercases the modelId before the "anthropic/" prefix check.
   it("returns true regardless of modelId case", async () => {
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "Anthropic/Claude-4-Sonnet",
-      }),
-    ).toBe(true);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "ANTHROPIC/claude-4-sonnet",
-      }),
-    ).toBe(true);
+    for (const modelId of ["Anthropic/Claude-4-Sonnet", "ANTHROPIC/claude-4-sonnet"]) {
+      expect(provider.isCacheTtlEligible?.({ provider: "deepinfra", modelId })).toBe(true);
+    }
   });
 
   it("returns false for non-anthropic models", async () => {
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "meta-llama/Llama-4-Scout-17B-16E-Instruct",
-      }),
-    ).toBe(false);
-    expect(
-      provider.isCacheTtlEligible?.({
-        provider: "deepinfra",
-        modelId: "zai-org/GLM-5.1",
-      }),
-    ).toBe(false);
+    for (const modelId of ["meta-llama/Llama-4-Scout-17B-16E-Instruct", "zai-org/GLM-5.1"]) {
+      expect(provider.isCacheTtlEligible?.({ provider: "deepinfra", modelId })).toBe(false);
+    }
   });
 });

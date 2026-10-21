@@ -19,8 +19,8 @@ import {
   readDiscordMessage,
   readRetryAfter,
 } from "./internal/rest-errors.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
-import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyMessageId,
@@ -83,9 +83,7 @@ async function throwWebhookResponseError(
       retry_after: readRetryAfter(parsed, response, 1),
       code: readDiscordCode(parsed),
       global:
-        parsed && typeof parsed === "object" && "global" in parsed
-          ? Boolean((parsed as { global?: unknown }).global)
-          : false,
+        parsed && typeof parsed === "object" && "global" in parsed ? Boolean(parsed.global) : false,
     });
   }
   throw new DiscordError(response, parsed);

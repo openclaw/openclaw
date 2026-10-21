@@ -27,7 +27,7 @@ function quote(value: string): string {
 }
 
 /** Regular final releases published to npm `latest` activate GitHub before Docker. */
-export function isStableLatestPublication(tag: string, npmDistTag: string | undefined): boolean {
+function isStableLatestPublication(tag: string, npmDistTag: string | undefined): boolean {
   return npmDistTag === "latest" && /^v\d{4}\.\d{1,2}\.\d+(?:-\d+)?$/u.test(tag);
 }
 

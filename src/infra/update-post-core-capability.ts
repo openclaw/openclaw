@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 
@@ -27,13 +27,8 @@ export async function supportsPostCoreExecutor(root: string, nodeRunner: string)
   if (check.termination !== "exit" || check.code !== 0 || check.cleanup !== "normal") {
     return false;
   }
-  let contract: unknown;
-  try {
-    contract = JSON.parse(check.stdout);
-  } catch {
-    return false;
-  }
-  if (!isRecord(contract) || contract.postCoreExecutor !== POST_CORE_EXECUTOR_CAPABILITY) {
+  const contract = safeParseJsonRecord(check.stdout);
+  if (!contract || contract.postCoreExecutor !== POST_CORE_EXECUTOR_CAPABILITY) {
     return false;
   }
   if (contract.mutationProtocol !== POST_CORE_MUTATION_PROTOCOL) {

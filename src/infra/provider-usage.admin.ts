@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonObjectResponse } from "../agents/provider-http-errors.js";
@@ -53,13 +54,7 @@ export function decodeProviderUsageAdminToken(prefix: string, raw: string): stri
 export { asOptionalRecord as asProviderUsageObject };
 
 export function parseProviderUsageNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return asFiniteNumber(typeof value === "string" && value.trim() ? Number(value) : value);
 }
 
 export function parseProviderUsageNonNegativeNumber(value: unknown): number | undefined {

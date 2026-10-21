@@ -11,7 +11,7 @@ export const sessionObserverHandlers: GatewayRequestHandlers = {
     "sessions.observer.visibility",
     validateSessionsObserverVisibilityParams,
     ({ params, respond, client, context }) => {
-      if (!client?.connId) {
+      if (!client?.connId || !context.isConnectionActive?.(client.connId)) {
         respond(
           false,
           undefined,

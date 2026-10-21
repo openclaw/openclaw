@@ -1,4 +1,3 @@
-// Normalizes plugin command specs for CLI and slash command surfaces.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-only-command-defaults.js";
@@ -19,20 +18,9 @@ type PluginCommandSpecOptions = {
   config?: OpenClawConfig;
 };
 
-type PluginCommandEntrySpec = {
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-  nativeName?: string;
-  clientPresentation?: NonNullable<OpenClawPluginCommandDefinition["clientPresentation"]>;
-};
+type PluginCommandEntrySpec = NonNullable<ReturnType<typeof serializePluginCommandEntrySpec>>;
 
-type PluginCommandSpec = {
-  name: string;
-  description: string;
-  descriptionLocalizations?: Record<string, string>;
-  acceptsArgs: boolean;
-};
+type PluginCommandSpec = ReturnType<typeof serializePluginCommandSpec>;
 
 function pluginNativeCommandsEnabled(
   providerName: string | undefined,
@@ -96,10 +84,7 @@ export function listProviderPluginCommandSpecs(provider?: string): PluginCommand
     .map((cmd) => serializePluginCommandSpec(cmd, provider));
 }
 
-function serializePluginCommandSpec(
-  cmd: OpenClawPluginCommandDefinition,
-  provider?: string,
-): PluginCommandSpec {
+function serializePluginCommandSpec(cmd: OpenClawPluginCommandDefinition, provider?: string) {
   const metadata = projectPluginCommandNativeMetadata(cmd, provider);
   return {
     name: metadata.name,
@@ -115,7 +100,7 @@ function serializePluginCommandEntrySpec(
   cmd: OpenClawPluginCommandDefinition,
   provider: string | undefined,
   nativeCommandsEnabled: boolean,
-): PluginCommandEntrySpec | null {
+) {
   if (!pluginCommandSupportsChannel(cmd, provider)) {
     return null;
   }

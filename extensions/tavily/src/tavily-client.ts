@@ -1,13 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import {
+  parseDateStringTimestampMs,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  externalContentStamp,
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
+  readCachedSearchPayload,
   resolveCacheTtlMs,
   writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { assertPluginCapabilitySecretAvailable } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
@@ -17,7 +24,6 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  DEFAULT_TAVILY_BASE_URL,
   TAVILY_API_KEY_CONFIG_PATH,
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
@@ -25,10 +31,6 @@ import {
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
 
-const SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
 const EXTRACT_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
@@ -42,7 +44,7 @@ const TAVILY_EXTRACT_MAX_RESULTS = 20;
 const TAVILY_RESULT_URL_MAX_CHARS = 2_048;
 const TAVILY_PUBLISHED_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
-export type TavilySearchParams = {
+type TavilySearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   searchDepth?: string;
@@ -56,7 +58,7 @@ export type TavilySearchParams = {
   signal?: AbortSignal;
 };
 
-export type TavilyExtractParams = {
+type TavilyExtractParams = {
   cfg?: OpenClawConfig;
   urls: string[];
   query?: string;
@@ -90,7 +92,12 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
     return undefined;
   }
   if (TAVILY_PUBLISHED_DATE_RE.test(value)) {
-    return value;
+    // Preserve accepted timestamp suffixes while rejecting impossible calendar dates.
+    const calendarDate = value.slice(0, 10);
+    const timestamp = parseDateStringTimestampMs(calendarDate);
+    return timestamp !== undefined && new Date(timestamp).toISOString().startsWith(calendarDate)
+      ? value
+      : undefined;
   }
   // Tavily news dates use RFC-style GMT. Exact round-tripping rejects prose,
   // relative ages, and invalid calendar dates before emitting an unwrapped field.
@@ -101,19 +108,10 @@ function normalizeTavilyPublishedDate(value: unknown): string | undefined {
 }
 
 function resolveEndpoint(baseUrl: string, pathname: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
-  try {
-    const url = new URL(trimmed);
-    // Always append the endpoint pathname to the base URL path,
-    // supporting both bare hosts and reverse-proxy path prefixes.
-    url.pathname = url.pathname.replace(/\/$/, "") + pathname;
-    return url.toString();
-  } catch {
-    return `${DEFAULT_TAVILY_BASE_URL}${pathname}`;
-  }
+  const url = new URL(baseUrl);
+  // Append to reverse-proxy path prefixes as well as bare hosts.
+  url.pathname = url.pathname.replace(/\/$/, "") + pathname;
+  return url.toString();
 }
 
 async function postTavilyJson(params: {
@@ -161,6 +159,7 @@ export async function runTavilySearch(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-search",
+      credential: sha256Hex(apiKey),
       q: params.query,
       count,
       baseUrl,
@@ -176,33 +175,21 @@ export async function runTavilySearch(
     params.cfg?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const body: Record<string, unknown> = {
     query: params.query,
     max_results: count,
+    ...(params.searchDepth ? { search_depth: params.searchDepth } : {}),
+    ...(params.topic ? { topic: params.topic } : {}),
+    ...(params.includeAnswer ? { include_answer: true } : {}),
+    ...(params.timeRange ? { time_range: params.timeRange } : {}),
+    ...(params.includeDomains?.length ? { include_domains: params.includeDomains } : {}),
+    ...(params.excludeDomains?.length ? { exclude_domains: params.excludeDomains } : {}),
   };
-  if (params.searchDepth) {
-    body.search_depth = params.searchDepth;
-  }
-  if (params.topic) {
-    body.topic = params.topic;
-  }
-  if (params.includeAnswer) {
-    body.include_answer = true;
-  }
-  if (params.timeRange) {
-    body.time_range = params.timeRange;
-  }
-  if (params.includeDomains?.length) {
-    body.include_domains = params.includeDomains;
-  }
-  if (params.excludeDomains?.length) {
-    body.exclude_domains = params.excludeDomains;
-  }
 
   const start = Date.now();
   const payload = await postTavilyJson({
@@ -250,12 +237,7 @@ export async function runTavilySearch(
     provider: "tavily",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "tavily",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("tavily"),
     results,
   };
   if (typeof payload.answer === "string" && payload.answer) {
@@ -265,7 +247,7 @@ export async function runTavilySearch(
     result.truncated = true;
   }
 
-  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -286,6 +268,7 @@ export async function runTavilyExtract(
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
       type: "tavily-extract",
+      credential: sha256Hex(apiKey),
       urls: params.urls,
       baseUrl,
       query: params.query,
@@ -299,19 +282,13 @@ export async function runTavilyExtract(
     return { ...cached.value, cached: true };
   }
 
-  const body: Record<string, unknown> = { urls: params.urls };
-  if (params.query) {
-    body.query = params.query;
-  }
-  if (params.extractDepth) {
-    body.extract_depth = params.extractDepth;
-  }
-  if (params.chunksPerSource) {
-    body.chunks_per_source = params.chunksPerSource;
-  }
-  if (params.includeImages) {
-    body.include_images = true;
-  }
+  const body: Record<string, unknown> = {
+    urls: params.urls,
+    ...(params.query ? { query: params.query } : {}),
+    ...(params.extractDepth ? { extract_depth: params.extractDepth } : {}),
+    ...(params.chunksPerSource ? { chunks_per_source: params.chunksPerSource } : {}),
+    ...(params.includeImages ? { include_images: true } : {}),
+  };
 
   const start = Date.now();
   const payload = await postTavilyJson({

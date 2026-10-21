@@ -1,40 +1,54 @@
 // Proxy stream wrapper tests cover wrapper selection and provider passthrough.
+import { createAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { buildOpenAICompletionsParams } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../../../packages/ai/src/utils/system-prompt-cache-boundary.js";
+import { resolveProviderRequestCapabilities } from "../../../agents/provider-attribution.js";
 import { createOpenRouterSystemCacheWrapper, createOpenRouterWrapper } from "./proxy.js";
 
+const openRouterModel: Model<"openai-completions"> = {
+  api: "openai-completions",
+  provider: "openrouter",
+  id: "anthropic/claude-sonnet-4.6",
+  name: "Claude",
+  baseUrl: "",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 8192,
+};
+const transportHost = createAiTransportHost({ resolveProviderRequestCapabilities });
+
 function runSystemCacheWrapper(model: Partial<Model<"openai-completions">>) {
-  const payload = {
-    messages: [{ role: "system", content: "system prompt" }],
-  };
+  let payload: ReturnType<typeof buildOpenAICompletionsParams> | undefined;
   const baseStreamFn: StreamFn = (resolvedModel, context, options) => {
+    payload = buildOpenAICompletionsParams(resolvedModel, context, {
+      cacheRetention: options?.cacheRetention,
+    });
     options?.onPayload?.(payload, resolvedModel);
     return createAssistantMessageEventStream();
   };
 
   const wrapped = createOpenRouterSystemCacheWrapper(baseStreamFn);
-  void wrapped(
-    {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "anthropic/claude-sonnet-4.6",
-      ...model,
-    } as Model<"openai-completions">,
-    { messages: [] },
-    {},
+  void runWithAiTransportHost(transportHost, () =>
+    wrapped(
+      { ...openRouterModel, ...model },
+      { systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`, messages: [] },
+      {},
+    ),
   );
 
+  assert(payload);
   return payload;
 }
 
 function captureHeaders(
   extraParams?: Record<string, unknown>,
   model: Partial<Model<"openai-completions">> = {},
-  headers?: Record<string, string>,
 ) {
   const calls: Array<{ headers?: Record<string, string> }> = [];
   const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -49,27 +63,12 @@ function captureHeaders(
       ...model,
     } as Model<"openai-completions">,
     { messages: [] },
-    { headers },
+    {},
   );
   return calls;
 }
 
 describe("proxy stream wrappers", () => {
-  it("adds OpenRouter attribution headers to stream options", () => {
-    const calls = captureHeaders(undefined, {}, { "X-Custom": "1" });
-
-    expect(calls).toEqual([
-      {
-        headers: {
-          "HTTP-Referer": "https://openclaw.ai",
-          "X-OpenRouter-Title": "OpenClaw",
-          "X-OpenRouter-Categories": "personal-agent,cli-agent",
-          "X-Custom": "1",
-        },
-      },
-    ]);
-  });
-
   it("adds opt-in OpenRouter response caching headers", () => {
     const calls = captureHeaders(
       { responseCache: true, responseCacheTtlSeconds: 900 },
@@ -99,6 +98,13 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("86400");
   });
 
+  it.each([Number.NaN, Infinity, -Infinity])("omits non-finite response cache TTL %s", (ttl) => {
+    const calls = captureHeaders({ responseCache: true, responseCacheTtlSeconds: ttl });
+
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers).not.toHaveProperty("X-OpenRouter-Cache-TTL");
+  });
+
   it("does not add OpenRouter response caching headers to custom proxy routes", () => {
     const calls = captureHeaders(
       { responseCache: true },
@@ -108,12 +114,24 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers).toBeUndefined();
   });
 
-  it("injects cache_control markers for declared OpenRouter Anthropic models on the default route", () => {
-    const payload = runSystemCacheWrapper({});
+  it.each([
+    "anthropic/claude-sonnet-4.6",
+    "~anthropic/claude-haiku-latest",
+    "openrouter/anthropic/claude-sonnet-4.6",
+    "openrouter/~anthropic/claude-haiku-latest",
+  ])("preserves the cache breakpoint through request building for OpenRouter model %s", (id) => {
+    const payload = runSystemCacheWrapper({ id });
 
-    expect(payload.messages[0]?.content).toEqual([
-      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "VOLATILE" },
+        ],
+      },
     ]);
+    expect(payload.model).toBe(id);
   });
 
   it("does not inject cache_control markers for declared OpenRouter providers on custom proxy URLs", () => {
@@ -121,16 +139,18 @@ describe("proxy stream wrappers", () => {
       baseUrl: "https://proxy.example.com/v1",
     });
 
-    expect(payload.messages[0]?.content).toBe("system prompt");
+    expect(payload.messages).toEqual([{ role: "system", content: "STABLE\nVOLATILE" }]);
   });
 
-  it("does not inject Anthropic cache_control markers for automatic OpenRouter DeepSeek cache models", () => {
-    const payload = runSystemCacheWrapper({
-      id: "deepseek/deepseek-v3.2",
-    });
+  it.each(["deepseek/deepseek-v3.2", "~openai/gpt-4o", "openrouter/~openai/gpt-4o"])(
+    "does not inject Anthropic cache_control markers for OpenRouter model %s",
+    (id) => {
+      const payload = runSystemCacheWrapper({ id });
 
-    expect(payload.messages[0]?.content).toBe("system prompt");
-  });
+      expect(payload.messages).toEqual([{ role: "system", content: "STABLE\nVOLATILE" }]);
+      expect(payload.model).toBe(id);
+    },
+  );
 
   it("injects cache_control markers for native OpenRouter hosts behind custom provider ids", () => {
     const payload = runSystemCacheWrapper({
@@ -138,8 +158,14 @@ describe("proxy stream wrappers", () => {
       baseUrl: "https://openrouter.ai/api/v1",
     });
 
-    expect(payload.messages[0]?.content).toEqual([
-      { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
+    expect(payload.messages).toEqual([
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "STABLE", cache_control: { type: "ephemeral" } },
+          { type: "text", text: "VOLATILE" },
+        ],
+      },
     ]);
   });
 
@@ -154,16 +180,9 @@ describe("proxy stream wrappers", () => {
       const model: Model<"openai-completions"> & {
         compat: { requiresStringContent: boolean };
       } = {
-        api: "openai-completions",
-        provider: "openrouter",
+        ...openRouterModel,
         id: "anthropic/claude-sonnet-4-6",
-        name: "Claude",
         baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
         compat: { requiresStringContent },
       };
       let payload: Record<string, unknown> = {};
@@ -180,7 +199,12 @@ describe("proxy stream wrappers", () => {
             systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`,
             messages: [
               ...(hasUser ? [{ role: "user" as const, content: "Question", timestamp: 1 }] : []),
-              { role: "user", content: "Runtime", timestamp: 2, runtimeContextCarrier: true },
+              {
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime",
+                timestamp: 2,
+                runtimeContext: {},
+              },
             ],
           });
           const wire = JSON.stringify(payload);
@@ -195,7 +219,7 @@ describe("proxy stream wrappers", () => {
             expect(payload.messages).toEqual([
               { role: "system", content: `${stable}\nVOLATILE` },
               ...(hasUser ? [{ role: "user", content: "Question" }] : []),
-              { role: "user", content: "Runtime" },
+              { role: "developer", content: "OpenClaw runtime context:\nRuntime" },
             ]);
           }
           expect(wire.includes('"ttl":"1h"')).toBe(

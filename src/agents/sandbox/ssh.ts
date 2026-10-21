@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -41,7 +40,7 @@ function normalizeInlineSshMaterial(contents: string, filename: string): string 
   return expanded.endsWith("\n") ? expanded : `${expanded}\n`;
 }
 
-function buildSshFailureMessage(stderr: string, exitCode?: number): string {
+function buildSshFailureMessage(stderr: string, exitCode: number): string {
   const trimmed = stderr.trim();
   if (
     trimmed.includes("error in libcrypto") &&
@@ -49,27 +48,7 @@ function buildSshFailureMessage(stderr: string, exitCode?: number): string {
   ) {
     return `${trimmed}\nSSH sandbox failed to load the configured identity. The private key contents may be malformed (for example CRLF or escaped newlines). Prefer identityFile when possible.`;
   }
-  return (
-    trimmed ||
-    (exitCode !== undefined
-      ? `ssh exited with code ${exitCode}`
-      : "ssh exited with a non-zero status")
-  );
-}
-
-export function buildSshSandboxArgv(params: {
-  session: SshSandboxSession;
-  remoteCommand: string;
-  tty?: boolean;
-}): string[] {
-  return [
-    params.session.command,
-    "-F",
-    params.session.configPath,
-    ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
-    params.session.host,
-    params.remoteCommand,
-  ];
+  return trimmed || `ssh exited with code ${exitCode}`;
 }
 
 export async function createSshSandboxSessionFromConfigText(params: {
@@ -159,7 +138,14 @@ export async function disposeSshSandboxSession(session: SshSandboxSession): Prom
 function commandSession(session: SshSandboxSession): RemoteShellSandboxSession {
   return createRemoteShellSandboxSession({
     buildCommand: ({ remoteCommand, tty }) => ({
-      argv: buildSshSandboxArgv({ session, remoteCommand, tty }),
+      argv: [
+        session.command,
+        "-F",
+        session.configPath,
+        ...(tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        session.host,
+        remoteCommand,
+      ],
       env: sanitizeEnvVars(process.env).allowed,
     }),
     assertCurrent: session.assertCurrent,
@@ -195,16 +181,14 @@ function parseSshConfigHost(configText: string): string | null {
   return hostMatch?.[1]?.trim() || null;
 }
 
-function resolveSshTmpRoot(): string {
-  return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
-}
-
 async function createSshSandboxSession(
   command: string,
   host: string,
   buildConfigText: (configDir: string) => string | Promise<string>,
 ): Promise<SshSandboxSession> {
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
+  const configDir = await fs.mkdtemp(
+    path.join(path.resolve(resolvePreferredOpenClawTmpDir()), "openclaw-sandbox-ssh-"),
+  );
   const configPath = path.join(configDir, "config");
   try {
     await writePrivateFile(configPath, await buildConfigText(configDir));

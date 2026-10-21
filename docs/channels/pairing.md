@@ -136,7 +136,7 @@ database at
 Account scoping behavior:
 
 - each request and approved sender is keyed by channel and account
-- channels using the pairing API read only the canonical SQLite rows; they do not merge legacy files
+- channels using the pairing API read only the current SQLite rows; they do not merge legacy files
 
 Older gateways wrote `<channel>-pairing.json` and
 `<channel>-<accountId>-allowFrom.json` under `~/.openclaw/credentials/`.
@@ -227,7 +227,7 @@ For Tailscale, public, or other remote mobile pairing, use Tailscale Serve/Funne
 or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
 for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
 emulator host. Non-loopback plaintext routes receive limited access. Tailnet
-CGNAT addresses, `.ts.net` names, and public hosts still fail closed before
+CGNAT addresses, `.ts.net` names, and public hosts are still rejected before
 QR/setup-code issuance.
 
 OpenClaw advertises Tailscale setup URLs only when it owns the route through

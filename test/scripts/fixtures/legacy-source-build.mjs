@@ -195,7 +195,11 @@ const modules = new Map([
   [
     "src/daemon/managed-gateway-bindings",
     exportsFromSelf("readBinding as readManagedGatewayBindingState") +
-      `export const discoverManagedGatewayBindings = async () => ${JSON.stringify(mode === "sibling" ? [{ profile: "sibling", env: { OPENCLAW_PROFILE: "sibling" } }] : [])};`,
+      `export { describeManagedGatewayBinding } from ${JSON.stringify(pathToFileURL(path.join(source, "src/daemon/managed-gateway-bindings.ts")).href + "?original")};
+      export const discoverManagedGatewayBindings = async (env, options) => [
+        ...(options?.includeInvoking ? [{env}] : []),
+        ...${JSON.stringify(mode === "sibling" ? [{ env: { OPENCLAW_PROFILE: "sibling" } }] : [])}
+      ];`,
   ],
 ]);
 if (
@@ -278,6 +282,13 @@ const compilerResponse = `
     return ${JSON.stringify(mode)}.startsWith('failure') ? 17 : 0;
   }`;
 modules.set("scripts/lib/managed-child-process", compilerResponse);
+// The synthetic compiler has no declaration program or outputs to cache.
+const cacheUrl = pathToFileURL(path.join(source, "scripts/lib/build-artifact-cache.mts")).href;
+modules.set(
+  "scripts/lib/build-artifact-cache",
+  `export * from ${JSON.stringify(cacheUrl + "?original")};
+  export const resolveBuildStepCacheState = () => ({cacheable: false, fresh: false, reason: 'fixture compiler'});`,
+);
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier.includes("?original")) {

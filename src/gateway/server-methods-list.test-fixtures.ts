@@ -32,7 +32,7 @@ taskSuggestions.create taskSuggestions.accept taskSuggestions.dismiss environmen
 environments.status worktrees.list worktrees.branches fs.listDir worktrees.create
 worktrees.remove worktrees.restore worktrees.gc agents.list agents.create agents.update
 agents.delete agents.files.list agents.files.get agents.files.set sessions.files.list
-sessions.files.get sessions.files.set sessions.files.reveal artifacts.list artifacts.get
+sessions.files.get sessions.files.download sessions.files.set sessions.files.reveal artifacts.list artifacts.get
 artifacts.download skills.status skills.library.list skills.library.read skills.library.save
 skills.library.mutate skills.library.activate skills.library.import skills.library.upload
 skills.search skills.detail skills.securityVerdicts
@@ -73,7 +73,8 @@ migrations.memory.plan migrations.memory.apply ui.command approval.history
 plugin.surface.refresh conversations.list session.discussion.info session.discussion.open
 board.prompt.authorize board.data.read board.action sessions.observer.visibility
 session.visibility.set session.members.list session.members.add session.members.remove
-session.suggestions.add session.suggestions.list session.suggestions.resolve session.typing
+session.suggestions.add session.suggestions.list session.suggestions.resolve
+session.reactions.set session.reactions.list session.typing
 sessions.companion.ask sessions.companion.state sessions.companion.reset memory.search
 skills.proposals.events.list skills.proposals.evaluate hooks.status
 audit.run.inspect sessions.patchMany update.hold sessions.catalog.startTerminal

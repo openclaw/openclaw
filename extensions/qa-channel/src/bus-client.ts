@@ -1,6 +1,11 @@
 import http from "node:http";
 import https from "node:https";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import type { ChannelMessageSendTextContext } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  PlatformMessageNotDispatchedError,
+  toErrorObject,
+} from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -65,7 +70,22 @@ const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 type QaBusPostOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  beforeRequest?: () => void;
 };
+
+export type QaMessageSendHandoff = Pick<
+  ChannelMessageSendTextContext,
+  "signal" | "onPlatformSendDispatch" | "assertDirectAdapterHandoff"
+>;
+
+function messageNotDispatched(cause: unknown): PlatformMessageNotDispatchedError {
+  return cause instanceof PlatformMessageNotDispatchedError
+    ? cause
+    : new PlatformMessageNotDispatchedError(
+        cause instanceof Error ? cause.message : "QA message handoff refused",
+        { cause, retryable: false },
+      );
+}
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -97,49 +117,54 @@ async function postJson<T>(
   body: unknown,
   options: QaBusPostOptions = {},
 ): Promise<T> {
-  const url = buildQaBusUrl(baseUrl, path);
-  const payload = JSON.stringify(body);
-  const client = url.protocol === "https:" ? https : http;
-  const timeoutMs = resolvePositiveTimerTimeoutMs(options.timeoutMs, QA_BUS_REQUEST_TIMEOUT_MS);
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
+  return captureEffectAuthority().initiate(async () => {
+    const url = buildQaBusUrl(baseUrl, path);
+    const payload = JSON.stringify(body);
+    const client = url.protocol === "https:" ? https : http;
+    const timeoutMs = resolvePositiveTimerTimeoutMs(options.timeoutMs, QA_BUS_REQUEST_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
 
-  return await new Promise<T>((resolve, reject) => {
-    const request = client.request(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(payload),
-          connection: "close",
+    return await new Promise<T>((resolve, reject) => {
+      options.beforeRequest?.();
+      const request = client.request(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(payload),
+            connection: "close",
+          },
+          signal,
         },
-        signal,
-      },
-      (response) => {
-        const label = `qa-bus ${path}`;
-        void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
-          (parsed) => {
-            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-              const error =
-                typeof parsed === "object" && parsed && "error" in parsed
-                  ? parsed.error
-                  : undefined;
-              reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
-              return;
-            }
-            resolve(parsed as T);
-          },
-          (error: unknown) => {
-            reject(toErrorObject(error, "Non-Error rejection"));
-          },
-        );
-        response.on("error", reject);
-      },
-    );
+        (response) => {
+          const label = `qa-bus ${path}`;
+          void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
+            (parsed) => {
+              if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+                const error =
+                  typeof parsed === "object" && parsed && "error" in parsed
+                    ? parsed.error
+                    : undefined;
+                reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
+                return;
+              }
+              resolve(parsed as T);
+            },
+            (error: unknown) => {
+              reject(toErrorObject(error, "Non-Error rejection"));
+            },
+          );
+          response.on("error", reject);
+        },
+      );
 
-    request.on("error", reject);
-    request.end(payload);
+      request.on("error", reject);
+      request.end(payload);
+    });
   });
 }
 
@@ -183,8 +208,29 @@ export async function pollQaBus(params: {
   );
 }
 
-export async function sendQaBusMessage(params: QaBusAccountRequest<QaBusOutboundMessageInput>) {
-  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params, {
+export async function sendQaBusMessage(
+  params: QaBusAccountRequest<QaBusOutboundMessageInput> & QaMessageSendHandoff,
+) {
+  const { signal, onPlatformSendDispatch, assertDirectAdapterHandoff, ...body } = params;
+  const assertCurrent = () => {
+    try {
+      signal?.throwIfAborted();
+      assertDirectAdapterHandoff?.();
+    } catch (cause) {
+      throw messageNotDispatched(cause);
+    }
+  };
+  assertCurrent();
+  try {
+    await onPlatformSendDispatch?.();
+  } catch (cause) {
+    throw messageNotDispatched(cause);
+  }
+  // Preparation and durable timing can yield. Fence again at the native request;
+  // errors after that boundary remain ambiguous, never proof of no dispatch.
+  return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", body, {
+    signal,
+    beforeRequest: assertCurrent,
     timeoutMs: QA_BUS_MESSAGE_REQUEST_TIMEOUT_MS,
   });
 }

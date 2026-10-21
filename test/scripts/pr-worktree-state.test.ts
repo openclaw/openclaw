@@ -11,8 +11,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
+import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
+import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createProvisionOwnerFixture,
@@ -24,6 +30,81 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 describePosix("repository-owned PR provisioning state", () => {
+  it.each([28, 29])("preserves private schema v%i state while provisioning", async (version) => {
+    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-schema-"));
+    const stateDir = join(f.canonical, ".local", "pr-state");
+    const databasePath = join(stateDir, "state", "openclaw.sqlite");
+    mkdirSync(join(stateDir, "state"), { recursive: true });
+    const identity = generateStoredDeviceIdentity();
+    const identityRow = {
+      identity_key: "primary",
+      device_id: identity.deviceId,
+      public_key_pem: identity.publicKeyPem,
+      private_key_pem: identity.privateKeyPem,
+      created_at_ms: identity.createdAtMs,
+      updated_at_ms: identity.createdAtMs,
+    };
+    {
+      using database = new DatabaseSync(databasePath);
+      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      database.exec(`PRAGMA user_version=${version}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,NULL,1,1)")
+        .run(version);
+      database
+        .prepare("INSERT INTO config_machine_state VALUES ('fixture.preserved','\"unchanged\"',1)")
+        .run();
+      if (version === 28) {
+        database.exec(CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
+        database
+          .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
+          .run(...Object.values(identityRow));
+      }
+    }
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expectProvisionSeed(f);
+    expectProvisionLeaseReleased(f);
+    const backups = readdirSync(join(stateDir, "state")).filter((name) =>
+      name.endsWith(".scoped.bak"),
+    );
+    expect(backups).toHaveLength(version === 28 ? 1 : 0);
+    {
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 29 });
+      expect(
+        database
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key='fixture.preserved'",
+          )
+          .get(),
+      ).toEqual({ value_json: '"unchanged"' });
+      if (version === 28) {
+        using local = new DatabaseSync(join(stateDir, "client", "credentials.sqlite"), {
+          readOnly: true,
+        });
+        expect(local.prepare("SELECT * FROM device_identities").get()).toEqual(identityRow);
+        expect(local.prepare("SELECT phase FROM client_credential_migration").get()).toEqual({
+          phase: "complete",
+        });
+        expect(
+          database.prepare("SELECT 1 FROM sqlite_schema WHERE name='device_identities'").get(),
+        ).toBeUndefined();
+      }
+    }
+    if (version === 28) {
+      await restoreDoctorMigrationBackup({
+        sourcePath: databasePath,
+        backupPath: join(stateDir, "state", backups[0]!),
+        env: { ...f.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      using restored = new DatabaseSync(databasePath, { readOnly: true });
+      expect(restored.prepare("SELECT * FROM device_identities").all()).toEqual([identityRow]);
+      expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
+    }
+    expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+  });
+
   it.runIf(process.platform === "linux")(
     "releases its completed operation after exited loader descendants await reaping",
     () => {
@@ -83,29 +164,19 @@ describePosix("repository-owned PR provisioning state", () => {
     },
   );
 
-  it("refuses a fresh provisioner whose handoff argv binding was stripped", () => {
-    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-stripped-binding-"));
-    const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
-    // Keep the pre-open observer but remove only the child's resolver import.
-    // The parent still has a valid binding: its witness cannot qualify this PID.
-    writeFileSync(
-      join(f.isolation.bin, "node"),
-      `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
-    );
-    const result = f.run();
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Missing private provisioner handoff preload");
-    expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
-    expect(existsSync(f.isolation.binding.databasePath)).toBe(false);
-    expect(existsSync(f.isolation.stateDatabase)).toBe(false);
-  });
-
-  it.each(["missing", "replaced"] as const)(
-    "refuses a %s binding directory before opening either store",
+  it.each(["stripped", "missing", "replaced"] as const)(
+    "refuses a %s handoff binding before opening either store",
     (fault) => {
       const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-binding-identity-"));
       const preload = fileURLToPath(f.isolation.binding.nodeOption.slice("--import=".length));
-      if (fault === "missing") {
+      if (fault === "stripped") {
+        const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+        // Keep the observer but remove this child's resolver; a parent witness cannot qualify it.
+        writeFileSync(
+          join(f.isolation.bin, "node"),
+          `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
+        );
+      } else if (fault === "missing") {
         unlinkSync(preload);
       } else {
         const retained = join(f.root, "replaced-handoff");
@@ -116,7 +187,11 @@ describePosix("repository-owned PR provisioning state", () => {
       const result = f.run();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toMatch(
-        fault === "missing" ? /ERR_MODULE_NOT_FOUND/ : /directory identity changed/,
+        fault === "stripped"
+          ? /Missing private provisioner handoff preload/
+          : fault === "missing"
+            ? /ERR_MODULE_NOT_FOUND/
+            : /directory identity changed/,
       );
       expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
       expect(existsSync(f.isolation.binding.databasePath)).toBe(false);

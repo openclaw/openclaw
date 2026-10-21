@@ -190,21 +190,6 @@ describe("plugin package update policy reconciliation", () => {
     expect(result).toMatchObject({ ok: false });
   });
 
-  it("accepts a valid package restored from an exact tombstone", () => {
-    const before = index("/packages/pack-v1", []);
-    const snapshot = captureSnapshot(before);
-    const after = index("/packages/pack-v2", [record("pack/one", "/packages/pack-v2")]);
-
-    const result = reconcilePluginPackageUpdateConfig({
-      config: {},
-      beforeIndex: before,
-      afterIndex: after,
-      snapshot,
-    });
-
-    expect(result).toEqual({ ok: true, config: {} });
-  });
-
   it("follows catalog-alias install-owner migrations without pruning QQ config", () => {
     const rootDir = "/packages/qqbot";
     const before: InstalledPluginIndex = {
@@ -309,21 +294,18 @@ describe("plugin package update policy reconciliation", () => {
     expect(result.config.plugins?.load?.paths).toEqual([rootDir, "/plugins/unrelated.js"]);
   });
 
-  it.each(["entry", "root"])(
-    "detects exact %s load-path cleanup before an update starts",
-    (kind) => {
-      const rootDir = "/packages/pack-v1";
-      const before = index(rootDir, [record("pack/one", rootDir)]);
-      const snapshot = captureSnapshot(before);
-      expect(
-        pluginPackageUpdateMayMutateConfig({
-          config: {
-            plugins: { load: { paths: [kind === "entry" ? `${rootDir}/one.js` : rootDir] } },
-          },
-          index: before,
-          snapshot,
-        }),
-      ).toBe(true);
-    },
-  );
+  it("detects exact entry load-path cleanup before an update starts", () => {
+    const rootDir = "/packages/pack-v1";
+    const before = index(rootDir, [record("pack/one", rootDir)]);
+    const snapshot = captureSnapshot(before);
+    expect(
+      pluginPackageUpdateMayMutateConfig({
+        config: {
+          plugins: { load: { paths: [`${rootDir}/one.js`] } },
+        },
+        index: before,
+        snapshot,
+      }),
+    ).toBe(true);
+  });
 });

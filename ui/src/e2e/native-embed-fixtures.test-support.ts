@@ -1,9 +1,14 @@
 import type { Page } from "playwright";
 import type { SecretsStoreListResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.js";
-import type { CronJobsListResult } from "../api/types.ts";
+import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
+import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
+import type {
+  ChannelsPairingListResult,
+  ChannelsStatusSnapshot,
+  CronJobsListResult,
+} from "../api/types.ts";
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
-import type { DevicePairingList } from "../lib/nodes/index.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
 
@@ -58,6 +63,51 @@ export function createNativeEmbedLayoutMethodResponses(): Record<string, unknown
   ];
 
   return {
+    "channels.status": {
+      ts: 0,
+      channels: {},
+      channelAccounts: {},
+      channelOrder: [],
+      channelLabels: {},
+      channelDefaultAccountId: {},
+    } satisfies ChannelsStatusSnapshot,
+    "channels.pairing.list": {
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: false,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    } satisfies ChannelsPairingListResult,
+    "webSearch.status": {
+      enabled: true,
+      provider: null,
+      agentId: "main",
+      model: {
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        runtime: "openclaw",
+        runtimeLabel: "OpenClaw",
+      },
+      route: {
+        kind: "managed",
+        provider: "parallel-free",
+        label: "Parallel Search (Free)",
+        testable: true,
+      },
+      providers: [
+        {
+          id: "parallel-free",
+          pluginId: "parallel",
+          label: "Parallel Search (Free)",
+          hint: "Free hosted web search",
+          configured: true,
+          installed: true,
+          available: true,
+          requiresCredential: false,
+          credentialSource: "none",
+          configPath: [],
+        },
+      ],
+    } satisfies WebSearchStatusResult,
     "agents.list": {
       agents: [
         { id: "main", identity: { name: "Example assistant" }, name: "Example assistant" },

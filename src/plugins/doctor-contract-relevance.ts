@@ -135,15 +135,8 @@ export function collectRelevantDoctorPluginIdsForTouchedPaths(params: {
       }
       continue;
     }
-    if (first === "plugins") {
-      if (second !== "entries" || !third) {
-        return collectRelevantDoctorPluginIds(params.raw);
-      }
-      ids.add(third);
-      continue;
-    }
-    if (first === "models") {
-      if (second !== "providers" || !third) {
+    if (first === "plugins" || first === "models") {
+      if (second !== (first === "plugins" ? "entries" : "providers") || !third) {
         return collectRelevantDoctorPluginIds(params.raw);
       }
       ids.add(third);

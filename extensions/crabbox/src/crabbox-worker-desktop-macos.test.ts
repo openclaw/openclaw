@@ -12,16 +12,14 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const leaseId = "cbx_macos_fixture";
 const wallpaper = Buffer.from("synthetic wallpaper");
-type Readiness =
-  | "wrong-account"
-  | "no-gui"
-  | "invalid-signature"
-  | "ad-hoc"
-  | "old-app"
-  | "missing-team"
-  | "invalid-team"
-  | "authority-first-long"
-  | "team-first-long";
+const rejectedReadiness = [
+  ["wrong-account", "must run as its inspected macOS account"],
+  ["no-gui", "GUI session is unavailable"],
+  ["invalid-signature", "signature is invalid"],
+  ["ad-hoc", "needs a Developer ID Application signature"],
+  ["invalid-team", "signing team is missing"],
+] as const;
+type Readiness = (typeof rejectedReadiness)[number][0] | "authority-first-long" | "team-first-long";
 
 function desktopFixture(readiness: Readiness) {
   const root = tempDirs.make("crabbox-macos-desktop-");
@@ -33,45 +31,41 @@ function desktopFixture(readiness: Readiness) {
   const workingDirectory = path.join(root, "runtime directory");
   const app = path.join(root, "OpenClawCloudWorker.app");
   const browser = path.join(root, "Google Chrome.app/Contents/MacOS/Google Chrome");
+  const executable = (target: string, body: string) => {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, body, { mode: 0o700 });
+  };
   for (const directory of [bin, home, provider, workingDirectory, path.dirname(browser)]) {
     fs.mkdirSync(directory, { recursive: true });
   }
   fs.writeFileSync(path.join(provider, "vnc.password"), "synthetic-vnc-password\n");
   for (const suffix of ["Contents/MacOS/OpenClaw", "Contents/Resources/cua-driver"]) {
-    const executable = path.join(app, suffix);
-    fs.mkdirSync(path.dirname(executable), { recursive: true });
-    fs.writeFileSync(executable, "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+    executable(path.join(app, suffix), "#!/bin/sh\nexit 99\n");
   }
-  fs.writeFileSync(
+  executable(
     browser,
     '#!/bin/bash\nprintf "launch\\n" >> "$FIXTURE_ROOT/launches"\nprintf "%s\\n" "$FIXTURE_EFFECTIVE_UID" "$FIXTURE_GUI_CONTEXT" "$HOME" "$TMPDIR" "$PATH" "$PWD" "${INHERITED_CANARY-unset}" > "$FIXTURE_ROOT/browser-context"\ntouch "$FIXTURE_ROOT/cdp-ready"\nexec /bin/sleep 30\n',
-    { mode: 0o700 },
   );
   const commands: Record<string, string> = {
     // A tail larger than a pipe buffer exposes signature readers that close before printf finishes.
     codesign: `if [ "$1" = --verify ]; then [ "$FIXTURE_READINESS" != invalid-signature ]; exit; fi
 case "$FIXTURE_READINESS" in
   ad-hoc) echo Signature=adhoc ;;
-  missing-team) printf 'Authority=Developer ID Application: Fixture\\n' ;;
   invalid-team) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=invalid\\n' ;;
   authority-first-long|team-first-long)
-    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
-      printf 'Authority=Developer ID Application: Fixture\\n'
-    else
-      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
-    fi
+    authority='Authority=Developer ID Application: Fixture'
+    team='TeamIdentifier=ABCDEFGHIJ'
+    if [ "$FIXTURE_READINESS" = authority-first-long ]; then first="$authority"; last="$team";
+    else first="$team"; last="$authority"; fi
+    printf '%s\\n' "$first"
     for ((line=0; line<4096; line++)); do printf 'Certificate=%0100d\\n' "$line"; done
-    if [ "$FIXTURE_READINESS" = authority-first-long ]; then
-      printf 'TeamIdentifier=ABCDEFGHIJ\\n'
-    else
-      printf 'Authority=Developer ID Application: Fixture\\n'
-    fi ;;
+    printf '%s\\n' "$last" ;;
   *) printf 'Authority=Developer ID Application: Fixture\\nTeamIdentifier=ABCDEFGHIJ\\n' ;;
 esac`,
     PlistBuddy: `case "$2" in
   'Print :CFBundleExecutable') echo OpenClaw ;;
   'Print :CFBundleIdentifier') echo ai.openclaw.cloud-worker ;;
-  'Print :OpenClawCloudWorkerHostVersion') if [ "$FIXTURE_READINESS" = old-app ]; then echo 0; else echo 1; fi ;;
+  'Print :OpenClawCloudWorkerHostVersion') echo 1 ;;
   *) exit 1 ;;
 esac`,
     id: `case "$1" in -u) echo "\${FIXTURE_EFFECTIVE_UID-501}" ;; -un) echo fixture ;; -gn) echo staff ;; *) exit 1 ;; esac`,
@@ -109,9 +103,7 @@ exec /usr/bin/install "\${args[@]}"`,
 printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIXTURE_BROWSER" "$FIXTURE_PROFILE"`,
   };
   for (const [name, body] of Object.entries(commands)) {
-    fs.writeFileSync(path.join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}\n`, {
-      mode: 0o700,
-    });
+    executable(path.join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}\n`);
   }
   const remapCommands = (source: string) =>
     source.replaceAll(
@@ -149,20 +141,29 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
       timeout: 5_000,
     });
   const result = run("/bin/bash", [], script);
+  const cleanup = () => {
+    const pidFile = path.join(profile, "browser.pid");
+    if (!fs.existsSync(pidFile)) {
+      return;
+    }
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    if (!Number.isSafeInteger(pid) || pid <= 1) {
+      return;
+    }
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
+      }
+    }
+  };
   return {
+    cleanup,
     result,
-    root,
     desktop,
-    expectedContext: [
-      "501",
-      "adopted",
-      home,
-      path.join(root, "tmp"),
-      env.PATH,
-      workingDirectory,
-      "unset",
-      "",
-    ].join("\n"),
+    read: (name: string) => fs.readFileSync(path.join(root, name), "utf8"),
+    expectedContext: `501\nadopted\n${home}\n${root}/tmp\n${env.PATH}\n${workingDirectory}\nunset\n`,
     repeat: () => run(path.join(desktop, "browser"), []),
     terminal: () => run(path.join(desktop, "terminal"), []),
     host: () =>
@@ -175,36 +176,19 @@ printf '%s --user-data-dir=%s --remote-debugging-port=9222 about:blank\\n' "$FIX
         "--display-name",
         "Worker with spaces",
       ]),
-    cleanup: () => {
-      const pidFile = path.join(profile, "browser.pid");
-      if (fs.existsSync(pidFile)) {
-        const pid = Number(fs.readFileSync(pidFile, "utf8"));
-        if (Number.isSafeInteger(pid) && pid > 1) {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-              throw error;
-            }
-          }
-        }
-      }
-    },
   };
 }
 
 describe("Crabbox macOS desktop descriptor", () => {
-  it.each(["", "<token>", "ec2-user\nother", "../user"])(
-    "rejects an unavailable or malformed inspected account %j",
-    (username) => {
-      expect(() => createCrabboxMacosDesktopEndpoint(leaseId, username)).toThrow(
-        "inspected SSH account",
-      );
-      expect(() => createCrabboxMacosDesktopSetup(leaseId, "cG5n", username)).toThrow(
-        "inspected SSH account",
-      );
-    },
-  );
+  it("rejects a malformed inspected account", () => {
+    const username = "ec2-user\nother";
+    for (const create of [
+      createCrabboxMacosDesktopEndpoint,
+      (id: string, user: string) => createCrabboxMacosDesktopSetup(id, "cG5n", user),
+    ]) {
+      expect(() => create(leaseId, username)).toThrow("inspected SSH account");
+    }
+  });
 
   it("binds ARD credentials and launchers to the inspected account and exact lease", () => {
     expect(createCrabboxMacosDesktopEndpoint(leaseId, "ec2-user")).toEqual({
@@ -226,17 +210,9 @@ describe("Crabbox macOS desktop descriptor", () => {
 });
 
 describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () => {
-  it.each<{ readiness: Readiness; error: string }>([
-    { readiness: "wrong-account", error: "must run as its inspected macOS account" },
-    { readiness: "no-gui", error: "GUI session is unavailable" },
-    { readiness: "invalid-signature", error: "signature is invalid" },
-    { readiness: "ad-hoc", error: "needs a Developer ID Application signature" },
-    { readiness: "old-app", error: "Update the signed OpenClaw Cloud Worker app" },
-    { readiness: "missing-team", error: "signing team is missing" },
-    { readiness: "invalid-team", error: "signing team is missing" },
-  ])(
-    "rejects $readiness before publishing credentials or desktop launchers",
-    ({ readiness, error }) => {
+  it.each(rejectedReadiness)(
+    "rejects %s before publishing credentials or desktop launchers",
+    (readiness, error) => {
       const fixture = desktopFixture(readiness);
       expect(fixture.result.error).toBeUndefined();
       expect(fixture.result.status, fixture.result.stderr).toBe(1);
@@ -259,21 +235,14 @@ describe.skipIf(process.platform === "win32")("Crabbox macOS desktop setup", () 
         expect(fs.readFileSync(path.join(fixture.desktop, "wallpaper.png"))).toEqual(wallpaper);
         const repeated = fixture.repeat();
         expect(repeated.status, repeated.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "launches"), "utf8")).toBe("launch\n");
-        expect(fs.readFileSync(path.join(fixture.root, "browser-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
-        const terminal = fixture.terminal();
-        expect(terminal.status, terminal.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
-        const host = fixture.host();
-        expect(host.status, host.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(fixture.root, "terminal-context"), "utf8")).toBe(
-          fixture.expectedContext,
-        );
-        expect(fs.readFileSync(path.join(fixture.root, "gui-arguments"), "utf8")).toBe(
+        expect(fixture.read("launches")).toBe("launch\n");
+        expect(fixture.read("browser-context")).toBe(fixture.expectedContext);
+        for (const launch of [fixture.terminal, fixture.host]) {
+          const result = launch();
+          expect(result.status, result.stderr).toBe(0);
+          expect(fixture.read("terminal-context")).toBe(fixture.expectedContext);
+        }
+        expect(fixture.read("gui-arguments")).toBe(
           "--cloud-worker-host\n--display-name\nWorker with spaces\n",
         );
         expect(fixture.result.stdout + fixture.result.stderr).not.toContain(

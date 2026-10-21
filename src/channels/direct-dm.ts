@@ -6,9 +6,11 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
-  resolveChannelInboundRouteEnvelope,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveInboundRouteEnvelopeBuilderWithRuntime,
 } from "./inbound-event/envelope.js";
 import type {
@@ -59,6 +61,8 @@ type DispatchInboundDirectDmParams = {
   channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
+  /** Recheck channel-owned live authority after preparation and at effect initiation. */
+  assertAuthority?: () => void;
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -128,7 +132,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
   route: DirectDmRoute;
   ctxPayload: FinalizedMsgContext;
 }> {
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: params.channel,
     accountId: params.accountId,
@@ -144,6 +148,7 @@ export async function dispatchInboundDirectDm(params: DispatchInboundDirectDmPar
     : params.channelIngress;
   const boundParams =
     channelIngress === params.channelIngress ? params : { ...params, channelIngress };
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({ cfg: params.cfg, route });
   const ctxPayload = await buildDirectDmContext(
     boundParams,
     route,
@@ -177,6 +182,7 @@ function buildDirectDmTurnPlan(
     accountId: route.accountId ?? params.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
+    assertAuthority: params.assertAuthority,
     record: {
       onRecordError: params.onRecordError,
     },
@@ -194,6 +200,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
+/** @deprecated Use dispatchInboundDirectDm. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;
@@ -203,6 +210,11 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "dispatchInboundDirectDmWithRuntime",
+    replacement: "dispatchInboundDirectDm",
+  });
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: params.cfg,
     channel: params.channel,

@@ -10,6 +10,7 @@ import {
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -19,8 +20,6 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
     const root = document.documentElement;
     root.dataset.themeMode = nextMode;
     root.dataset.themeResolved = nextMode;
-    root.classList.toggle("wa-light", nextMode === "light");
-    root.classList.toggle("wa-dark", nextMode === "dark");
     root.style.colorScheme = nextMode;
   }, mode);
   await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
@@ -66,6 +65,8 @@ suite.define(() => {
       const groups = page.locator('[data-session-section="groups"]');
       const row = done.locator('[data-session-key="agent:main:done-group"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
+      await chooseSidebarMenuOption(page, "Hide empty groups", "Never");
+      await closeSidebarMenu(page);
       await groups.waitFor({ state: "visible" });
 
       await row.hover();

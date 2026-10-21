@@ -13,7 +13,7 @@ import {
   assertSystemCookiePlatform,
   readSystemProfileCookies,
   resolveSystemCookieSource,
-} from "../system-profile-api.js";
+} from "../browser/system-profiles.js";
 import {
   callBrowserRequest,
   runBrowserCliCommand,
@@ -107,7 +107,7 @@ async function watchSystemProfileCookies(params: {
   domains: readonly string[];
 }): Promise<void> {
   assertSystemCookiePlatform();
-  const source = resolveSystemCookieSource({
+  const source = await resolveSystemCookieSource({
     browser: params.options.browser,
     systemProfile: params.options.system,
   });

@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
+// Tooling imports this bootstrap directly in Node before a TypeScript loader is available.
+
 const NODE_RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 const NODE_RUNTIME_CACHE_MAX_ENTRIES = 16;
 

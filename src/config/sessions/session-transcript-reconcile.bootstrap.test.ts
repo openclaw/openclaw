@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
@@ -12,7 +13,6 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  captureSessionTranscriptReconcileGeneration,
   closeSessionTranscriptReconcileWorkerPool,
   getSessionTranscriptReconcileWorkerPoolSnapshot,
   runSessionTranscriptReconcileOperation,
@@ -22,10 +22,10 @@ import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcri
 
 function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
   return runSessionTranscriptReconcileOperation(
-    captureSessionTranscriptReconcileGeneration(),
     async (operation) => {
       const task = await operation.startTask({
         mode: "disk",
+        sessionIds: [],
         agentId: "main",
         path: pathname,
         stateDir: context.environment.OPENCLAW_STATE_DIR,
@@ -80,6 +80,7 @@ it.each([false, true])(
               databasePath: context.admission.databasePath,
               payload: {
                 pid: process.pid,
+                processNamespace: readGatewayLockProcessNamespace(),
                 createdAt: new Date().toISOString(),
                 configPath: state.configPath,
                 stateDir: state.stateDir,
@@ -139,7 +140,10 @@ it("refuses an agent replacement during canonical first creation", async () => {
         });
       const observation = observe(context, agentPath);
       try {
-        await expect(runDiskTask(context, agentPath)).rejects.toThrow();
+        await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+          "failed",
+          "lease-released",
+        ]);
         expect(replaced).toBe(true);
         expect(readDatabasePathIdentitySync(agentPath).key).not.toBe(original.key);
         await closeSessionTranscriptReconcileWorkerPool();

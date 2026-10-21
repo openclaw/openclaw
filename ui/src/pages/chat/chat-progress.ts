@@ -43,6 +43,9 @@ export function buildGuardianNoticeItem(
     icon: "shieldCheck" as const,
     timestamp: notice.timestamp,
   };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
       ...item,
@@ -258,9 +261,29 @@ export type TurnRecapWatch = {
   sessionKey: string;
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
-  runId: string;
+  runId: string | null;
+  /** For a run that resumed a handoff: when its request was asked and the runs before it. */
+  request: TurnRequest | null;
   recap: TurnRecap | null;
 };
+
+type TurnRequest = { askedAt: number; runIds: readonly string[] };
+
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage || usage.outputTokens === null) {
+      return null;
+    }
+    total += usage.outputTokens;
+  }
+  return runIds.length > 0 ? total : null;
+}
 
 export function resolveTurnRecap(
   host: { turnRecapWatch: TurnRecapWatch | null },
@@ -268,12 +291,21 @@ export function resolveTurnRecap(
     sessionKey: string;
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
+    indicator?: { runId?: string; request?: TurnRequest };
+    activeRunId?: string | null;
+    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
+  const {
+    sessionKey,
+    agentId = null,
+    gatewayClient = null,
+    indicator,
+    activeRunId,
+    row,
+    usageByRun,
+  } = params;
   let watch = host.turnRecapWatch;
   if (
     watch?.sessionKey !== sessionKey ||
@@ -282,26 +314,34 @@ export function resolveTurnRecap(
   ) {
     watch = null;
   }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
-      return null;
-    }
+  if (indicator || activeRunId) {
+    const runId = indicator?.runId ?? activeRunId ?? null;
     if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
+      // An answer can identify a resumed run after its working indicator has vanished.
+      const request = watch?.runId === null ? watch.request : null;
+      watch = { sessionKey, agentId, gatewayClient, runId, request, recap: null };
+    }
+    if (indicator) {
+      watch.request = indicator.request ?? null;
     }
   }
   host.turnRecapWatch = watch;
-  if (!watch) {
+  if (!watch?.runId) {
     return null;
   }
-  const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
+  const runIds = [...(watch.request?.runIds ?? []), watch.runId];
+  const unavailable = runIds.some((runId) => usageByRun?.get(runId)?.outputTokens === null);
+  const outputTokens = unavailable
+    ? null
+    : (sumRunOutputTokens(usageByRun, runIds) ?? watch.recap?.outputTokens ?? null);
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
+      // A resumed answer reports the whole request, the wait included. Both
+      // ends are on the Gateway's clock; it never reports less than its last run.
+      const sinceRequest =
+        watch.request && typeof row.endedAt === "number" ? row.endedAt - watch.request.askedAt : 0;
+      watch.recap = { runtimeMs: Math.max(runtimeMs, sinceRequest), outputTokens };
     } else if (row.status && row.status !== "done") {
       watch.recap = null;
     }

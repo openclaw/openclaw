@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectModelCatalogEntryForRoute } from "./model-catalog-route.js";
 import {
@@ -11,126 +11,89 @@ import {
   resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
-describe("provider-owned catalog identity", () => {
-  const authored: ModelCatalogEntry = {
-    provider: "arcee",
-    id: "arcee-ai/trinity-large-thinking",
-    name: "Authored default",
-    api: "openai-completions",
-    baseUrl: "https://openrouter.ai/api/v1",
-    contextWindow: 32768,
-    reasoning: false,
-  };
-  const cfg: OpenClawConfig = {
-    plugins: { allow: ["arcee"] },
-    agents: {
-      defaults: {
-        model: { primary: "arcee/trinity-large-thinking" },
-        models: { "arcee/trinity-large-thinking": { alias: "Authored alias" } },
+const metadata = { name: "Authored default", contextWindow: 32768, reasoning: false };
+const authored: ModelCatalogEntry = {
+  provider: "arcee",
+  id: "arcee-ai/trinity-large-thinking",
+  ...metadata,
+  api: "openai-completions",
+  baseUrl: "https://openrouter.ai/api/v1",
+};
+const cfg: OpenClawConfig = {
+  plugins: { allow: ["arcee"] },
+  models: {
+    mode: "replace",
+    providers: {
+      arcee: {
+        baseUrl: "https://openrouter.ai/api/v1",
+        api: "openai-completions",
+        models: [
+          {
+            id: authored.id,
+            ...metadata,
+            input: ["text"],
+            maxTokens: 2048,
+            cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
+          },
+        ],
       },
     },
-    models: {
-      mode: "replace",
-      providers: {
-        arcee: {
-          baseUrl: "https://openrouter.ai/api/v1",
-          api: "openai-completions",
-          models: [
-            {
-              id: authored.id,
-              name: "Authored default",
-              contextWindow: 32768,
-              reasoning: false,
-              input: ["text"],
-              maxTokens: 2048,
-              cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
-            },
-          ],
-        },
-      },
-    },
-  };
+  },
+};
 
-  async function project(catalog: ModelCatalogEntry[]) {
-    return resolveLogicalVisibleModelCatalog({
-      cfg,
-      catalog,
-      defaultProvider: "arcee",
-      defaultModel: "trinity-large-thinking",
-      view: "all",
-      routePolicy: openAIModelCatalogRoutePolicy,
-      evaluateEntry: async () =>
-        resolveLogicalModelCatalogEntryState({
-          evaluation: { availability: true, routeResolution: null },
-          routePolicy: openAIModelCatalogRoutePolicy,
-        }),
-    });
-  }
+async function project(catalog: ModelCatalogEntry[]) {
+  return resolveLogicalVisibleModelCatalog({
+    cfg,
+    catalog,
+    defaultProvider: "arcee",
+    defaultModel: "trinity-large-thinking",
+    view: "all",
+    routePolicy: openAIModelCatalogRoutePolicy,
+    evaluateEntry: async () =>
+      resolveLogicalModelCatalogEntryState({
+        evaluation: { availability: true, routeResolution: null },
+        routePolicy: openAIModelCatalogRoutePolicy,
+      }),
+  });
+}
 
-  it("keeps logical identity in both public and runtime unmanaged rows", () => {
-    const { entry, runtimeEntry } = projectModelCatalogEntryForRoute({
-      entry: authored,
-      projection: { kind: "unmanaged" },
-      overrides: { name: "Selected account model" },
-    });
-
-    for (const row of [entry, runtimeEntry]) {
-      expect(row).toMatchObject({
-        provider: "arcee",
-        id: "trinity-large-thinking",
-        name: "Selected account model",
-        contextWindow: 32768,
-      });
-    }
-    expect(authored.id).toBe("arcee-ai/trinity-large-thinking");
-    expect(authored.name).toBe("Authored default");
+it("keeps logical identity in both public and runtime unmanaged rows", () => {
+  const { entry, runtimeEntry } = projectModelCatalogEntryForRoute({
+    entry: authored,
+    projection: { kind: "unmanaged" },
+    overrides: { name: "Selected account model" },
   });
 
-  it("joins equivalent provider-owned spellings before authored metadata projection", async () => {
-    const rows = await project([
-      authored,
-      {
-        ...authored,
-        id: "trinity-large-thinking",
-        name: "Trinity Large Thinking",
-        contextWindow: 262144,
-        reasoning: true,
-      },
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
+  for (const row of [entry, runtimeEntry]) {
+    expect(row).toMatchObject({
       provider: "arcee",
       id: "trinity-large-thinking",
-      name: "Authored default",
+      name: "Selected account model",
       contextWindow: 32768,
-      reasoning: false,
     });
-  });
+  }
+  expect(authored).toMatchObject({ id: "arcee-ai/trinity-large-thinking", ...metadata });
+});
 
-  it("retains the existing same-spelling deduplication control", async () => {
+it.each(["trinity-large-thinking", "arcee-ai/trinity-large-thinking"])(
+  "deduplicates %s before authored metadata projection",
+  async (id) => {
     const rows = await project([
       authored,
-      { ...authored, name: "Static sibling", contextWindow: 262144, reasoning: true },
+      { ...authored, id, name: "Static sibling", contextWindow: 262144, reasoning: true },
     ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      provider: "arcee",
-      name: "Authored default",
-      contextWindow: 32768,
-      reasoning: false,
-    });
-  });
-  it("keeps unknown model case and separate credential providers distinct", () => {
-    expect(resolveModelCatalogIdentityKey({ provider: "custom", id: "Reader" })).not.toBe(
-      resolveModelCatalogIdentityKey({ provider: "custom", id: "reader" }),
-    );
-    expect(
-      resolveModelCatalogIdentityKey({ provider: "arcee", id: "arcee-ai/trinity-large-thinking" }),
-    ).not.toBe(
-      resolveModelCatalogIdentityKey({
-        provider: "openrouter",
-        id: "arcee-ai/trinity-large-thinking",
-      }),
-    );
-  });
+    expect(rows).toMatchObject([
+      {
+        provider: "arcee",
+        id: "trinity-large-thinking",
+        ...metadata,
+      },
+    ]);
+  },
+);
+it("keeps unknown model case and separate credential providers distinct", () => {
+  const key = (provider: string, id: string) => resolveModelCatalogIdentityKey({ provider, id });
+  expect(key("custom", "Reader")).not.toBe(key("custom", "reader"));
+  const wireId = "arcee-ai/trinity-large-thinking";
+  expect(key("arcee", wireId)).not.toBe(key("openrouter", wireId));
 });

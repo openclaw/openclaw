@@ -1,52 +1,45 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadAgentRole } from "../agents/agent-roles.js";
+import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createAgentTeam } from "../agents/agent-team.js";
-import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { readConfigFileSnapshot, resetConfigRuntimeState } from "../config/config.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { defaultRuntime } from "../runtime.js";
+import { publishAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { agentsAddCommand } from "./agents.commands.add.js";
 import { agentsTeamCreateCommand } from "./agents.commands.team.js";
 import { ensureOnboardingAgent } from "./onboard-agent.js";
-import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agent-roles-" });
+const specialists = ["researcher", "writer", "reviewer"];
 
-beforeAll(async () => {
-  await tempDirs.setup();
-});
-afterAll(async () => {
-  await tempDirs.cleanup();
-});
-
-async function withState(run: (root: string, configPath: string) => Promise<void>): Promise<void> {
-  const root = await tempDirs.make();
-  const configPath = path.join(root, "openclaw.json");
-  await withEnvAsync(
-    {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_WORKSPACE_DIR: undefined,
-      OPENCLAW_HOME: root,
-    },
-    async () => {
-      resetConfigRuntimeState();
+let root: string, configPath: string;
+it.aroundEach(async (runTest) => {
+  await withOpenClawTestState(
+    { layout: "state-only", label: "agent-roles", env: { OPENCLAW_WORKSPACE_DIR: undefined } },
+    async (state) => {
+      root = state.stateDir;
+      configPath = state.configPath;
+      state.envVars.OPENCLAW_HOME = root;
+      state.applyEnv();
       try {
-        await run(root, configPath);
+        await runTest();
       } finally {
+        vi.restoreAllMocks();
         closeOpenClawAgentDatabasesForTest();
         closeOpenClawStateDatabaseForTest();
-        resetConfigRuntimeState();
       }
     },
   );
-}
+});
 
 async function readConfig(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
@@ -54,7 +47,7 @@ async function readConfig(): Promise<OpenClawConfig> {
   return snapshot.sourceConfig ?? snapshot.config;
 }
 
-function existingFleet(root: string): OpenClawConfig {
+function existingFleet(): OpenClawConfig {
   return {
     agents: {
       ownership: "explicit",
@@ -68,267 +61,178 @@ function existingFleet(root: string): OpenClawConfig {
   };
 }
 
-describe("role and team creation through persisted configuration", () => {
-  it.each([false, true])(
-    "rejects skipped team creation with an existing roster (stale proposal: %s)",
-    async (stale) => {
-      await withState(async (root, configPath) => {
-        const initial: OpenClawConfig = {
-          agents: { entries: { main: { name: "Existing owner" } } },
-        };
-        const original = JSON.stringify(initial);
-        await fs.writeFile(configPath, original);
-        const workspace = path.join(root, "team");
-        await expect(
-          ensureOnboardingAgent({
-            config: stale ? {} : initial,
-            workspace,
-            firstAgent: { name: "coordinator", team: true },
-          }),
-        ).rejects.toThrow(
-          "The requested team was not created because an agent roster already exists",
-        );
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-        await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
-      });
-    },
+it.each([false, true])("rejects existing-roster onboarding (stale proposal: %s)", async (stale) => {
+  const initial = { agents: { entries: { main: { name: "Existing owner" } } } };
+  const original = JSON.stringify(initial);
+  await fs.writeFile(configPath, original);
+  const workspace = path.join(root, "team");
+  await expect(
+    ensureOnboardingAgent({
+      config: stale ? {} : initial,
+      workspace,
+      firstAgent: { name: "coordinator", team: true },
+    }),
+  ).rejects.toThrow("The requested team was not created because an agent roster already exists");
+  expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  await expect(fs.access(workspace)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("preserves implicit main workspace and routing when adding a team", async () => {
+  const workspace = path.join(root, "existing-workspace");
+  const initial = {
+    agents: { defaults: { workspace } },
+    bindings: [{ agentId: "main", match: { channel: "test-channel" } }],
+  };
+  await fs.mkdir(workspace);
+  await fs.writeFile(path.join(workspace, "AGENTS.md"), "Existing operating program\n");
+  await fs.writeFile(configPath, JSON.stringify(initial));
+  const result = await createAgentTeam({ workspaceRoot: path.join(root, "team") });
+  expect(result).toMatchObject({ status: "created", coordinatorId: "coordinator" });
+  const config = await readConfig();
+  const ids = Object.keys(config.agents?.entries ?? {});
+  expect(ids).toEqual(["main", "coordinator", ...specialists]);
+  expect(config.agents?.entries?.main?.workspace).toBe(workspace);
+  expect(config.bindings).toEqual(initial.bindings);
+  expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
+    "Existing operating program\n",
   );
+});
 
-  it("preserves an established implicit main and its routing when adding a team", async () => {
-    await withState(async (root, configPath) => {
-      const workspace = path.join(root, "existing-workspace");
-      const initial = {
-        agents: { defaults: { workspace } },
-        bindings: [{ agentId: "main", match: { channel: "test-channel" } }],
-      };
-      await fs.mkdir(workspace);
-      await fs.writeFile(path.join(workspace, "AGENTS.md"), "Existing operating program\n");
-      await fs.writeFile(configPath, JSON.stringify(initial));
-      const result = await createAgentTeam({ workspaceRoot: path.join(root, "team") });
-      expect(result).toMatchObject({ status: "created", coordinatorId: "coordinator" });
-      const config = await readConfig();
-      expect(Object.keys(config.agents?.entries ?? {})).toEqual([
-        "main",
-        "coordinator",
-        "researcher",
-        "writer",
-        "reviewer",
-      ]);
-      expect(config.agents?.entries?.main?.workspace).toBe(workspace);
-      expect(config.bindings).toEqual(initial.bindings);
-      expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
-        "Existing operating program\n",
+it("allows a team to replace the implicit main", async () => {
+  const result = await createAgentTeam({ coordinator: "main" });
+  expect(result).toMatchObject({ status: "created", coordinatorId: "main" });
+  expect(Object.keys((await readConfig()).agents?.entries ?? {})).toEqual(["main", ...specialists]);
+});
+
+it("rejects unfinished role adoption without workspace or config changes", async () => {
+  const original = JSON.stringify(existingFleet());
+  await fs.writeFile(configPath, original);
+  const workspace = path.join(root, "editor");
+  const seeded = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
+  expect(seeded.bootstrapPending).toBe(true);
+  // Git metadata is completion evidence; keep this fixture unambiguously unfinished.
+  await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
+  await fs.rm(path.join(workspace, "SOUL.md"));
+  await fs.rm(path.join(workspace, "IDENTITY.md"));
+  const readWorkspace = async () => {
+    const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
+    return Promise.all(
+      entries
+        .filter((entry) => entry.isFile())
+        .map(async (entry) => {
+          const file = path.join(entry.parentPath, entry.name);
+          return [path.relative(workspace, file), await fs.readFile(file)];
+        }),
+    );
+  };
+  const before = await readWorkspace();
+  const adding = agentsAddCommand({
+    name: "Editor",
+    role: "writer",
+    workspace,
+    nonInteractive: true,
+    json: true,
+  });
+  await expect.soft(adding).rejects.toThrow("unfinished bootstrap");
+  expect.soft(await readWorkspace()).toEqual(before);
+  expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
+  expect((await readConfig()).agents?.entries?.editor).toBeUndefined();
+});
+
+it.each([false, true])(
+  "creates directed teams preserving the existing ambient owner: %s",
+  async (hasAmbientOwner) => {
+    const initial = existingFleet();
+    if (hasAmbientOwner && initial.agents?.defaults) {
+      initial.agents.defaults.systemAgent = { agentId: " ambient " };
+    }
+    await fs.writeFile(configPath, JSON.stringify(initial));
+    const before = await readConfig();
+    const coordinatorId = hasAmbientOwner ? "docs-lead" : "coordinator";
+    const specialistIds = specialists.map((id) => (hasAmbientOwner ? `docs-${id}` : id));
+    const workspaceRoot = path.join(root, hasAmbientOwner ? "team-workspaces" : "workspace");
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    await agentsTeamCreateCommand({
+      ...(hasAmbientOwner ? { coordinator: "lead", prefix: "docs", workspaceRoot } : {}),
+      nonInteractive: true,
+      json: true,
+    });
+    const summary: unknown = json.mock.calls[0]?.[0];
+    expect(summary).toMatchObject({
+      coordinatorId,
+      ambientOwnerId: hasAmbientOwner ? "ambient" : coordinatorId,
+      agents: [coordinatorId, ...specialistIds].map((agentId) => ({
+        agentId,
+        workspace: path.join(workspaceRoot, agentId),
+      })),
+      ...(hasAmbientOwner
+        ? { note: "ambient owner stays ambient; talk to the coordinator by name" }
+        : {}),
+    });
+    const config = await readConfig();
+    expect(config.agents?.defaults).toEqual({
+      ...before.agents?.defaults,
+      systemAgent: hasAmbientOwner
+        ? before.agents?.defaults?.systemAgent
+        : { agentId: coordinatorId },
+    });
+    expect(config.tools).toEqual(before.tools);
+    expect(config.agents?.entries?.ambient).toEqual(before.agents?.entries?.ambient);
+    for (const id of [coordinatorId, ...specialistIds]) {
+      const entry = config.agents?.entries?.[id];
+      expect(entry?.subagents).toEqual(
+        id === coordinatorId
+          ? { allowAgents: specialistIds, delegationMode: "prefer" }
+          : { allowAgents: [] },
       );
-    });
-  });
+      expect(entry?.workspace).toBe(path.join(workspaceRoot, id));
+      expect(entry).not.toHaveProperty("default");
+    }
+  },
+);
 
-  it.each([false, true])("distinguishes implicit main from authored main: %s", async (authored) => {
-    await withState(async (_root, configPath) => {
-      const original = JSON.stringify({ agents: { entries: { main: {} } } });
-      if (authored) {
-        await fs.writeFile(configPath, original);
-      }
-      const result = await createAgentTeam({ coordinator: "main" });
-      if (authored) {
-        expect(result).toMatchObject({ status: "error", message: expect.stringContaining("main") });
-        expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      } else {
-        expect(result).toMatchObject({ status: "created", coordinatorId: "main" });
-        expect(Object.keys((await readConfig()).agents?.entries ?? {})).toEqual([
-          "main",
-          "researcher",
-          "writer",
-          "reviewer",
-        ]);
-      }
-    });
+it("rejects pending specialist deletion before publishing config or workspace", async () => {
+  const original = JSON.stringify(existingFleet());
+  await fs.writeFile(configPath, original);
+  const workspaceRoot = path.join(root, "team-workspaces");
+  beginAgentDeletionJournal({
+    agentId: "reviewer",
+    operationId: "pending-reviewer",
+    agentDir: path.join(root, "agents", "reviewer", "agent"),
+    workspaceDir: path.join(workspaceRoot, "reviewer"),
+    sessionsDir: path.join(root, "agents", "reviewer", "sessions"),
+    deleteFiles: false,
   });
-
-  it("adds a role with its workspace program and complete identity without bootstrapping again", async () => {
-    await withState(async (root, configPath) => {
-      await fs.writeFile(configPath, JSON.stringify(existingFleet(root)));
-      const workspace = path.join(root, "editor");
-      const { runtime, logs, errors } = createCapturingTestRuntime();
-      await agentsAddCommand(
-        { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-        runtime,
+  const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath());
+  let result: Awaited<ReturnType<typeof createAgentTeam>>;
+  try {
+    foreign.exec(
+      "UPDATE agent_deletion_journal SET cleanup_completed = 1 WHERE agent_id = 'reviewer'",
+    );
+    publishAgentDeletionJournalStatus(foreign, "reviewer", "complete");
+    result = await withOpenClawStateDatabaseReadSnapshot(async () => {
+      foreign.exec(
+        "UPDATE agent_deletion_journal SET cleanup_completed = 0 WHERE agent_id = 'reviewer'",
       );
-      expect(errors).toEqual([]);
-      const summary: unknown = JSON.parse(logs.join("\n"));
-      expect(summary).toMatchObject({ agentId: "editor", workspace });
-      const template = await loadAgentRole("writer");
-      for (const [file, content] of Object.entries(template.files)) {
-        expect(await fs.readFile(path.join(workspace, file), "utf8")).toBe(content);
+      publishAgentDeletionJournalStatus(foreign, "reviewer", "pending");
+      const observation = observeHostDataSql();
+      try {
+        const created = await createAgentTeam({ workspaceRoot });
+        expect(
+          observation.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql)),
+        ).toEqual([]);
+        return created;
+      } finally {
+        observation.restore();
       }
-      expect(loadAgentIdentityFromWorkspace(workspace)).toEqual({
-        name: "Writer",
-        creature: "writer assistant",
-        vibe: "clear, audience-aware writing",
-        emoji: "✍️",
-        theme: "clear, audience-aware writing",
-      });
-      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toContain("# USER.md");
-      const config = await readConfig();
-      expect(config.agents?.entries?.editor?.identity).toEqual(template.identity);
-      expect(config.agents?.entries?.editor?.subagents).toEqual({ allowAgents: [] });
-      expect(config.agents?.entries?.editor?.skills).toBeUndefined();
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      const ensured = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
-      expect(ensured.bootstrapPending).toBe(false);
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
     });
+  } finally {
+    foreign.close();
+  }
+  expect(result).toMatchObject({
+    status: "error",
+    message: expect.stringContaining("reviewer"),
   });
-
-  it.each([false, true])(
-    "rejects unfinished role adoption without changing workspace bytes or config (missing identity: %s)",
-    async (missingIdentity) => {
-      await withState(async (root, configPath) => {
-        const original = JSON.stringify(existingFleet(root));
-        await fs.writeFile(configPath, original);
-        const workspace = path.join(root, "editor");
-        const seeded = await ensureAgentWorkspace({ dir: workspace, ensureBootstrapFiles: true });
-        expect(seeded.bootstrapPending).toBe(true);
-        // Git metadata is completion evidence; keep this fixture unambiguously unfinished.
-        await fs.rm(path.join(workspace, ".git"), { recursive: true, force: true });
-        await fs.rm(path.join(workspace, "SOUL.md"));
-        if (missingIdentity) {
-          await fs.rm(path.join(workspace, "IDENTITY.md"));
-        }
-        const readWorkspace = async () => {
-          const entries = await fs.readdir(workspace, { recursive: true, withFileTypes: true });
-          return Promise.all(
-            entries
-              .filter((entry) => entry.isFile())
-              .map(async (entry) => {
-                const file = path.join(entry.parentPath, entry.name);
-                return [path.relative(workspace, file), await fs.readFile(file)];
-              }),
-          );
-        };
-        const before = await readWorkspace();
-        const { runtime } = createCapturingTestRuntime();
-        await expect
-          .soft(
-            agentsAddCommand(
-              { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-              runtime,
-            ),
-          )
-          .rejects.toThrow("unfinished bootstrap");
-        expect.soft(await readWorkspace()).toEqual(before);
-        expect.soft(await fs.readFile(configPath, "utf8")).toBe(original);
-        expect((await readConfig()).agents?.entries?.editor).toBeUndefined();
-      });
-    },
-  );
-
-  it("adds missing role files to a complete workspace while preserving existing files", async () => {
-    await withState(async (root, configPath) => {
-      await fs.writeFile(configPath, JSON.stringify(existingFleet(root)));
-      const workspace = path.join(root, "editor");
-      await fs.mkdir(workspace);
-      const identity = "# IDENTITY.md\n\n- **Name:** Established Editor\n";
-      const soul = "Existing editorial voice\n";
-      await fs.writeFile(path.join(workspace, "IDENTITY.md"), identity);
-      await fs.writeFile(path.join(workspace, "SOUL.md"), soul);
-      const { runtime, errors } = createCapturingTestRuntime();
-      await agentsAddCommand(
-        { name: "Editor", role: "writer", workspace, nonInteractive: true, json: true },
-        runtime,
-      );
-      expect(errors).toEqual([]);
-      expect(await fs.readFile(path.join(workspace, "AGENTS.md"), "utf8")).toBe(
-        (await loadAgentRole("writer")).files["AGENTS.md"],
-      );
-      expect(await fs.readFile(path.join(workspace, "IDENTITY.md"), "utf8")).toBe(identity);
-      expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe(soul);
-      expect((await readConfig()).agents?.entries?.editor?.workspace).toBe(workspace);
-      await expect(fs.access(path.join(workspace, "BOOTSTRAP.md"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    });
-  });
-
-  it.each([false, true])(
-    "creates directed teams and preserves defaults with an existing ambient owner: %s",
-    async (hasAmbientOwner) => {
-      await withState(async (root, configPath) => {
-        const initial = existingFleet(root);
-        if (hasAmbientOwner && initial.agents?.defaults) {
-          initial.agents.defaults.systemAgent = { agentId: " ambient " };
-        }
-        await fs.writeFile(configPath, JSON.stringify(initial));
-        const before = await readConfig();
-        const coordinatorId = hasAmbientOwner ? "docs-lead" : "coordinator";
-        const specialistIds = ["researcher", "writer", "reviewer"].map((id) =>
-          hasAmbientOwner ? `docs-${id}` : id,
-        );
-        const workspaceRoot = path.join(root, hasAmbientOwner ? "team-workspaces" : "workspace");
-        const { runtime, logs } = createCapturingTestRuntime();
-        await agentsTeamCreateCommand(
-          {
-            ...(hasAmbientOwner ? { coordinator: "lead", prefix: "docs", workspaceRoot } : {}),
-            nonInteractive: true,
-            json: true,
-          },
-          runtime,
-        );
-        const summary: unknown = JSON.parse(logs.join("\n"));
-        expect(summary).toMatchObject({
-          coordinatorId,
-          ambientOwnerId: hasAmbientOwner ? "ambient" : coordinatorId,
-          agents: [coordinatorId, ...specialistIds].map((agentId) => ({
-            agentId,
-            workspace: path.join(workspaceRoot, agentId),
-          })),
-          ...(hasAmbientOwner
-            ? { note: "ambient owner stays ambient; talk to the coordinator by name" }
-            : {}),
-        });
-        const config = await readConfig();
-        expect(config.agents?.entries?.[coordinatorId]?.subagents).toEqual({
-          allowAgents: specialistIds,
-          delegationMode: "prefer",
-        });
-        for (const id of specialistIds) {
-          expect(config.agents?.entries?.[id]?.subagents).toEqual({ allowAgents: [] });
-        }
-        expect(config.agents?.defaults).toEqual({
-          ...before.agents?.defaults,
-          systemAgent: hasAmbientOwner
-            ? before.agents?.defaults?.systemAgent
-            : { agentId: coordinatorId },
-        });
-        expect(config.tools).toEqual(before.tools);
-        expect(config.agents?.entries?.ambient).toEqual(before.agents?.entries?.ambient);
-        for (const id of [coordinatorId, ...specialistIds]) {
-          expect(config.agents?.entries?.[id]?.workspace).toBe(path.join(workspaceRoot, id));
-          expect(config.agents?.entries?.[id]?.default).toBeUndefined();
-        }
-      });
-    },
-  );
-
-  it("detects a collision on the last specialist before publishing any team config or workspace", async () => {
-    await withState(async (root, configPath) => {
-      const initial = existingFleet(root);
-      if (initial.agents?.entries) {
-        initial.agents.entries.Reviewer = { workspace: path.join(root, "existing-reviewer") };
-      }
-      const original = JSON.stringify(initial);
-      await fs.writeFile(configPath, original);
-      const workspaceRoot = path.join(root, "team-workspaces");
-      const result = await createAgentTeam({ workspaceRoot });
-      expect(result).toMatchObject({
-        status: "error",
-        message: expect.stringContaining("reviewer"),
-      });
-      expect(await fs.readFile(configPath, "utf8")).toBe(original);
-      await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
+  expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  await expect(fs.access(workspaceRoot)).rejects.toMatchObject({ code: "ENOENT" });
 });

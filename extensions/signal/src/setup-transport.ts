@@ -41,13 +41,6 @@ export type SignalManagedNativeTransport = Extract<
   { kind: "managed-native" }
 >;
 
-function managedTransportOptions(
-  transport: SignalManagedNativeTransport,
-): Omit<SignalManagedNativeTransport, "kind"> {
-  const { kind: _kind, ...options } = transport;
-  return options;
-}
-
 function normalizeTransport(transport: SignalTransportConfig): SignalTransportConfig {
   if (transport.kind === "managed-native") {
     assertSignalSocketTransport(transport);
@@ -277,7 +270,7 @@ export async function probeSignalTransport(params: {
       ? prepareSignalManagedNativeTransport({
           cfg: params.cfg,
           accountId: params.accountId,
-          overrides: managedTransportOptions(params.transport),
+          overrides: params.transport,
         })
       : params.transport;
   const resolved = resolveSignalTransport(transport);

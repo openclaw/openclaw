@@ -91,6 +91,79 @@ does not approve a backport. If the commit needs companions, probe and assess
 the smallest ordered final fix rather than treating each clean commit as an
 independent candidate.
 
+## Close Selected Contracts Before Qualification
+
+Extend the same backport ledger; do not create another release-state store or
+infer dependencies from commit titles. For each selected fix, record its
+consumer, owning producer, public exports or generated inputs, and lifecycle
+or recovery companions. Include workflow, script, fixture, and CI-planner
+changes, not only product code. Trace the actual symbols and contracts in the
+pinned main change and baseline; a clean cherry-pick does not prove closure.
+
+Give each prerequisite one evidenced disposition: `present-equivalent`,
+`selected` (with its ordered commit group), `missing`, or `not-applicable`.
+Name source paths/symbols and commits, the baseline evidence, and focused proof
+for the complete group. An equivalent implementation counts without the same
+commit SHA. Missing or unverified prerequisites keep that group blocked; do
+not start qualification hoping full CI will discover them.
+
+Use the existing Git tools to locate companion changes:
+
+```bash
+git show <selected-main-sha> -- <consumer-path>
+git show <baseline-sha>:<producer-path>
+git log -p -S '<contract-symbol>' <pinned-main-sha> -- <producer-path>
+```
+
+Run the bounded companion audit for every selected commit. Repeat `--selected`
+for an ordered group. Before picks, omit `--candidate`; after picks, supply the
+final candidate so the report compares the selected main file set with the
+actual baseline-to-candidate delta.
+
+```bash
+pnpm release:backport-companions -- \
+  --baseline <pinned-maintenance-baseline> \
+  --scan-end <pinned-main-sha> \
+  --selected <selected-main-sha> \
+  --candidate <final-candidate-sha>
+```
+
+Disposition every reported later same-path commit, later mention of the
+selected PR number, existing neighbor test, selected-file reference/registry,
+candidate file-set difference, and candidate content difference. A whole-file
+difference is inspection evidence, not a failure: a release adaptation or the
+final selected companion sequence can differ legitimately. This scan is
+heuristic and never establishes dependency closure or approval: manually trace
+symbols, callers, imports/exports, producers, workflows, registries, generated
+inputs, and differently named or cross-directory tests. Record
+`present-equivalent`, `selected`, `missing`, or `not-applicable` in the
+existing backport ledger. Missing or unverified rows keep the group blocked.
+Do not silence a candidate merely because it is not a dependency, and do not
+automatically cherry-pick it.
+
+Read callers and sibling consumers too. For an IPC-readiness consumer, check
+that the baseline's fixture producer emits the expected receipt and preserves
+any shell/file-readiness callers. For an imported fixture helper, check the
+defining module and exported barrel together. Probe the ordered complete group
+using the applicability procedure above, then run its focused owner proof;
+neither importing a future-main helper nor weakening the consumer closes it.
+
+Before freezing, compare the selected qualification workflows and planners
+with their pinned-main counterparts for known CI deduplication and preparation
+optimizations. Record each relevant optimization as already equivalent,
+selected, deliberately excluded with rationale, or blocked. Compare the actual
+scenario/input coverage and retained gates, not job names or duration alone.
+For example, a removed self-upgrade aggregate is covered only when the
+baseline's Package Acceptance selection still runs its required upgrade
+scenarios. Check source-independent admission/Doctor preparation the same way;
+do not cherry-pick unrelated optimizations automatically.
+
+Present the closure rows and CI-optimization dispositions with the proposed
+set before candidate mutation. After approved backports, recheck them against
+the final candidate SHA before qualification: report complete groups, remaining
+blocked groups, and deliberately excluded optimizations. Unresolved selected
+contracts block freezing; excluding an optimization is not a waived test gate.
+
 ## Decide and Present the Set
 
 For every proposed backport, inspect the complete change, baseline behavior,

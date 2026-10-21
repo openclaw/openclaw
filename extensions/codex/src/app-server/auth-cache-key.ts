@@ -4,12 +4,10 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
-const CODEX_HOME_ENV_VAR = "CODEX_HOME";
-const HOME_ENV_VAR = "HOME";
-const CODEX_HOME_DIRNAME = ".codex";
 export const CODEX_AUTH_JSON_FILENAME = "auth.json";
 export const CODEX_APP_SERVER_API_KEY_ENV_VARS = ["CODEX_API_KEY", "OPENAI_API_KEY"];
 
@@ -17,6 +15,7 @@ export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
   baseEnv?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  allowNativeAuthFile?: boolean;
 }): string | undefined {
   if (params.startOptions.transport !== "stdio") {
     return undefined;
@@ -28,15 +27,11 @@ export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   );
   const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
-    return resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
+    return params.allowNativeAuthFile === false
+      ? undefined
+      : resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env);
   }
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:app-server-env-api-key:v1");
-  hash.update("\0");
-  hash.update(apiKey.key);
-  hash.update("\0");
-  hash.update(apiKey.value);
-  return `${apiKey.key}:sha256:${hash.digest("hex")}`;
+  return fingerprintAuthCacheKey(apiKey.key, "env-api-key", apiKey.key, apiKey.value);
 }
 
 /** Secret-free cache identity for an API key already resolved by the runtime plan. */
@@ -48,44 +43,28 @@ export function resolveCodexAppServerPreparedApiKeyCacheKey(
 }
 
 export function fingerprintApiKeyAuthProfileCacheKey(apiKey: string): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:app-server-auth-profile-api-key:v1");
-  hash.update("\0");
-  hash.update(apiKey);
-  return `api_key:sha256:${hash.digest("hex")}`;
+  return fingerprintAuthCacheKey("api_key", "auth-profile-api-key", apiKey);
 }
 
 export function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:app-server-auth-profile-token:v1");
-  hash.update("\0");
-  hash.update(accessToken);
-  return `token:sha256:${hash.digest("hex")}`;
+  return fingerprintAuthCacheKey("token", "auth-profile-token", accessToken);
 }
 
-function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:app-server-cli-auth-json-api-key:v1");
-  hash.update("\0");
-  hash.update(apiKey);
-  return `CODEX_AUTH_JSON:sha256:${hash.digest("hex")}`;
+function fingerprintAuthCacheKey(prefix: string, domain: string, ...parts: string[]): string {
+  const hash = createHash("sha256")
+    .update(`openclaw:codex:app-server-${domain}:v1\0`)
+    .update(parts.join("\0"))
+    .digest("hex");
+  return `${prefix}:sha256:${hash}`;
 }
 
 function resolveCodexCliAuthFilePath(env: NodeJS.ProcessEnv): string {
-  const configuredCodexHome = env[CODEX_HOME_ENV_VAR]?.trim();
-  if (configuredCodexHome) {
-    return path.join(resolveHomeRelativePath(configuredCodexHome, env), CODEX_AUTH_JSON_FILENAME);
+  const codexHome = env.CODEX_HOME?.trim() || "~/.codex";
+  if (codexHome === "~" || codexHome.startsWith("~/") || codexHome.startsWith("~\\")) {
+    const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+    return path.join(home, codexHome.slice(codexHome === "~" ? 1 : 2), CODEX_AUTH_JSON_FILENAME);
   }
-  const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-  return path.join(home, CODEX_HOME_DIRNAME, CODEX_AUTH_JSON_FILENAME);
-}
-
-function resolveHomeRelativePath(value: string, env: NodeJS.ProcessEnv): string {
-  if (value === "~" || value.startsWith("~/") || value.startsWith("~\\")) {
-    const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-    return path.join(home, value.slice(value === "~" ? 1 : 2));
-  }
-  return value;
+  return path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
 }
 
 function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
@@ -95,12 +74,7 @@ function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (!parsed || typeof parsed !== "object") {
-    return undefined;
-  }
-  // SAFETY: The object guard permits this unknown field read; the string check below validates it.
-  const apiKey = (parsed as Record<string, unknown>).OPENAI_API_KEY;
-  return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
+  return isRecord(parsed) ? normalizeOptionalString(parsed.OPENAI_API_KEY) : undefined;
 }
 
 export async function readCodexCliAuthFileApiKey(
@@ -120,7 +94,9 @@ function resolveCodexCliAuthFileApiKeyCacheKey(env: NodeJS.ProcessEnv): string |
     const apiKey = parseCodexCliAuthFileApiKey(
       fsSync.readFileSync(resolveCodexCliAuthFilePath(env), "utf8"),
     );
-    return apiKey ? fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey) : undefined;
+    return apiKey
+      ? fingerprintAuthCacheKey("CODEX_AUTH_JSON", "cli-auth-json-api-key", apiKey)
+      : undefined;
   } catch {
     return undefined;
   }

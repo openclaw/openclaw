@@ -47,23 +47,17 @@ export function loadGatewayStartupPluginPlanWithMetadata(params: GatewayStartupP
       ...(params.index ? { index: params.index } : {}),
       pluginIdScope: createGatewayStartupMetadataPluginIdScope({
         config: params.config,
-        ...(params.activationSourceConfig !== undefined
-          ? { activationSourceConfig: params.activationSourceConfig }
-          : {}),
+        activationSourceConfig: params.activationSourceConfig,
         env: params.env,
         workerProviderIds: params.workerProviderIds ?? [],
-        ...(params.platform !== undefined ? { platform: params.platform } : {}),
-        ...(params.ambientEnvTriggers !== undefined
-          ? { ambientEnvTriggers: params.ambientEnvTriggers }
-          : {}),
+        platform: params.platform,
+        ambientEnvTriggers: params.ambientEnvTriggers,
       }),
     });
   const startupPlanStartedAt = performance.now();
   const plan = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
+    activationSourceConfig: params.activationSourceConfig,
     env: params.env,
     index: metadataSnapshot.index,
     manifestRegistry: metadataSnapshot.manifestRegistry,

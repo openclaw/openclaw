@@ -70,6 +70,10 @@ const jobSchema = z.object({
   error: z.string().nullable(),
 });
 
+function updateKindForBinding(bindingKind: string | undefined) {
+  return bindingKind === "runtime" ? "package" : bindingKind === "launcher" ? "git" : undefined;
+}
+
 function projectJob(
   job: z.infer<typeof jobSchema>,
   redact: (value: string) => string,
@@ -81,12 +85,7 @@ function projectJob(
     job.result?.outcome === "switched" ||
     job.result?.outcome === "source-updated";
   // A later rebind cannot change the outcome or target of a recorded update.
-  const kind =
-    job.result?.bindingKind === "runtime"
-      ? "package"
-      : job.result?.bindingKind === "launcher"
-        ? "git"
-        : undefined;
+  const kind = updateKindForBinding(job.result?.bindingKind);
   const status = running
     ? "running"
     : job.result?.outcome === "rolled-back"
@@ -244,12 +243,7 @@ export async function resolveOcmUpdateManager() {
   if (capability.envName !== envName.data || matches.some((match) => !match)) {
     throw new Error("OCM's update binding does not match this Gateway's state and configuration.");
   }
-  const kind =
-    capability.bindingKind === "runtime"
-      ? "package"
-      : capability.bindingKind === "launcher"
-        ? "git"
-        : null;
+  const kind = updateKindForBinding(capability.bindingKind) ?? null;
   if (!capability.supported || !capability.bindingName) {
     return null;
   }

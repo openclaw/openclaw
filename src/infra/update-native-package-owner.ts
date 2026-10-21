@@ -22,6 +22,11 @@ export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): 
   return /^\d+$/u.test(path.basename(layoutDir)) ? path.dirname(layoutDir) : null;
 }
 
+export function resolvePnpmHome(globalRoot?: string | null): string | null {
+  const globalDir = resolvePnpmGlobalDirFromGlobalRoot(globalRoot);
+  return globalDir && path.basename(globalDir) === "global" ? path.dirname(globalDir) : null;
+}
+
 /** Native activation replaces the complete manager project, not only its package directory. */
 export function resolveNativePackageProjectRoot(
   target: {

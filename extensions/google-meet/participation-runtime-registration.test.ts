@@ -1,3 +1,4 @@
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -12,7 +13,6 @@ import {
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
 import * as chromeTransport from "./src/transports/chrome.js";
-import { testing } from "./test-api.js";
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
 
@@ -24,7 +24,9 @@ function setupWithSqlite(env: NodeJS.ProcessEnv) {
     { defaultTransport: "chrome", defaultMode: "transcribe" },
     { stateEnv: env, fullConfig: { transcripts: { enabled: false } } },
   );
-  testing.setCallGatewayFromCliForTests(createGoogleMeetToolGatewayForTest(harness.methods));
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+    createGoogleMeetToolGatewayForTest(harness.methods),
+  );
   const tool = harness.tools[0];
   if (!tool) {
     throw new Error("Expected Google Meet tool registration");
@@ -36,7 +38,6 @@ function setupWithSqlite(env: NodeJS.ProcessEnv) {
 
 describe("Google Meet registered participation lifecycle", () => {
   afterEach(() => {
-    testing.setCallGatewayFromCliForTests();
     vi.restoreAllMocks();
   });
 

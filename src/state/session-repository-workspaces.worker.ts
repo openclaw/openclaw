@@ -1,5 +1,5 @@
 import { requestSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -13,38 +13,60 @@ import {
   findSessionRepositoryWorkspaceInDatabase,
   readSessionRepositoryWorkspaceInDatabase,
 } from "./session-repository-workspaces.kernel.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
+  RepositoryWorkspaceBase,
+  RepositoryWorkspaceCheckpoint,
+  RepositoryWorkspaceCreate,
   RepositoryWorkspaceMutationResult,
-  RepositoryWorkspaceWorkerOperations,
+  RepositoryWorkspaceOwner,
 } from "./session-repository-workspaces.types.js";
+import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
-type Command = SqliteWorkerCommand<RepositoryWorkspaceWorkerOperations>;
+export const repositoryWorkspaceOperations = {
+  "repositoryWorkspaces.get": (input: { workspaceId: string }, { open }) =>
+    readSessionRepositoryWorkspaceInDatabase(open().db, input.workspaceId),
+  "repositoryWorkspaces.find": (input: RepositoryWorkspaceOwner, { open }) =>
+    findSessionRepositoryWorkspaceInDatabase(open().db, input),
+  "repositoryWorkspaces.create": (
+    input: RepositoryWorkspaceCreate & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.create", (db) =>
+      createSessionRepositoryWorkspaceInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.bindBase": (
+    input: RepositoryWorkspaceBase & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.bindBase", (db) =>
+      bindSessionRepositoryWorkspaceBaseInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.acceptCheckpoint": (
+    input: RepositoryWorkspaceCheckpoint & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.acceptCheckpoint", (db) =>
+      acceptSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.delete": (
+    input: { workspaceId: string; sessionEntryCurrentSource?: SessionEntryCurrentSource },
+    { open },
+  ) =>
+    mutate(
+      open(),
+      "repositoryWorkspaces.delete",
+      (db) => deleteSessionRepositoryWorkspaceInDatabase(db, input.workspaceId),
+      input.sessionEntryCurrentSource,
+    ),
+} satisfies WorkerOperationHandlers;
 
-export function isRepositoryWorkspaceCommand(command: { type: string }): command is Command {
-  return (
-    command.type === "repositoryWorkspaces.get" ||
-    command.type === "repositoryWorkspaces.find" ||
-    command.type === "repositoryWorkspaces.create" ||
-    command.type === "repositoryWorkspaces.bindBase" ||
-    command.type === "repositoryWorkspaces.acceptCheckpoint" ||
-    command.type === "repositoryWorkspaces.delete"
-  );
-}
-
-export function executeRepositoryWorkspaceCommand(
-  command: Command,
+function mutate(
   database: OpenClawStateDatabase,
-): RepositoryWorkspaceWorkerOperations[keyof RepositoryWorkspaceWorkerOperations]["output"] {
-  if (command.type === "repositoryWorkspaces.get") {
-    return readSessionRepositoryWorkspaceInDatabase(database.db, command.input.workspaceId);
-  }
-  if (command.type === "repositoryWorkspaces.find") {
-    return findSessionRepositoryWorkspaceInDatabase(database.db, command.input);
-  }
-  const sessionEntryCurrentSource =
-    command.type === "repositoryWorkspaces.delete"
-      ? command.input.sessionEntryCurrentSource
-      : undefined;
+  operationLabel: string,
+  operation: (db: OpenClawStateDatabase["db"]) => RepositoryWorkspaceMutationResult,
+  sessionEntryCurrentSource?: SessionEntryCurrentSource,
+): RepositoryWorkspaceMutationResult {
   const admit = (stage: "transaction" | "commit", facts: unknown) =>
     requestSessionEntryCurrentAdmission(
       sessionEntryCurrentSource,
@@ -54,38 +76,15 @@ export function executeRepositoryWorkspaceCommand(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       admit("transaction", undefined);
-      let result: RepositoryWorkspaceMutationResult;
-      switch (command.type) {
-        case "repositoryWorkspaces.create":
-          result = createSessionRepositoryWorkspaceInDatabase(
-            db,
-            command.input,
-            command.input.nowMs ?? Date.now(),
-          );
-          break;
-        case "repositoryWorkspaces.bindBase":
-          result = bindSessionRepositoryWorkspaceBaseInDatabase(
-            db,
-            command.input,
-            command.input.nowMs ?? Date.now(),
-          );
-          break;
-        case "repositoryWorkspaces.acceptCheckpoint":
-          result = acceptSessionRepositoryWorkspaceCheckpointInDatabase(
-            db,
-            command.input,
-            command.input.nowMs ?? Date.now(),
-          );
-          break;
-        case "repositoryWorkspaces.delete":
-          result = deleteSessionRepositoryWorkspaceInDatabase(db, command.input.workspaceId);
-          break;
-      }
+      const { result, receipt } = repositoryWorkspacePublication.capture(db, () => operation(db));
       admit("commit", result);
-      deferSqliteWorkerCommitReceipt(db, result);
+      deferSqliteWorkerCommitReceipt(db, {
+        result,
+        receipt: repositoryWorkspacePublication.bound(receipt),
+      });
       return result;
     },
     { database },
-    { operationLabel: command.type },
+    { operationLabel },
   );
 }

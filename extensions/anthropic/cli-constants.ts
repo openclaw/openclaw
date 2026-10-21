@@ -70,22 +70,18 @@ const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice
 );
 /** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
 export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers[
-  CLAUDE_CLI_BACKEND_ID
-].models.map(({ id }) => `${CLAUDE_CLI_BACKEND_ID}/${id}`);
-
 /**
  * Claude CLI model ids probed when detecting an existing CLI route, canonical
  * default first. Route detection must not depend on which model is currently
  * the default: existing configs route older Claude models, so probing only the
  * default would stop advertising session creation after a default bump.
  */
-export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
-  ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
-);
-export const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS.map(
-  (id) => `anthropic/${id}`,
-);
+export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = [
+  ...new Set([
+    CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
+    ...Object.values(manifest.modelIdNormalization.providers.anthropic.aliases),
+  ]),
+];
 
 /** Provider-owned aliases shared by setup, pricing, and native CLI selectors. */
 export const CLAUDE_MODEL_ID_ALIASES: ReadonlyMap<string, string> = new Map(
@@ -107,3 +103,6 @@ export const CLAUDE_CLI_SESSION_ID_FIELDS = [
   "conversation_id",
   "conversationId",
 ] as const;
+
+/** Claude Code registers bundled OpenClaw MCP tools under this name prefix. */
+export const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";

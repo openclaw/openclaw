@@ -1,8 +1,7 @@
-// Capability metadata for the configured shared media model entries.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProvider } from "../plugins/capability-provider-runtime.js";
-import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
+import { listImageCapableConfiguredProviders } from "./config-provider-models.js";
 import { resolveConfiguredMediaEntryCapabilities } from "./entry-capabilities.js";
 import type { MediaUnderstandingCapabilityRegistry } from "./types.js";
 
@@ -35,7 +34,8 @@ export function buildMediaUnderstandingCapabilityRegistry(
       registry.set(normalizeMediaProviderId(provider.id), { capabilities: provider.capabilities });
     }
   }
-  for (const providerId of resolveImageCapableConfigProviderIds(cfg)) {
+  for (const configuredId of listImageCapableConfiguredProviders(cfg)) {
+    const providerId = normalizeMediaProviderId(configuredId);
     // A runtime declaration owns capability truth, including an explicitly absent capability set.
     if (providerIds.has(providerId) && !registry.has(providerId)) {
       registry.set(providerId, { capabilities: ["image"] });

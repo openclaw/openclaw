@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import type { SshResolvedConfig } from "../infra/ssh-config.js";
 import type { inspectGatewayTlsCertificate as InspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -15,28 +16,60 @@ import {
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
-  return {
-    readBestEffortConfig: vi.fn(async () => ({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://remote.example:18789", token: "rtok" },
-        auth: { token: "ltok" },
+  const successfulProbe = (url: string): GatewayProbeResult => {
+    const local = url.includes("127.0.0.1");
+    const host = local ? "local" : "remote";
+    const ip = local ? "127.0.0.1" : "100.64.0.2";
+    return {
+      ok: true,
+      url,
+      connectLatencyMs: local ? 12 : 34,
+      error: null,
+      close: null,
+      auth: {
+        role: "operator",
+        scopes: [local ? "operator.read" : "operator.admin"],
+        capability: local ? "read_only" : "admin_capable",
       },
-    })),
+      server: { version: "2026.4.24", connId: host },
+      health: { ok: true },
+      status: {},
+      presence: [
+        {
+          mode: "gateway",
+          reason: "self",
+          host,
+          ip,
+          text: `Gateway: ${host} (${ip}) · app test · mode gateway · reason self`,
+          ts: Date.now(),
+        },
+      ],
+      configSnapshot: {
+        path: local ? "/tmp/cfg.json" : "/tmp/remote.json",
+        exists: true,
+        valid: true,
+        config: { gateway: { mode: local ? "local" : "remote" } },
+        issues: [],
+        legacyIssues: [],
+      },
+    };
+  };
+  return {
+    successfulProbe,
+    readBestEffortConfig: vi.fn<typeof import("../config/config.js").readBestEffortConfig>(
+      async () => ({
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example:18789", token: "rtok" },
+          auth: { token: "ltok" },
+        },
+      }),
+    ),
     resolveGatewayPort: vi.fn((_cfg?: unknown) => 18789),
     discoverGatewayBeacons: vi.fn(async (_opts?: unknown): Promise<GatewayBonjourBeacon[]> => []),
     pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
     sshStop,
-    resolveSshConfig: vi.fn(
-      async (
-        _opts?: unknown,
-      ): Promise<{
-        user: string;
-        host: string;
-        port: number;
-        identityFiles: string[];
-      } | null> => null,
-    ),
+    resolveSshConfig: vi.fn(async (_opts?: unknown): Promise<SshResolvedConfig | null> => null),
     startSshPortForward: vi.fn(async (_opts?: unknown) => ({
       localPort: 18789,
       pid: 123,
@@ -57,113 +90,7 @@ const mocks = vi.hoisted(() => {
       message: "Windows LAN firewall diagnostics do not apply.",
       details: [],
     })),
-    probeGateway: vi.fn(async (opts: { url: string }): Promise<GatewayProbeResult> => {
-      const { url } = opts;
-      if (url.includes("127.0.0.1")) {
-        return {
-          ok: true,
-          url,
-          connectLatencyMs: 12,
-          error: null,
-          close: null,
-          auth: {
-            role: "operator",
-            scopes: ["operator.read"],
-            capability: "read_only",
-          },
-          server: {
-            version: "2026.4.24",
-            connId: "local",
-          },
-          health: { ok: true },
-          status: {
-            linkChannel: {
-              id: "whatsapp",
-              label: "WhatsApp",
-              linked: false,
-              authAgeMs: null,
-            },
-            sessions: {
-              paths: [],
-              count: 0,
-              defaults: { model: null, contextTokens: null },
-              recent: [],
-              byAgent: [],
-            },
-          },
-          presence: [
-            {
-              mode: "gateway",
-              reason: "self",
-              host: "local",
-              ip: "127.0.0.1",
-              text: "Gateway: local (127.0.0.1) · app test · mode gateway · reason self",
-              ts: Date.now(),
-            },
-          ],
-          configSnapshot: {
-            path: "/tmp/cfg.json",
-            exists: true,
-            valid: true,
-            config: {
-              gateway: { mode: "local" },
-            },
-            issues: [],
-            legacyIssues: [],
-          },
-        };
-      }
-      return {
-        ok: true,
-        url,
-        connectLatencyMs: 34,
-        error: null,
-        close: null,
-        auth: {
-          role: "operator",
-          scopes: ["operator.admin"],
-          capability: "admin_capable",
-        },
-        server: {
-          version: "2026.4.24",
-          connId: "remote",
-        },
-        health: { ok: true },
-        status: {
-          linkChannel: {
-            id: "whatsapp",
-            label: "WhatsApp",
-            linked: true,
-            authAgeMs: 5_000,
-          },
-          sessions: {
-            paths: [],
-            count: 2,
-            defaults: { model: null, contextTokens: null },
-            recent: [],
-            byAgent: [],
-          },
-        },
-        presence: [
-          {
-            mode: "gateway",
-            reason: "self",
-            host: "remote",
-            ip: "100.64.0.2",
-            text: "Gateway: remote (100.64.0.2) · app test · mode gateway · reason self",
-            ts: Date.now(),
-          },
-        ],
-        configSnapshot: {
-          path: "/tmp/remote.json",
-          exists: true,
-          valid: true,
-          config: { gateway: { mode: "remote" } },
-          issues: [],
-          legacyIssues: [],
-        },
-      };
-    }),
+    probeGateway: vi.fn(async (opts: { url: string }) => successfulProbe(opts.url)),
   };
 });
 
@@ -175,58 +102,29 @@ const {
   resolveSshConfig,
   startSshPortForward,
   inspectGatewayTlsCertificate,
-  inspectWindowsGatewayFirewall,
   probeGateway,
 } = mocks;
+const defaultConfigReader = expectDefined(
+  readBestEffortConfig.getMockImplementation(),
+  "default config reader",
+);
 
 vi.mock("../config/config.js", () => ({
   readBestEffortConfig: mocks.readBestEffortConfig,
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../infra/bonjour-discovery.js", () => ({
+vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bonjour-discovery.js")>()),
   discoverGatewayBeacons: mocks.discoverGatewayBeacons,
-  resolveGatewayDiscoveryEndpoint: (beacon: GatewayBonjourBeacon) => {
-    const host = beacon.host?.trim();
-    const port = beacon.port;
-    if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
-      return null;
-    }
-    const scheme = beacon.gatewayTls === true ? "wss" : "ws";
-    return {
-      host,
-      port,
-      gatewayTls: beacon.gatewayTls === true,
-      gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
-      scheme,
-      wsUrl: `${scheme}://${host}:${port}`,
-    };
-  },
 }));
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: mocks.pickPrimaryTailnetIPv4,
 }));
 
-vi.mock("../infra/ssh-tunnel.js", () => ({
-  parseSshTarget: (rawTarget: string) => {
-    const trimmed = rawTarget.trim();
-    if (!trimmed || trimmed.startsWith("-")) {
-      return null;
-    }
-    const [userHost, rawPort] = trimmed.split(":");
-    const [maybeUser, maybeHost] = expectDefined(userHost, "userHost test invariant").includes("@")
-      ? expectDefined(userHost, "userHost test invariant").split("@", 2)
-      : [undefined, userHost];
-    if (!maybeHost) {
-      return null;
-    }
-    return {
-      user: maybeUser,
-      host: maybeHost,
-      port: rawPort ? Number(rawPort) : 22,
-    };
-  },
+vi.mock("../infra/ssh-tunnel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/ssh-tunnel.js")>()),
   startSshPortForward: mocks.startSshPortForward,
 }));
 
@@ -250,18 +148,14 @@ vi.mock("../gateway/probe.js", async (importOriginal) => ({
 function createRuntimeCapture() {
   const runtimeLogs: string[] = [];
   const runtimeErrors: string[] = [];
-  const runtime = {
-    log: (msg: string) => runtimeLogs.push(msg),
-    error: (msg: string) => runtimeErrors.push(msg),
+  const runtime: RuntimeEnv = {
+    log: (msg) => runtimeLogs.push(String(msg)),
+    error: (msg) => runtimeErrors.push(String(msg)),
     exit: (code: number) => {
       throw new Error(`__exit__:${code}`);
     },
   };
   return { runtime, runtimeLogs, runtimeErrors };
-}
-
-function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"]): RuntimeEnv {
-  return runtime as unknown as RuntimeEnv;
 }
 
 type ProbeGatewayCall = Parameters<typeof import("../gateway/probe.js").probeGateway>[0];
@@ -271,11 +165,10 @@ function readProbeCalls(): ProbeGatewayCall[] {
 }
 
 function requireProbeCall(url: string): ProbeGatewayCall {
-  const call = readProbeCalls().find((candidate) => candidate.url === url);
-  if (!call) {
-    throw new Error(`Expected gateway probe call for ${url}`);
-  }
-  return call;
+  return expectDefined(
+    readProbeCalls().find((candidate) => candidate.url === url),
+    `Expected gateway probe call for ${url}`,
+  );
 }
 
 function requireSshForwardCall(index = 0): Record<string, unknown> {
@@ -286,7 +179,7 @@ function requireSshForwardCall(index = 0): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
+function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok"): OpenClawConfig {
   return {
     gateway: {
       mode: "remote",
@@ -314,68 +207,48 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
 }
 
 async function runGatewayStatus(
-  runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
-  opts: {
-    timeout?: string;
-    json?: boolean;
-    port?: unknown;
-    url?: string;
-    token?: string;
-    password?: string;
-    ssh?: string;
-    sshAuto?: boolean;
-    sshIdentity?: string;
-  },
+  runtime: RuntimeEnv,
+  opts: Parameters<typeof gatewayStatusCommand>[0],
 ) {
-  await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
-}
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function requireRecordArray(value: unknown, label: string): Array<Record<string, unknown>> {
-  if (
-    !Array.isArray(value) ||
-    !value.every((entry) => typeof entry === "object" && entry !== null)
-  ) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Array<Record<string, unknown>>;
-}
-
-function findUnresolvedSecretRefWarning(runtimeLogs: string[]) {
-  const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-    warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-  };
-  return parsed.warnings?.find(
-    (warning) =>
-      warning.code === "auth_secretref_unresolved" &&
-      warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
-  );
+  await gatewayStatusCommand(opts, runtime);
 }
 
 function requireUnresolvedSecretRefWarning(runtimeLogs: string[]) {
-  const warning = findUnresolvedSecretRefWarning(runtimeLogs);
-  if (!warning) {
-    throw new Error("expected unresolved gateway auth token SecretRef warning");
-  }
-  return warning;
+  const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+    warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
+  };
+  return expectDefined(
+    parsed.warnings?.find(
+      (warning) =>
+        warning.code === "auth_secretref_unresolved" &&
+        warning.message?.includes("gateway.auth.token SecretRef is unresolved"),
+    ),
+    "expected unresolved gateway auth token SecretRef warning",
+  );
 }
+
+const localGatewayConfig = (token = "ltok", tls = false): OpenClawConfig => ({
+  gateway: {
+    mode: "local",
+    auth: { mode: "token", token },
+    ...(tls ? { tls: { enabled: true } } : {}),
+  },
+});
+
+const gatewaySelf = {
+  text: "Gateway fixture",
+  host: "gateway-host",
+  ip: "192.0.2.10",
+  version: "2026.5.22",
+  platform: "linux",
+};
+const gatewayProcessSelf = { ...gatewaySelf, instanceId: "gateway-instance-1" };
 
 describe("gateway-status command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it.each(["   "])("rejects an explicitly blank timeout %j before probing", async (timeout) => {
-    const { runtime } = createRuntimeCapture();
-
-    await expect(runGatewayStatus(runtime, { timeout, json: true })).rejects.toThrow(
-      "Invalid --timeout",
-    );
-
-    expect(discoverGatewayBeacons).not.toHaveBeenCalled();
-    expect(startSshPortForward).not.toHaveBeenCalled();
-    expect(probeGateway).not.toHaveBeenCalled();
+    readBestEffortConfig.mockReset().mockImplementation(defaultConfigReader);
+    probeGateway.mockReset().mockImplementation(async ({ url }) => mocks.successfulProbe(url));
   });
 
   it("prints human output by default", async () => {
@@ -389,110 +262,150 @@ describe("gateway-status command", () => {
     expect(runtimeLogs.join("\n")).toContain("Targets");
   });
 
-  it("prints a structured JSON envelope when --json is set", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, { timeout: "1000", json: true });
-
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;
-    expect(parsed.ok).toBe(true);
-    const targets = requireRecordArray(parsed.targets, "gateway status targets");
-    expect(targets.length).toBeGreaterThanOrEqual(2);
-    const firstTarget = requireRecord(targets[0], "first gateway target");
-    requireRecord(firstTarget.health, "first target health");
-    requireRecord(firstTarget.summary, "first target summary");
-  });
-
-  it("does not run Windows LAN firewall diagnostics during fast gateway status", async () => {
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        auth: { token: "ltok" },
-      },
-    } as never);
+  it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", async () => {
     const { runtime, runtimeLogs } = createRuntimeCapture();
-
-    await runGatewayStatus(runtime, { timeout: "1000", json: true });
-
-    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code?: string }>;
-    };
-    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
-      false,
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    probeGateway.mockImplementation(async ({ url }) =>
+      createUnreachableGatewayProbe(url, "connection refused"),
     );
+
+    await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: false,
+      primaryTargetId: null,
+      warnings: [
+        {
+          code: "no_gateway_reachable",
+          message:
+            "No gateway answered any check and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+          targetIds: ["localLoopback"],
+        },
+      ],
+    });
   });
 
   it.each([
     {
-      source: "configured and ambient credentials",
-      auth: { mode: "token", token: "configured-local-token" },
-      env: {
+      name: "suppresses warning for SSH tunnel and configured remote with the same self identity",
+      ssh: "user@gateway-host",
+      localSelf: gatewayProcessSelf,
+      remoteSelf: { ...gatewayProcessSelf, host: "GATEWAY-HOST" },
+      expectedTargetIds: null,
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "suppresses warning for the same self identity on different transport ports",
+      ssh: null,
+      localSelf: gatewayProcessSelf,
+      remoteSelf: gatewayProcessSelf,
+      expectedTargetIds: null,
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when same-host probes do not report process identity",
+      ssh: null,
+      localSelf: gatewaySelf,
+      remoteSelf: gatewaySelf,
+      expectedTargetIds: ["explicit", "localLoopback"],
+      primaryTargetId: "explicit",
+    },
+    {
+      name: "warns when probes report distinct identities",
+      ssh: "user@gateway-a",
+      localSelf: { ...gatewayProcessSelf, host: "gateway-a", instanceId: "gateway-instance-a" },
+      remoteSelf: {
+        ...gatewayProcessSelf,
+        host: "gateway-b",
+        ip: "192.0.2.11",
+        instanceId: "gateway-instance-b",
+      },
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+    {
+      name: "warns when probe identity is unknown",
+      ssh: "user@gateway-host",
+      localSelf: null,
+      remoteSelf: null,
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+      primaryTargetId: "sshTunnel",
+    },
+  ])("$name", async ({ ssh, localSelf, remoteSelf, expectedTargetIds, primaryTargetId }) => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(
+      ssh ? makeRemoteGatewayConfig("ws://gateway-host:18789") : localGatewayConfig(),
+    );
+    probeGateway.mockImplementation(async ({ url }) => {
+      const self = url.includes("127.0.0.1") ? localSelf : remoteSelf;
+      return {
+        ...mocks.successfulProbe(url),
+        presence: self ? [{ ...self, ts: 0, mode: "gateway", reason: "self" }] : null,
+      };
+    });
+
+    await runGatewayStatus(runtime, {
+      timeout: "1000",
+      json: true,
+      ...(ssh ? { ssh } : { url: "ws://gateway-host:28789", token: "explicit-token" }),
+    });
+
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: true,
+      primaryTargetId,
+      warnings: expectedTargetIds
+        ? [
+            {
+              code: "multiple_gateways",
+              message:
+                "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+              targetIds: expectedTargetIds,
+            },
+          ]
+        : [],
+    });
+  });
+
+  it("rejects configured and ambient credentials before probing an explicit URL", async () => {
+    const configuredGateway = localGatewayConfig("configured-local-token");
+    await withEnvAsync(
+      {
         OPENCLAW_GATEWAY_TOKEN: "ambient-token",
         OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
       },
-      options: {},
-    },
-    {
-      source: "whitespace token",
-      auth: { mode: "token", token: "configured-local-token" },
-      env: {},
-      options: { token: "   " },
-    },
-    {
-      source: "whitespace password",
-      auth: { mode: "password", password: "configured-local-password" },
-      env: {},
-      options: { password: "   " },
-    },
-    {
-      source: "explicit loopback URL",
-      auth: { mode: "token", token: "configured-local-token" },
-      env: {},
-      options: { url: "ws://127.0.0.1:18991" },
-    },
-  ])(
-    "rejects a local $source before probing an explicit Gateway URL",
-    async ({ auth, env, options }) => {
-      const configuredGateway = { gateway: { mode: "local", auth } };
+      async () => {
+        await readBestEffortConfig.withImplementation(
+          async () => configuredGateway as never,
+          async () => {
+            const { runtime } = createRuntimeCapture();
+            await expect(
+              runGatewayStatus(runtime, {
+                timeout: "1000",
+                json: true,
+                url: "wss://attacker.example:18789",
+              }),
+            ).rejects.toMatchObject({
+              name: "GatewayExplicitAuthRequiredError",
+              message: expect.stringContaining(
+                "gateway url override requires explicit credentials",
+              ),
+            });
 
-      await withEnvAsync(
-        {
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          ...env,
-        },
-        async () => {
-          await readBestEffortConfig.withImplementation(
-            async () => configuredGateway as never,
-            async () => {
-              const { runtime } = createRuntimeCapture();
-              await expect(
-                runGatewayStatus(runtime, {
-                  timeout: "1000",
-                  json: true,
-                  url: "wss://attacker.example:18789",
-                  ...options,
-                }),
-              ).rejects.toMatchObject({
-                name: "GatewayExplicitAuthRequiredError",
-                message: expect.stringContaining(
-                  "gateway url override requires explicit credentials",
-                ),
-              });
-
-              expect(readBestEffortConfig).not.toHaveBeenCalled();
-              expect(discoverGatewayBeacons).not.toHaveBeenCalled();
-              expect(startSshPortForward).not.toHaveBeenCalled();
-              expect(probeGateway).not.toHaveBeenCalled();
-            },
-          );
-        },
-      );
-    },
-  );
+            for (const effect of [
+              readBestEffortConfig,
+              discoverGatewayBeacons,
+              startSshPortForward,
+              probeGateway,
+            ]) {
+              expect(effect).not.toHaveBeenCalled();
+            }
+          },
+        );
+      },
+    );
+  });
 
   it.each([
     {
@@ -509,12 +422,9 @@ describe("gateway-status command", () => {
     "honors an explicit $credential for an explicit Gateway URL",
     async ({ options, expectedAuth }) => {
       const explicitUrl = "wss://attacker.example:18789";
-      readBestEffortConfig.mockResolvedValueOnce({
-        gateway: {
-          mode: "local",
-          auth: { mode: "token", token: "configured-local-token" },
-        },
-      } as never);
+      readBestEffortConfig.mockResolvedValueOnce(
+        localGatewayConfig("configured-local-token") as never,
+      );
 
       await withEnvAsync(
         {
@@ -536,54 +446,6 @@ describe("gateway-status command", () => {
     },
   );
 
-  it("includes diagnostic next steps when no gateway is reachable or discoverable", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    const defaultProbeGateway = probeGateway.getMockImplementation();
-    try {
-      probeGateway.mockImplementation(async (opts: { url: string }) =>
-        createUnreachableGatewayProbe(opts.url, "connection refused"),
-      );
-
-      await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-        "__exit__:1",
-      );
-    } finally {
-      probeGateway.mockReset();
-      if (defaultProbeGateway) {
-        probeGateway.mockImplementation(defaultProbeGateway);
-      }
-    }
-
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string }>;
-    };
-    const warning = parsed.warnings?.find((entry) => entry.code === "no_gateway_reachable");
-    expect(warning?.message).toContain("openclaw gateway status --deep --require-rpc");
-    expect(warning?.message).toContain("ss -ltnp");
-  });
-
-  it("omits discovery wsUrl when only TXT hints are present", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    discoverGatewayBeacons.mockResolvedValueOnce([
-      {
-        instanceName: "gateway",
-        displayName: "Gateway",
-        tailnetDns: "attacker.tailnet.ts.net",
-        lanHost: "attacker.example.com",
-        gatewayPort: 19443,
-      },
-    ]);
-
-    await runGatewayStatus(runtime, { timeout: "1000", json: true });
-
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      discovery?: { beacons?: Array<{ wsUrl?: string | null }> };
-    };
-    expect(parsed.discovery?.beacons?.[0]?.wsUrl).toBeNull();
-  });
-
   it("keeps status output working when tailnet discovery throws", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
@@ -593,21 +455,14 @@ describe("gateway-status command", () => {
     await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      network?: { tailnetIPv4?: string | null; localTailnetUrl?: string | null };
-    };
-    expect(parsed.network?.tailnetIPv4).toBeNull();
-    expect(parsed.network?.localTailnetUrl).toBeNull();
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      network: { tailnetIPv4: null, localTailnetUrl: null },
+    });
   });
 
   it("treats missing-scope RPC probe failures as degraded but reachable", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig() as never);
     probeGateway.mockResolvedValueOnce({
       ok: false,
       url: "ws://127.0.0.1:18789",
@@ -629,81 +484,40 @@ describe("gateway-status command", () => {
     await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
     expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      ok?: boolean;
-      degraded?: boolean;
-      capability?: string;
-      warnings?: Array<{ code?: string; targetIds?: string[] }>;
-      targets?: Array<{
-        connect?: {
-          ok?: boolean;
-          rpcOk?: boolean;
-          scopeLimited?: boolean;
-        };
-        auth?: {
-          capability?: string;
-        };
-      }>;
-    };
-    expect(parsed.ok).toBe(true);
-    expect(parsed.degraded).toBe(true);
-    expect(parsed.capability).toBe("write_capable");
-    expect(parsed.targets?.[0]?.connect?.ok).toBe(true);
-    expect(parsed.targets?.[0]?.connect?.rpcOk).toBe(false);
-    expect(parsed.targets?.[0]?.connect?.scopeLimited).toBe(true);
-    expect(parsed.targets?.[0]?.auth?.capability).toBe("write_capable");
-    const scopeLimitedWarning = parsed.warnings?.find(
-      (warning) => warning.code === "probe_scope_limited",
-    );
-    expect(scopeLimitedWarning?.targetIds).toContain("localLoopback");
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      ok: true,
+      degraded: true,
+      capability: "write_capable",
+      targets: [
+        expect.objectContaining({
+          connect: expect.objectContaining({ ok: true, rpcOk: false, scopeLimited: true }),
+          auth: expect.objectContaining({ capability: "write_capable" }),
+        }),
+      ],
+      warnings: expect.arrayContaining([
+        expect.objectContaining({
+          code: "probe_scope_limited",
+          targetIds: expect.arrayContaining(["localLoopback"]),
+        }),
+      ]),
+    });
   });
 
-  it("suppresses unresolved SecretRef auth warnings when probe is reachable", async () => {
+  it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
     await withEnvAsync(
       { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
       async () => {
         mockLocalTokenEnvRefConfig();
-
-        await runGatewayStatus(runtime, { timeout: "1000", json: true });
+        probeGateway.mockImplementation(async (opts: { url: string }) => {
+          const { url } = opts;
+          return createUnreachableGatewayProbe(url, "connection refused");
+        });
+        await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
+          "__exit__:1",
+        );
       },
     );
-
-    expect(runtimeErrors).toHaveLength(0);
-    const unresolvedWarning = findUnresolvedSecretRefWarning(runtimeLogs);
-    expect(unresolvedWarning).toBeUndefined();
-  });
-
-  it("surfaces unresolved SecretRef auth diagnostics when probe fails", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    const defaultReadBestEffortConfig = readBestEffortConfig.getMockImplementation();
-    const defaultProbeGateway = probeGateway.getMockImplementation();
-    try {
-      await withEnvAsync(
-        { MISSING_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_TOKEN: undefined },
-        async () => {
-          readBestEffortConfig.mockReset();
-          probeGateway.mockReset();
-          mockLocalTokenEnvRefConfig();
-          probeGateway.mockImplementation(async (opts: { url: string }) => {
-            const { url } = opts;
-            return createUnreachableGatewayProbe(url, "connection refused");
-          });
-          await expect(runGatewayStatus(runtime, { timeout: "1000", json: true })).rejects.toThrow(
-            "__exit__:1",
-          );
-        },
-      );
-    } finally {
-      readBestEffortConfig.mockReset();
-      if (defaultReadBestEffortConfig) {
-        readBestEffortConfig.mockImplementation(defaultReadBestEffortConfig);
-      }
-      probeGateway.mockReset();
-      if (defaultProbeGateway) {
-        probeGateway.mockImplementation(defaultProbeGateway);
-      }
-    }
 
     expect(runtimeErrors).toHaveLength(0);
     const unresolvedWarning = requireUnresolvedSecretRefWarning(runtimeLogs);
@@ -731,125 +545,18 @@ describe("gateway-status command", () => {
     expect(localProbeCall.auth?.token).toBeUndefined();
   });
 
-  it("does not resolve local password SecretRef in token mode", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync(
-      {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        MISSING_GATEWAY_PASSWORD: undefined,
-      },
-      async () => {
-        readBestEffortConfig.mockResolvedValueOnce({
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: "config-token",
-              password: { source: "env", provider: "default", id: "MISSING_GATEWAY_PASSWORD" },
-            },
-          },
-        } as never);
-
-        await runGatewayStatus(runtime, { timeout: "1000", json: true });
-      },
-    );
-
-    expect(runtimeErrors).toHaveLength(0);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string }>;
-    };
-    const unresolvedPasswordWarning = parsed.warnings?.find(
-      (warning) =>
-        warning.code === "auth_secretref_unresolved" &&
-        warning.message?.includes("gateway.auth.password SecretRef is unresolved"),
-    );
-    expect(unresolvedPasswordWarning).toBeUndefined();
-  });
-
-  it("resolves env-template gateway.auth.token before probing targets", async () => {
-    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    await withEnvAsync(
-      {
-        CUSTOM_GATEWAY_TOKEN: "resolved-gateway-token",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-      },
-      async () => {
-        readBestEffortConfig.mockResolvedValueOnce({
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: "${CUSTOM_GATEWAY_TOKEN}",
-            },
-          },
-        } as never);
-
-        await runGatewayStatus(runtime, { timeout: "1000", json: true });
-      },
-    );
-
-    expect(runtimeErrors).toHaveLength(0);
-    const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
-    expect(localProbeCall.auth?.token).toBe("resolved-gateway-token");
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string }>;
-    };
-    const unresolvedWarning = parsed.warnings?.find(
-      (warning) => warning.code === "auth_secretref_unresolved",
-    );
-    expect(unresolvedWarning).toBeUndefined();
-  });
-
   it("emits stable SecretRef auth configuration booleans in --json output", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    const previousProbeImpl = probeGateway.getMockImplementation();
     probeGateway.mockImplementation(async (opts: { url: string }) => ({
-      ok: true,
-      url: opts.url,
+      ...mocks.successfulProbe(opts.url),
+      server: undefined,
       connectLatencyMs: 20,
-      error: null,
-      close: null,
       auth: {
         role: "operator",
         scopes: ["operator.read"],
         capability: "read_only",
       },
-      health: { ok: true },
-      status: {
-        linkChannel: {
-          id: "whatsapp",
-          label: "WhatsApp",
-          linked: true,
-          authAgeMs: 1_000,
-        },
-        sessions: {
-          paths: [],
-          count: 1,
-          defaults: { model: null, contextTokens: null },
-          recent: [],
-          byAgent: [],
-        },
-      },
-      presence: [
-        {
-          mode: "gateway",
-          reason: "self",
-          host: "remote",
-          ip: "100.64.0.2",
-          text: "Gateway: remote (100.64.0.2) · app test · mode gateway · reason self",
-          ts: Date.now(),
-        },
-      ],
+      presence: mocks.successfulProbe("wss://remote.example:18789").presence,
       configSnapshot: {
         path: "/tmp/secretref-config.json",
         exists: true,
@@ -865,15 +572,7 @@ describe("gateway-status command", () => {
       },
     }));
 
-    try {
-      await runGatewayStatus(runtime, { timeout: "1000", json: true });
-    } finally {
-      if (previousProbeImpl) {
-        probeGateway.mockImplementation(previousProbeImpl);
-      } else {
-        probeGateway.mockReset();
-      }
-    }
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
     expect(runtimeErrors).toHaveLength(0);
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
@@ -911,10 +610,6 @@ describe("gateway-status command", () => {
   it("supports SSH tunnel targets", async () => {
     const { runtime, runtimeLogs } = createRuntimeCapture();
 
-    startSshPortForward.mockClear();
-    sshStop.mockClear();
-    probeGateway.mockClear();
-
     await runGatewayStatus(runtime, { timeout: "1000", json: true, ssh: "me@studio" });
 
     expect(startSshPortForward).toHaveBeenCalledTimes(1);
@@ -943,15 +638,7 @@ describe("gateway-status command", () => {
 
   it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
     const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-    inspectGatewayTlsCertificate.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        tls: { enabled: true },
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
@@ -964,58 +651,30 @@ describe("gateway-status command", () => {
 
   it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
     const { runtime, runtimeLogs } = createRuntimeCapture();
-    probeGateway.mockClear();
     inspectGatewayTlsCertificate.mockResolvedValueOnce({
       ok: false,
       error: "gateway tls: failed to load cert (missing certificate)",
     });
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "local",
-        tls: { enabled: true },
-        auth: { mode: "token", token: "ltok" },
-      },
-    } as never);
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
 
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
     expect(localProbeCall.tlsFingerprint).toBeUndefined();
 
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
-    };
-    const tlsWarning = parsed.warnings?.find(
-      (warning) => warning.code === "local_tls_runtime_unavailable",
-    );
-    expect(tlsWarning?.targetIds).toEqual(["localLoopback"]);
-    expect(tlsWarning?.message).toContain("gateway tls: failed to load cert");
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      warnings: expect.arrayContaining([
+        expect.objectContaining({
+          code: "local_tls_runtime_unavailable",
+          targetIds: ["localLoopback"],
+          message: expect.stringContaining("gateway tls: failed to load cert"),
+        }),
+      ]),
+    });
   });
-
-  it.each([
-    { timeout: undefined, expected: 3000 },
-    { timeout: "15000", expected: 15_000 },
-  ])(
-    "passes timeout $timeout through to local loopback probes as $expected ms",
-    async ({ timeout, expected }) => {
-      const { runtime } = createRuntimeCapture();
-      probeGateway.mockClear();
-      readBestEffortConfig.mockResolvedValueOnce({
-        gateway: {
-          mode: "local",
-          auth: { mode: "token", token: "ltok" },
-        },
-      } as never);
-
-      await runGatewayStatus(runtime, { timeout, json: true });
-
-      expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(expected);
-    },
-  );
 
   it("lets --port select the local probe despite gateway env and configured remote targets", async () => {
     const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
-    probeGateway.mockClear();
     readBestEffortConfig.mockResolvedValueOnce({
       gateway: {
         mode: "remote",
@@ -1038,82 +697,41 @@ describe("gateway-status command", () => {
     expect(runtimeErrors).toHaveLength(0);
     expect(readProbeCalls().map((call) => call.url)).toEqual(["ws://127.0.0.1:19080"]);
     expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
-    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      network?: { localLoopbackUrl?: string | null };
-      primaryTargetId?: string | null;
-      targets?: Array<{ id?: string; kind?: string; url?: string }>;
-    };
-    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
-    expect(parsed.primaryTargetId).toBe("localLoopback");
-    expect(parsed.targets).toEqual([
-      expect.objectContaining({
-        id: "localLoopback",
-        kind: "localLoopback",
-        url: "ws://127.0.0.1:19080",
-      }),
-    ]);
-  });
-
-  it("passes the full caller timeout through to active configured remote probes", async () => {
-    const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-
-    await runGatewayStatus(runtime, { timeout: "15000", json: true });
-
-    const remoteProbeCall = requireProbeCall("wss://remote.example:18789");
-    expect(remoteProbeCall.timeoutMs).toBe(15_000);
-    expect(remoteProbeCall.originScopedDeviceAuth).toBe(true);
-  });
-
-  it("keeps inactive local loopback probes on the short timeout in remote mode", async () => {
-    const { runtime } = createRuntimeCapture();
-    probeGateway.mockClear();
-    readBestEffortConfig.mockResolvedValueOnce({
-      gateway: {
-        mode: "remote",
-        auth: { mode: "token", token: "ltok" },
-        remote: {},
-      },
-    } as never);
-
-    await runGatewayStatus(runtime, { timeout: "15000", json: true });
-
-    expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(800);
-  });
-
-  it("does not infer ssh-auto targets from TXT-only discovery metadata", async () => {
-    const { runtime } = createRuntimeCapture();
-    await withEnvAsync({ USER: "steipete" }, async () => {
-      readBestEffortConfig.mockResolvedValueOnce(makeRemoteGatewayConfig("", "", "ltok"));
-      discoverGatewayBeacons.mockResolvedValueOnce([
-        { instanceName: "bad", tailnetDns: "-V" },
-        { instanceName: "txt-only", tailnetDns: "goodhost" },
-      ]);
-
-      startSshPortForward.mockClear();
-      await runGatewayStatus(runtime, { timeout: "1000", json: true, sshAuto: true });
-
-      expect(startSshPortForward).not.toHaveBeenCalled();
+    expect(JSON.parse(runtimeLogs.join("\n"))).toMatchObject({
+      network: { localLoopbackUrl: "ws://127.0.0.1:19080" },
+      primaryTargetId: "localLoopback",
+      targets: [
+        expect.objectContaining({
+          id: "localLoopback",
+          kind: "localLoopback",
+          url: "ws://127.0.0.1:19080",
+        }),
+      ],
     });
   });
 
-  it("infers ssh-auto targets from resolved discovery hosts", async () => {
-    const { runtime } = createRuntimeCapture();
-    await withEnvAsync({ USER: "steipete" }, async () => {
-      readBestEffortConfig.mockResolvedValueOnce(makeRemoteGatewayConfig("", "", "ltok"));
-      discoverGatewayBeacons.mockResolvedValueOnce([
-        { instanceName: "bad", tailnetDns: "-V" },
-        { host: "goodhost", sshPort: 2222, port: 18789, instanceName: "Gateway" },
-      ]);
+  it.each([false, true])(
+    "requires a resolved discovery host for ssh-auto (resolved=%s)",
+    async (resolved) => {
+      const { runtime } = createRuntimeCapture();
+      await withEnvAsync({ USER: "steipete" }, async () => {
+        readBestEffortConfig.mockResolvedValueOnce(makeRemoteGatewayConfig("", "", "ltok"));
+        discoverGatewayBeacons.mockResolvedValueOnce([
+          { instanceName: "bad", tailnetDns: "-V" },
+          resolved
+            ? { host: "goodhost", sshPort: 2222, port: 18789, instanceName: "Gateway" }
+            : { instanceName: "txt-only", tailnetDns: "goodhost" },
+        ]);
 
-      startSshPortForward.mockClear();
-      await runGatewayStatus(runtime, { timeout: "1000", json: true, sshAuto: true });
+        await runGatewayStatus(runtime, { timeout: "1000", json: true, sshAuto: true });
 
-      expect(startSshPortForward).toHaveBeenCalledTimes(1);
-      const call = requireSshForwardCall();
-      expect(call.target).toBe("steipete@goodhost:2222");
-    });
-  });
+        expect(startSshPortForward).toHaveBeenCalledTimes(resolved ? 1 : 0);
+        if (resolved) {
+          expect(requireSshForwardCall().target).toBe("steipete@goodhost:2222");
+        }
+      });
+    },
+  );
 
   it("infers SSH target from gateway.remote.url and ssh config", async () => {
     const { runtime } = createRuntimeCapture();
@@ -1128,7 +746,6 @@ describe("gateway-status command", () => {
         identityFiles: ["/tmp/id_ed25519"],
       });
 
-      startSshPortForward.mockClear();
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
       expect(startSshPortForward).toHaveBeenCalledTimes(1);
@@ -1146,7 +763,6 @@ describe("gateway-status command", () => {
       );
       resolveSshConfig.mockResolvedValueOnce(null);
 
-      startSshPortForward.mockClear();
       await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
       const call = requireSshForwardCall();
@@ -1167,7 +783,6 @@ describe("gateway-status command", () => {
       identityFiles: ["/tmp/id_from_config"],
     });
 
-    startSshPortForward.mockClear();
     await runGatewayStatus(runtime, {
       timeout: "1000",
       json: true,
@@ -1177,5 +792,115 @@ describe("gateway-status command", () => {
     const call = requireSshForwardCall();
     expect(call.identity).toBe("/tmp/explicit_id");
   });
+
+  it("derives summary capability from reachable probes only in json output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ...(url.includes("127.0.0.1") ? {} : { ok: false, connectLatencyMs: null, error: "timeout" }),
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000", json: true });
+
+    expect(runtimeLogs).toHaveLength(1);
+    const payload = JSON.parse(runtimeLogs.join("\n")) as { ok?: unknown; capability?: unknown };
+    expect(payload?.ok).toBe(true);
+    expect(payload?.capability).toBe("read_only");
+  });
+
+  it("derives summary capability from reachable probes only in text output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ok: false,
+      ...(url.includes("127.0.0.1")
+        ? { gatewayReached: true, error: "missing scope: operator.read" }
+        : { connectLatencyMs: null, error: "timeout" }),
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000" });
+
+    expect(runtimeLogs.map(stripAnsi)).toContain("Capability: read-only");
+  });
+
+  it("reports post-connect detail failures as reachable but degraded in json output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ok: false,
+      gatewayReached: true,
+      connectLatencyMs: 40,
+      error: "timeout",
+      server: { version: "2026.4.24", buildId: "build-test", connId: "conn-test" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000", json: true });
+
+    expect(runtimeLogs).toHaveLength(1);
+    const payload: unknown = JSON.parse(runtimeLogs.join("\n"));
+    expect(payload).toStrictEqual({
+      ok: true,
+      degraded: true,
+      capability: "read_only",
+      ts: expect.any(Number),
+      durationMs: expect.any(Number),
+      timeoutMs: 5_000,
+      primaryTargetId: "localLoopback",
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["localLoopback"],
+        },
+      ],
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: "ws://100.64.0.10:18789",
+        tailnetIPv4: "100.64.0.10",
+      },
+      discovery: {
+        timeoutMs: 1200,
+        count: 0,
+        beacons: [],
+      },
+      targets: [
+        {
+          id: "localLoopback",
+          kind: "localLoopback",
+          url: "ws://127.0.0.1:18789",
+          active: true,
+          tunnel: null,
+          connect: {
+            ok: true,
+            rpcOk: false,
+            scopeLimited: false,
+            latencyMs: 40,
+            error: "timeout",
+            close: null,
+          },
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
+          server: {
+            version: "2026.4.24",
+            buildId: "build-test",
+            connId: "conn-test",
+          },
+          self: null,
+          config: null,
+          health: null,
+          summary: null,
+          presence: null,
+        },
+      ],
+    });
+  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

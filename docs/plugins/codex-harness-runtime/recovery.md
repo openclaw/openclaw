@@ -1,13 +1,20 @@
 ---
-summary: "Orphaned Codex app-server process detection and cleanup after a hard Gateway stop"
+summary: "Codex app-server process cleanup after discovery timeouts and hard Gateway stops"
 read_when:
+  - Model discovery timed out and left Codex processes running
   - A Gateway stop left Codex app-server processes behind
   - A fresh stdio connection refuses to spawn
 title: "Codex process recovery"
 sidebarTitle: "Process recovery"
 ---
 
-What OpenClaw does about registered Codex app-server children when the Gateway stops without cleaning up. Part of the [Codex harness runtime](/plugins/codex-harness-runtime) guide; [Where each section moved](/plugins/codex-harness-runtime#where-each-section-moved) lists every section.
+How OpenClaw cleans up Codex app-server children after model discovery times out or the Gateway stops. Part of the [Codex harness runtime](/plugins/codex-harness-runtime) guide; [Where each section moved](/plugins/codex-harness-runtime#where-each-section-moved) lists every section.
+
+## Timed-out model discovery
+
+If a written discovery request reaches its deadline without a response, OpenClaw
+retires that shared client. Other active leases finish before its process closes;
+future discovery uses a new client. Successful discovery remains reusable.
 
 ## Recovery after a hard Gateway stop
 

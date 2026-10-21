@@ -4,6 +4,18 @@ import {
   parseAgentSessionKey,
 } from "../sessions/session-key.ts";
 
+export type ComposerStorageTarget = {
+  key: string;
+  legacyKey: string;
+  previousKey: string;
+  blobKey: string;
+  gatewayOwner: string;
+  legacyOwnerIsUnambiguous: boolean;
+  recoveryScope?: string;
+  unscopedKey: string;
+  unavailable?: boolean;
+};
+
 export type StoredChatOutboxScope = {
   sessionKey: string;
   agentId?: string;

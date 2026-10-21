@@ -1,7 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./searxng-client.js";
 import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 const servers = new Set<Server>();
@@ -45,7 +44,6 @@ async function closeServer(server: Server): Promise<void> {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  testing.SEARXNG_SEARCH_CACHE.clear();
   await Promise.all([...servers].map(closeServer));
   servers.clear();
 });
@@ -69,7 +67,7 @@ describe("searxng real transport", () => {
       );
       const search = (ttl: number) =>
         createTool(baseUrl, ttl).execute(
-          { query: "current search TTL" },
+          { query: `current ${cacheTtlMinutes}-minute search TTL` },
           { signal: new AbortController().signal },
         );
 

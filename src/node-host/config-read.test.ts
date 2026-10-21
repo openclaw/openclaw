@@ -1,23 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { OpenClawStateReadReply } from "../state/openclaw-state-read.types.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { configureNodeHost, loadNodeHostConfig, loadNodeHostConfigReadOnly } from "./config.js";
+import { configureNodeHost, loadNodeHostConfig } from "./config.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-const readers = [loadNodeHostConfig, loadNodeHostConfigReadOnly];
 
 function fixture() {
   const root = tempDirs.make("openclaw-node-host-config-reader-");
@@ -41,46 +37,32 @@ function seed(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function withoutParentSql(operation: () => Promise<void>): Promise<number> {
+async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
   requireNodeSqlite();
   const sql = observeMainThreadSql();
   try {
-    await operation();
-    const count = sql.count();
-    expect(count).toBe(0);
-    return count;
+    const result = await operation();
+    expect(sql.count()).toBe(0);
+    return result;
   } finally {
     vi.restoreAllMocks();
   }
 }
 
-it.each(["cached", "fresh"] as const)(
-  "loads %s node-host configuration without parent-thread SQL",
-  async (mode) => {
-    expect(isMainThread).toBe(true);
-    const { env } = fixture();
-    const expected = await seed(env);
-    const source = openOpenClawStateDatabase({ env });
-    if (mode === "fresh") {
-      await closeOpenClawStateDatabaseAsync();
-    }
-    const startedAt = performance.now();
-    const parentSqlCalls = await withoutParentSql(async () => {
-      for (const read of readers) {
-        expect(await read(env)).toEqual(expected);
-      }
-    });
-    console.info("node-host configuration read", {
-      mode,
-      parentSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
-    });
-    expect(source.db.isOpen).toBe(mode === "cached");
-  },
-);
+it.each(["cached", "fresh"] as const)("loads %s config without parent SQL", async (mode) => {
+  expect(isMainThread).toBe(true);
+  const { env } = fixture();
+  const expected = await seed(env);
+  const source = openOpenClawStateDatabase({ env });
+  if (mode === "fresh") {
+    await closeOpenClawStateDatabaseAsync();
+  }
+  expect(await withoutParentSql(() => loadNodeHostConfig(env))).toEqual(expected);
+  expect(source.db.isOpen).toBe(mode === "cached");
+});
 
 it.each(["fresh", "cached"] as const)(
-  "loads %s managed node-host configuration without host SQL or schema repair",
+  "reads %s managed schema without repair/SQL",
   async (mode) => {
     const { env, databasePath } = fixture();
     const expected = await seed(env);
@@ -93,11 +75,10 @@ it.each(["fresh", "cached"] as const)(
       if (mode === "cached") {
         openOpenClawStateDatabase({ env });
       }
-      await withoutParentSql(async () => {
-        for (const read of readers) {
-          expect(await read(env)).toEqual(expected);
-        }
-      });
+      expect(await withoutParentSql(() => loadNodeHostConfig(env))).toEqual(expected);
+      await closeOpenClawStateDatabaseAsync();
+      fs.renameSync(databasePath, `${databasePath}.template`);
+      fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
       const external = new DatabaseSync(databasePath);
       try {
         external.exec("DROP INDEX idx_plugin_state_listing");
@@ -105,9 +86,7 @@ it.each(["fresh", "cached"] as const)(
         external.close();
       }
       await withoutParentSql(async () => {
-        for (const read of readers) {
-          await expect(read(env)).rejects.toThrow(/idx_plugin_state_listing|schema/i);
-        }
+        await expect(loadNodeHostConfig(env)).rejects.toThrow(/idx_plugin_state_listing|schema/i);
       });
     });
     await closeOpenClawStateDatabaseAsync();
@@ -127,10 +106,15 @@ it.each(["fresh", "cached"] as const)(
   },
 );
 
-it("leaves absent node-host configuration stores uncreated", async () => {
-  const { env, databasePath } = fixture();
-  for (const read of readers) {
-    expect(await read(env)).toBeNull();
+it.each([false, true])("gates absent store reads on legacy=%s", async (legacy) => {
+  const { env, root, databasePath } = fixture();
+  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  if (legacy) {
+    fs.writeFileSync(path.join(root, "node.json"), "{}\n");
+    await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
+    expect(execute).not.toHaveBeenCalled();
+  } else {
+    expect(await loadNodeHostConfig(env)).toBeNull();
   }
   expect(fs.existsSync(databasePath)).toBe(false);
 });
@@ -140,89 +124,53 @@ it("joins admitted node-host configuration reads before their disposable scope e
   const expected = await seed(env);
   const outcomes: unknown[] = [];
   await stateReads.withDisposableOpenClawStateReads(databasePath, async () => {
-    for (const read of readers) {
-      void read(env).then(
-        (value) => outcomes.push(value),
-        (error: unknown) => outcomes.push(error),
-      );
-    }
+    void loadNodeHostConfig(env).then(
+      (value) => outcomes.push(value),
+      (error: unknown) => outcomes.push(error),
+    );
   });
-  expect(outcomes).toEqual([expected, expected]);
+  expect(outcomes).toEqual([expected]);
 });
 
+const validRow = '{"version":1,"nodeId":"fixture-node"}';
 it.each([
-  { value_json: "{", updated_at_ms: 1, error: SyntaxError, message: /JSON/u },
-  {
-    value_json: '{"version":1,"nodeId":"fixture-node"}',
-    updated_at_ms: -1,
-    error: Error,
-    message: /updated_at_ms must be a non-negative integer/u,
-  },
-  {
-    value_json: '{"version":2,"nodeId":"fixture-node"}',
-    updated_at_ms: 1,
-    error: Error,
-    message: /unsupported version 2/u,
-  },
-])("preserves node-host row decoding errors ($value_json, $updated_at_ms)", async (row) => {
+  ["{", 1, SyntaxError, /JSON/u],
+  [validRow, -1, Error, /updated_at_ms must be a non-negative integer/u],
+  ['{"version":2,"nodeId":"fixture-node"}', 1, Error, /unsupported version 2/u],
+] as const)("preserves row errors (%s, %s)", async (json, time, kind, message) => {
   const { env } = fixture();
   vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockResolvedValue({
     ok: true,
     type: "nodeHost.config",
     sourceAdmitted: true,
-    row: { value_json: row.value_json, updated_at_ms: row.updated_at_ms },
+    row: { value_json: json, updated_at_ms: time },
   });
-  for (const read of readers) {
-    const failure = await read(env).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(row.error);
-    expect(failure).toMatchObject({ message: expect.stringMatching(row.message) });
-  }
+  const failure = await loadNodeHostConfig(env).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(kind);
+  expect(failure).toMatchObject({ message: expect.stringMatching(message) });
 });
 
-it("refuses retired node-host files before admitting a read", async () => {
-  const { env, root } = fixture();
-  fs.writeFileSync(path.join(root, "node.json"), "{}\n");
-  const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  for (const read of readers) {
-    await expect(read(env)).rejects.toThrow("openclaw doctor --fix");
-  }
-  expect(execute).not.toHaveBeenCalled();
-});
-
-it.each(
-  readers.flatMap((read) =>
-    [true, false].map((markerAtOriginal) => ({ read, name: read.name, markerAtOriginal })),
-  ),
-)(
-  "retains the selected state root after $name waits (original marker=$markerAtOriginal)",
-  async ({ read, markerAtOriginal }) => {
-    const original = fixture();
-    const other = fixture();
-    const env = { ...original.env };
-    const reply = createDeferredCore<OpenClawStateReadReply>();
-    const execute = vi
-      .spyOn(stateReads, "executeExistingOpenClawStateRead")
-      .mockReturnValue(reply.promise);
-    const result = read(env);
-    env.OPENCLAW_STATE_DIR = other.root;
-    fs.writeFileSync(path.join(markerAtOriginal ? original.root : other.root, "node.json"), "{}\n");
-    reply.resolve({
-      ok: true,
-      type: "nodeHost.config",
-      sourceAdmitted: true,
-      row: {
-        // The original-root legacy gate must run before decoding the returned row.
-        value_json: markerAtOriginal ? "{" : '{"version":1,"nodeId":"original-node"}',
-        updated_at_ms: 1,
-      },
+it("configures without host SQL and refreshes previously read configuration", async () => {
+  const { env } = fixture();
+  const initial = await seed(env);
+  expect(await loadNodeHostConfig(env)).toEqual(initial);
+  await withoutParentSql(async () => {
+    const update = {
+      displayName: "Updated Node",
+      gateway: { host: "new.gateway.example", port: 19443, tls: true },
+      commands: ["fixture.updated"],
+    };
+    const configured = await configureNodeHost({
+      ...update,
+      env,
+      fallbackDisplayName: "fallback",
+      nowMs: 5678,
     });
-    if (markerAtOriginal) {
-      await expect(result).rejects.toThrow(
-        `retired node-host state remains at ${path.join(original.root, "node.json")}`,
-      );
-    } else {
-      await expect(result).resolves.toMatchObject({ nodeId: "original-node" });
-    }
-    expect(execute.mock.calls[0]?.[0].env?.OPENCLAW_STATE_DIR).toBe(original.root);
-  },
-);
+    expect(configured).toMatchObject({
+      ...update,
+      nodeId: initial.nodeId,
+      installedAppsSharing: true,
+    });
+    expect(await loadNodeHostConfig(env)).toEqual(configured);
+  });
+});

@@ -14,7 +14,10 @@ import * as launchdExec from "./launchd-exec.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readCorrespondingLaunchAgentCommand } from "./launchd-runtime.js";
-import { readManagedGatewayBindingState } from "./managed-gateway-bindings.js";
+import {
+  discoverManagedGatewayBindings,
+  readManagedGatewayBindingState,
+} from "./managed-gateway-bindings.js";
 import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 // Native command observations are controlled; discovery, plist decoding,
@@ -180,6 +183,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${locations.local.plist}`,
+            sourcePath: locations.local.plist,
             scope: "user",
             marker: "openclaw",
           },
@@ -187,6 +191,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${locations.global.plist}`,
+            sourcePath: locations.global.plist,
             scope: "system",
             marker: "openclaw",
           },
@@ -194,6 +199,7 @@ it.each([
             platform: "darwin",
             label,
             detail: `plist: ${systemPlist}`,
+            sourcePath: systemPlist,
             scope: "system",
             marker: "openclaw",
           },
@@ -333,7 +339,6 @@ it.each([
       }
       if ((scenario.loaded === "system" && scenario.refused) || sourceMismatch) {
         const state = await readManagedGatewayBindingState({
-          profile: "shared-proof",
           env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
           launchAgentPlistPath: loaded.plist,
         });
@@ -351,7 +356,13 @@ it.each([
         if (scenario.loaded === "system") {
           expect(
             inventory.renderGatewayServiceCleanupHints([
-              { platform: "darwin", label, detail: `plist: ${systemPlist}`, scope: "system" },
+              {
+                platform: "darwin",
+                label,
+                detail: `plist: ${systemPlist}`,
+                sourcePath: systemPlist,
+                scope: "system",
+              },
             ]),
           ).toContain(`sudo launchctl bootout system/${label}`);
         }
@@ -361,4 +372,50 @@ it.each([
       }
       expect(native).toHaveBeenCalled();
     }),
+);
+
+it.each([false, true])(
+  "keeps invoking native selection first (strict=%s)",
+  async (requireComplete) => {
+    mockProcessPlatform("linux");
+    const env = {
+      HOME: "/synthetic/service-home",
+      OPENCLAW_PROFILE: "selected",
+      OPENCLAW_SYSTEMD_UNIT: "custom-selected.service",
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/synthetic/selected-bus",
+    };
+    const sibling = {
+      platform: "linux" as const,
+      scope: "user" as const,
+      label: "custom-sibling.service",
+      detail: "unit: /synthetic/custom-sibling.service",
+      sourcePath: "/synthetic/custom-sibling.service",
+    };
+    vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue({
+      services: [sibling, sibling],
+      errors: [],
+    });
+    const reads = vi
+      .spyOn(fs, "readFile")
+      .mockRejectedValue(new Error("Unexpected definition reread"));
+    const bindings = await discoverManagedGatewayBindings(env, {
+      requireComplete,
+      includeInvoking: true,
+    });
+    expect(bindings).toHaveLength(2);
+    expect(bindings[0]?.env).toEqual(env);
+    expect(bindings[1]).toMatchObject({
+      env: {
+        OPENCLAW_SYSTEMD_UNIT: sibling.label,
+        DBUS_SESSION_BUS_ADDRESS: env.DBUS_SESSION_BUS_ADDRESS,
+      },
+      systemdReadTarget: {
+        scope: "user",
+        unitName: sibling.label,
+        unitPath: "/synthetic/custom-sibling.service",
+      },
+    });
+    expect(bindings[1]?.env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(reads).not.toHaveBeenCalled();
+  },
 );

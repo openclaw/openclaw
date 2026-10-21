@@ -45,11 +45,12 @@ describe("transcript stream empty files", () => {
 
 describe("streamSessionTranscriptLines", () => {
   it("yields trimmed non-empty lines in file order", async () => {
-    fs.writeFileSync(transcriptPath, "  alpha  \n\nbeta\n  \r\ngamma\n", "utf-8");
+    const longLine = "alpha".repeat(14 * 1024);
+    fs.writeFileSync(transcriptPath, `  ${longLine}  \n\nbeta\n  \r\ngamma\n`, "utf-8");
 
     const lines = await collect(streamSessionTranscriptLines(transcriptPath));
 
-    expect(lines).toEqual(["alpha", "beta", "gamma"]);
+    expect(lines).toEqual([longLine, "beta", "gamma"]);
   });
 
   it("returns an empty iterator when the file does not exist", async () => {
@@ -67,30 +68,19 @@ describe("streamSessionTranscriptLines", () => {
     ).rejects.toBe(error);
   });
 
-  it("honours an abort signal between lines", async () => {
+  it("closes the stream when a consumer stops between lines", async () => {
     fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
+    const createReadStream = vi.spyOn(fs, "createReadStream");
     const out: string[] = [];
-    for await (const line of streamSessionTranscriptLines(transcriptPath, {
-      signal: controller.signal,
-    })) {
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
       out.push(line);
       if (line === "one") {
-        controller.abort();
+        break;
       }
     }
 
     expect(out).toEqual(["one"]);
-  });
-
-  it("preserves long lines without truncation", async () => {
-    const longLine = "x".repeat(64 * 1024 + 7);
-    fs.writeFileSync(transcriptPath, `${longLine}\nshort\n`, "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual([longLine, "short"]);
+    expect(createReadStream.mock.results[0]?.value.destroyed).toBe(true);
   });
 });
 
@@ -112,72 +102,29 @@ describe("streamSessionTranscriptLinesReverse", () => {
     ).rejects.toBe(error);
   });
 
-  it("preserves complete lines across chunk boundaries", async () => {
-    const longLine = "x".repeat(2048);
-    fs.writeFileSync(transcriptPath, `${longLine}\nbeta\ngamma\n`, "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", longLine]);
-  });
-
   it("preserves multibyte UTF-8 across chunk boundaries", async () => {
     const firstLine = `${"a".repeat(1100)}🌊`;
-    const secondLine = `${"b".repeat(1100)}✅`;
+    // The first reverse read splits the wave's four UTF-8 bytes at the 64 KiB boundary.
+    const secondLine = `${"b".repeat(65529)}✅`;
     fs.writeFileSync(transcriptPath, `${firstLine}\n${secondLine}\n`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual([secondLine, firstLine]);
   });
 
-  it("honours an abort signal between reverse lines", async () => {
+  it("closes the file when a consumer stops between reverse lines", async () => {
     fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
+    const open = vi.spyOn(fs.promises, "open");
     const out: string[] = [];
-    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath, {
-      signal: controller.signal,
-    })) {
+    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
       out.push(line);
       if (line === "three") {
-        controller.abort();
+        break;
       }
     }
 
     expect(out).toEqual(["three"]);
-  });
-
-  it("clamps a sub-minimum chunk size without dropping older lines", async () => {
-    fs.writeFileSync(transcriptPath, "alpha\nbeta\ngamma\n", "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 16,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", "alpha"]);
-  });
-
-  it("does not emit a partial prefix until the full first line is available", async () => {
-    const firstLine = "prefix".repeat(400);
-    fs.writeFileSync(transcriptPath, `${firstLine}\nbeta\ngamma`, "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", firstLine]);
+    expect((await open.mock.results[0]?.value)?.fd).toBe(-1);
   });
 });

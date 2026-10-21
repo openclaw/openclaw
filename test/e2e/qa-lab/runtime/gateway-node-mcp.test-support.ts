@@ -9,11 +9,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
-import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { createQaGatewayChild, QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -34,10 +36,7 @@ export type CapturedChild = {
 };
 export type HttpFixture = CapturedChild & {
   pid: number;
-  urls: {
-    streamableHttp: string;
-    sse: string;
-  };
+  urls: Record<"streamableHttp" | "sse", string>;
 };
 type NodeRead = {
   nodeId: string;
@@ -63,7 +62,84 @@ export type ToolsEffectiveResult = {
 
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
 
-export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
+export async function createMcpPlacement(root: string, placement: "node" | "session") {
+  const at = (name: string) => path.join(root, placement, name);
+  const home = at("home"),
+    tempDir = at("tmp");
+  const stateDir = at("state"),
+    workspaceDir = at("workspace");
+  const configPath = at("openclaw.json");
+  await Promise.all(
+    [home, tempDir, placement === "node" ? stateDir : workspaceDir].map((dir) =>
+      fs.mkdir(dir, { recursive: true }),
+    ),
+  );
+  const env = (extra?: Record<string, string>) => createChildEnv({ home, tempDir, extra });
+  return {
+    configPath,
+    workspaceDir,
+    env,
+    servers: (fixture: HttpFixture, extra?: Record<string, string>) =>
+      createMcpServers({
+        placement,
+        fixture,
+        stdioEnv: env(extra),
+        repoRoot: process.cwd(),
+        fixturePath: path.join(
+          process.cwd(),
+          "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs",
+        ),
+      }),
+    hostEnv: (token: string) =>
+      env({
+        OPENCLAW_HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_GATEWAY_TOKEN: token,
+        OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+      }),
+  };
+}
+
+export function startMcpGateway(
+  owner: ReturnType<typeof createQaGatewayChild>,
+  configure: (cfg: OpenClawConfig) => OpenClawConfig = (cfg) => cfg,
+): Promise<GatewayHandle> {
+  const repoRoot = process.cwd();
+  return owner.start({
+    repoRoot,
+    command: {
+      executablePath: process.execPath,
+      argsPrefix: ["dist/index.js"],
+      cwd: repoRoot,
+      usePackagedPlugins: true,
+    },
+    transportBaseUrl: "http://127.0.0.1",
+    controlUiEnabled: false,
+    runtimeEnvPatch: {
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+    },
+    mutateConfig: (cfg) =>
+      configure({
+        ...cfg,
+        plugins: { enabled: false },
+        gateway: {
+          ...cfg.gateway,
+          nodes: {
+            ...cfg.gateway?.nodes,
+            commands: { allow: [NODE_MCP_COMMAND] },
+            pairing: { ...cfg.gateway?.nodes?.pairing, autoApproveLocal: false },
+          },
+        },
+      }),
+  });
+}
+
+export async function waitForMcpFixtureGate(filePath: string, signal: AbortSignal): Promise<void> {
   try {
     await fs.access(filePath);
     return;
@@ -79,7 +155,7 @@ export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
         return;
       }
       settled = true;
-      clearTimeout(timeout);
+      signal.removeEventListener("abort", aborted);
       clearInterval(poll);
       watcher.close();
       if (error) {
@@ -103,18 +179,46 @@ export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
         inspect();
       }
     });
-    // watch() can throw synchronously; only a constructed watcher owns a deadline.
-    const timeout = setTimeout(() => {
-      finish(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
-    }, WAIT_TIMEOUT_MS);
-    timeout.unref();
+    const aborted = () =>
+      finish(
+        new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`, {
+          cause: signal.reason,
+        }),
+      );
     // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun fs.watch fix ships.
     // TODO(bun): remove polling when Bun's fs.watch reliably reports file creation.
     const poll = setInterval(inspect, 50);
     poll.unref();
     watcher.once("error", finish);
-    inspect();
+    signal.addEventListener("abort", aborted, { once: true });
+    if (signal.aborted) {
+      aborted();
+    } else {
+      inspect();
+    }
   });
+}
+
+export function descriptorFor(
+  descriptors: readonly NodePluginToolDescriptor[],
+  server: string,
+): NodePluginToolDescriptor {
+  const descriptor = descriptors.find((entry) => entry.mcp?.server === server);
+  if (!descriptor) {
+    throw new Error(`missing ${server} MCP descriptor`);
+  }
+  return descriptor;
+}
+
+function spawnCaptured(args: string[], env: NodeJS.ProcessEnv): CapturedChild {
+  return captureChild(
+    spawn(process.execPath, args, {
+      cwd: process.cwd(),
+      detached: process.platform !== "win32",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
 }
 
 function captureChild(child: ChildProcess): CapturedChild {
@@ -127,14 +231,9 @@ function captureChild(child: ChildProcess): CapturedChild {
     stderr = (stderr + chunk.toString()).slice(-200_000);
   });
   const pid = child.pid;
-  let termPromise: Promise<void> | undefined;
-  let killPromise: Promise<void> | undefined;
+  const signals: Partial<Record<"SIGTERM" | "SIGKILL", Promise<void>>> = {};
   const signalTree = (signal: "SIGTERM" | "SIGKILL") => {
-    const existing = signal === "SIGKILL" ? killPromise : termPromise;
-    if (existing) {
-      return existing;
-    }
-    const signaled = new Promise<void>((resolve) => {
+    return (signals[signal] ??= new Promise<void>((resolve) => {
       if (pid === undefined) {
         resolve();
         return;
@@ -143,13 +242,7 @@ function captureChild(child: ChildProcess): CapturedChild {
         detached: process.platform !== "win32",
         onComplete: resolve,
       });
-    });
-    if (signal === "SIGKILL") {
-      killPromise = signaled;
-    } else {
-      termPromise = signaled;
-    }
-    return signaled;
+    }));
   };
   const exited = once(child, "exit").then(async () => {
     // The root PID still identifies this task-owned tree at exit delivery. Reap
@@ -194,14 +287,11 @@ export async function startHttpFixture(params: {
   fixturePath: string;
   labelPrefix: "session" | "node";
   env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
 }): Promise<HttpFixture> {
-  const captured = captureChild(
-    spawn(process.execPath, [params.fixturePath, "http", "--label-prefix", params.labelPrefix], {
-      cwd: process.cwd(),
-      detached: process.platform !== "win32",
-      env: params.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
+  const captured = spawnCaptured(
+    [params.fixturePath, "http", "--label-prefix", params.labelPrefix],
+    params.env,
   );
   let transferred = false;
   let lines: ReturnType<typeof createInterface> | undefined;
@@ -214,17 +304,18 @@ export async function startHttpFixture(params: {
       throw new Error("HTTP MCP fixture stdout was not piped");
     }
     lines = createInterface({ input: captured.child.stdout });
-    const line = await Promise.race([
-      new Promise<string>((resolve) => {
-        lines?.once("line", resolve);
-      }),
-      captured.exited.then(() => {
-        throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
-      }),
-      delay(WAIT_TIMEOUT_MS, undefined, { ref: false }).then(() => {
-        throw new Error(`HTTP MCP fixture readiness timed out:\n${captured.logs()}`);
-      }),
-    ]);
+    const line = await withinTest(
+      awaitGateBeforeSettlement(
+        new Promise<string>((resolve) => {
+          lines?.once("line", resolve);
+        }),
+        captured.exited.then(() => {
+          throw new Error(`HTTP MCP fixture exited before readiness:\n${captured.logs()}`);
+        }),
+        "HTTP MCP fixture exited before readiness",
+      ),
+      params.signal,
+    );
     const value: unknown = JSON.parse(line);
     if (
       !isRecord(value) ||
@@ -250,27 +341,19 @@ export async function startHttpFixture(params: {
 }
 
 export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv): CapturedChild {
-  return captureChild(
-    spawn(
-      process.execPath,
-      [
-        "dist/index.js",
-        "node",
-        "run",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        String(gatewayPort),
-        "--display-name",
-        NODE_DISPLAY_NAME,
-      ],
-      {
-        cwd: process.cwd(),
-        detached: process.platform !== "win32",
-        env: nodeEnv,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ),
+  return spawnCaptured(
+    [
+      "dist/index.js",
+      "node",
+      "run",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(gatewayPort),
+      "--display-name",
+      NODE_DISPLAY_NAME,
+    ],
+    nodeEnv,
   );
 }
 
@@ -384,14 +467,11 @@ export function parseNodeMcpTextRecord(value: unknown): Record<string, unknown> 
 
 export function parseProbeResult(value: unknown): ProbeResult {
   const parsed = parseNodeMcpTextRecord(value);
-  if (
-    typeof parsed.label !== "string" ||
-    typeof parsed.marker !== "string" ||
-    typeof parsed.pid !== "number"
-  ) {
+  const { label, marker, pid } = parsed;
+  if (typeof label !== "string" || typeof marker !== "string" || typeof pid !== "number") {
     throw new Error(`MCP result had invalid probe data: ${JSON.stringify(parsed)}`);
   }
-  return { label: parsed.label, marker: parsed.marker, pid: parsed.pid };
+  return { label, marker, pid };
 }
 
 export async function invokeNodeMcpPayload(params: {
@@ -427,7 +507,7 @@ export function flattenEffectiveTools(result: ToolsEffectiveResult): EffectiveTo
   return (result.groups ?? []).flatMap((group) => group.tools ?? []);
 }
 
-export function createMcpServers(params: {
+function createMcpServers(params: {
   placement: "session" | "node";
   fixture: HttpFixture;
   stdioEnv: Record<string, string>;

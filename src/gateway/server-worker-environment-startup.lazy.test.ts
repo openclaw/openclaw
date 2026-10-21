@@ -1,13 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as metadataState from "../plugins/current-plugin-metadata-state.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as version from "../version.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
@@ -19,41 +16,29 @@ import type {
   WorkerEnvironmentService,
 } from "./worker-environments/service.js";
 
-type WorkerSessionToolExecutor = ReturnType<
-  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerSessionToolExecutor
->;
+type ServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
+type WorkerGatewayTools =
+  typeof import("./worker-environments/worker-session-tool-executor.js").createWorkerGatewayTools;
 
-const mocks = vi.hoisted(() => {
-  const execute: WorkerSessionToolExecutor = vi.fn(async () => ({
-    resultJson: '{"ok":true}',
-  }));
-  return {
-    createExecutor: vi.fn(() => execute),
-    execute,
-    executeSessionTool: undefined as WorkerSessionToolExecutor | undefined,
-    prepareNodeArtifacts: undefined as Parameters<
-      typeof createWorkerEnvironmentService
-    >[0]["prepareNodeArtifacts"],
-    service: {
-      get: vi.fn<WorkerEnvironmentService["get"]>(),
-      ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
-      stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
-    } satisfies Pick<WorkerEnvironmentService, "get" | "ready" | "stop">,
-  };
-});
+const mocks = vi.hoisted(() => ({
+  createTools: vi.fn<WorkerGatewayTools>(async () => []),
+  options: undefined as ServiceOptions | undefined,
+  service: {
+    ready: vi.fn<WorkerEnvironmentService["ready"]>(async () => {}),
+    stop: vi.fn<WorkerEnvironmentService["stop"]>(async () => {}),
+  } satisfies Pick<WorkerEnvironmentService, "ready" | "stop">,
+}));
 
+// mock-isolation: observe lazy startup without launching worker processes.
 vi.mock("./worker-environments/service.js", () => ({
-  createWorkerEnvironmentService: vi.fn(
-    (options: Parameters<typeof createWorkerEnvironmentService>[0]) => {
-      mocks.executeSessionTool = options.executeSessionTool;
-      mocks.prepareNodeArtifacts = options.prepareNodeArtifacts;
-      return mocks.service;
-    },
-  ),
+  createWorkerEnvironmentService: (options: ServiceOptions) => {
+    mocks.options = options;
+    return mocks.service;
+  },
 }));
 
 vi.mock("./worker-environments/worker-session-tool-executor.js", () => ({
-  createWorkerSessionToolExecutor: mocks.createExecutor,
+  createWorkerGatewayTools: mocks.createTools,
 }));
 
 import {
@@ -64,10 +49,8 @@ import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-enviro
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    mocks.executeSessionTool = undefined;
-    mocks.prepareNodeArtifacts = undefined;
+    await closeStateDatabaseForTest();
+    mocks.options = undefined;
     vi.restoreAllMocks();
     vi.clearAllMocks();
     cleanup();
@@ -84,7 +67,7 @@ async function withWorkerRuntime(run: () => Promise<void>) {
       getPluginRegistry: () => registry,
       getPortalRuntime: () => undefined,
       resolveGatewayContext: () => undefined,
-      desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+      desktopSessionRegistry: createDesktopSessionRegistry(),
       startup,
       log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
@@ -93,39 +76,36 @@ async function withWorkerRuntime(run: () => Promise<void>) {
   });
 }
 
-describe("gateway worker session-tool startup", () => {
-  it("creates one executor on concurrent first use", async () => {
-    await withWorkerRuntime(async () => {
-      expect(mocks.service.ready).toHaveBeenCalledOnce();
-      expect(mocks.createExecutor).not.toHaveBeenCalled();
-      const executeSessionTool = mocks.executeSessionTool;
-      if (!executeSessionTool) {
-        throw new Error("worker session-tool callback was not composed");
-      }
-      const identity: WorkerConnectionIdentity = {
-        environmentId: "environment",
-        credentialHash: "credential",
-        bundleHash: "bundle",
-        sessionId: null,
-        runId: null,
-        turnClaim: null,
-        ownerEpoch: 1,
-        rpcSetVersion: 1,
-        protocolFeatures: [],
-        credentialExpiresAtMs: Date.now() + 60_000,
-      };
-      const request: Parameters<WorkerSessionToolExecutor>[0] = {
-        identity,
-        toolName: "sessions_send",
-        request: { toolCallId: "first", sessionKey: "agent:main:target", message: "hello" },
-      };
-
-      await expect(
-        Promise.all([executeSessionTool(request), executeSessionTool(request)]),
-      ).resolves.toEqual([{ resultJson: '{"ok":true}' }, { resultJson: '{"ok":true}' }]);
-      expect(mocks.createExecutor).toHaveBeenCalledOnce();
-      expect(mocks.execute).toHaveBeenCalledTimes(2);
-    });
+it("loads Gateway tools lazily and binds each requested surface", async () => {
+  await withWorkerRuntime(async () => {
+    expect(mocks.service.ready).toHaveBeenCalledOnce();
+    expect(mocks.createTools).not.toHaveBeenCalled();
+    const createGatewayTools = mocks.options?.createGatewayTools;
+    if (!createGatewayTools) {
+      throw new Error("worker tool-surface callback was not composed");
+    }
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment",
+      credentialHash: "credential",
+      bundleHash: "bundle",
+      sessionId: null,
+      runId: null,
+      turnClaim: null,
+      ownerEpoch: 1,
+      rpcSetVersion: 1,
+      protocolFeatures: [],
+      credentialExpiresAtMs: Date.now() + 60_000,
+    };
+    const results = await Promise.all([
+      createGatewayTools({ identity }),
+      createGatewayTools({ identity }),
+    ]);
+    expect(results).toEqual([[], []]);
+    expect(results[0]).not.toBe(results[1]);
+    expect(mocks.createTools).toHaveBeenCalledTimes(2);
+    expect(mocks.createTools).toHaveBeenCalledWith(
+      expect.objectContaining({ identity, environments: mocks.service }),
+    );
   });
 });
 
@@ -167,7 +147,7 @@ it.each(["success", "failure", "abort"] as const)(
     });
     await withWorkerRuntime(async () => {
       const controller = new AbortController();
-      const preparation = mocks.prepareNodeArtifacts!({}, controller.signal);
+      const preparation = mocks.options!.prepareNodeArtifacts!({}, controller.signal);
       const published = vi.fn();
       const rejected = vi.fn();
       void preparation.then(published, rejected);

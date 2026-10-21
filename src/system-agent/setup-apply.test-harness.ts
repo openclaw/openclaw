@@ -2,6 +2,8 @@ import path from "node:path";
 import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -11,7 +13,7 @@ type ConfigSnapshot = {
   path: string;
   hash: string | null;
   parsed: unknown;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -124,7 +126,7 @@ export const runtime: RuntimeEnv = {
 
 export function snapshot(
   hash: string | null,
-  sourceConfig: OpenClawConfig,
+  sourceConfig: OpenClawConfigWithLegacyRoster,
   runtimeConfig: OpenClawConfig = sourceConfig,
 ): ConfigSnapshot {
   return {
@@ -203,7 +205,7 @@ export function baseParams(
 }
 
 export function mainAgentModelConfig(model = "openai/gpt-5.5"): OpenClawConfig {
-  return { agents: { defaults: { model }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model }, entries: { main: {} } } };
 }
 
 export function setSetupCommitState(config: OpenClawConfig, initialSnapshot: ConfigSnapshot): void {
@@ -218,7 +220,7 @@ export function resetSetupApplyMocks(): void {
   const config: OpenClawConfig = {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
   };
   setSetupCommitState(structuredClone(config), snapshot("probe", config));
@@ -244,7 +246,6 @@ export function resetSetupApplyMocks(): void {
             createdAgentIds.map((agentId) => [
               agentId,
               {
-                ...(!team ? { default: true } : {}),
                 workspace: team ? path.join(workspace, agentId) : workspace,
                 agentDir: `/agents/${agentId}`,
                 ...(team
@@ -307,7 +308,7 @@ export function resetSetupApplyMocks(): void {
     }: {
       nextConfig: OpenClawConfig;
       quickstartGateway: {
-        authMode: "token" | "password";
+        authMode: GatewayAuthMode;
         bind: "loopback" | "lan";
         customBindHost?: string;
         port: number;

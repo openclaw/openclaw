@@ -2,15 +2,17 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
+import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
 import {
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   readCurrentOpenClawStateDatabaseContentVersion,
 } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
+import { withUpdateRunRead } from "./update-run-admission.js";
 import {
   decodeRun,
   readActiveUpdateRun,
@@ -28,7 +30,7 @@ export function getUpdateRun(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+  return withUpdateRunRead(
     ({ db }) => (tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined),
     options,
   );
@@ -37,10 +39,7 @@ export function getUpdateRun(
 export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readActiveUpdateRun(db),
-    options,
-  );
+  return withUpdateRunRead(({ db }) => readActiveUpdateRun(db), options);
 }
 
 /** Previews and acknowledged abandonment cannot replace failure or completion evidence. */
@@ -49,7 +48,7 @@ export function readUpdateRunResolutionHistory(options: OpenClawStateDatabaseOpt
   outcome?: UpdateRunRecord;
 } {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    withUpdateRunRead(({ db }) => {
       if (!tableExists(db, "update_runs")) {
         return {};
       }
@@ -77,18 +76,34 @@ export async function getUpdateRunAsync(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.get", runId },
-      { preferIndependentWarmRead: true },
-    ),
+  return await withArtifactPreservingStateReads(() =>
+    readUpdateRunAsync(runId, options, { preferIndependentWarmRead: true }),
+  );
+}
+
+/** The active updater already writes this ledger, so SQLite sidecars need no private copy.
+ * Canonical state closure drains the retained worker before database replacement.
+ */
+export function getUpdateRunForProgressAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  signal?: AbortSignal,
+): Promise<UpdateRunRecord | undefined> {
+  return readUpdateRunAsync(runId, options, { live: true, signal });
+}
+
+async function readUpdateRunAsync(
+  runId: string,
+  options: OpenClawStateDatabaseOptions,
+  readOptions: OpenClawStateReadOptions,
+): Promise<UpdateRunRecord | undefined> {
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type: "updateRuns.get", runId },
+    readOptions,
   );
   if (!reply) {
     return undefined;
-  }
-  if (!reply.ok || reply.type !== "updateRuns.get") {
-    throw new Error("Unexpected update run lookup result");
   }
   return reply.run;
 }
@@ -99,7 +114,7 @@ export function listUpdateRuns(
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): UpdateRunRecord[] {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    withUpdateRunRead(
       ({ db }) => readUpdateRuns(db, input),
       options,
       openStateSchemaReadAdmission,
@@ -107,29 +122,37 @@ export function listUpdateRuns(
   );
 }
 
-/** Reuse decoded rows only after a fresh observation of every authoritative source byte.
+/** Read current rows on an independent warm owner; cold reads preserve every source byte.
  * The caller still evaluates admission on every invocation; no grant is cached.
- * This closure owns only rows, never a native handle, child, or temporary snapshot.
  */
 export function createUpdateRunAdmissionReader(
   input: UpdateRunListInput,
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
 ): () => UpdateRunRecord[] {
-  const query = { ...input };
+  const readWarm = createOpenClawStateCurrentWarmReader(
+    ({ db }) => readUpdateRuns(db, input),
+    options,
+    openStateSchemaReadAdmission,
+  );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    const warm = readWarm();
+    if (warm.available) {
+      previous = undefined;
+      return warm.value;
+    }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
-      return structuredClone(previous.runs);
+      return previous.runs;
     }
     previous = undefined;
-    const runs = listUpdateRuns(query, options, openStateSchemaReadAdmission);
+    const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
     if (
       version !== undefined &&
       version === readCurrentOpenClawStateDatabaseContentVersion(options)
     ) {
-      previous = { version, runs: structuredClone(runs) };
+      previous = { version, runs };
     }
     return runs;
   };
@@ -139,20 +162,7 @@ export function createUpdateRunAdmissionReader(
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.status" },
-      { preferIndependentWarmRead: true },
-    ),
-  );
-  if (!reply) {
-    return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.status") {
-    throw new Error("Unexpected update run status result");
-  }
-  return reply.status;
+  return readUpdateRunStatusAsync("updateRuns.status", options);
 }
 
 export async function getUpdateRunHistoryStatusAsync(
@@ -162,18 +172,18 @@ export async function getUpdateRunHistoryStatusAsync(
   lastRun?: UpdateRunRecord;
   expiredRun?: UpdateRunRecord;
 }> {
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+}
+
+async function readUpdateRunStatusAsync(
+  type: "updateRuns.status" | "updateRuns.historyStatus",
+  options: OpenClawStateDatabaseOptions,
+) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.historyStatus" },
-      { preferIndependentWarmRead: true },
-    ),
+    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
   );
   if (!reply) {
     return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.historyStatus") {
-    throw new Error("Unexpected update run history status result");
   }
   return reply.status;
 }
@@ -193,9 +203,6 @@ export async function listUpdateRunsAsync(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "updateRuns.list") {
-    throw new Error("Unexpected update run list result");
-  }
   return reply.runs;
 }
 
@@ -203,7 +210,7 @@ export async function listUpdateRunsAsync(
 export function getLatestUpdateFetchFailure(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateFetchFailure | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+  return withUpdateRunRead(({ db }) => {
     if (!tableExists(db, "update_runs")) {
       return undefined;
     }

@@ -2,9 +2,11 @@
 import { createHash } from "node:crypto";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { readStoredDeviceIdentityReadOnly } from "./device-identity-store.js";
-import { loadOrCreateDeviceIdentity } from "./device-identity.js";
+import { resolveStateDir } from "../config/state-dir.js";
+import { loadOrCreateDeviceIdentityAsync } from "./device-identity-async.js";
+import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
+/** Doctor previews and migrations retain their synchronous one-shot admission. */
 export function resolveHeartbeatSchedulerSeed(
   explicitSeed?: string,
   options: { env?: NodeJS.ProcessEnv; readOnly?: boolean } = {},
@@ -16,7 +18,7 @@ export function resolveHeartbeatSchedulerSeed(
   const env = options.env ?? process.env;
   try {
     const identity = options.readOnly
-      ? readStoredDeviceIdentityReadOnly({ env })
+      ? loadDeviceIdentityIfPresent({ env })
       : loadOrCreateDeviceIdentity({ env });
     if (identity) {
       return identity.deviceId;
@@ -25,11 +27,29 @@ export function resolveHeartbeatSchedulerSeed(
     // Read-only Doctor previews never create identity state; absent state
     // still receives a deterministic monitor anchor.
   }
-  return createHash("sha256")
-    .update(env.HOME ?? "")
-    .update("\0")
-    .update(process.cwd())
-    .digest("hex");
+  return fallbackSchedulerSeed(env);
+}
+
+export async function resolveHeartbeatSchedulerSeedAsync(
+  explicitSeed?: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<string> {
+  const normalized = normalizeOptionalString(explicitSeed);
+  if (normalized) {
+    return normalized;
+  }
+  const env = options.env ?? process.env;
+  const fallback = fallbackSchedulerSeed(env);
+  try {
+    return (await loadOrCreateDeviceIdentityAsync({ env })).deviceId;
+  } catch {
+    // Unavailable identity state retains the deterministic monitor anchor.
+  }
+  return fallback;
+}
+
+function fallbackSchedulerSeed(env: NodeJS.ProcessEnv): string {
+  return createHash("sha256").update(resolveStateDir(env)).digest("hex");
 }
 
 export function resolveHeartbeatPhaseMs(params: {

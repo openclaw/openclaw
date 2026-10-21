@@ -1,6 +1,4 @@
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
 import {
@@ -12,7 +10,7 @@ import {
   isModelIndependentDirectiveCommand,
   resolveReplyDirectiveCommand,
 } from "../../../../src/auto-reply/reply/directive-handling.parse.js";
-import type { IconName } from "../../components/icons.ts";
+import type { IconName } from "../../components/icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 
@@ -38,8 +36,6 @@ export type SlashCommandDef = {
   argOptions?: string[];
   /** Whether a multi-word argument may execute from an inline prose position. */
   allowsInlineMultiWordArgs?: boolean;
-  /** Keyboard shortcut hint shown in the menu (display only). */
-  shortcut?: string;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: SlashCommandTier;
   source?: "native" | "plugin" | "skill";
@@ -59,7 +55,7 @@ type CommandLike = {
   args?: Array<{
     name: string;
     required?: boolean;
-    choices?: LocalArgChoice[];
+    choices?: NonNullable<ChatCommandDefinition["args"]>[number]["choices"];
   }>;
   formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
@@ -75,13 +71,6 @@ export function executesInlineImmediately(command: SlashCommandDef): boolean {
 }
 
 const REMOTE_SLASH_IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9_-]*$/u;
-const MAX_REMOTE_COMMANDS = 500;
-const MAX_REMOTE_ALIAS_COUNT = 20;
-const MAX_REMOTE_ARGS = 20;
-const MAX_REMOTE_CHOICES = 50;
-const MAX_REMOTE_NAME_LENGTH = 200;
-const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
-const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
 const COMMAND_PRESENTATION: Partial<Record<string, Pick<SlashCommandDef, "icon" | "category">>> = {
   help: { icon: "book", category: "tools" },
@@ -160,19 +149,19 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   },
 ];
 
-const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
-  steer: "chat.commands.steerDescription",
-  "export-session": "chat.commands.exportDescription",
-};
-
-const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "Inject a message into the active run",
-  "export-session": "Download this conversation as Markdown",
-};
-
-const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "<message>",
-  "export-session": undefined,
+const COMMAND_OVERRIDES: Partial<
+  Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
+> = {
+  steer: {
+    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
+    descriptionKey: "chat.commands.steerDescription",
+    args: "<message>",
+  },
+  "export-session": {
+    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
+    descriptionKey: "chat.commands.exportDescription",
+    args: undefined,
+  },
 };
 
 function getSlashAliases(command: CommandLike): string[] {
@@ -186,12 +175,7 @@ function formatArgs(command: CommandLike): string | undefined {
   if (!command.args?.length) {
     return undefined;
   }
-  return command.args
-    .map((arg) => {
-      const token = `<${arg.name}>`;
-      return arg.required ? token : `[${arg.name}]`;
-    })
-    .join(" ");
+  return command.args.map((arg) => (arg.required ? `<${arg.name}>` : `[${arg.name}]`)).join(" ");
 }
 
 function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
@@ -201,13 +185,13 @@ function choiceToValue(command: CommandLike, argName: string, choice: LocalArgCh
 
 function getArgOptions(command: CommandLike): string[] | undefined {
   const firstArg = command.args?.[0];
-  if (!firstArg) {
+  if (!firstArg || !Array.isArray(firstArg.choices)) {
     return undefined;
   }
   const options = firstArg.choices
-    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .map((choice) => choiceToValue(command, firstArg.name, choice))
     .filter(Boolean);
-  return options?.length ? options : undefined;
+  return options.length ? options : undefined;
 }
 
 function mapTier(command: CommandLike): SlashCommandTier {
@@ -218,10 +202,7 @@ function mapTier(command: CommandLike): SlashCommandTier {
   return "standard";
 }
 
-function toSlashCommand(
-  command: CommandLike,
-  source: "local" | "remote" = "local",
-): SlashCommandDef | null {
+function toSlashCommand(command: CommandLike, source: "local" | "remote"): SlashCommandDef | null {
   const name = command.name.trim();
   if (!name) {
     return null;
@@ -232,13 +213,9 @@ function toSlashCommand(
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
-    description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
-    ...(COMMAND_DESCRIPTION_KEYS[command.key]
-      ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
-      : {}),
-    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
-      ? COMMAND_ARGS_OVERRIDES[command.key]
-      : formatArgs(command),
+    description: command.description,
+    args: formatArgs(command),
+    ...COMMAND_OVERRIDES[command.key],
     icon: presentation?.icon ?? "terminal",
     category:
       presentation?.category ??
@@ -262,7 +239,7 @@ function toSlashCommand(
 }
 
 function normalizeSlashIdentifier(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^\//u, "").slice(0, MAX_REMOTE_NAME_LENGTH);
+  const trimmed = raw.trim().replace(/^\//u, "");
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!normalized || !REMOTE_SLASH_IDENTIFIER_PATTERN.test(normalized)) {
     return null;
@@ -270,89 +247,23 @@ function normalizeSlashIdentifier(raw: string): string | null {
   return normalized;
 }
 
-function clampText(value: unknown, maxLength: number): string {
-  const text = typeof value === "string" ? value : "";
-  return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
-}
-
-function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
-  if (arg.dynamic === true) {
-    return [];
-  }
-  const rawChoices = arg.choices;
-  if (!Array.isArray(rawChoices)) {
-    return [];
-  }
-  return rawChoices
-    .map((choice) => {
-      if (typeof choice === "string") {
-        return clampText(choice, MAX_REMOTE_NAME_LENGTH);
-      }
-      const record = asRecord(choice);
-      if (!record) {
-        return null;
-      }
-      return {
-        value: clampText(record.value, MAX_REMOTE_NAME_LENGTH),
-        label: clampText(record.label, MAX_REMOTE_NAME_LENGTH),
-      };
-    })
-    .filter((choice): choice is LocalArgChoice => {
-      if (!choice) {
-        return false;
-      }
-      return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
-    });
-}
-
-function normalizeClientPresentation(
-  value: unknown,
-): NonNullable<CommandEntry["clientPresentation"]> | undefined {
-  const presentation = asRecord(value);
-  if (
-    !presentation ||
-    Object.keys(presentation).length !== 2 ||
-    !Object.hasOwn(presentation, "when") ||
-    !Object.hasOwn(presentation, "action") ||
-    presentation.when !== "no-arguments"
-  ) {
-    return undefined;
-  }
-  const action = asRecord(presentation.action);
-  if (
-    !action ||
-    Object.keys(action).length !== 1 ||
-    !Object.hasOwn(action, "kind") ||
-    action.kind !== "device-pairing"
-  ) {
-    return undefined;
-  }
-  return { when: "no-arguments", action: { kind: "device-pairing" } };
-}
-
 export function buildFallbackSlashCommands(): SlashCommandDef[] {
   const builtins = buildBuiltinChatCommands()
-    .map((command) => ({
-      key: command.key,
-      name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
-      aliases: command.textAliases,
-      description: command.description,
-      modelIndependent: command.modelIndependent,
-      args: command.args?.map((arg) => ({
-        name: arg.name,
-        required: arg.required,
-        choices: Array.isArray(arg.choices) ? arg.choices : undefined,
-      })),
-      formatArgs: command.formatArgs,
-      category: command.category,
-      tier: command.tier,
-    }))
-    .map((command) => toSlashCommand(command, "local"))
+    .map((command) =>
+      toSlashCommand(
+        {
+          ...command,
+          name: command.textAliases[0]?.replace(/^\//u, "") ?? command.key,
+          aliases: command.textAliases,
+        },
+        "local",
+      ),
+    )
     .filter((command): command is SlashCommandDef => command !== null);
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands()): Set<string> {
+function buildReservedLocalSlashNames(localCommands: SlashCommandDef[]): Set<string> {
   const reserved = new Set<string>();
   for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
@@ -367,56 +278,33 @@ function buildReservedLocalSlashNames(localCommands = buildFallbackSlashCommands
 }
 
 function normalizeCommandEntry(
-  entry: CommandEntry | Record<string, unknown>,
+  entry: CommandEntry,
   reservedLocalNames: Set<string>,
 ): CommandLike | null {
-  const aliases = (Array.isArray(entry.textAliases) ? entry.textAliases : [])
-    .slice(0, MAX_REMOTE_ALIAS_COUNT)
-    .filter((alias): alias is string => typeof alias === "string")
+  const aliases = (entry.textAliases ?? [])
     .map(normalizeSlashIdentifier)
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedLocalNames.has(alias));
-  const primaryName =
-    aliases[0] ?? (typeof entry.name === "string" ? normalizeSlashIdentifier(entry.name) : null);
+  const primaryName = aliases[0] ?? normalizeSlashIdentifier(entry.name);
   if (!primaryName || reservedLocalNames.has(primaryName)) {
     return null;
   }
-  const args = (Array.isArray(entry.args) ? entry.args : [])
-    .map((arg) => asRecord(arg))
-    .filter((arg) => arg !== null)
-    .slice(0, MAX_REMOTE_ARGS)
-    .map((arg) => ({
-      name: clampText(arg.name, MAX_REMOTE_ARG_NAME_LENGTH),
-      required: arg.required === true,
-      choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
-    }))
-    .filter((arg) => arg.name.length > 0)
-    .map((arg) =>
-      Object.assign(
-        { name: arg.name },
-        arg.required ? { required: true } : {},
-        arg.choices.length > 0 ? { choices: arg.choices } : {},
-      ),
-    );
+  const args = entry.args?.map((arg) => ({
+    name: arg.name,
+    required: arg.required,
+    choices: arg.dynamic ? [] : arg.choices?.filter((choice) => choice.value),
+  }));
   return {
     key: primaryName,
     name: primaryName,
     aliases: aliases.map((alias) => `/${alias}`),
-    description: clampText(entry.description, MAX_REMOTE_DESCRIPTION_LENGTH),
-    ...(args.length > 0 ? { args } : {}),
-    category: typeof entry.category === "string" ? entry.category : undefined,
-    source:
-      entry.source === "native" || entry.source === "plugin" || entry.source === "skill"
-        ? entry.source
-        : undefined,
-    skillDisplayName:
-      typeof entry.skillDisplayName === "string"
-        ? clampText(entry.skillDisplayName, MAX_REMOTE_NAME_LENGTH).trim() || undefined
-        : undefined,
-    skillModelVisible:
-      typeof entry.skillModelVisible === "boolean" ? entry.skillModelVisible : undefined,
-    clientPresentation:
-      entry.source === "plugin" ? normalizeClientPresentation(entry.clientPresentation) : undefined,
+    description: entry.description,
+    args,
+    category: entry.category,
+    source: entry.source,
+    skillDisplayName: entry.skillDisplayName?.trim() || undefined,
+    skillModelVisible: entry.skillModelVisible,
+    clientPresentation: entry.source === "plugin" ? entry.clientPresentation : undefined,
   };
 }
 
@@ -428,7 +316,6 @@ export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCom
   const local = buildFallbackSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
-    .slice(0, MAX_REMOTE_COMMANDS)
     .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))
     .filter((command): command is CommandLike => command !== null)
     .map((command) => toSlashCommand(command, "remote"))
@@ -442,18 +329,6 @@ export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCom
     deduped.set(key, command);
   }
   return Array.from(deduped.values());
-}
-
-export function getRemoteCommandEntries(
-  result: { commands?: unknown } | null | undefined,
-): CommandEntry[] {
-  const commands = result?.commands;
-  if (!Array.isArray(commands)) {
-    return [];
-  }
-  return commands
-    .map((entry) => asRecord(entry))
-    .filter((entry): entry is CommandEntry => entry !== null);
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();

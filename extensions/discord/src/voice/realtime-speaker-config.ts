@@ -7,27 +7,26 @@ import {
   buildRealtimeVoiceSessionInstructions,
   canonicalizeRealtimeVoiceProviderId,
   projectInternalRealtimeVoicePublicConfig,
-  resolveConfiguredRealtimeVoiceProvider,
+  resolveConfiguredRealtimeVoiceProviderAsync,
   resolveRealtimeVoiceBargeIn,
   resolveRealtimeVoiceInterruptResponseOnInputAudio,
   resolveRealtimeVoiceMinBargeInAudioEndMs,
   resolveRealtimeVoiceSessionPolicy,
   type RealtimeVoiceTranscriptEntry,
+  type ResolvedRealtimeVoiceProvider,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
 
-/** Resolve the same provider, voice catalog, and policies for initial and replacement connections. */
-export function resolveDiscordRealtimeSpeakerConfig(params: {
+/** Prepare shared provider credentials once before any speaker starts capturing audio. */
+export async function prepareDiscordRealtimeProvider(params: {
   accountId: string;
   agentId: string;
   cfg: OpenClawConfig;
   realtimeConfig: NonNullable<DiscordAccountConfig["voice"]>["realtime"];
   isAgentProxy: boolean;
-  bootstrapContextInstructions?: string;
   voiceOverride?: string;
-  conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
-}) {
+}): Promise<ResolvedRealtimeVoiceProvider> {
   const { realtimeConfig, isAgentProxy } = params;
   const configuredProviderId = realtimeConfig?.provider?.trim();
   if (configuredProviderId) {
@@ -49,7 +48,7 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
     }
   }
   const configuredVoice = realtimeConfig?.speakerVoice || realtimeConfig?.speakerVoiceId;
-  const resolved = resolveConfiguredRealtimeVoiceProvider({
+  const resolved = await resolveConfiguredRealtimeVoiceProviderAsync({
     configuredProviderId: realtimeConfig?.provider,
     providerConfigs: { ...realtimeConfig?.providers },
     providerConfigOverrides: {
@@ -80,6 +79,21 @@ export function resolveDiscordRealtimeSpeakerConfig(params: {
       ),
     noRegisteredProviderMessage: "No configured realtime voice provider registered",
   });
+  return resolved;
+}
+
+/** Build per-speaker policy from the room-owned provider preparation. */
+export function resolveDiscordRealtimeSpeakerConfig(params: {
+  accountId: string;
+  agentId: string;
+  cfg: OpenClawConfig;
+  realtimeConfig: NonNullable<DiscordAccountConfig["voice"]>["realtime"];
+  isAgentProxy: boolean;
+  preparedProvider: ResolvedRealtimeVoiceProvider;
+  bootstrapContextInstructions?: string;
+  conversationHistory?: readonly RealtimeVoiceTranscriptEntry[];
+}) {
+  const { realtimeConfig, isAgentProxy, preparedProvider: resolved } = params;
   assertSecretOwnerAvailable(
     "capability",
     discordRealtimeVoiceSecretOwnerId(params.accountId, resolved.provider.id),

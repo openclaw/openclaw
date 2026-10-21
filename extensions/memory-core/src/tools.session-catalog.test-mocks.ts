@@ -20,7 +20,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
     await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   return {
     ...actual,
-    loadArchivedSessions: vi.fn(() => []),
+    loadArchivedSessionsAsync: vi.fn(async () => []),
   };
 });
 
@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({
+    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
       storePath: "(test)",
       store: sessionStore,
     })),

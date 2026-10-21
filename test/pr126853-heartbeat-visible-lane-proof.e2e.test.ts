@@ -114,7 +114,6 @@ describe("PR #126853 real Gateway lane proof", () => {
       const heartbeatMarker = "PR126853_HEARTBEAT_HELD";
       const visibleMarker = "PR126853_VISIBLE_TURN";
       const providerOrder: string[] = [];
-      let visibleTurnDispatched = false;
 
       try {
         const tempHome = tempDirs.make("openclaw-pr126853-proof-");
@@ -160,11 +159,16 @@ describe("PR #126853 real Gateway lane proof", () => {
               return;
             }
             const body = Buffer.concat(chunks).toString("utf8");
-            const kind = !visibleTurnDispatched
+            const kind = body.includes(heartbeatMarker)
               ? "heartbeat"
               : body.includes(visibleMarker)
                 ? "visible"
-                : "unexpected";
+                : undefined;
+            // Startup heartbeats share this provider; hold only the two explicit turns.
+            if (!kind) {
+              writeAssistantResponse(response, "HEARTBEAT_OK");
+              return;
+            }
             providerOrder.push(kind);
             console.log(`PR126853_PROVIDER_REQUEST ${kind}`);
             if (kind === "heartbeat") {
@@ -204,7 +208,7 @@ describe("PR #126853 real Gateway lane proof", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",
@@ -257,7 +261,6 @@ describe("PR #126853 real Gateway lane proof", () => {
 
         const visibleSessionKey = "agent:main:pr126853-visible";
         const visibleRunId = "pr126853-visible-run";
-        visibleTurnDispatched = true;
         const started = await gateway.client.request<{ runId: string; status: string }>(
           "chat.send",
           {

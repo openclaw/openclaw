@@ -3,6 +3,7 @@ import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { asPositiveFiniteNumber, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
@@ -120,12 +121,18 @@ function requestSignalHttp(
     assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<SignalHttpResponse> {
+  return captureEffectAuthority().initiate(() => initiateSignalHttp(url, options));
+}
+
+function initiateSignalHttp(
+  url: URL,
+  options: Parameters<typeof requestSignalHttp>[1],
+): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
   options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
-    let settled = false;
     const deadline = setTimeout(() => {
       request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -134,21 +141,9 @@ function requestSignalHttp(
       clearTimeout(deadline);
       request?.setTimeout(0);
     };
-    const rejectOnce = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
+    const rejectResponse = (error: unknown) => {
       cleanup();
       reject(toErrorObject(error, "Non-Error rejection"));
-    };
-    const resolveOnce = (response: SignalHttpResponse) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(response);
     };
     const maxResponseBytes = Math.floor(
       asPositiveFiniteNumber(options.maxResponseBytes) ?? DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES,
@@ -169,14 +164,15 @@ function requestSignalHttp(
             const error = new Error("Signal HTTP response exceeded size limit");
             request?.destroy(error);
             res.destroy(error);
-            rejectOnce(error);
+            rejectResponse(error);
             return;
           }
           chunks.push(next);
         });
-        res.on("error", rejectOnce);
+        res.on("error", rejectResponse);
         res.on("end", () => {
-          resolveOnce({
+          cleanup();
+          resolve({
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks),
           });
@@ -186,7 +182,7 @@ function requestSignalHttp(
     request.setTimeout(timeoutMs, () => {
       request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
     });
-    request.on("error", rejectOnce);
+    request.on("error", rejectResponse);
     if (options.body !== undefined) {
       request.write(options.body);
     }

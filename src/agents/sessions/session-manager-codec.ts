@@ -1,9 +1,11 @@
-import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
+import { isOpenClawSubagentCompletionMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -11,6 +13,7 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
+  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -21,7 +24,15 @@ export {
   partitionSessionFileEntries,
 } from "../../config/sessions/session-entry-codec.js";
 
-export function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+/** Rows that record history without consuming the open turn's keyed input. */
+export function isOutOfTurnHistoryEntry(entry: SessionEntry): boolean {
+  return (
+    isTalkRealtimeVoiceEntry(entry) ||
+    (entry.type === "message" && isOpenClawSubagentCompletionMirrorAssistantMessage(entry.message))
+  );
+}
+
+function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
   if (
     entry.type !== "message" ||
     (entry.message.role !== "user" && entry.message.role !== "assistant")
@@ -123,17 +134,28 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    // SAFETY: The reverse index stays within the canonical session entries.
-    const entry = entries[index]!;
-    if (entry.type === "reset") {
-      return null;
-    }
-    if (entry.type === "compaction") {
-      return entry;
+  const boundary = entries.findLast(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  return boundary?.type === "compaction" ? boundary : null;
+}
+
+export function cloneSessionModelContextEntries(
+  header: SessionHeader | null,
+  branch: readonly SessionEntry[],
+): FileEntry[] {
+  // Project storage-only payloads before cloning, while isolating mutable manager entries.
+  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
+  for (let index = 0; index < events.length; index++) {
+    const entry = events[index]!;
+    if (entry.type === "message") {
+      const message = projectModelContextMessages([entry.message])[0]!;
+      if (message !== entry.message) {
+        events[index] = { ...entry, message };
+      }
     }
   }
-  return null;
+  return structuredClone(events);
 }
 
 export function buildSessionContext(

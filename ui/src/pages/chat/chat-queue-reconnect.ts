@@ -1,5 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { SessionScopeHost } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -53,16 +53,6 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
   sessionsResult?: SessionsListResult | null;
 };
 
-function isSelectedSessionKnownIdle(
-  sessionsResult: SessionsListResult,
-  sessionKey: string,
-): boolean {
-  const row = sessionsResult.sessions.find((session) =>
-    areUiSessionKeysEquivalent(session.key, sessionKey),
-  );
-  return Boolean(row && !isSessionRunActive(row));
-}
-
 function isHistorySessionInfoForRequestedSession(
   host: ChatIdleSessionReconciliationHost,
   historySessionKey: string | undefined,
@@ -103,7 +93,11 @@ function historyIdleProofIsStaleForSelectedRow(
   historySessionInfo: GatewaySessionRow,
   selectedRow: GatewaySessionRow | undefined,
 ): boolean {
-  if (!selectedRow || !isSessionRunActive(selectedRow) || isSessionRunActive(historySessionInfo)) {
+  if (
+    !selectedRow ||
+    !isSessionRunStateActive(selectedRow) ||
+    isSessionRunStateActive(historySessionInfo)
+  ) {
     return false;
   }
   const historyUpdatedAt =
@@ -144,12 +138,15 @@ export function flushChatQueueAfterIdleSessionReconciliation(
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
       isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&
-      !isSessionRunActive(historySessionInfo) &&
+      !isSessionRunStateActive(historySessionInfo) &&
       !historyIdleProofIsStaleForSelectedRow(historySessionInfo, selectedSessionRow),
     );
-    const sessionsResultKnownIdle = freshSessionsResult
-      ? isSelectedSessionKnownIdle(freshSessionsResult, sessionKey)
-      : false;
+    const listedSessionRow = freshSessionsResult?.sessions.find((session) =>
+      areUiSessionKeysEquivalent(session.key, sessionKey),
+    );
+    const sessionsResultKnownIdle = Boolean(
+      listedSessionRow && !isSessionRunStateActive(listedSessionRow),
+    );
     if (
       sessionsRefreshSettled.status !== "fulfilled" ||
       host.chatQueue.length === 0 ||

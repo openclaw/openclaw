@@ -3,9 +3,13 @@
  */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
+import {
+  resolveMergedModelProviderConfig,
+  resolveMergedModelProviderEntry,
+} from "../config/model-provider-config.js";
 import {
   getResolvedConfigEnvSecretRef,
+  hasUnresolvedConfigPath,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import {
@@ -15,7 +19,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
@@ -62,9 +66,9 @@ export function projectResolvedProfileAuth(params: {
   const credential = params.store.profiles[params.profileId];
   const ref =
     credential?.type === "api_key"
-      ? coerceSecretRef(credential.keyRef)
+      ? parseSecretRef(credential.keyRef)
       : credential?.type === "token"
-        ? coerceSecretRef(credential.tokenRef)
+        ? parseSecretRef(credential.tokenRef)
         : null;
   return {
     apiKey:
@@ -89,13 +93,6 @@ export function resolveConfigAwareEnvApiKey(
     workspaceDir,
     ...(skipSetupProviderFallback ? { skipSetupProviderFallback: true } : {}),
   });
-}
-
-export function resolveProviderConfig(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-): ModelProviderConfig | undefined {
-  return resolveMergedModelProviderEntry(cfg, provider)?.providerConfig;
 }
 
 function resolveProviderSourceConfig(cfg: OpenClawConfig | undefined, provider: string) {
@@ -124,7 +121,8 @@ export function resolveProviderConfigSecretInput(
     : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
-    providerConfig: resolveProviderConfig(cfg, provider),
+    path,
+    providerConfig: resolveMergedModelProviderConfig(cfg, provider),
     resolvedEnvRef,
     ref: entry
       ? (resolvedEnvRef ??
@@ -147,11 +145,7 @@ export function getCustomProviderApiKey(
   if (!ref) {
     return normalizeOptionalSecretInput(providerConfig?.apiKey);
   }
-  if (ref.source === "env") {
-    const envId = ref.id.trim();
-    return envId || NON_ENV_SECRETREF_MARKER;
-  }
-  return NON_ENV_SECRETREF_MARKER;
+  return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
 type ResolvedCustomProviderApiKey = {
@@ -219,7 +213,6 @@ export function resolveUsableCustomProviderApiKey(params: {
   }
   if (
     customProviderConfig &&
-    isCustomLocalProviderConfig(customProviderConfig) &&
     (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
     customProviderConfig.baseUrl &&
     isLocalAuthProviderBaseUrl(customProviderConfig.baseUrl)
@@ -244,7 +237,7 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): boolean {
-  const providerConfig = resolveProviderConfig(cfg, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   return (
     resolveProviderAuthOverride(cfg, provider) === "api-key" &&
     providerConfig !== undefined &&
@@ -252,14 +245,23 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-/** True when configured or prepared route facts prove a local no-auth provider. */
+/** True when configured or prepared route facts prove a no-auth provider. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
   route?: { api?: string | null; baseUrl?: unknown };
 }): boolean {
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  const route = params.route ?? {
+    api: params.modelApi ?? providerConfig?.api,
+    baseUrl: providerConfig?.baseUrl,
+  };
+  // Only this adapter clears the SDK-generated bearer header for the marker.
+  if (authOverride === "none") {
+    return route.api === "openai-completions" && typeof route.baseUrl === "string";
+  }
   if (authOverride && authOverride !== "api-key") {
     return false;
   }
@@ -269,9 +271,8 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   ) {
     return false;
   }
-  const route = params.route ?? providerConfig;
   return (
-    typeof route?.api === "string" &&
+    typeof route.api === "string" &&
     route.api.trim().length > 0 &&
     typeof route.baseUrl === "string" &&
     isLocalAuthProviderBaseUrl(route.baseUrl)
@@ -282,9 +283,15 @@ export function resolveProviderAuthOverride(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderAuthMode | undefined {
-  const entry = resolveProviderConfig(cfg, provider);
+  const entry = resolveMergedModelProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;
@@ -301,7 +308,7 @@ export function shouldUseImplicitAwsSdkAuth(params: {
   if (normalizeProviderId(params.provider) !== "amazon-bedrock") {
     return false;
   }
-  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.cfg, params.provider);
   return (
     resolveProviderAuthOverride(params.cfg, params.provider) === undefined &&
     (providerConfig === undefined || !hasExplicitProviderApiKeyConfig(providerConfig))
@@ -345,15 +352,14 @@ function normalizeProviderEntryBaseUrlForBinding(baseUrl: string | undefined): s
   if (!trimmed) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    parsed.hash = "";
-    parsed.search = "";
-    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
+  const parsed = URL.parse(trimmed);
+  if (!parsed) {
     return trimmed.toLowerCase().replace(/\/+$/, "");
   }
+  parsed.hash = "";
+  parsed.search = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function providerEntriesShareBaseUrl(params: {
@@ -362,10 +368,10 @@ function providerEntriesShareBaseUrl(params: {
   credentialProvider: string;
 }): boolean {
   const providerBaseUrl = normalizeProviderEntryBaseUrlForBinding(
-    resolveProviderConfig(params.cfg, params.provider)?.baseUrl,
+    resolveMergedModelProviderConfig(params.cfg, params.provider)?.baseUrl,
   );
   const credentialProviderBaseUrl = normalizeProviderEntryBaseUrlForBinding(
-    resolveProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
+    resolveMergedModelProviderConfig(params.cfg, params.credentialProvider)?.baseUrl,
   );
   return Boolean(
     providerBaseUrl && credentialProviderBaseUrl && providerBaseUrl === credentialProviderBaseUrl,
@@ -377,7 +383,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 }
 
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
-export function canUseProfileAsProviderEntryApiKey(params: {
+function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
@@ -386,14 +392,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (!isBearerProfileCredential(params.credential)) {
     return false;
   }
-  if (
-    isStoredCredentialCompatibleWithAuthProvider({
-      cfg: params.cfg,
-      authAliasLookupParams: params.authAliasLookupParams,
-      provider: params.provider,
-      credential: params.credential,
-    })
-  ) {
+  if (isStoredCredentialCompatibleWithAuthProvider(params)) {
     return true;
   }
   // Split-provider entries may intentionally point at the same upstream endpoint
@@ -538,7 +537,7 @@ function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
 function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
-    coerceSecretRef(providerConfig.apiKey) !== null
+    parseSecretRef(providerConfig.apiKey) !== null
   );
 }
 
@@ -596,13 +595,8 @@ export function assertInlineProviderApiKeyUsable(params: {
 }
 
 function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
-  return (
-    typeof providerConfig.baseUrl === "string" &&
-    providerConfig.baseUrl.trim().length > 0 &&
-    typeof providerConfig.api === "string" &&
-    providerConfig.api.trim().length > 0 &&
-    Array.isArray(providerConfig.models) &&
-    providerConfig.models.length > 0
+  return Boolean(
+    providerConfig.baseUrl?.trim() && providerConfig.api?.trim() && providerConfig.models?.length,
   );
 }
 
@@ -631,8 +625,11 @@ export function providerConfigMatchesRuntimeSnapshot(params: {
   runtimeConfig: OpenClawConfig | null;
   provider: string;
 }): boolean {
-  const inputProvider = resolveProviderConfig(params.inputConfig, params.provider);
-  const runtimeProvider = resolveProviderConfig(params.runtimeConfig ?? undefined, params.provider);
+  const inputProvider = resolveMergedModelProviderConfig(params.inputConfig, params.provider);
+  const runtimeProvider = resolveMergedModelProviderConfig(
+    params.runtimeConfig ?? undefined,
+    params.provider,
+  );
   const toComparableConfig = (providerConfig: ModelProviderConfig): OpenClawConfig => ({
     models: { providers: { [params.provider]: providerConfig } },
   });
@@ -658,8 +655,8 @@ export function sentinelizeConfigSecretRefEnvApiKey(params: {
     return params.apiKey;
   }
   const sourceConfig = resolveProviderSourceConfig(params.cfg, params.provider);
-  const configured = resolveProviderConfig(sourceConfig, params.provider)?.apiKey;
-  const ref = coerceSecretRef(configured);
+  const configured = resolveMergedModelProviderConfig(sourceConfig, params.provider)?.apiKey;
+  const ref = parseSecretRef(configured);
   const envId =
     ref?.source === "env"
       ? ref.id
@@ -677,7 +674,11 @@ export function resolveRuntimeProviderConfigApiKeyAuth(params: {
   sourceConfig: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | undefined {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
+  if (hasUnresolvedConfigPath(params.cfg, input.path)) {
+    return undefined;
+  }
+  const { providerConfig, ref } = input;
   const sourceRef = resolveProviderConfigSecretInput(params.sourceConfig, params.provider).ref;
   // Prepared Ref values are opaque bytes, not authored markers or copy/paste input.
   // Legacy metadata markers without a source Ref still use literal validation.

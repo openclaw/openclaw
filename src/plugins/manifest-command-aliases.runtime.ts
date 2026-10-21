@@ -1,4 +1,3 @@
-/** Resolves manifest-declared command and tool ownership at runtime. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -16,7 +15,6 @@ import {
 } from "./manifest-contract-eligibility.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 
-/** Resolves the manifest owner for a CLI command alias when one is declared. */
 export function resolveManifestCommandAliasOwner(params: {
   command: string | undefined;
   config?: OpenClawConfig;
@@ -24,20 +22,13 @@ export function resolveManifestCommandAliasOwner(params: {
   env?: NodeJS.ProcessEnv;
   registry?: PluginManifestCommandAliasRegistry;
 }): PluginManifestCommandAliasRecord | undefined {
-  const registry =
-    params.registry ??
-    loadManifestMetadataRegistry({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).manifestRegistry;
+  const registry = params.registry ?? loadManifestMetadataRegistry(params).manifestRegistry;
   return resolveManifestCommandAliasOwnerInRegistry({
     command: params.command,
     registry,
   });
 }
 
-/** Resolves the plugin id that should be activated for a CLI command surface. */
 export function resolveManifestCliCommandSurfaceOwner(params: {
   command: string | undefined;
   config?: OpenClawConfig;
@@ -81,11 +72,7 @@ export function resolveManifestToolOwner(params: {
   if (!normalizedToolName) {
     return undefined;
   }
-  const snapshot = loadManifestMetadataSnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const snapshot = loadManifestMetadataSnapshot(params);
   const env = params.env ?? process.env;
   for (const plugin of snapshot.plugins) {
     const tools = plugin.contracts?.tools;

@@ -1,11 +1,9 @@
+import Darwin
 import Foundation
 import Network
 import OpenClawKit
 import OSLog
 import Subprocess
-#if canImport(Darwin)
-import Darwin
-#endif
 
 /// Port forwarding tunnel for remote mode.
 ///
@@ -19,20 +17,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
         let preferredLocalPort: UInt16?
-
-        init(
-            target: CommandResolver.SSHParsedTarget,
-            identity: String,
-            remotePort: Int,
-            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
-            preferredLocalPort: UInt16? = nil)
-        {
-            self.target = target
-            self.identity = identity
-            self.remotePort = remotePort
-            self.hostKeyPolicy = hostKeyPolicy
-            self.preferredLocalPort = preferredLocalPort
-        }
     }
 
     let localPort: UInt16
@@ -120,8 +104,7 @@ final class RemotePortTunnel: @unchecked Sendable {
                 code: 3,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
-        let sshHost = target.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let ports = Self.ports(root: root, sshHost: sshHost)
+        let ports = Self.ports(root: root, sshHost: target.host)
         return Configuration(
             target: target,
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -130,18 +113,12 @@ final class RemotePortTunnel: @unchecked Sendable {
             preferredLocalPort: UInt16(ports.local))
     }
 
-    static func create(
-        configuration: Configuration,
-        preferredLocalPort: UInt16? = nil,
-        allowRandomLocalPort: Bool = true) async throws -> RemotePortTunnel
-    {
+    static func create(configuration: Configuration) async throws -> RemotePortTunnel {
         // Reap orphans from crashed instances before picking a port, otherwise a dead
         // session's tunnel squats the preferred port and forces an ephemeral one.
         await PortGuardian.shared.reapOrphanedTunnels()
 
-        let localPort = try await Self.findPort(
-            preferred: preferredLocalPort,
-            allowRandom: allowRandomLocalPort)
+        let localPort = try await Self.findPort(preferred: configuration.preferredLocalPort ?? 18789)
         let sshHost = configuration.target.host
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
@@ -298,19 +275,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
-              let urlRaw = remote["url"] as? String
-        else {
-            return nil
-        }
-        let trimmed = urlRaw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port else {
-            return nil
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
+              let raw = (remote["url"] as? String)?.trimmedNonEmpty,
+              let url = URL(string: raw), let port = url.port,
+              let host = url.host?.trimmedNonEmpty
+        else { return nil }
         if LoopbackHost.isLoopbackHost(host) {
             return port == defaultRemotePort ? nil : port
         }
@@ -332,13 +300,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
-        [
-            "-o", "BatchMode=yes",
-            // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
-            "-o", "ControlMaster=no",
-            "-o", "ControlPath=none",
-            "-o", "ControlPersist=no",
-            "-o", "ForkAfterAuthentication=no",
+        ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
@@ -346,19 +308,11 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
     }
 
-    private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
-        if let preferred, self.portIsFree(preferred) { return preferred }
-        if let preferred, !allowRandom {
-            throw NSError(
-                domain: "RemotePortTunnel",
-                code: 5,
-                userInfo: [
-                    NSLocalizedDescriptionKey: "Local port \(preferred) is unavailable",
-                ])
-        }
+    private static func findPort(preferred: UInt16) async throws -> UInt16 {
+        if self.portIsFree(preferred) { return preferred }
 
         return try await withCheckedThrowingContinuation { cont in
             let queue = DispatchQueue(label: "ai.openclaw.remote.tunnel.port", qos: .utility)
@@ -389,52 +343,22 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     static func portIsFree(_ port: UInt16) -> Bool {
-        #if canImport(Darwin)
         // NWListener can succeed even when only one address family is held. Mirror what ssh needs by checking
         // both 127.0.0.1 and ::1 for availability.
-        return self.canBindIPv4(port) && self.canBindIPv6(port)
-        #else
-        do {
-            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
-            listener.cancel()
-            return true
-        } catch {
-            return false
-        }
-        #endif
+        self.canBindIPv4(port) && self.canBindIPv6(port)
     }
 
-    #if canImport(Darwin)
     private static func canBindIPv4(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = port.bigEndian
         addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-        let result = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        return result == 0
+        return self.canBind(&addr, family: AF_INET)
     }
 
     private static func canBindIPv6(_ port: UInt16) -> Bool {
-        let fd = socket(AF_INET6, SOCK_STREAM, 0)
-        guard fd >= 0 else { return false }
-        defer { _ = Darwin.close(fd) }
-
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
-
         var addr = sockaddr_in6()
         addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
         addr.sin6_family = sa_family_t(AF_INET6)
@@ -444,13 +368,21 @@ final class RemotePortTunnel: @unchecked Sendable {
             inet_pton(AF_INET6, "::1", ptr)
         }
         addr.sin6_addr = loopback
+        return self.canBind(&addr, family: AF_INET6)
+    }
 
-        let result = withUnsafePointer(to: &addr) { ptr in
+    private static func canBind<Address>(_ address: inout Address, family: Int32) -> Bool {
+        let fd = socket(family, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { _ = Darwin.close(fd) }
+
+        var one: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+
+        return withUnsafePointer(to: &address) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                Darwin.bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                Darwin.bind(fd, sa, socklen_t(MemoryLayout<Address>.size)) == 0
             }
         }
-        return result == 0
     }
-    #endif
 }

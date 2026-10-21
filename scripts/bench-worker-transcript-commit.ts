@@ -24,7 +24,7 @@ import {
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../src/config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "../src/gateway/worker-environments/connection-identity.js";
-import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../src/gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../src/gateway/worker-environments/transcript-commit.js";
 import { onSessionTranscriptUpdate } from "../src/sessions/transcript-events.js";
 import { openOpenClawStateDatabase } from "../src/state/openclaw-state-db.js";
@@ -138,7 +138,7 @@ function percentile(samples: number[], fraction: number): number {
 async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   const storePath = path.join(state.sessionsDir("main"), "sessions.json");
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: {
       mainKey: "main",
       store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -171,7 +171,7 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   );
   await persistSessionTranscriptTurn(target, { messages: seed, touchSessionEntry: false });
   // branch() is an in-memory cursor move. Appending an anchor persists the selected branch.
-  const seeded = SessionManager.open(target);
+  const seeded = await SessionManager.openAsync(target);
   seeded.branch(`seed-${shape.activeEvents - 2}`);
   const baseLeafId = seeded.appendMessage({
     role: "user",
@@ -179,7 +179,7 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
     timestamp: 1,
   });
   await waitForSessionTranscriptIndexReconcilesInStateDir(state.stateDir);
-  const verifiedSeed = SessionManager.open(target);
+  const verifiedSeed = await SessionManager.openAsync(target);
   assert.equal(verifiedSeed.getLeafId(), baseLeafId);
   assert.equal(
     verifiedSeed.getBranch().filter((entry) => entry.type === "message").length,
@@ -286,7 +286,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           lastOutcome,
         );
         assert.equal(updates.length, publicationCount, "ledger replay must not publish again");
-        const final = SessionManager.open(target);
+        const final = await SessionManager.openAsync(target);
         assert.equal(final.getLeafId(), leaf);
         assert.equal(loadSessionEntry(target)?.skillsSnapshot?.prompt, skillsPrompt);
         assert.deepEqual(

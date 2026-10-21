@@ -21,45 +21,14 @@ import {
 } from "./plugin-publication-collector.ts";
 import { collectReleaseVersionFloorErrors } from "./release-version.mjs";
 
-export {
-  collectPublishablePluginPackageErrors,
-  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
-} from "./plugin-publication-collector.ts";
+export { collectPublishablePluginPackageErrors } from "./plugin-publication-collector.ts";
 export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
-
-type PluginReleasePlanItem = PublishablePluginPackage & {
-  alreadyPublished: boolean;
-};
-
-type PluginReleasePlan = {
-  all: PluginReleasePlanItem[];
-  warnings: string[];
-  candidates: PluginReleasePlanItem[];
-  skippedPublished: PluginReleasePlanItem[];
-};
 
 export type PluginReleaseSelectionMode = "selected" | "all-publishable";
 
 export type GitRangeSelection = {
   baseRef: string;
   headRef: string;
-};
-
-type PluginNpmGitRangeSelection = {
-  authorityChanged: boolean;
-  changedExtensionIds: string[];
-};
-
-type ParsedPluginReleaseArgs = {
-  selection: string[];
-  selectionMode?: PluginReleaseSelectionMode;
-  pluginsFlagProvided: boolean;
-  baseRef?: string;
-  headRef?: string;
-};
-
-type ParsedPluginNpmReleaseArgs = ParsedPluginReleaseArgs & {
-  npmDistTag?: "extended-stable";
 };
 
 function parsePluginNpmDistTagOverride(value: string | undefined): "extended-stable" | undefined {
@@ -107,7 +76,7 @@ export function parsePluginReleaseSelectionMode(
   );
 }
 
-export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs {
+export function parsePluginReleaseArgs(argv: string[]) {
   let selection: string[] = [];
   let selectionMode: PluginReleaseSelectionMode | undefined;
   let pluginsFlagProvided = false;
@@ -164,7 +133,7 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
-export function parsePluginNpmReleaseArgs(argv: string[]): ParsedPluginNpmReleaseArgs {
+export function parsePluginNpmReleaseArgs(argv: string[]) {
   const baseArgs: string[] = [];
   let npmDistTag: "extended-stable" | undefined;
   for (let index = 0; index < argv.length; index += 1) {
@@ -328,7 +297,7 @@ export function collectChangedPathsFromGitRange(params: {
 export function collectPluginNpmGitRangeSelection(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
-}): PluginNpmGitRangeSelection {
+}) {
   const changedPaths = collectChangedPathsFromGitRange({
     rootDir: params.rootDir,
     gitRange: params.gitRange,
@@ -419,7 +388,7 @@ function resolveNpmLatestVersion(packageName: string): string {
   return version;
 }
 
-export function collectPluginReleaseDependencyFreshnessWarnings(
+function collectPluginReleaseDependencyFreshnessWarnings(
   plugins: readonly PublishablePluginPackage[],
   resolveLatestVersion: NpmLatestVersionResolver = resolveNpmLatestVersion,
 ): string[] {
@@ -475,16 +444,9 @@ async function isPluginVersionPublished(packageName: string, version: string): P
   ).selectedVersionExists;
 }
 
-export type NpmPackageObservation = {
-  packageExists: boolean;
-  hasVersionHistory: boolean;
-  selectedVersionExists: boolean;
-  latestVersion: string | null;
-};
-
 export async function observeNpmPackage(
   params: Parameters<typeof fetchNpmRegistryPackumentWithRetry>[0] & { version?: string },
-): Promise<NpmPackageObservation> {
+) {
   const result = await fetchNpmRegistryPackumentWithRetry(params);
   if (result.status === 404) {
     return {
@@ -522,7 +484,7 @@ export async function collectPluginReleasePlan(params?: {
   npmDistTag?: "extended-stable";
   resolvePublishedVersion?: (packageName: string, version: string) => Promise<boolean>;
   resolveLatestVersion?: NpmLatestVersionResolver;
-}): Promise<PluginReleasePlan> {
+}) {
   const gitRangeSelection = params?.gitRange
     ? collectPluginNpmGitRangeSelection({
         rootDir: params.rootDir,
@@ -547,14 +509,7 @@ export async function collectPluginReleasePlan(params?: {
             plugins: allPublishable,
             selection: params.selection,
           })
-        : gitRangeSelection
-          ? gitRangeSelection.authorityChanged
-            ? allPublishable
-            : resolveChangedPublishablePluginPackages({
-                plugins: allPublishable,
-                changedExtensionIds: gitRangeSelection.changedExtensionIds,
-              })
-          : allPublishable;
+        : allPublishable;
 
   const explicitPublishSelection =
     params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;

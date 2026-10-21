@@ -15,6 +15,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import { maintenanceDefaults } from "./update-command-service-fixtures.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 
@@ -45,17 +46,10 @@ const root = "/synthetic/install";
 let service: GatewayService;
 beforeEach(() => {
   mockSystemAccountHome();
-  for (const key of [
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_SUPERVISOR_MODE",
-    "OPENCLAW_PROFILE",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    vi.stubEnv(key, undefined);
+  const suffixes =
+    "HOME STATE_DIR CONFIG_PATH SUPERVISOR_MODE PROFILE SYSTEMD_UNIT LAUNCHD_LABEL WINDOWS_TASK_NAME";
+  for (const suffix of suffixes.split(" ")) {
+    vi.stubEnv(`OPENCLAW_${suffix}`, undefined);
   }
   service = createMockGatewayService();
   boundary.service.mockReturnValue(service);
@@ -66,28 +60,35 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
-function inspectService(assertCurrent = () => {}) {
-  return maybeStopManagedServiceBeforeMutableUpdate({
-    root,
-    updateInstallKind: "package",
-    shouldRestart: true,
-    jsonMode: true,
-    phase: "inspect",
-    assertCurrent,
-  });
-}
-
-function pendingCleanup() {
+type Outcome = "forced" | "uncertain" | "nested failure" | "revoked";
+function pendingCleanup(outcome: Outcome) {
   const cleanup = createDeferredCore<"forced" | "uncertain">();
   const joining = createDeferredCore();
+  const failure =
+    outcome === "nested failure"
+      ? new GatewayServiceUpdateOwnershipError(
+          "inspection cleanup failed",
+          new CommandProcessCleanupError(),
+        )
+      : new Error("original executor lost");
   return {
-    retain() {
+    failure,
+    retain<T>(value?: T) {
+      if (outcome === "nested failure") {
+        throw failure;
+      }
       retainCommandProcessCleanup(cleanup.promise);
       resolveCommandProcessSignal()?.addEventListener("abort", () => joining.resolve(), {
         once: true,
       });
+      return value;
     },
-    async settle(work: Promise<unknown>, result: "forced" | "uncertain", beforeRelease = () => {}) {
+    async settle(inspection: Promise<unknown>, beforeRelease = () => {}) {
+      if (outcome === "nested failure") {
+        await expect(inspection).rejects.toBe(failure);
+        return failure;
+      }
+      const work = inspection.catch((error: unknown) => error);
       try {
         await Promise.race([
           joining.promise,
@@ -97,7 +98,7 @@ function pendingCleanup() {
         ]);
         beforeRelease();
       } finally {
-        cleanup.resolve(result);
+        cleanup.resolve(outcome === "revoked" ? "forced" : outcome);
         await work;
       }
       return await work;
@@ -105,10 +106,12 @@ function pendingCleanup() {
   };
 }
 
-it.each(["forced", "uncertain"] as const)(
-  "joins the maintenance fallback before returning unavailable (%s)",
-  async (cleanupResult) => {
-    const cleanup = pendingCleanup();
+it.each(["forced", "uncertain", "revoked", "nested failure"] as const)(
+  "settles the maintenance fallback without losing cleanup or authority failure: %s",
+  async (outcome) => {
+    const cleanup = pendingCleanup(outcome);
+    const { failure } = cleanup;
+    let current = true;
     boundary.read.mockRejectedValue(
       new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
     );
@@ -116,12 +119,26 @@ it.each(["forced", "uncertain"] as const)(
       cleanup.retain();
       throw new Error("manager unavailable");
     });
-    const work = inspectService().catch((error: unknown) => error);
-    const result = await cleanup.settle(work, cleanupResult, () => {
-      expect(service.stop).not.toHaveBeenCalled();
+    const inspection = maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      root,
+      phase: "inspect",
+      assertCurrent: () => {
+        if (!current) {
+          throw failure;
+        }
+      },
     });
-    expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
+    const result = await cleanup.settle(inspection, () => {
+      expect(service.stop).not.toHaveBeenCalled();
+      current = outcome !== "revoked";
+    });
+    expect(hasCommandProcessCleanupError(result)).toBe(
+      outcome === "uncertain" || outcome === "nested failure",
+    );
+    if (outcome === "nested failure" || outcome === "revoked") {
+      expect(result).toBe(failure);
+    } else if (outcome === "forced") {
       expect(result).toEqual({
         stopped: false,
         inspected: false,
@@ -136,50 +153,15 @@ it.each(["forced", "uncertain"] as const)(
   },
 );
 
-it("does not demote a canonical maintenance fallback failure to unavailable", async () => {
-  const failure = new GatewayServiceUpdateOwnershipError(
-    "manager cleanup failed",
-    new CommandProcessCleanupError(),
-  );
-  boundary.read.mockRejectedValue(
-    new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
-  );
-  vi.mocked(service.isLoaded).mockRejectedValue(failure);
-  await expect(inspectService()).rejects.toBe(failure);
-  expect(service.stop).not.toHaveBeenCalled();
-});
-
-it("rechecks retained authority after confirmed maintenance fallback cleanup", async () => {
-  const cleanup = pendingCleanup();
-  const lost = new Error("original executor lost");
-  let current = true;
-  boundary.read.mockRejectedValue(
-    new GatewayServiceUpdateOwnershipError("recorded selector changed", undefined),
-  );
-  vi.mocked(service.isLoaded).mockImplementation(async () => {
-    cleanup.retain();
-    throw new Error("manager unavailable");
-  });
-  const work = inspectService(() => {
-    if (!current) {
-      throw lost;
-    }
-  }).catch((error: unknown) => error);
-  const result = await cleanup.settle(work, "forced", () => {
-    current = false;
-  });
-  expect(result).toBe(lost);
-  expect(service.stop).not.toHaveBeenCalled();
-});
-
 it.each([
   { owned: false, cleanupResult: "forced" },
   { owned: false, cleanupResult: "uncertain" },
   { owned: true, cleanupResult: "forced" },
+  { owned: false, cleanupResult: "nested failure" },
 ] as const)(
   "settles context inspection before publishing selected contexts (owned=$owned, $cleanupResult)",
   async ({ owned, cleanupResult }) => {
-    const cleanup = pendingCleanup();
+    const cleanup = pendingCleanup(cleanupResult);
     const caller = { env: { OPENCLAW_STATE_DIR: "/synthetic/caller" }, config: {} };
     const managed = { env: { OPENCLAW_STATE_DIR: "/synthetic/managed" }, config: {} };
     const inspected: PreManagedServiceStop = {
@@ -192,23 +174,22 @@ it.each([
         ? { kind: "owned", root, fingerprint: "definition", refreshDefinition: true }
         : { kind: "unavailable", message: "manager unavailable" },
     };
-    boundary.inspect.mockImplementation(async () => {
-      cleanup.retain();
-      return inspected;
-    });
+    boundary.inspect.mockImplementation(async () => cleanup.retain(inspected));
     boundary.callerContext.mockResolvedValue(caller);
     boundary.managedContext.mockResolvedValue(owned ? managed : undefined);
-    const work = inspectUpdateDatabaseContexts({
+    const inspection = inspectUpdateDatabaseContexts({
       roots: [root],
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
+      ...maintenanceDefaults,
       timeoutMs: 1_000,
       managedServiceRootRedirect: null,
-    }).catch((error: unknown) => error);
-    const result = await cleanup.settle(work, cleanupResult);
-    expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
+    });
+    const result = await cleanup.settle(inspection);
+    expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult !== "forced");
+    if (cleanupResult === "nested failure") {
+      expect(result).toBe(cleanup.failure);
+      expect(boundary.callerContext).not.toHaveBeenCalled();
+      expect(boundary.managedContext).not.toHaveBeenCalled();
+    } else if (cleanupResult === "forced") {
       expect(result).toEqual({
         service: owned ? inspected : undefined,
         services: new Map([[root, inspected]]),
@@ -221,23 +202,3 @@ it.each([
     }
   },
 );
-
-it("preserves nested cleanup uncertainty before capturing database contexts", async () => {
-  const failure = new GatewayServiceUpdateOwnershipError(
-    "inspection cleanup failed",
-    new CommandProcessCleanupError(),
-  );
-  boundary.inspect.mockRejectedValue(failure);
-  await expect(
-    inspectUpdateDatabaseContexts({
-      roots: [root],
-      updateInstallKind: "package",
-      shouldRestart: true,
-      jsonMode: true,
-      timeoutMs: 1_000,
-      managedServiceRootRedirect: null,
-    }),
-  ).rejects.toBe(failure);
-  expect(boundary.callerContext).not.toHaveBeenCalled();
-  expect(boundary.managedContext).not.toHaveBeenCalled();
-});

@@ -1,18 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it } from "vitest";
-import memoryCorePlugin from "../../memory-core/index.js";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiAgentConfig } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import { assertToolDetailsRecord, registerMemoryCoreTools } from "./memory-core.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -20,84 +17,33 @@ const { createVault } = createMemoryWikiTestHarness();
 const appConfig = {
   // This suite registers memory-core directly; runtime discovery would load unrelated plugins.
   plugins: { enabled: false },
-  agents: { list: [{ id: "main", default: true }, { id: "secondary" }] },
+  agents: { entries: { main: {}, secondary: {} } },
 } as OpenClawConfig;
 
-async function writeBridgePage(params: {
-  rootDir: string;
-  slug: string;
-  title: string;
-  agentIds: string[];
-  marker: string;
-}): Promise<void> {
+async function writeBridgePage(
+  rootDir: string,
+  slug: string,
+  title: string,
+  agentIds: readonly string[],
+  marker: string,
+): Promise<void> {
   await fs.writeFile(
-    path.join(params.rootDir, "sources", `${params.slug}.md`),
+    path.join(rootDir, "sources", `${slug}.md`),
     renderWikiMarkdown({
       frontmatter: {
         pageType: "source",
-        id: `source.${params.slug}`,
-        title: params.title,
+        id: `source.${slug}`,
+        title,
         sourceType: "memory-bridge",
-        sourcePath: `/tmp/${params.slug}/MEMORY.md`,
+        sourcePath: `/tmp/${slug}/MEMORY.md`,
         bridgeRelativePath: "MEMORY.md",
-        bridgeWorkspaceDir: `/tmp/${params.slug}`,
-        bridgeAgentIds: params.agentIds,
+        bridgeWorkspaceDir: `/tmp/${slug}`,
+        bridgeAgentIds: agentIds,
       },
-      body: `# ${params.title}\n\n${params.marker}\n`,
+      body: `# ${title}\n\n${marker}\n`,
     }),
     "utf8",
   );
-}
-
-function assertToolDetailsRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected tool details object");
-  }
-  return value as Record<string, unknown>;
-}
-
-function registerMemoryCoreToolFactories(): Map<string, OpenClawPluginToolFactory> {
-  const factories = new Map<string, OpenClawPluginToolFactory>();
-  memoryCorePlugin.register(
-    createTestPluginApi({
-      id: "memory-core",
-      config: appConfig,
-      runtime: createPluginRuntimeMock(),
-      registerTool(tool, options) {
-        if (typeof tool !== "function") {
-          return;
-        }
-        for (const name of options?.names ?? []) {
-          factories.set(name, tool);
-        }
-      },
-    }),
-  );
-  return factories;
-}
-
-function createMemoryCoreTool(params: {
-  factories: Map<string, OpenClawPluginToolFactory>;
-  name: "memory_search" | "memory_get";
-  agentId: string;
-  sandboxed: boolean;
-}): AnyAgentTool {
-  const factory = params.factories.get(params.name);
-  if (!factory) {
-    throw new Error(`Expected memory-core to register ${params.name}`);
-  }
-  const tool = factory({
-    config: appConfig,
-    runtimeConfig: appConfig,
-    getRuntimeConfig: () => appConfig,
-    agentId: params.agentId,
-    sessionKey: `agent:${params.agentId}:child-session`,
-    sandboxed: params.sandboxed,
-  });
-  if (!tool || Array.isArray(tool)) {
-    throw new Error(`Expected one ${params.name} tool`);
-  }
-  return tool;
 }
 
 describe("memory-wiki corpus supplement visibility", () => {
@@ -106,27 +52,13 @@ describe("memory-wiki corpus supplement visibility", () => {
       initialize: true,
       config: { vault: { scope: "global" } },
     });
-    await writeBridgePage({
-      rootDir,
-      slug: "secondary-private",
-      title: "Secondary Private",
-      agentIds: ["secondary"],
-      marker: "REDACTED-FOREIGN-MARKER",
-    });
-    await writeBridgePage({
-      rootDir,
-      slug: "main-private",
-      title: "Main Private",
-      agentIds: ["main"],
-      marker: "REDACTED-OWN-MARKER",
-    });
-    await writeBridgePage({
-      rootDir,
-      slug: "unowned-private",
-      title: "Unowned Private",
-      agentIds: [],
-      marker: "REDACTED-UNOWNED-MARKER",
-    });
+    for (const [slug, title, agentIds, marker] of [
+      ["secondary-private", "Secondary Private", ["secondary"], "REDACTED-FOREIGN-MARKER"],
+      ["main-private", "Main Private", ["main"], "REDACTED-OWN-MARKER"],
+      ["unowned-private", "Unowned Private", [], "REDACTED-UNOWNED-MARKER"],
+    ] as const) {
+      await writeBridgePage(rootDir, slug, title, agentIds, marker);
+    }
     const supplement = createWikiCorpusSupplement({
       getAppConfig: () => appConfig,
       resolveConfig: (agentId, currentAppConfig) =>
@@ -162,31 +94,11 @@ describe("memory-wiki corpus supplement visibility", () => {
     clearMemoryPluginState();
     try {
       registerMemoryCorpusSupplement("memory-wiki", supplement);
-      const factories = registerMemoryCoreToolFactories();
-      const sandboxedGet = createMemoryCoreTool({
-        factories,
-        name: "memory_get",
-        agentId: "main",
-        sandboxed: true,
-      });
-      const sandboxedSearch = createMemoryCoreTool({
-        factories,
-        name: "memory_search",
-        agentId: "main",
-        sandboxed: true,
-      });
-      const openGet = createMemoryCoreTool({
-        factories,
-        name: "memory_get",
-        agentId: "main",
-        sandboxed: false,
-      });
-      const openSearch = createMemoryCoreTool({
-        factories,
-        name: "memory_search",
-        agentId: "main",
-        sandboxed: false,
-      });
+      const memoryCoreTool = registerMemoryCoreTools(appConfig);
+      const sandboxedGet = memoryCoreTool("memory_get", "main", "child-session", true);
+      const sandboxedSearch = memoryCoreTool("memory_search", "main", "child-session", true);
+      const openGet = memoryCoreTool("memory_get", "main", "child-session", false);
+      const openSearch = memoryCoreTool("memory_search", "main", "child-session", false);
 
       const foreignGet = await sandboxedGet.execute("memory-get-foreign", {
         path: "sources/secondary-private.md",
