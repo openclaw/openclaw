@@ -124,8 +124,19 @@ describe("doctor session transcript repair", () => {
   type DoctorOptions = NonNullable<Parameters<typeof noteSessionTranscriptHealth>[0]>;
   const doctor = (overrides: Partial<DoctorOptions> = {}) =>
     noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true, ...overrides });
-  const expectNote = (text: string) =>
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(text), "Session SQLite");
+  const expectNote = (...texts: string[]) => {
+    for (const text of texts) {
+      expect(note).toHaveBeenCalledWith(expect.stringContaining(text), "Session SQLite");
+    }
+  };
+  const expectWorkspaceRepair = (cfg: DoctorOptions["cfg"], apply: boolean, quick = false) =>
+    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
+      apply,
+      cfg,
+      env,
+      targets: [],
+      ...(quick ? { integrityCheck: "quick" } : {}),
+    });
   const stepReceipt = (details: object) =>
     expect.objectContaining({ id: "plugin-doctor-post-session-state", ...details });
 
@@ -206,8 +217,7 @@ describe("doctor session transcript repair", () => {
       operation: "session SQLite import",
       run: expect.any(Function),
     });
-    expectNote("Legacy entries: 1");
-    expectNote("Archived 2 legacy transcript artifact(s).");
+    expectNote("Legacy entries: 1", "Archived 2 legacy transcript artifact(s).");
   });
 
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
@@ -218,27 +228,19 @@ describe("doctor session transcript repair", () => {
       warnings: ["source changed; retry openclaw doctor --fix"],
     });
     const cfg = { agents: { entries: { ops: {} } } };
-    await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
+    await doctor({ cfg });
     expect(repairCanonicalSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
-      apply: false,
-      cfg,
-      env,
-      targets: [],
-    });
+    expectWorkspaceRepair(cfg, false);
   });
 
   it("explains how to shrink SQLite files after removing persisted runtime skills", async () => {
     runDoctorSessionSqlite.mockResolvedValueOnce(sessionSqliteReport({ sqliteEntries: 2 }));
-    repairCanonicalSessionResolvedSkills.mockReturnValueOnce({
-      found: 2,
-      repaired: 2,
-    });
+    repairCanonicalSessionResolvedSkills.mockReturnValueOnce({ found: 2, repaired: 2 });
 
     await doctor();
 
-    expectNote("Logical SQLite pages are freed");
     expectNote(
+      "Logical SQLite pages are freed",
       'shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents"',
     );
   });
@@ -297,13 +299,7 @@ describe("doctor session transcript repair", () => {
       undefined,
     );
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
-      apply: false,
-      cfg,
-      env,
-      integrityCheck: "quick",
-      targets: [],
-    });
+    expectWorkspaceRepair(cfg, false, true);
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
     expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
       config: cfg,
@@ -338,7 +334,7 @@ describe("doctor session transcript repair", () => {
     runDoctorSessionSqlite.mockResolvedValueOnce(report);
     hasRetainedDoctorSessionSources.mockReturnValueOnce(true);
 
-    await noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true });
+    await doctor();
 
     expect(hasRetainedDoctorSessionSources).toHaveBeenCalledWith(report);
     const call = runPostSessionPluginDoctorStateRepairs.mock.calls[0]?.[0] as {
@@ -369,19 +365,16 @@ describe("doctor session transcript repair", () => {
       receipts.push(receipt);
     };
     const params = {
-      cfg: {},
-      env,
-      shouldRepair: true,
       postSessionPluginMigration: postSessionMigration,
       onStepReceipt: recordReceipt,
     };
 
     const first = await doctor(params);
-    const replay = await noteSessionTranscriptHealth(params);
+    const replay = await doctor(params);
 
     expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenNthCalledWith(1, {
       config: {},
-      env: params.env,
+      env,
       maintenanceAuthority: { assertCurrent: expect.any(Function) },
       plannedActions: postSessionMigration.plannedActions,
     });
@@ -457,9 +450,11 @@ describe("doctor session transcript repair", () => {
     await expect(doctor({ env })).resolves.toBeUndefined();
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
-    expectNote(cause.message);
-    expectNote("ENOSYS");
-    expectNote('run "openclaw doctor --fix" for session-store maintenance');
+    expectNote(
+      cause.message,
+      "ENOSYS",
+      'run "openclaw doctor --fix" for session-store maintenance',
+    );
   });
 
   it("keeps non-lock session SQLite import failures fatal", async () => {

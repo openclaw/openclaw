@@ -68,9 +68,7 @@ it("runs legacy state migrations in yes mode without prompting", async () => {
     runtime,
     runLegacyStateMigrations,
   } = await arrangeLegacyStateMigrationTest();
-  await (runDoctor as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(runtime, {
-    yes: true,
-  });
+  await runDoctor(runtime, { yes: true });
   expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
   expect(confirm).not.toHaveBeenCalled();
 }, 30_000);

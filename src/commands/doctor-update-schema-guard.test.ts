@@ -344,8 +344,7 @@ it.each<AdmissionCase>([
 });
 
 it("retains a verified canonical backup before permitting the normal schema migration", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const f = await legacyAgentFixture(true);
+  await withLegacyAgent(true, async (f, state) => {
     const logs = runtime();
     const create = vi.spyOn(backupCreate, "createBackupArchive");
     const verify = vi.spyOn(backupVerify, "verifyBackupArchive");
@@ -354,7 +353,6 @@ it("retains a verified canonical backup before permitting the normal schema migr
     await withDoctorMaintenance(
       { runtime: logs, assertCurrent: authority.assertCurrent },
       async (maintenance) => {
-        expect(maintenance).toBeDefined();
         await maintenance.run(async () => {
           await guardUpdateDoctorSchemaUpgrade({
             schemas: f.schemas,
@@ -373,12 +371,7 @@ it("retains a verified canonical backup before permitting the normal schema migr
               ino: identity.ino,
             }),
           ]);
-          await withAgentDatabaseMaintenanceLease({ env: state.env }, (lease) =>
-            migrateOpenClawAgentDatabaseForMaintenance(
-              { agentId: "main", pathname: f.pathname },
-              lease,
-            ),
-          );
+          await migrateAgent(f.pathname, state.env);
           // A current maintenance owner may publish a same-version rebuilt image
           // after migration; the old backup cannot fence unrelated later repairs.
           await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
@@ -401,17 +394,14 @@ it("retains a verified canonical backup before permitting the normal schema migr
     const backup = await expectDefined(create.mock.results[0], "canonical backup creation result")
       .value;
     expect(fs.existsSync(backup.archivePath)).toBe(true);
-    const db = new DatabaseSync(f.pathname, { readOnly: true });
-    try {
+    withDatabase(f.pathname, true, (db) => {
       expect(db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
       expect(db.prepare("SELECT value_json,updated_at FROM cache_entries").all()).toEqual([
         { value_json: '{"keep":true}', updated_at: 7 },
       ]);
-    } finally {
-      db.close();
-    }
+    });
   });
 });
 
@@ -486,12 +476,11 @@ it("revalidates the update owner after integrity work before committing an agent
       }
     });
     let result: PromiseSettledResult<void>[] = [];
-    const settled = withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
+    await withDoctorMaintenance({ assertCurrent }, async (maintenance) => {
       result = await Promise.allSettled([
         maintenance.run(() => migrateAgent(f.pathname, state.env)),
       ]);
     });
-    await settled;
     const outcome = expectDefined(result[0], "migration outcome");
     expect(outcome.status).toBe("rejected");
     if (outcome.status !== "rejected") {
@@ -599,18 +588,14 @@ it("requires the captured agent path and owner to be verified canonical archive 
     await expect(
       backupVerify.verifyBackupArchive(archive.archivePath, facts),
     ).resolves.toMatchObject({ ok: true });
-    await expect(
-      backupVerify.verifyBackupArchive(
-        archive.archivePath,
-        agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
-      ),
-    ).rejects.toThrow("lacks verified SQLite database coverage");
-    await expect(
-      backupVerify.verifyBackupArchive(
-        archive.archivePath,
-        agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
-      ),
-    ).rejects.toThrow("lacks verified SQLite database coverage");
+    for (const invalid of [
+      agents.map((fact) => Object.assign({}, fact, { sourcePath: `${fact.sourcePath}.missing` })),
+      agents.map((fact) => Object.assign({}, fact, { agentId: "another-agent" })),
+    ]) {
+      await expect(backupVerify.verifyBackupArchive(archive.archivePath, invalid)).rejects.toThrow(
+        "lacks verified SQLite database coverage",
+      );
+    }
     expect(fs.readFileSync(f.pathname)).toEqual(f.bytes);
   });
 });

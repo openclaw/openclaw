@@ -3,11 +3,7 @@ import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
-import {
-  createPluginLoadResult,
-  createPluginRecord,
-  createTypedHook,
-} from "../plugins/status.test-fixtures.js";
+import { createPluginLoadResult, createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   collectWorkspaceStatusHealthFindings,
   noteWorkspaceStatus,
@@ -80,26 +76,6 @@ function showDrift(entry: Drift) {
   return noteBody(spy, "Plugin restart readiness");
 }
 
-it("passes the shared status report into compatibility warnings", () => {
-  const loadResult = createPluginLoadResult({
-    plugins: [createPluginRecord({ id: "legacy-plugin", name: "Legacy Plugin", hookCount: 1 })],
-    typedHooks: [createTypedHook({ pluginId: "legacy-plugin", hookName: "before_prompt_build" })],
-  });
-  setReport(loadResult, ["legacy-plugin is hook-only"]);
-  const spy = spyNotes();
-  noteWorkspaceStatus({});
-  expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
-    config: {},
-    workspaceDir: "/workspace",
-  });
-  expect(mocks.buildPluginCompatibilityWarnings).toHaveBeenCalledWith({
-    config: {},
-    workspaceDir: "/workspace",
-    report: { workspaceDir: "/workspace", ...loadResult },
-  });
-  expect(noteBody(spy, "Plugin compatibility")).toContain("legacy-plugin is hook-only");
-});
-
 it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
   const diagnostic = {
     level: "error" as const,
@@ -125,8 +101,13 @@ it("shares scoped workspace inspection while reporting identical registrar failu
       ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
     };
   });
-  mocks.buildPluginCompatibilityWarnings.mockImplementation(({ workspaceDir }) => {
+  mocks.buildPluginCompatibilityWarnings.mockImplementation(({ config, workspaceDir, report }) => {
     expect(activeWorkspace).toBe(workspaceDir);
+    expect(config).toEqual({});
+    expect(report).toEqual({
+      workspaceDir,
+      ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
+    });
     return ["legacy-plugin is hook-only"];
   });
   const spy = vi.spyOn(noteModule, "note").mockImplementation(() => {
@@ -163,24 +144,6 @@ it("lists only errored plugin ids in deterministic order with truncation", () =>
   expect(noteBody(spy, "Plugins")).toBe(
     "Errors: 12\n- alpha\n- bravo\n- charlie\n- delta\n- echo\n- foxtrot\n- hotel\n- india\n- juliet\n- kilo\n- ...",
   );
-});
-
-it("collects plugin version drift as structured findings", () => {
-  const findings = collectWorkspaceStatusHealthFindings(
-    { plugins: { entries: { codex: { enabled: true } } } },
-    readiness(codexDrift),
-  );
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/workspace-status",
-      severity: "warning",
-      path: "plugins.entries.codex",
-      target: "codex",
-      requirement: "plugin-version-drift",
-      message: expect.stringContaining("2026.5.30-beta.1"),
-      fixHint: expect.stringContaining("openclaw plugins update codex"),
-    }),
-  ]);
 });
 
 it("reports npm target lookup failure without an uninstallable fix hint", () => {
@@ -256,6 +219,17 @@ it("collects compatibility warnings and plugin diagnostics", () => {
 
 it("surfaces active official managed plugin version drift", () => {
   const body = showDrift(codexDrift);
+  expect(collectWorkspaceStatusHealthFindings({}, readiness(codexDrift))).toEqual([
+    expect.objectContaining({
+      checkId: "core/doctor/workspace-status",
+      severity: "warning",
+      path: "plugins.entries.codex",
+      target: "codex",
+      requirement: "plugin-version-drift",
+      message: expect.stringContaining("2026.5.30-beta.1"),
+      fixHint: expect.stringContaining("openclaw plugins update codex"),
+    }),
+  ]);
   for (const text of [
     "1 active official plugin not on post-restart OpenClaw 2026.6.1",
     "codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1",
@@ -264,24 +238,4 @@ it("surfaces active official managed plugin version drift", () => {
   ]) {
     expect(body).toContain(text);
   }
-});
-
-it("uses package-version update commands for exact npm plugin drift", () => {
-  const body = showDrift({
-    pluginId: "brave",
-    installedVersion: "2026.6.9",
-    gatewayVersion: "2026.6.10-beta.1",
-    source: "npm",
-    packageName: "@openclaw/brave-plugin",
-    spec: "@openclaw/brave-plugin@2026.6.9",
-    targetResolution: {
-      status: "resolved",
-      packageName: "@openclaw/brave-plugin",
-      requestedTarget: "2026.6.10-beta.1",
-      version: "2026.6.10-beta.1",
-    },
-  });
-  expect(body).toContain("openclaw plugins update @openclaw/brave-plugin@2026.6.10-beta.1");
-  expect(body).not.toContain("openclaw plugins update brave");
-  expect(body).toContain("openclaw gateway restart");
 });

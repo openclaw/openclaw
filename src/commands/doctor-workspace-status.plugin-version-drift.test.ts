@@ -69,44 +69,33 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
   return report;
 }
 
-it("reports an unresolved post-restart target instead of silently omitting readiness", () => {
-  const readiness = {
-    status: "unresolved" as const,
-    reason: "Gateway service package version is unavailable.",
-    runningGatewayVersion: "2026.5.30",
-  };
-
-  const { findings, noteSpy } = inspect(readiness);
-  expect(findings).toMatchObject([
-    {
-      requirement: "plugin-version-restart-readiness",
-      message: expect.stringContaining("Gateway service package version is unavailable"),
-    },
-  ]);
-
-  expect(noteSpy).toHaveBeenCalledWith(
-    expect.stringContaining("Running Gateway: OpenClaw 2026.5.30"),
-    "Plugin restart readiness",
-  );
-});
-
-it("reports when compatible plugins still need the older running Gateway restarted", () => {
+it.each(["unresolved", "restart"] as const)("reports %s Gateway readiness", (state) => {
+  const unresolved = state === "unresolved";
   const runningGatewayVersion = "2026.5.30";
-  const readiness = {
-    status: "resolved" as const,
-    runningGatewayVersion,
-    report: detectCodexDrift("2026.6.1", "2026.6.1"),
-  };
-
-  const { findings, noteSpy } = inspect(readiness);
+  const { findings, noteSpy } = inspect(
+    unresolved
+      ? {
+          status: "unresolved",
+          reason: "Gateway service package version is unavailable.",
+          runningGatewayVersion,
+        }
+      : {
+          status: "resolved",
+          runningGatewayVersion,
+          report: detectCodexDrift("2026.6.1", "2026.6.1"),
+        },
+  );
   expect(findings).toMatchObject([
     {
-      requirement: "plugin-version-gateway-restart",
-      message: expect.stringContaining(`running Gateway is ${runningGatewayVersion}`),
-      fixHint: "openclaw gateway restart",
+      requirement: `plugin-version-${unresolved ? "restart-readiness" : "gateway-restart"}`,
+      message: expect.stringContaining(
+        unresolved
+          ? "Gateway service package version is unavailable"
+          : `running Gateway is ${runningGatewayVersion}`,
+      ),
+      ...(!unresolved ? { fixHint: "openclaw gateway restart" } : {}),
     },
   ]);
-
   expect(noteSpy).toHaveBeenCalledWith(
     expect.stringContaining(`Running Gateway: OpenClaw ${runningGatewayVersion}`),
     "Plugin restart readiness",
@@ -135,14 +124,16 @@ it("reports older and newer pins as advisory drift while accepting correction su
       ([, title]) => title === "Plugin restart readiness",
     );
     expect(driftNotes).toHaveLength(1);
-    expect(driftNotes[0]?.[0]).toContain(
+    const output = driftNotes[0]?.[0];
+    for (const text of [
       `1 active official plugin not on post-restart OpenClaw ${gatewayVersion}`,
-    );
-    expect(driftNotes[0]?.[0]).toContain(
       `codex: ${installedVersion} (npm) -> expected ${gatewayVersion}`,
-    );
-    expect(driftNotes[0]?.[0]).toContain("openclaw plugins update @openclaw/codex@2026.6.1");
-    expect(driftNotes[0]?.[0]).toContain("openclaw gateway restart");
+      "openclaw plugins update @openclaw/codex@2026.6.1",
+      "openclaw gateway restart",
+    ]) {
+      expect(output).toContain(text);
+    }
+    expect(output).not.toContain("openclaw plugins update codex");
   }
 
   for (const [installedVersion, correctionGatewayVersion] of [

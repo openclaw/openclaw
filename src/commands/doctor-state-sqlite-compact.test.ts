@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -123,116 +123,112 @@ function expectOwnerOnlySqlitePermissions(sqlitePath: string): void {
   }
 }
 
-describe("runDoctorStateSqliteCompact", () => {
-  it("reports a missing canonical database as skipped", async () => {
-    const env = createStateEnv();
+it("reports a missing canonical database as skipped", async () => {
+  const env = createStateEnv();
 
-    await expect(runDoctorStateSqliteCompact({ env })).resolves.toEqual({
-      mode: "compact",
-      path: resolveOpenClawStateSqlitePath(env),
-      reason: "missing",
-      skipped: true,
-    });
+  await expect(runDoctorStateSqliteCompact({ env })).resolves.toEqual({
+    mode: "compact",
+    path: resolveOpenClawStateSqlitePath(env),
+    reason: "missing",
+    skipped: true,
+  });
+});
+
+it("clears authoritative quarantine after compaction", async () => {
+  const env = createStateEnv();
+  const sqlitePath = seedStateDatabase(env, true);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    kind: "state",
+    path: sqlitePath,
+    reason: "corrupt index",
   });
 
-  it("clears authoritative quarantine after compaction", async () => {
+  await runDoctorStateSqliteCompact({ env });
+
+  expect(readPersistedQuarantineRow(sqlitePath, { env })).toBeUndefined();
+  expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+});
+
+it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {
+  const env = createStateEnv();
+  const sqlitePath = seedStateDatabase(env, true);
+
+  await runDoctorStateSqliteCompact({ env });
+
+  expectOwnerOnlySqlitePermissions(sqlitePath);
+});
+
+it.skipIf(process.platform === "win32")(
+  "refuses a symlink at the canonical database path",
+  async () => {
     const env = createStateEnv();
-    const sqlitePath = seedStateDatabase(env, true);
-    seedOpenClawDatabaseQuarantine({
-      env,
-      kind: "state",
-      path: sqlitePath,
-      reason: "corrupt index",
-    });
+    const canonicalPath = resolveOpenClawStateSqlitePath(env);
+    const externalEnv = createStateEnv();
+    const externalPath = seedStateDatabase(externalEnv);
+    fs.mkdirSync(path.dirname(canonicalPath), { recursive: true });
+    fs.symlinkSync(externalPath, canonicalPath);
 
-    await runDoctorStateSqliteCompact({ env });
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/not a regular file/);
+  },
+);
 
-    expect(readPersistedQuarantineRow(sqlitePath, { env })).toBeUndefined();
-    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+it("refuses compaction while this process owns an open shared-state handle", async () => {
+  const env = createStateEnv();
+  openOpenClawStateDatabase({ env });
+
+  await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
+    /already open in this process/,
+  );
+});
+
+it("treats a busy truncating checkpoint as failure", async () => {
+  const env = createStateEnv();
+  const sqlitePath = seedStateDatabase(env);
+  seedOpenClawDatabaseQuarantine({
+    env,
+    kind: "state",
+    path: sqlitePath,
+    reason: "busy checkpoint",
+  });
+  const sqlite = requireNodeSqlite();
+  const reader = new sqlite.DatabaseSync(sqlitePath);
+  const writer = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    reader.exec("BEGIN; SELECT COUNT(*) FROM compact_payload;");
+    writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
+
+    // Exercise the real busy checkpoint result without waiting the production lock timeout.
+    const compact = compactOwner.compactDoctorSqliteFile;
+    vi.spyOn(compactOwner, "compactDoctorSqliteFile").mockImplementation((options) =>
+      compact({ ...options, busyTimeoutMs: 0 }),
+    );
+    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/checkpoint remained busy/);
+    expect(readPragma(writer, "auto_vacuum")).toBe(0);
+    expect(readPersistedQuarantineRow(sqlitePath, { env })?.reason).toBe("busy checkpoint");
+  } finally {
+    reader.exec("ROLLBACK;");
+    reader.close();
+    writer.close();
+  }
+});
+
+it("rejects stale secondary indexes before mutating the database", async () => {
+  const env = createStateEnv();
+  const sqlitePath = seedStateDatabase(env, true);
+  createUnsafeIndexDrift(sqlitePath);
+  withDatabase(sqlitePath, true, (before) => {
+    expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+    expectUnsafeIndex(before);
   });
 
-  it.skipIf(process.platform === "win32")("reapplies owner-only SQLite permissions", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase(env, true);
-
-    await runDoctorStateSqliteCompact({ env });
-
-    expectOwnerOnlySqlitePermissions(sqlitePath);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "refuses a symlink at the canonical database path",
-    async () => {
-      const env = createStateEnv();
-      const canonicalPath = resolveOpenClawStateSqlitePath(env);
-      const externalEnv = createStateEnv();
-      const externalPath = seedStateDatabase(externalEnv);
-      fs.mkdirSync(path.dirname(canonicalPath), { recursive: true });
-      fs.symlinkSync(externalPath, canonicalPath);
-
-      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(/not a regular file/);
-    },
+  await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
+    /integrity_check failed.*missing from index unsafe_index_records_value/iu,
   );
 
-  it("refuses compaction while this process owns an open shared-state handle", async () => {
-    const env = createStateEnv();
-    openOpenClawStateDatabase({ env });
-
-    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
-      /already open in this process/,
-    );
-  });
-
-  it("treats a busy truncating checkpoint as failure", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase(env);
-    seedOpenClawDatabaseQuarantine({
-      env,
-      kind: "state",
-      path: sqlitePath,
-      reason: "busy checkpoint",
-    });
-    const sqlite = requireNodeSqlite();
-    const reader = new sqlite.DatabaseSync(sqlitePath);
-    const writer = new sqlite.DatabaseSync(sqlitePath);
-    try {
-      reader.exec("BEGIN; SELECT COUNT(*) FROM compact_payload;");
-      writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
-
-      // Exercise the real busy checkpoint result without waiting the production lock timeout.
-      const compact = compactOwner.compactDoctorSqliteFile;
-      vi.spyOn(compactOwner, "compactDoctorSqliteFile").mockImplementation((options) =>
-        compact({ ...options, busyTimeoutMs: 0 }),
-      );
-      await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
-        /checkpoint remained busy/,
-      );
-      expect(readPragma(writer, "auto_vacuum")).toBe(0);
-      expect(readPersistedQuarantineRow(sqlitePath, { env })?.reason).toBe("busy checkpoint");
-    } finally {
-      reader.exec("ROLLBACK;");
-      reader.close();
-      writer.close();
-    }
-  });
-
-  it("rejects stale secondary indexes before mutating the database", async () => {
-    const env = createStateEnv();
-    const sqlitePath = seedStateDatabase(env, true);
-    createUnsafeIndexDrift(sqlitePath);
-    withDatabase(sqlitePath, true, (before) => {
-      expect(before.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expectUnsafeIndex(before);
-    });
-
-    await expect(runDoctorStateSqliteCompact({ env })).rejects.toThrow(
-      /integrity_check failed.*missing from index unsafe_index_records_value/iu,
-    );
-
-    withDatabase(sqlitePath, true, (after) => {
-      expect(readPragma(after, "auto_vacuum")).toBe(0);
-      expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
-      expectUnsafeIndex(after);
-    });
+  withDatabase(sqlitePath, true, (after) => {
+    expect(readPragma(after, "auto_vacuum")).toBe(0);
+    expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
+    expectUnsafeIndex(after);
   });
 });
