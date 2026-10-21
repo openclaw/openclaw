@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { createComputerUseRequest } from "./computer-use.test-support.js";
-import { resolveCodexComputerUseConfig, type ResolvedCodexComputerUseConfig } from "./config.js";
+import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 describe("Codex Computer Use periodic health", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -30,6 +30,19 @@ describe("Codex Computer Use periodic health", () => {
     client.close();
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expectToolCalls(client, 1);
+  });
+
+  it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
+    const client = createClient({ liveTestFailures: 1 });
+
+    startMonitor(client, { autoRepair: true });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expectToolCalls(client, 2);
+    expect(client.request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
+      timeoutMs: 60_000,
+    });
   });
 
   it.each([
@@ -64,7 +77,9 @@ describe("Codex Computer Use periodic health", () => {
   });
 });
 
-function createClient(options: { mcpServerName?: string; mcpTools?: string[] } = {}) {
+function createClient(
+  options: { liveTestFailures?: number; mcpServerName?: string; mcpTools?: string[] } = {},
+) {
   const closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   const fixture = createComputerUseRequest({
     installed: true,
@@ -110,17 +125,21 @@ function startMonitor(
   return startCodexComputerUseHealthMonitor({
     client: client.client,
     tools,
-    config: resolveCodexComputerUseConfig({
-      env: {},
-      overrides: {
-        enabled: true,
-        autoInstall: true,
-        healthCheckEnabled: true,
-        healthCheckIntervalMinutes: 30,
-        pluginCacheMode: "shared",
-        ...overrides,
-      },
-    }),
+    config: {
+      enabled: true,
+      autoInstall: true,
+      marketplaceDiscoveryTimeoutMs: 60_000,
+      liveTestTimeoutMs: 60_000,
+      toolCallTimeoutMs: 60_000,
+      healthCheckEnabled: true,
+      healthCheckIntervalMinutes: 30,
+      pluginCacheMode: "shared",
+      strictReadiness: false,
+      autoRepair: false,
+      pluginName: "computer-use",
+      mcpServerName: "computer-use",
+      ...overrides,
+    },
   });
 }
 

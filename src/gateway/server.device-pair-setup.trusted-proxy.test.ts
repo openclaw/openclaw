@@ -2,15 +2,10 @@ import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
-import type { WebSocket } from "ws";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/index.js";
 import { replaceConfigFile } from "../config/config.js";
 import { loadDeviceBootstrapTokenRecords } from "../infra/device-pairing-store.js";
-import {
-  getPairedDevice,
-  listDevicePairing,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { decodePairingSetupCode } from "../pairing/setup-code.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -50,7 +45,7 @@ const HANDOFF_SCOPES = [
   "operator.write",
 ];
 
-async function startProxy(headers: Record<string, string>) {
+test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profile) => {
   const auth = {
     mode: "trusted-proxy" as const,
     trustedProxy: {
@@ -65,16 +60,12 @@ async function startProxy(headers: Record<string, string>) {
       gateway: {
         auth,
         trustedProxies: ["127.0.0.1"],
-        controlUi: { allowedOrigins: [headers.origin] },
+        controlUi: { allowedOrigins: [PROXY_HEADERS.origin] },
       },
     },
     afterWrite: { mode: "auto" },
   });
-  return await startServerWithClient(undefined, { auth, wsHeaders: headers });
-}
-
-test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profile) => {
-  const started = await startProxy(PROXY_HEADERS);
+  const started = await startServerWithClient(undefined, { auth, wsHeaders: PROXY_HEADERS });
   const sockets = [started.ws];
   try {
     const mintSetup = async (scopes: string[]) => {
@@ -205,102 +196,3 @@ test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profil
     started.envSnapshot.restore();
   }
 });
-
-const TRUSTED_PROXY_HEADERS = {
-  origin: "https://localhost",
-  "x-forwarded-for": "203.0.113.50",
-  "x-forwarded-proto": "https",
-  "x-forwarded-user": "operator@example.com",
-};
-
-async function withPairingSession(
-  options: {
-    name: string;
-    auth: "device" | "shared" | "proxy";
-    admin?: boolean;
-    self?: boolean;
-    role?: "operator" | "node";
-    roles?: string[];
-    scopes?: string[];
-  },
-  run: (ws: WebSocket, requestId: string, deviceId: string) => Promise<void>,
-) {
-  const callerScopes = options.admin ? ["operator.admin"] : ["operator.pairing"];
-  let started: Awaited<ReturnType<typeof startServerWithClient>>;
-  const proxyHeaders = { ...TRUSTED_PROXY_HEADERS, "x-openclaw-scopes": callerScopes.join(",") };
-  if (options.auth === "proxy") {
-    started = await startProxy(proxyHeaders);
-  } else {
-    started = await startServerWithClient("secret");
-  }
-  let ws: WebSocket | undefined;
-  try {
-    const approver = await issueOperatorToken({
-      name: options.name,
-      approvedScopes: ["operator.admin"],
-      tokenScopes: options.admin ? undefined : ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
-    const pending = loadDeviceIdentity(options.self ? options.name : `${options.name}-target`);
-    const request = await requestDevicePairing({
-      deviceId: pending.identity.deviceId,
-      publicKey: pending.publicKey,
-      role: options.role ?? "operator",
-      roles: options.roles,
-      scopes: options.scopes ?? ["operator.pairing"],
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-    });
-    ws = await openTrackedWs(started.port, options.auth === "proxy" ? proxyHeaders : undefined);
-    await connectOk(ws, {
-      ...(options.auth === "device"
-        ? { skipDefaultAuth: true, deviceToken: approver.token }
-        : options.auth === "proxy"
-          ? { skipDefaultAuth: true, client: CONTROL_UI_CLIENT }
-          : { token: "secret" }),
-      deviceIdentityPath: approver.identityPath,
-      scopes: callerScopes,
-    });
-    await run(ws, request.request.requestId, pending.identity.deviceId);
-  } finally {
-    ws?.close();
-    started.ws.close();
-    await started.server.close();
-    started.envSnapshot.restore();
-  }
-}
-const errors = {
-  scope: "missing scope: operator.admin",
-  approval: "device pairing approval denied",
-};
-type PairingCase = Parameters<typeof withPairingSession>[0] & {
-  error?: keyof typeof errors;
-};
-test.each<PairingCase>([
-  { name: "scope upgrade", auth: "device", self: true, scopes: ["operator.admin"], error: "scope" },
-  { name: "mixed roles", auth: "shared", roles: ["operator", "node"], error: "approval" },
-  { name: "proxy node", auth: "proxy", role: "node", scopes: [], error: "approval" },
-  { name: "proxy admin approval", auth: "proxy", admin: true, role: "node", scopes: [] },
-])("device pairing: $name", (options) =>
-  withPairingSession(options, async (ws, requestId, deviceId) => {
-    const result = await rpcReq(ws, "device.pair.approve", {
-      requestId,
-    });
-    if (options.error) {
-      expect(result).toMatchObject({ ok: false, error: { message: errors[options.error] } });
-    } else {
-      expect(result.ok).toBe(true);
-    }
-    if (options.self) {
-      expect((await getPairedDevice(deviceId))?.approvedScopes).toEqual(["operator.admin"]);
-    } else if (options.admin) {
-      expect(await getPairedDevice(deviceId)).toMatchObject({
-        role: "node",
-        tokens: { node: { role: "node" } },
-      });
-    } else {
-      expect(await getPairedDevice(deviceId)).toBeNull();
-    }
-  }),
-);

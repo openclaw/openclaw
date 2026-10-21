@@ -504,7 +504,7 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
     vi.restoreAllMocks();
   });
 
-  it("refreshes the managed artifacts before startup", async () => {
+  it.each(["service", "cache"])("refreshes the managed %s before startup", async (artifact) => {
     const inspection = { platform: "darwin" as const, inspectServiceApp: inspectServiceFixture };
     const root = tempDirs.make("openclaw-computer-use-startup-");
     const agentDir = path.join(root, "agent");
@@ -520,11 +520,17 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
     const pluginRoot = path.join(marketplace, "plugins", "computer-use");
     const cachePath = path.join(codexHome, "plugins/cache/openai-bundled/computer-use/1.0.857");
     await writeServiceFixture(sourceService, CURRENT_IDENTITY);
-    await writeServiceFixture(targetService, STALE_IDENTITY);
+    await writeServiceFixture(
+      targetService,
+      artifact === "service" ? STALE_IDENTITY : CURRENT_IDENTITY,
+    );
     const sourceIdentity = await inspectServiceFixture(sourceService);
     await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
     await fs.cp(pluginRoot, cachePath, { recursive: true });
-    await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
+    await fs.writeFile(
+      path.join(cachePath, "generation.txt"),
+      artifact === "cache" ? "old-cache" : "new-cache",
+    );
 
     vi.spyOn(desktopPaths, "resolveMacOSDesktopCodexAppPathCandidates").mockReturnValue([
       { ...candidate, computerUseServiceAppPaths: [sourceService] },

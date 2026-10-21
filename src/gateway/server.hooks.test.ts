@@ -37,6 +37,7 @@ installGatewayTestHooks({ scope: "suite" });
 await import("./server.js");
 
 const HOOK_TOKEN = "hook-secret";
+const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
 beforeEach(() => configureHooks());
 
@@ -179,6 +180,8 @@ async function writeHookTransformModule(moduleName: string, source: string): Pro
 test("handles auth, wake, and agent flows", async () => {
   setHookAgentRoster();
   await withHooksServer(async (post, reject) => {
+    await post("wake", { text: "Ping" }, { status: 401, token: null });
+
     await post("wake", { text: "Ping", mode: "next-heartbeat" });
     const wakeEvents = await waitForSystemEvent();
     expect(wakeEvents.join("\n")).toContain("Ping");
@@ -229,6 +232,9 @@ test("handles auth, wake, and agent flows", async () => {
 
     await post("wake?token=hook-secret", { text: "Query auth" }, { status: 400, token: null });
 
+    await post("agent", { message: "Nope", channel: "sms" }, { status: 400 });
+    expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
     await post(
       "wake",
       { text: "Header auth", mode: "next-heartbeat" },
@@ -238,6 +244,7 @@ test("handles auth, wake, and agent flows", async () => {
     expect(headerEvents.join("\n")).toContain("Header auth");
     drainSystemEvents(resolveMainKey());
 
+    await post("wake", { text: " " }, { status: 400 });
     await post("agent", { message: " " }, { status: 400 });
     await post("wake", "{", { status: 400 });
   });
@@ -406,6 +413,38 @@ test("queues direct and mapped wake payloads as system events", async () => {
   });
 });
 
+test("enforces templated vs static mapping session keys on /hooks/<mapping>", async () => {
+  configureHooks({
+    allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+    mappings: [
+      agentMapping("mapped-templated", { sessionKey: "hook:gmail:{{payload.id}}" }),
+      agentMapping("gmail", { sessionMode: "persistent", sessionKey: "hook:gmail:fixed" }),
+    ],
+  });
+
+  await withHooksServer(async (post, reject) => {
+    await reject(
+      "mapped-templated",
+      { subject: "hello", id: "42" },
+      expect.stringContaining("hooks.allowRequestSessionKey"),
+    );
+    expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+    mockIsolatedRunOk(true);
+    await post("gmail", { subject: "hello" });
+    await waitForSystemEvent();
+    const staticCall = cronRunCall();
+    expect(staticCall).toMatchObject({
+      sessionKey: "hook:gmail:fixed",
+      job: {
+        sessionTarget: "session:hook:gmail:fixed",
+        payload: { externalContentSource: "gmail" },
+      },
+    });
+    drainSystemEvents(resolveMainKey());
+  });
+});
+
 test.each(["agent", "mapped-rebind-denied"])(
   "rejects /hooks/%s rebinding into a disallowed target-agent namespace",
   async (route) => {
@@ -477,6 +516,45 @@ test("dispatches agent hooks when the process clock is outside the Date range", 
     expect(call.job).toMatchObject({ createdAtMs: 0, state: { nextRunAtMs: 0 } });
     expect(call.job.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
     drainSystemEvents(resolveMainKey());
+  });
+});
+
+test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
+  configureHooks({
+    allowedAgentIds: ["hooks"],
+    mappings: [
+      agentMapping("mapped-default", { wakeMode: undefined }),
+      agentMapping("mapped", { agentId: "main", wakeMode: undefined }),
+    ],
+  });
+  setHookAgentRoster();
+  await withHooksServer(async (post, reject) => {
+    const denied = expect.stringContaining("hooks.allowedAgentIds");
+    await reject("agent", { message: "No explicit agent" }, denied);
+    expect(cronIsolatedRun).not.toHaveBeenCalled();
+    expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+    await reject(
+      "agent",
+      { message: "Empty agent", agentId: " " },
+      "agentId must be a non-empty string",
+    );
+    expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+    mockIsolatedRunOk(true);
+    await post("agent", { message: "Allowed", agentId: "hooks", wakeMode: "next-heartbeat" });
+    const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
+    expect(targetEvents.join("\n")).toContain("Hook Hook: done");
+    expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
+    const allowedCall = cronRunCall();
+    expect(allowedCall?.job?.agentId).toBe("hooks");
+    drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+
+    await reject("agent", { message: "Denied", agentId: "main" }, denied);
+    for (const route of ["mapped-default", "mapped"]) {
+      await reject(route, { subject: "hello" }, denied);
+    }
+    expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
   });
 });
 
@@ -588,7 +666,7 @@ test.each([
 test.each([false, true])(
   "requires stable keys for mapped persistent hooks (missing: %s)",
   async (missing) => {
-    const route = missing ? "mapped-missing" : "gmail";
+    const route = missing ? "mapped-missing" : "mapped-default";
     if (missing) {
       await writeHookTransformModule("mapped-missing-key.mjs", "export default () => ({});");
     }
@@ -613,10 +691,7 @@ test.each([false, true])(
       mockIsolatedRunOk();
       await post(route, {});
       await waitForCronIsolatedRuns(1);
-      expect(cronRunCall().job).toMatchObject({
-        sessionTarget: "session:hook:mapped:default",
-        payload: { externalContentSource: "gmail" },
-      });
+      expect(cronRunCall().job.sessionTarget).toBe("session:hook:mapped:default");
       await waitForSystemEvent();
     });
   },

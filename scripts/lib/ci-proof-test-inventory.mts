@@ -4663,6 +4663,7 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/gateway/server-worker-placement-session-evidence.worker.test.ts",
   "src/gateway/server.agent-artifact-apis.test.ts",
   "src/gateway/server.auth.control-ui.test.ts",
+  "src/gateway/server.device-pair-approve-authz.test.ts",
   "src/gateway/server.device-token-rotate-authz.test.ts",
   "src/gateway/server.encrypted-tool-continuation.test.ts",
   "src/gateway/server.hooks-admission.test.ts",
