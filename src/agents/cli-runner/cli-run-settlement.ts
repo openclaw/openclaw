@@ -1,6 +1,7 @@
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasCompletionMessageSessionSpawn } from "../accepted-session-spawn.js";
 import {
   filterAgentRunTerminalPayloadsForPresentation,
   sanitizeAgentRunTerminalReply,
@@ -517,6 +518,8 @@ export function buildCliRunResult(params: {
   const yielded = output.yielded === true;
   const presentationHiddenRequiredReply =
     !terminalInterruption &&
+    !yielded &&
+    !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
     !hasCompletedSourceReplyDeliveryEvidence(output) &&
     (payloadsWithToolMedia?.length ?? 0) > 0 &&
     (payloadsForVisibleCompletion?.length ?? 0) === 0 &&

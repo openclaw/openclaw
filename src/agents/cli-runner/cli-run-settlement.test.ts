@@ -275,6 +275,29 @@ it("preserves confirmed final delivery of an acknowledgement-only CLI result", (
   expect(result.payloads).toEqual([{ text: "HEARTBEAT_OK" }]);
 });
 
+it("preserves an accepted completion-message child over a hidden CLI acknowledgement", () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  context.params.terminalReplyExpectation = "result-required";
+  const acceptedSessionSpawns = [
+    {
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child-run",
+      expectsCompletionMessage: true,
+    },
+  ];
+  const result = testRunResult({
+    context,
+    output: { text: "HEARTBEAT_OK", acceptedSessionSpawns },
+  });
+
+  expect(result.meta.error).toBeUndefined();
+  expect(result.meta.terminalReply).toEqual({
+    disposition: "visible",
+    text: "HEARTBEAT_OK",
+  });
+  expect(result.acceptedSessionSpawns).toEqual(acceptedSessionSpawns);
+});
+
 it.each([
   ["blocked", "s1", "previous-native-session"],
   ["no-native-id", "s1", "previous-native-session"],
