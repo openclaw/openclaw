@@ -4,13 +4,17 @@ import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
+import {
+  appendHistoryMessage,
+  historyStream,
+  readHistoryEvent,
+} from "./sessions-history-http-read.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -29,24 +33,20 @@ function assistantMessage(text: string) {
   return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 }
 
-type AppendOptions = Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0];
+type AppendOptions = Parameters<typeof appendHistoryMessage>[0];
 async function appendMessage(
   storePath: string,
   text: string,
   key = sessionKey,
   expected: Pick<AppendOptions, "expectedSessionId" | "expectedLifecycleRevision"> = {},
 ) {
-  const result = await appendExactAssistantMessageToSessionTranscript({
+  const result = await appendHistoryMessage({
     agentId: "main",
     sessionKey: key,
     storePath,
     message: assistantMessage(text),
     ...expected,
   });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.reason);
-  }
   return result.messageId;
 }
 
@@ -96,13 +96,10 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         headers: { ...headers, accept: "text/event-stream" },
         signal: abort.signal,
       });
-      expect(response.status).toBe(200);
-      reader = expectDefined(response.body?.getReader(), "session history event stream");
-      const stream = { buffer: "" };
-      const initial = await readSseEvent(reader, stream);
-      expect(initial).toMatchObject({
-        event: "history",
-        data: { messages: [historyMessage("bound initial message")] },
+      const stream = historyStream(response);
+      reader = stream.reader;
+      expect(await readHistoryEvent(stream)).toMatchObject({
+        messages: [historyMessage("bound initial message")],
       });
       if (mismatch === "lifecycle owner") {
         const reset = await resetSessionEntryLifecycle({
@@ -130,7 +127,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
           expectedSessionId: sessionId,
           expectedLifecycleRevision: "after-reset",
         });
-        let remaining = stream.buffer;
+        let remaining = stream.streamState.buffer;
         const decoder = new TextDecoder();
         for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
           remaining += decoder.decode(chunk.value, { stream: true });
@@ -177,7 +174,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       // The committed bound append is an ordering barrier, so no quiet-period timer is needed.
       let published = "";
       do {
-        published = JSON.stringify((await readSseEvent(reader, stream)).data);
+        published = JSON.stringify((await readSseEvent(reader, stream.streamState)).data);
         expect(published).not.toContain(foreignText);
       } while (!published.includes(visibleText));
       const history = await fetch(url, { headers });

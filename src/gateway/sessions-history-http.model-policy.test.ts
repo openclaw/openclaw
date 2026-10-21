@@ -10,7 +10,6 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitSessionTranscriptUpdate,
@@ -28,8 +27,12 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayHttpServer } from "./server-http.js";
-import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import * as historyState from "./session-history-state.js";
+import {
+  appendHistoryMessage,
+  historyStream,
+  readHistoryEvent,
+} from "./sessions-history-http-read.test-support.js";
 
 const readerEmail = "history-reader@example.test";
 const staffEmail = "history-staff@example.test";
@@ -216,17 +219,9 @@ describe("HTTP historical model disclosure", () => {
   }
 
   async function openStream(params: Parameters<typeof requestHistory>[0] = {}) {
-    const response = await requestHistory({ ...params, sse: true });
-    const reader = expectDefined(response.body?.getReader(), "SSE reader");
-    readers.add(reader);
-    const buffer = { buffer: "" };
-    return {
-      async next(event = "history") {
-        const result = await readSseEvent(reader, buffer);
-        expect(result.event).toBe(event);
-        return result.data;
-      },
-    };
+    const stream = historyStream(await requestHistory({ ...params, sse: true }));
+    readers.add(stream.reader);
+    return { next: (event = "history") => readHistoryEvent(stream, event) };
   }
 
   const jsonHistory = (params?: Parameters<typeof requestHistory>[0]) =>
@@ -246,7 +241,7 @@ describe("HTTP historical model disclosure", () => {
   }
 
   async function append(text: string, updateMode: "inline" | "file-only" = "inline") {
-    const result = await appendExactAssistantMessageToSessionTranscript({
+    const result = await appendHistoryMessage({
       ...scope,
       updateMode,
       message: makeAgentAssistantMessage({
@@ -254,9 +249,6 @@ describe("HTTP historical model disclosure", () => {
         content: [{ type: "text", text }],
       }),
     });
-    if (!result.ok) {
-      throw new Error(result.reason);
-    }
     return result.messageId;
   }
 
@@ -392,5 +384,11 @@ describe("HTTP historical model disclosure", () => {
     expect(messages(await jsonHistory({ owner: true }), 4)[0]).toMatchObject(historical);
     const stream = await openStream({ owner: true });
     expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
+    const text = "bearer sse update";
+    const id = await append(text);
+    expect(await stream.next("message")).toMatchObject({
+      messageSeq: 5,
+      message: { ...historical, content: [{ text }], __openclaw: { id, seq: 5 } },
+    });
   });
 });

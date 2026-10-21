@@ -71,7 +71,11 @@ import type {
   GatewayConfigReloadTransactionOwnership,
   GatewayReloadPlan,
 } from "./config-reload.js";
-import { registerPluginServiceReloadTests } from "./config-reload.services.test-support.js";
+import {
+  createReadyReloader,
+  registerPluginDrainReloadTests,
+  registerPluginServiceReloadTests,
+} from "./config-reload.services.test-support.js";
 import { registerSkillsRefreshTests } from "./config-reload.skills.test-support.js";
 import {
   closeTestConfigReloaders,
@@ -98,6 +102,11 @@ import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type HarnessOptions = Parameters<typeof createReloaderHarness>[1];
+async function createReadyWriteReloader(...args: Parameters<typeof createWriteReloaderHarness>) {
+  const harness = createWriteReloaderHarness(...args);
+  await harness.reloader.ready;
+  return harness;
+}
 const pluginRuntime = (operationId: string, generation = 9, pluginIds = ["notes"]) => ({
   operationId,
   generation,
@@ -123,6 +132,9 @@ const refreshSkillsDiscoveryMock = vi.hoisted(() => vi.fn());
 vi.mock("../skills/runtime/refresh.js", () => ({
   refreshSkillsDiscovery: refreshSkillsDiscoveryMock,
 }));
+const realSkillsRefresh = await vi.importActual<typeof import("../skills/runtime/refresh.js")>(
+  "../skills/runtime/refresh.js",
+);
 
 vi.mock("../config/io.audit.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/io.audit.js")>();
@@ -725,7 +737,7 @@ describe("startGatewayConfigReloader", () => {
         transactionEntered();
         return await run();
       };
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         async () =>
           makeSnapshot({
             config,
@@ -744,7 +756,6 @@ describe("startGatewayConfigReloader", () => {
           },
         },
       );
-      await harness.reloader.ready;
       expect(
         await harness.reloader.applyPluginLifecycleChange({
           config,
@@ -793,7 +804,7 @@ describe("startGatewayConfigReloader", () => {
           hash: "same",
         });
       });
-      const harness = createReloaderHarness(readSnapshot, {
+      const harness = await createReadyReloader(readSnapshot, {
         initialConfig: config,
         onHotReload: async (plan, nextConfig, ownership) => {
           if (boundary === "queue" && waiting) {
@@ -803,7 +814,6 @@ describe("startGatewayConfigReloader", () => {
           return { status: "applied", runtime };
         },
       });
-      await harness.reloader.ready;
       const request = { config, pluginIds: ["notes"], reason: "reload" as const };
       const first =
         boundary === "queue" ? harness.reloader.applyPluginLifecycleChange(request) : undefined;
@@ -863,12 +873,11 @@ describe("startGatewayConfigReloader", () => {
         restart: true,
       });
       const runtime = pluginRuntime("source-owner");
-      const harness = createReloaderHarness(async () => snapshot, {
+      const harness = await createReadyReloader(async () => snapshot, {
         initialConfig: snapshot.config,
         initialCompareConfig: snapshot.sourceConfig,
         onHotReload: commitPluginRuntime(runtime),
       });
-      await harness.reloader.ready;
       const application = harness.reloader.applyPluginLifecycleChange({
         config:
           source === "current"
@@ -954,12 +963,11 @@ describe("startGatewayConfigReloader", () => {
         expect(current.hash).toBe(write.persistedHash);
       }
       const runtime = pluginRuntime("written-config");
-      const harness = createReloaderHarness(async () => current, {
+      const harness = await createReadyReloader(async () => current, {
         initialConfig: prepared.snapshot.config,
         initialCompareConfig: prepared.snapshot.sourceConfig,
         onHotReload: commitPluginRuntime(runtime),
       });
-      await harness.reloader.ready;
       const application = harness.reloader.applyPluginLifecycleChange({
         config,
         write,
@@ -986,7 +994,7 @@ describe("startGatewayConfigReloader", () => {
     async (missing) => {
       const config: OpenClawConfig = { gateway: { reload: { mode: "off" } } };
       const runtime = pluginRuntime("runtime-owner");
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         async () =>
           makeSnapshot({
             config,
@@ -998,7 +1006,6 @@ describe("startGatewayConfigReloader", () => {
           onHotReload: commitPluginRuntime(runtime),
         },
       );
-      await harness.reloader.ready;
       await expect(
         harness.reloader.applyPluginLifecycleChange({
           config,
@@ -1043,11 +1050,10 @@ describe("startGatewayConfigReloader", () => {
       const settled = vi.fn();
       void application.result.then(settled);
       let currentApplication: ReturnType<typeof createRuntimeConfigWriteApplication> | undefined;
-      const harness = createReloaderHarness(async () => snapshot, {
+      const harness = await createReadyReloader(async () => snapshot, {
         initialConfig,
         onHotReload: commitPluginRuntime(runtime),
       });
-      await harness.reloader.ready;
       harness.emitWrite(
         attachRuntimeConfigWriteApplication(
           {
@@ -1124,7 +1130,7 @@ describe("startGatewayConfigReloader", () => {
       const operationIds: string[] = [];
       let applying = false;
       let reads = 0;
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         async () => {
           if (applying && ++reads === 1 && boundary === "snapshot") {
             if (scenario === "pending-write") {
@@ -1176,7 +1182,6 @@ describe("startGatewayConfigReloader", () => {
           },
         },
       );
-      await harness.reloader.ready;
       try {
         if (boundary === "snapshot") {
           harness.emitWrite(writeNotification);
@@ -1428,7 +1433,7 @@ describe("startGatewayConfigReloader", () => {
   it("does not duplicate another OpenClaw process's journaled write", async () => {
     const initialConfig = makeGatewayPortConfig(18789);
     const nextConfig = makeGatewayPortConfig(18790);
-    const harness = createReloaderHarness(
+    const harness = await createReadyReloader(
       vi.fn(async () =>
         makeSnapshot({
           config: nextConfig,
@@ -1437,7 +1442,6 @@ describe("startGatewayConfigReloader", () => {
       ),
       { initialConfig },
     );
-    await harness.reloader.ready;
     configAuditMocks.readLatestSnapshot.mockReturnValue({
       configPath: "/tmp/openclaw.json",
       rawHash: hashConfigRaw(JSON.stringify(nextConfig)),
@@ -1471,8 +1475,7 @@ describe("startGatewayConfigReloader", () => {
       issues: [{ path: "gateway.port", message: "expected number" }],
     });
     let activeSnapshot = firstInvalid;
-    const harness = createReloaderHarness(vi.fn(async () => activeSnapshot));
-    await harness.reloader.ready;
+    const harness = await createReadyReloader(vi.fn(async () => activeSnapshot));
     configAuditMocks.append.mockClear();
 
     await flushWatcherChange(harness);
@@ -1503,11 +1506,10 @@ describe("startGatewayConfigReloader", () => {
       });
       const nextConfig = makeGatewayPortConfig(port);
       let activeSnapshot = invalid;
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         vi.fn(async () => activeSnapshot),
         { initialConfig },
       );
-      await harness.reloader.ready;
       configAuditMocks.append.mockClear();
 
       await flushWatcherChange(harness);
@@ -1536,13 +1538,12 @@ describe("startGatewayConfigReloader", () => {
         fingerprintedAuthoredConfig: { gateway: { port: 18789 } },
       });
       const rawHash = kind === "missing" ? null : "invalid-raw-hash";
-      const harness = createWriteReloaderHarness({
+      await createReadyWriteReloader({
         initialSnapshotRawHash: rawHash,
         initialAuthoredConfig: kind === "missing" ? {} : { gateway: { port: "invalid" } },
         initialSnapshotValid: kind === "missing",
         initialSnapshotIssues: [{ path: "gateway.port", message: "expected number" }],
       });
-      await harness.reloader.ready;
 
       expect(configAuditMocks.append).toHaveBeenCalledOnce();
       expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
@@ -1571,12 +1572,11 @@ describe("startGatewayConfigReloader", () => {
       fingerprintedAuthoredConfig: fingerprintConfigSnapshotAuthoredConfig(previousConfig),
     });
 
-    const harness = createWriteReloaderHarness({
+    await createReadyWriteReloader({
       initialConfig,
       initialSnapshotRawHash: "current-raw-hash",
       initialAuthoredConfig: initialConfig,
     });
-    await harness.reloader.ready;
 
     expect(configAuditMocks.append.mock.calls[0]?.[0]?.record).toMatchObject({
       event: "config.external",
@@ -1598,12 +1598,11 @@ describe("startGatewayConfigReloader", () => {
     // CAS token so path B can take the slot over, without seeding reconcile.
     configAuditMocks.readLatestSnapshot.mockReturnValue(storedSnapshot);
     const initialConfig: OpenClawConfig = { gateway: { port: 18790 } };
-    const harness = createWriteReloaderHarness({
+    await createReadyWriteReloader({
       initialConfig,
       initialSnapshotRawHash: "path-b-raw-hash",
       initialAuthoredConfig: initialConfig,
     });
-    await harness.reloader.ready;
 
     expect(configAuditMocks.append).not.toHaveBeenCalled();
     expect(configAuditMocks.upsertSnapshot.mock.calls.map(([snapshot]) => snapshot)).toContainEqual(
@@ -1821,8 +1820,7 @@ describe("startGatewayConfigReloader", () => {
     };
     let snapshot = makeSnapshot({ config: nextConfig, hash: "mode-off-write" });
     const readSnapshot = vi.fn(async () => snapshot);
-    const harness = createReloaderHarness(readSnapshot, { initialConfig });
-    await harness.reloader.ready;
+    const harness = await createReadyReloader(readSnapshot, { initialConfig });
     expect(harness.onReloadEnabledChange.mock.calls).toEqual([[true]]);
 
     await flushWatcherChange(harness);
@@ -1883,12 +1881,11 @@ describe("startGatewayConfigReloader", () => {
         throw new Error("required SecretRef INCLUDED_GATEWAY_TOKEN is unavailable");
       },
     );
-    const harness = createReloaderHarness(readSnapshot, {
+    const harness = await createReadyReloader(readSnapshot, {
       initialConfig,
       initialCompareConfig: initialConfig,
       onRestart,
     });
-    await harness.reloader.ready;
 
     harness.emitWrite(makeWrite(initialConfig, "unchanged-root-hash"));
     await flushReload(harness.reloader);
@@ -2037,12 +2034,11 @@ describe("startGatewayConfigReloader", () => {
       },
     );
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
-    const harness = createReloaderHarness(readSnapshot, {
+    const harness = await createReadyReloader(readSnapshot, {
       initialConfig,
       onHotReload,
       promoteSnapshot,
     });
-    await harness.reloader.ready;
 
     harness.watcher.emit("change");
     await vi.advanceTimersByTimeAsync(0);
@@ -2090,7 +2086,7 @@ describe("startGatewayConfigReloader", () => {
       env: { vars: { [envKey]: "b" } },
     } satisfies OpenClawConfig;
     const preparedEnvValues: Array<string | undefined> = [];
-    const harness = createWriteReloaderHarness({
+    const harness = await createReadyWriteReloader({
       initialConfig,
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
@@ -2114,7 +2110,6 @@ describe("startGatewayConfigReloader", () => {
         return "applied";
       },
     });
-    await harness.reloader.ready;
     const emitWrite = (config: OpenClawConfig, hash: string, revision: number) => {
       harness.emitWrite(
         makeWrite(config, hash, {
@@ -2146,11 +2141,12 @@ describe("startGatewayConfigReloader", () => {
           ? { messages: { visibleReplies: "message_tool" } }
           : { agents: { defaults: { sandbox: { mode: "all" } } }, hooks: { enabled: true } }),
       };
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         async () => makeSnapshot({ config: nextConfig, hash: kind }),
-        { initialConfig },
+        {
+          initialConfig,
+        },
       );
-      await harness.reloader.ready;
       await flushWatcherChange(harness);
 
       const apply = kind === "noop" ? harness.onNoopConfigCommit : harness.onHotReload;
@@ -2499,8 +2495,7 @@ describe("startGatewayConfigReloader", () => {
       ],
     };
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
-    const harness = createReloaderHarness(readSnapshot, { promoteSnapshot });
-    await harness.reloader.ready;
+    const harness = await createReadyReloader(readSnapshot, { promoteSnapshot });
 
     harness.emitWrite(write);
     await flushReload(harness.reloader);
@@ -2556,7 +2551,7 @@ describe("startGatewayConfigReloader", () => {
       env: targetEnv,
       previousOwnedEnv: { [envKey]: "old" },
     });
-    const harness = createWriteReloaderHarness({
+    const harness = await createReadyWriteReloader({
       initialConfig,
       onHotReload: async (plan, runtimeConfig, ownership) => {
         ownership.publishRuntimeEnv();
@@ -2567,7 +2562,6 @@ describe("startGatewayConfigReloader", () => {
         throw new Error("hot reload failed");
       },
     });
-    await harness.reloader.ready;
 
     harness.emitWrite(
       makeWrite(nextConfig, `env-${testCase.label}`, {
@@ -2601,7 +2595,7 @@ describe("startGatewayConfigReloader", () => {
         hash: "env-c",
       }),
     );
-    const harness = createReloaderHarness(readSnapshot, {
+    const harness = await createReadyReloader(readSnapshot, {
       initialConfig: configA,
       prepareConfigCandidate: async ({ runtimeConfig, sourceConfig, previousSourceConfig }) => ({
         runtimeConfig,
@@ -2616,7 +2610,6 @@ describe("startGatewayConfigReloader", () => {
         }),
       }),
     });
-    await harness.reloader.ready;
 
     await flushWatcherChange(harness);
     expect(targetEnv[envKey]).toBe("c");
@@ -2659,7 +2652,7 @@ describe("startGatewayConfigReloader", () => {
       const rollbackSource = vi.fn(async () => {});
       let rejectAcceptance = failure === "acceptance failure";
       let emitSupersedingChange = () => {};
-      const harness = createReloaderHarness(
+      const harness = await createReadyReloader(
         vi.fn(async () => makeSnapshot({ config: initialConfig, hash: "superseding-write" })),
         {
           scheduler,
@@ -2689,7 +2682,6 @@ describe("startGatewayConfigReloader", () => {
           },
         },
       );
-      await harness.reloader.ready;
       emitSupersedingChange = () => {
         emitSupersedingChange = () => {};
         harness.watcher.emit("change");
@@ -2737,8 +2729,7 @@ describe("startGatewayConfigReloader", () => {
         logging: { level: "debug" },
       });
       const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("source-only-echo"));
-      const harness = createReloaderHarness(readSnapshot);
-      await harness.reloader.ready;
+      const harness = await createReadyReloader(readSnapshot);
 
       harness.emitWrite({
         ...makeZeroDebounceHookWrite("source-only-echo"),
@@ -2798,8 +2789,7 @@ describe("startGatewayConfigReloader", () => {
         hash: "replay-secret-restart",
       }),
     );
-    const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
-    await harness.reloader.ready;
+    const harness = await createReadyReloader(readSnapshot, { readPluginInstallRecords });
 
     harness.emitWrite(
       makeWrite(sourceConfig, "replay-secret-restart", {
@@ -2834,8 +2824,7 @@ describe("startGatewayConfigReloader", () => {
         hash: "latest-c",
       }),
     );
-    const harness = createReloaderHarness(readSnapshot, { readPluginInstallRecords });
-    await harness.reloader.ready;
+    const harness = await createReadyReloader(readSnapshot, { readPluginInstallRecords });
 
     const pendingApplication = createRuntimeConfigWriteApplication();
     const restartIntent = { mode: "restart", reason: "committed write requires restart" } as const;
@@ -2886,8 +2875,7 @@ describe("startGatewayConfigReloader", () => {
     "preserves required restart after failed admission through %s",
     async (retry) => {
       const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("replay-retry"));
-      const harness = createReloaderHarness(readSnapshot);
-      await harness.reloader.ready;
+      const harness = await createReadyReloader(readSnapshot);
       harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
 
       harness.emitWrite({
@@ -2922,10 +2910,9 @@ describe("startGatewayConfigReloader", () => {
 
   it("retries a failed RPC write under independent watcher admission after its request settles", async () => {
     const readSnapshot = vi.fn(async () => makeZeroDebounceHookSnapshot("direct-retry"));
-    const harness = createReloaderHarness(readSnapshot, {
+    const harness = await createReadyReloader(readSnapshot, {
       runTransaction: runWithGatewayIndependentRootWorkAdmission,
     });
-    await harness.reloader.ready;
     harness.onRestart.mockRejectedValueOnce(new Error("restart admission failed"));
     const request = tryBeginGatewayRootWorkAdmission();
     if (!request) {
@@ -2990,10 +2977,9 @@ describe("startGatewayConfigReloader", () => {
         },
       };
       const snapshot = makeSnapshot({ config: nextSourceConfig, hash: "plugin-install-1" });
-      const harness = createReloaderHarness(async () => snapshot, {
+      const harness = await createReadyReloader(async () => snapshot, {
         initialCompareConfig: sourceConfig,
       });
-      await harness.reloader.ready;
       harness.emitWrite(
         makeWrite(nextSourceConfig, "plugin-install-1", {
           snapshot,
@@ -3044,7 +3030,7 @@ describe("startGatewayConfigReloader", () => {
             hash: "batch-source",
           }),
         );
-        const harness = createReloaderHarness(readSnapshot, {
+        const harness = await createReadyReloader(readSnapshot, {
           onHotReload: async (plan, next, ownership) => {
             ownership.markRuntimeCommitted(next, plan);
             return {
@@ -3057,7 +3043,6 @@ describe("startGatewayConfigReloader", () => {
             };
           },
         });
-        await harness.reloader.ready;
         try {
           await withPluginLifecycleLease({}, async () => {
             // The CLI is reviewing the next requirement after committing the first one.
@@ -3152,14 +3137,13 @@ describe("startGatewayConfigReloader", () => {
         }),
       );
       const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
-      const harness = createReloaderHarness(readSnapshot, {
+      const harness = await createReadyReloader(readSnapshot, {
         initialConfig: activeConfig,
         initialCompareConfig: activeConfig,
         initialPluginInstallRecords: installRecords,
         readPluginInstallRecords,
         onHotReload: commitPluginRuntime(pluginRuntime("metadata-refresh", 2, ["brave"])),
       });
-      await harness.reloader.ready;
       const startupMetadata = createPluginMetadataSnapshotFixture();
       setCurrentPluginMetadataSnapshotState(startupMetadata, "startup-metadata");
 
@@ -3191,6 +3175,10 @@ describe("startGatewayConfigReloader", () => {
       await harness.reloader.stop();
     },
   );
+
+  registerPluginDrainReloadTests(() => {
+    refreshSkillsDiscoveryMock.mockImplementation(realSkillsRefresh.refreshSkillsDiscovery);
+  });
 });
 
 registerSkillsRefreshTests(refreshSkillsDiscoveryMock);

@@ -3066,7 +3066,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/sessions-patch.test.ts",
   "src/gateway/sessions-resolve-projection.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
-  "src/gateway/sessions-resolve.resident.test.ts",
   "src/gateway/sessions-resolve.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/talk/client-authority.test.ts",
