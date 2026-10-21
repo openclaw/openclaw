@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  retireAcceptedSessionSpawnCompletionForRun,
+} from "../accepted-session-spawn.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -86,6 +89,42 @@ describe("logical requester settlement", () => {
         assertCurrent: expect.any(Function),
       });
       expect(result.requesterContinuationSettled).toBe(true);
+    } finally {
+      admission.close();
+    }
+  });
+
+  it("keeps cancelled receipts retired while transferring replacement work from a stale harness result", async () => {
+    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "yield-test");
+    const cancelled = acceptedSessionSpawns[0]!;
+    const replacement = {
+      runId: "replacement",
+      childSessionKey: "agent:main:subagent:replacement",
+      expectsCompletionMessage: true,
+    };
+    try {
+      await admission.admit("embedded");
+      mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, [cancelled]);
+      retireAcceptedSessionSpawnCompletionForRun(admission.operationalRunInstance, cancelled);
+      const result: EmbeddedAgentRunResult = {
+        acceptedSessionSpawns: [cancelled, replacement],
+        meta: { durationMs: 1, yielded: true },
+      };
+      await settleRequesterRun(
+        { ...requester, preparedRunAdmission: admission },
+        result,
+        assertCurrent,
+      );
+      expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
+        requesterSessionKey: requester.sessionKey,
+        requesterAgentId: requester.agentId,
+        requesterTurnRunId: requester.runId,
+        requesterYielded: true,
+        acceptedSessionSpawns: [{ ...cancelled, expectsCompletionMessage: false }, replacement],
+        assertCurrent: expect.any(Function),
+      });
+      expect(result.requesterContinuationSettled).toBe(true);
+      expect(cancelled.expectsCompletionMessage).toBe(true);
     } finally {
       admission.close();
     }

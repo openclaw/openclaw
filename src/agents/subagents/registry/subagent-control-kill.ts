@@ -3,11 +3,15 @@ import { prepareSessionGenerationFacts } from "../../../config/sessions/session-
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isCurrentChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
+import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { retireAcceptedSessionSpawnCompletionForRun } from "../../accepted-session-spawn.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { captureSubagentCommands } from "./subagent-control-commands.js";
+import { collectKillErrors } from "./subagent-control-kill-errors.js";
 import { mutateSubagentRunForKill } from "./subagent-control-kill-runtime.js";
 import {
   withSubagentKillScope,
@@ -246,30 +250,6 @@ async function killLatestSubagentRun(params: {
     });
   }
   return { entry: tree.entry, session, result };
-}
-
-function collectKillErrors(trees: KillTree[], unlabeledRoot?: KillTree) {
-  let failed = 0;
-  const errors: string[] = [];
-  const collect = (tree: KillTree) => {
-    const diagnostics = [...tree.errors];
-    if (tree.completedCleanupError) {
-      diagnostics.push(tree.completedCleanupError);
-    }
-    if (diagnostics.length > 0) {
-      failed += 1;
-      for (const error of diagnostics) {
-        errors.push(
-          tree === unlabeledRoot ? error : `${resolveSubagentLabel(tree.entry)}: ${error}`,
-        );
-      }
-    }
-    tree.children.forEach(collect);
-  };
-  // No authority checks or I/O here: a later sibling can fault an already-visited node.
-  // Failures count stable selected nodes, independent of later replacements and killed counts.
-  trees.forEach(collect);
-  return { errors, failed };
 }
 
 type KillTraversal = {
@@ -726,6 +706,29 @@ export async function killSubagentRunAdmin(
       };
     },
     control?.preparePublication,
-    publish,
+    (result) => {
+      const caller = getGatewayToolCallerIdentity();
+      const instance = caller?.operationalRunInstance;
+      if (
+        result.found &&
+        !result.error &&
+        result.targetState?.state === "terminal" &&
+        result.targetState.task.status === "cancelled" &&
+        caller &&
+        instance &&
+        instance.runId === entry.requesterTurnRunId &&
+        caller.sessionKey === entry.requesterSessionKey &&
+        caller.agentId === authority.requesterAgentId &&
+        getActiveAgentRunDelegatedAuthority(instance)?.operationalRunInstance === instance
+      ) {
+        // Only the final publication follows queued cleanup and its second ownership
+        // check. The earlier snapshot cannot retire an unacknowledged cancellation.
+        retireAcceptedSessionSpawnCompletionForRun(instance, {
+          runId: entry.taskRunId ?? entry.runId,
+          childSessionKey: entry.childSessionKey,
+        });
+      }
+      return publish(result);
+    },
   );
 }
