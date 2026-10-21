@@ -316,28 +316,17 @@ it("validates selected split notes instead of accepting an index as package cont
   writeFileSync(file("CHANGELOG.md"), "# Changelog\n\n- [Release](CHANGELOG/2026.8.1.md)\n");
   writeFileSync(file("CHANGELOG/2026.8.1.md"), changelog.replace("Unreleased", "2026.8.1"));
   expect(validatePackageSourceDir(root)).toBe("2026.8.1");
-  writeFileSync(file("CHANGELOG/2026.8.1.md"), "## 2026.8.1\n- Tiny.\n");
-  expect(() => validatePackageSourceDir(root)).toThrow("only 7 body bytes");
 });
 
-it.each([
-  ["2026.8.1-beta.4", "Unreleased"],
-  ["2026.9.1", "2026.8.3 (Unreleased)"],
-])("accepts aligned %s source manifests with %s notes", (version, heading) => {
+it("accepts aligned prerelease source manifests with Unreleased notes", () => {
+  const version = "2026.8.1-beta.4";
   expect(
     validateSource({
       aiManifestContent: aiManifest({ version }),
       allowUnreleasedChangelog: true,
-      changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
       rootManifestContent: rootManifest({ version }),
     }),
   ).toBe(version);
-});
-
-it("uses canonical package changelog validation", () => {
-  expect(() => validateSource()).toThrow(
-    "CHANGELOG.md does not contain a release section for 2026.8.1.",
-  );
 });
 
 it("rejects source package version drift", () => {

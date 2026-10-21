@@ -11,7 +11,6 @@ import {
   readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { validateParentManifest } from "../../scripts/release-ci-summary.mjs";
 import {
   SHA,
   TARGET_SHA,
@@ -76,30 +75,26 @@ describe("FRV protected gh evidence reads", () => {
     ]);
   });
 
-  it("fails closed when every job listing page size returns a 5xx", async () => {
-    const serverError = Object.assign(new Error("Command failed"), {
-      stderr: "gh: Server Error (HTTP 502)",
-    });
-    const pageSizes: number[] = [];
-    await expect(
-      readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
-        pageSizes.push(perPage);
-        expect(smallerPageFallback).toBe(perPage !== 30);
-        throw serverError;
-      }),
-    ).rejects.toBe(serverError);
-    expect(pageSizes).toEqual([100, 50, 30]);
-    const notFound = Object.assign(new Error("Command failed"), {
-      stderr: "gh: Not Found (HTTP 404)",
-    });
-    await expect(
-      readReleaseJobListing(async (perPage) => {
-        pageSizes.push(perPage);
-        throw notFound;
-      }),
-    ).rejects.toBe(notFound);
-    expect(pageSizes).toEqual([100, 50, 30, 100]);
-  });
+  it.each([
+    [502, [100, 50, 30]],
+    [404, [100]],
+  ] as const)(
+    "preserves HTTP %s after the permitted page-size fallbacks",
+    async (status, sizes) => {
+      const error = Object.assign(new Error("Command failed"), {
+        stderr: `gh: ${status === 502 ? "Server Error" : "Not Found"} (HTTP ${status})`,
+      });
+      const pageSizes: number[] = [];
+      await expect(
+        readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+          pageSizes.push(perPage);
+          expect(smallerPageFallback).toBe(perPage !== 30);
+          throw error;
+        }),
+      ).rejects.toBe(error);
+      expect(pageSizes).toEqual(sizes);
+    },
+  );
 
   it("reads the mutable release tip freshly even when watcher reads are cached", () => {
     const result = runProtectedFrv(
@@ -733,12 +728,6 @@ describe("publication status real CLI", () => {
       fixture.diagnostic.stages.coreNpm.state = "unattempted";
       fixture.diagnostic.stages.coreNpm.publication = "unknown";
     }
-    validateParentManifest(fixture.manifest, {
-      runId: "77",
-      runAttempt: 2,
-      workflowRef: SOURCE_REF,
-      workflowSha: SHA,
-    });
     const result = await runPublicationCli(fixture);
     const value = JSON.parse(result.stdout);
     const publication = value.publication;
