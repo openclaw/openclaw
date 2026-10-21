@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -30,11 +30,15 @@ afterEach(() => {
   vi.mocked(resolveBundledPluginsDir).mockReset();
 });
 
+function writePackage(packagePath: string, channel: PluginPackageChannel) {
+  writeJsonFile(packagePath, { name: "@openclaw/matrix", openclaw: { channel } });
+}
+
 function fixture(channel: PluginPackageChannel) {
   const extensionsRoot = path.join(makeTempRepoRoot(tempDirs, "bpcm-"), "dist", "extensions");
   const pluginRoot = path.join(extensionsRoot, "matrix");
   const packagePath = path.join(pluginRoot, "package.json");
-  writeJsonFile(packagePath, { name: "@openclaw/matrix", openclaw: { channel } });
+  writePackage(packagePath, channel);
   writeJsonFile(path.join(pluginRoot, "openclaw.plugin.json"), {
     id: "matrix",
     configSchema: { type: "object" },
@@ -44,25 +48,40 @@ function fixture(channel: PluginPackageChannel) {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensionsRoot;
   process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
   vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+  return packagePath;
 }
 
 const readMatrix = () =>
   listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
 
-it("reads doctor capabilities from the resolved bundled plugin dir", () => {
-  const doctorCapabilities = {
-    dmAllowFromMode: "nestedOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: false,
-    warnOnEmptyGroupSenderAllowlist: true,
-  } satisfies PluginPackageChannel["doctorCapabilities"];
-  fixture({
-    id: "matrix",
-    label: "Matrix",
-    docsPath: "/channels/matrix",
-    doctorCapabilities,
+describe("bundled package channel metadata", () => {
+  it("reads doctor capabilities from the resolved bundled plugin dir", () => {
+    fixture({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      doctorCapabilities: {
+        dmAllowFromMode: "nestedOnly",
+        groupModel: "sender",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+      },
+    });
+    expect(readMatrix()?.doctorCapabilities).toEqual({
+      dmAllowFromMode: "nestedOnly",
+      groupModel: "sender",
+      groupAllowFromFallbackToAllowFrom: false,
+      warnOnEmptyGroupSenderAllowlist: true,
+    });
   });
-  expect(readMatrix()?.doctorCapabilities).toEqual(doctorCapabilities);
+
+  it("reflects package channel metadata edits after the metadata lifecycle is cleared", () => {
+    const packagePath = fixture({ id: "matrix", label: "Before" });
+    expect(readMatrix()?.label).toBe("Before");
+    writePackage(packagePath, { id: "matrix", label: "After" });
+    clearPluginMetadataLifecycleCaches();
+    expect(readMatrix()?.label).toBe("After");
+  });
 });
 
 it("keeps bundled channel schemas single-sourced from the generated metadata", async () => {

@@ -291,4 +291,22 @@ describe("bundled plugin metadata", () => {
       ),
     ).toBe(path.join(pluginRoot, "index.ts"));
   });
+
+  it("reflects bundled manifest edits in the next lifecycle generation", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-fresh-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+
+    writeAlphaPlugin(pluginRoot, { name: "Before" });
+
+    expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("Before");
+
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      name: "After",
+      configSchema: { type: "object" },
+    });
+    clearPluginMetadataLifecycleCaches();
+
+    expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("After");
+  });
 });

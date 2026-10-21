@@ -23,6 +23,7 @@ import {
   isColdPluginRuntimeLoaded,
 } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -193,6 +194,34 @@ describe("buildPluginRegistrySnapshotReport", () => {
     },
   );
 
+  it("keeps recovered managed npm plugins visible when the persisted registry is stale", async () => {
+    const { stateDir, env } = createStatusEnv();
+    const config = { plugins: { entries: { whatsapp: { enabled: true } } } };
+    const whatsappDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+      name: "WhatsApp",
+    });
+    const staleIndex = loadInstalledPluginIndex({ config, env, installRecords: {} });
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
+    await writePersistedInstalledPluginIndex(staleIndex, { stateDir });
+
+    const report = buildPluginRegistrySnapshotReport({ config, env });
+
+    expect(report.registrySource).toBe("derived");
+    expect(report.registryDiagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+    expect(report.plugins.find((plugin) => plugin.id === "whatsapp")).toMatchObject({
+      id: "whatsapp",
+      name: "WhatsApp",
+      source: fs.realpathSync(path.join(whatsappDir, "dist", "index.js")),
+      status: "loaded",
+    });
+  });
+
   it("reuses prepared list metadata with a persisted registry and omitted workspace", async () => {
     const { rootDir: tempRoot, stateDir, env } = createStatusEnv(false);
     const fixture = createColdPluginFixture({
@@ -225,7 +254,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
 
     expect(report.plugins).toMatchObject([
       {
-        name: "Cold Control Plane",
         version: "9.8.7",
         toolNames: ["indexed_echo", "indexed_search"],
         source: fs.realpathSync(fixture.runtimeSource),

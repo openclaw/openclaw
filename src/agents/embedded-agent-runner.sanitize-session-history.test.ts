@@ -1,16 +1,25 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildOpenAICompletionsParams } from "../../packages/ai/src/transports/openai-completions-params.js";
+import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   loadSanitizeSessionHistoryWithCleanMocks,
   makeMockSessionManager,
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
+  makeReasoningAssistantMessages,
   type SanitizeSessionHistoryFn,
   TEST_SESSION_ID,
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
-import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
-import { textAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { validateReplayTurns } from "./embedded-agent-runner/replay-history.js";
+import { convertToLlm } from "./sessions/messages.js";
+import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+import { textToolResult, textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import { extractToolCallsFromAssistant } from "./tool-call-id.js";
+import type { TranscriptPolicy } from "./transcript-policy.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./embedded-agent-helpers/images.js", async () => ({
@@ -43,6 +52,20 @@ vi.mock("../plugins/provider-runtime.js", async () => {
     sanitizeProviderReplayHistoryWithPluginAsync: vi.fn<
       typeof actual.sanitizeProviderReplayHistoryWithPluginAsync
     >(async ({ provider, context }) => {
+      if (
+        provider &&
+        provider.startsWith("google") &&
+        context.messages[0]?.role === "assistant" &&
+        context.sessionState
+      ) {
+        await context.sessionState.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
+          timestamp: Date.now(),
+        });
+        return [
+          { role: "user", content: "(session bootstrap)" } as AgentMessage,
+          ...context.messages,
+        ];
+      }
       if (provider === "replay-poison") {
         return context.messages.filter(
           (message) =>
@@ -78,6 +101,8 @@ const toolCall = (id: string, name = "read") => ({
   name,
   arguments: {},
 });
+const toolResult = (id: string, value = "ok", name = "read") =>
+  castAgentMessage(textToolResult(id, name, value, { isError: false }));
 const makeUsage = (input = 0, output = 0, totalTokens = 0): Usage => ({
   ...makeZeroUsageSnapshot(),
   input,
@@ -108,6 +133,23 @@ const assistantContent = (messages: AgentMessage[], index = 1) => {
   return (messages[index] as AssistantMessage).content;
 };
 const roles = (messages: AgentMessage[]) => messages.map((message) => message.role);
+const omittedReasoning = [text("[assistant reasoning omitted]")];
+const makeAnthropicReplayPolicy = (
+  overrides: Partial<TranscriptPolicy> = {},
+): TranscriptPolicy => ({
+  sanitizeMode: "full",
+  sanitizeToolCallIds: true,
+  toolCallIdMode: "strict",
+  preserveNativeAnthropicToolUseIds: true,
+  repairToolUseResultPairing: true,
+  preserveSignatures: true,
+  dropThinkingBlocks: false,
+  applyGoogleTurnOrdering: false,
+  validateGeminiTurns: false,
+  validateAnthropicTurns: true,
+  allowSyntheticToolResults: true,
+  ...overrides,
+});
 const anthropicRoute = {
   provider: "anthropic",
   modelApi: "anthropic-messages",
@@ -127,6 +169,13 @@ const currentModel = (timestamp: number) =>
     modelApi: "openai-responses",
     modelId: "gpt-5.4",
   });
+const metadata = [
+  markInboundContextLabel("Conversation info:"),
+  "```json",
+  '{"chat_id":"channel:123","sender":"OpenClaw"}',
+  "```",
+].join("\n");
+
 describe("sanitizeSessionHistory", () => {
   let sessionManager: ReturnType<typeof makeMockSessionManager>;
   // Sparse and malformed transcript fixtures cross the typed boundary once, here.
@@ -146,14 +195,49 @@ describe("sanitizeSessionHistory", () => {
     messages: unknown[],
     overrides: Partial<Parameters<SanitizeSessionHistoryFn>[0]> = {},
   ) => sanitize(messages, { ...anthropicRoute, ...overrides });
+  const validateAnthropic = (messages: AgentMessage[], policy?: TranscriptPolicy) =>
+    validateReplayTurns({ messages, ...anthropicRoute, sessionId: TEST_SESSION_ID, policy });
 
   beforeAll(async () => {
-    sanitizeSessionHistory = await loadSanitizeSessionHistoryWithCleanMocks();
+    ({ sanitizeSessionHistory } = await loadSanitizeSessionHistoryWithCleanMocks());
   });
   beforeEach(() => {
     testTimestamp = 1;
     vi.clearAllMocks();
     sessionManager = makeMockSessionManager();
+  });
+
+  it("keeps tier-suffixed model reasoning through history sanitization and request replay", async () => {
+    const model = makeProviderModelFixture<"openai-completions">({
+      id: "deepseek-v4-flash-free",
+      provider: "custom-openai-proxy",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example/v1",
+      reasoning: false,
+    });
+    const messages = await sanitize(
+      [
+        user("hello"),
+        {
+          ...assistant([thinking("Need to answer politely.", "reasoning_content"), text("Hello!")]),
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+        },
+        user("again"),
+      ],
+      { modelApi: model.api, provider: model.provider, modelId: model.id, model },
+    );
+    const request = buildOpenAICompletionsParams(
+      model,
+      { messages: convertToLlm(messages) },
+      undefined,
+    );
+    expect(request.messages).toContainEqual({
+      role: "assistant",
+      content: "Hello!",
+      reasoning_content: "Need to answer politely.",
+    });
   });
 
   it.each([
@@ -181,6 +265,19 @@ describe("sanitizeSessionHistory", () => {
       });
     },
   );
+
+  it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
+    const entries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const out = await sanitize([textAssistant("hello")], {
+      modelApi: "google-generative-ai",
+      provider: "google-vertex",
+      sessionManager: makeInMemorySessionManager(entries),
+    });
+    expect(out[0]).toMatchObject({ role: "user", content: "(session bootstrap)" });
+    expect(entries.some((entry) => entry.customType === "google-turn-ordering-bootstrap")).toBe(
+      true,
+    );
+  });
 
   it("annotates inter-session user messages before context sanitization", async () => {
     const out = await sanitize([
@@ -250,57 +347,27 @@ describe("sanitizeSessionHistory", () => {
     expect((out[3] as AssistantMessage).usage).toEqual(freshUsage);
   });
 
-  it("preserves paired tool IDs for an unowned Azure Responses provider", async () => {
-    const id = "call_gateway_0|fc_gateway_0";
-    const out = await sanitize(
-      [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "reasoning",
-              thinkingSignature: { id: "rs_test", type: "reasoning" },
-            },
-            toolCall(id, "noop"),
-          ],
-        },
-        textToolResult(id, "noop", "", { isError: false }),
-      ],
+  it("keeps OpenAI Responses real tool results paired without rewriting valid ids", async () => {
+    const id = "call_mock_image_generate_1";
+    const out = await sanitize([
+      user("generate"),
+      assistant([toolCall(id, "image_generate")], { stopReason: "toolUse" }),
       {
-        modelApi: "azure-openai-responses",
-        provider: "custom-compatible",
-        modelId: undefined,
-        sessionManager: makeInMemorySessionManager([]),
+        role: "toolResult",
+        call_id: id,
+        toolName: "image_generate",
+        content: [text("Background task started.")],
+        isError: false,
       },
-    );
-    expect((out[0] as AssistantMessage).content).toContainEqual(toolCall(id, "noop"));
-    expect(out[1]).toMatchObject({ toolCallId: id });
-  });
-
-  it("strips completed Qwen reasoning but preserves the current tool-call continuation", async () => {
-    const current = [
-      thinking("call the tool", "reasoning_content"),
-      toolCall("call123456", "lookup"),
-    ];
-    const out = await sanitize(
-      [
-        user("first"),
-        assistant([thinking("old private reasoning", "reasoning_content"), text("visible answer")]),
-        user("look up the answer"),
-        assistant(current),
-        {
-          role: "toolResult",
-          toolCallId: "call123456",
-          toolName: "lookup",
-          content: "42",
-          timestamp: nextTimestamp(),
-        },
-      ],
-      { modelApi: "openai-completions", provider: "vllm", modelId: "Qwen3.6-27B" },
-    );
-    expect(assistantContent(out)).toEqual([text("visible answer")]);
-    expect(assistantContent(out, 3)).toEqual(current);
+      user("inspect the attachment"),
+    ]);
+    expect(roles(out)).toEqual(["user", "assistant", "toolResult", "user"]);
+    expect(extractToolCallsFromAssistant(out[1] as AssistantMessage)[0]?.id).toBe(id);
+    expect(out[2]).toMatchObject({
+      toolCallId: id,
+      call_id: id,
+      content: [text("Background task started.")],
+    });
   });
 
   it("repairs OpenAI Responses replay again after provider hooks mutate history", async () => {
@@ -321,6 +388,29 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
+  it("repairs a message-tool delivery-mirror poisoned replay", async () => {
+    const out = await sanitize([
+      user("start"),
+      assistant([toolCall("call_message|fc_message", "message")], { stopReason: "toolUse" }),
+      {
+        ...textAssistant("visible reply"),
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        stopReason: "stop",
+      },
+      user("continue"),
+    ]);
+    expect(roles(out)).toEqual(["user", "assistant", "toolResult", "user"]);
+    expect(out.some((message) => (message as { model?: string }).model === "delivery-mirror")).toBe(
+      false,
+    );
+    expect(out[2]).toMatchObject({
+      toolCallId: "call_message|fc_message",
+      content: [text("aborted")],
+    });
+  });
+
   it("rejects dangling OpenAI Responses tool calls before provider replay when repair is disabled", async () => {
     await expect(
       sanitize(
@@ -330,23 +420,29 @@ describe("sanitizeSessionHistory", () => {
           user("continue"),
         ],
         {
-          policy: {
+          policy: makeAnthropicReplayPolicy({
             sanitizeMode: "images-only",
             sanitizeToolCallIds: false,
-            toolCallIdMode: "strict",
             preserveNativeAnthropicToolUseIds: false,
             repairToolUseResultPairing: false,
             preserveSignatures: false,
-            dropThinkingBlocks: false,
             dropReasoningFromHistory: false,
-            applyGoogleTurnOrdering: false,
-            validateGeminiTurns: false,
             validateAnthropicTurns: false,
             allowSyntheticToolResults: false,
-          },
+          }),
         },
       ),
     ).rejects.toThrow(/invalid_replay_transcript.*dangling_tool_call.*call_1/);
+  });
+
+  it("drops tool calls that are not in the allowed tool set", async () => {
+    const out = await sanitize(
+      [assistant([toolCall("call_1", "write")], { stopReason: "toolUse" })],
+      {
+        allowedToolNames: ["read"],
+      },
+    );
+    expect(out).toStrictEqual([]);
   });
 
   it("keeps reasoning newer than the latest actual model switch", async () => {
@@ -401,16 +497,11 @@ describe("sanitizeSessionHistory", () => {
 
   it("keeps paired openai reasoning when the active branch never switched", async () => {
     const active = currentModel(100);
-    const messages = castAgentMessages([
-      {
-        role: "assistant",
-        timestamp: 1,
-        content: [
-          thinking("reasoning", JSON.stringify({ id: "rs_test", type: "reasoning" })),
-          text("answer"),
-        ],
-      },
-    ]);
+    const messages = makeReasoningAssistantMessages({
+      thinkingSignature: "json",
+      includeText: true,
+      timestamp: 1,
+    });
     const out = await sanitize(messages, {
       modelId: "gpt-5.4",
       sessionManager: makeInMemorySessionManager(
@@ -419,5 +510,163 @@ describe("sanitizeSessionHistory", () => {
       ),
     });
     expect(out).toEqual([{ ...messages[0], usage: makeZeroUsageSnapshot() }]);
+  });
+
+  it("keeps consecutive user turns separate for append-only Anthropic Messages replay", async () => {
+    const messages = [
+      user("/model anthropic/claude-sonnet-4-6"),
+      user("Read notes.txt"),
+      assistant([text("Done")]),
+    ];
+    const policy = makeAnthropicReplayPolicy({
+      appendOnlyRuntimeContext: true,
+      dropReasoningFromHistory: false,
+    });
+    const direct = await validateAnthropic(messages, policy);
+    const bedrock = await validateReplayTurns({
+      messages,
+      policy,
+      modelApi: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      modelId: "anthropic.claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(roles(direct)).toEqual(["user", "user", "assistant"]);
+    expect(roles(bedrock)).toEqual(["user", "assistant"]);
+  });
+
+  it("strips copied inbound metadata and drops emptied assistant turns before validation", async () => {
+    const external = [
+      markInboundContextLabel("Context:"),
+      '<<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+      "Source: External",
+      "---",
+      "UNTRUSTED Discord message body",
+      "Ping",
+      '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>',
+    ].join("\n");
+    const sanitized = await sanitizeAnthropic([
+      user("Ping"),
+      assistant([text(`${metadata}\n\nPong\n\n${external}`)]),
+      user("First"),
+      assistant([text(metadata)]),
+      user("Second"),
+    ]);
+    expect(assistantContent(sanitized)).toEqual([text("Pong")]);
+    expect(roles(sanitized)).toEqual(["user", "assistant", "user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+    const validated = await validateAnthropic(sanitized);
+    expect(roles(validated)).toEqual(["user", "assistant", "user"]);
+    expect((validated[2] as UserMessage).content).toEqual([text("First"), text("Second")]);
+  });
+
+  it("strips completed Qwen reasoning but preserves the current tool-call continuation", async () => {
+    const current = [
+      thinking("call the tool", "reasoning_content"),
+      toolCall("call123456", "lookup"),
+    ];
+    const out = await sanitize(
+      [
+        user("first"),
+        assistant([thinking("old private reasoning", "reasoning_content"), text("visible answer")]),
+        user("look up the answer"),
+        assistant(current),
+        castAgentMessage({
+          role: "toolResult",
+          toolCallId: "call123456",
+          toolName: "lookup",
+          content: "42",
+          timestamp: nextTimestamp(),
+        }),
+      ],
+      { modelApi: "openai-completions", provider: "vllm", modelId: "Qwen3.6-27B" },
+    );
+    expect(assistantContent(out)).toEqual([text("visible answer")]);
+    expect(assistantContent(out, 3)).toEqual(current);
+  });
+
+  it("keeps regular latest Anthropic thinking replay while preserving older stripped turns", async () => {
+    const latest = [thinking("latest private reasoning", "sig_latest"), text("latest answer")];
+    const out = await sanitizeAnthropic(
+      [
+        user("first"),
+        assistant([thinking("old private reasoning", "sig_old")]),
+        user("second"),
+        assistant(latest),
+      ],
+      { modelId: "claude-3-7-sonnet-20250219" },
+    );
+    expect(assistantContent(out)).toEqual(omittedReasoning);
+    expect(assistantContent(out, 3)).toEqual(latest);
+  });
+
+  it("uses immutable thinking replay for anthropic-compatible providers when policy preserves signatures", async () => {
+    const out = await sanitizeAnthropic(
+      [user("retry"), assistant([thinking("internal", "sig_1"), toolCall("call_1", " read ")])],
+      {
+        provider: "anthropic-vertex",
+        policy: makeAnthropicReplayPolicy({ sanitizeThoughtSignatures: undefined }),
+      },
+    );
+    expect(roles(out)).toEqual(["user"]);
+    expect((out[0] as UserMessage).content).toBe("retry");
+  });
+
+  it("keeps earlier mutable ids from colliding with later preserved signed ids", async () => {
+    const signed = [thinking("internal", "sig_1"), toolCall("call1")];
+    const sanitized = await sanitizeAnthropic([
+      user("first"),
+      assistant([toolCall("call_1")]),
+      toolResult("call_1", "first result"),
+      user("second"),
+      assistant(signed, { stopReason: "toolUse" }),
+      toolResult("call1", "second result"),
+      user("retry"),
+    ]);
+    const validated = await validateAnthropic(sanitized);
+    const first = extractToolCallsFromAssistant(sanitized[1] as AssistantMessage)[0]?.id;
+    const second = extractToolCallsFromAssistant(sanitized[4] as AssistantMessage)[0]?.id;
+    expect(first).not.toBe("call1");
+    expect(second).toBe("call1");
+    expect(first).not.toBe(second);
+    expect(sanitized[2]).toMatchObject({ toolCallId: first });
+    expect(sanitized[5]).toMatchObject({ toolCallId: "call1" });
+    expect(assistantContent(validated, 4)).toEqual(signed);
+  });
+
+  it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
+    const priorId = "toolu_01ABCDEF1234567890";
+    const laterId = "toolu_01ZZZZZZ9999999999";
+    const policy = makeAnthropicReplayPolicy({
+      sanitizeThoughtSignatures: undefined,
+      dropThinkingBlocks: true,
+    });
+    const priorCall = {
+      type: "toolUse",
+      id: priorId,
+      name: "read",
+      input: { path: "IDENTITY.md" },
+    };
+    const base = [
+      user("Read IDENTITY.md"),
+      { ...assistant([], { stopReason: "toolUse" }), content: [priorCall] },
+      { ...textToolResult(priorId, "read", "ok", { isError: false }), toolUseId: priorId },
+      assistant([text("done")]),
+    ];
+    const extended = [
+      ...base,
+      user("Ask a subagent for an emoji"),
+      {
+        ...assistant([], { stopReason: "toolUse" }),
+        content: [{ type: "toolUse", id: laterId, name: "subagent", input: { prompt: "emoji" } }],
+      },
+      { ...textToolResult(laterId, "subagent", "😀", { isError: false }), toolUseId: laterId },
+      assistant([text("it was 😀")]),
+    ];
+    const sanitizedBase = await sanitizeAnthropic(base, { policy });
+    const sanitizedExtended = await sanitizeAnthropic(extended, { policy });
+    expect(sanitizedExtended.slice(0, sanitizedBase.length)).toEqual(sanitizedBase);
+    expect(assistantContent(sanitizedBase)).toEqual([priorCall]);
+    expect(sanitizedBase[2]).toMatchObject({ toolCallId: priorId });
   });
 });

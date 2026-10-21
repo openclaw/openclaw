@@ -77,7 +77,7 @@ async function request(
   });
 }
 
-function expectPairingChanged(respond: ReturnType<typeof vi.fn>) {
+function expectPairingChanged(respond: Awaited<ReturnType<typeof request>>) {
   expectNodeFailure(respond, { details: { code: "PAIRING_CHANGED" } });
 }
 

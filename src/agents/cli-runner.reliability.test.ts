@@ -1171,10 +1171,9 @@ describe("runCliAgent reliability", () => {
           expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
           expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
         });
-        expect(hookEvent(hookRunner.runAgentEnd)).toMatchObject({
-          success: true,
-          error: undefined,
-        });
+        const agentEndEvent = hookEvent(hookRunner.runAgentEnd);
+        expect(agentEndEvent.success).toBe(true);
+        expect(agentEndEvent.error).toBeUndefined();
         await waitForDiagnosticEventsDrained();
         expect(modelCallEvents.map((event) => event.type)).toEqual([
           "model.call.started",

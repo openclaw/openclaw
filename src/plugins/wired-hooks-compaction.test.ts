@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -262,5 +263,14 @@ describe("compaction hook wiring", () => {
       subscription.unsubscribe();
       await subscription.waitForPendingEvents();
     }
+  });
+
+  it("resets stale assistant usage after final compaction", async () => {
+    const assistants = [assistant(180_000, 100, 50), assistant(181_000, 120, 60)];
+    const messages = [{ role: "user", content: "hello" }, ...assistants];
+    await runCompactionEnd(createCompactionEndCtx({ runId: "r4", messages, compactionCount: 1 }));
+    expect(
+      messages.slice(1).map((message) => ("usage" in message ? message.usage : undefined)),
+    ).toEqual([makeZeroUsageSnapshot(), makeZeroUsageSnapshot()]);
   });
 });

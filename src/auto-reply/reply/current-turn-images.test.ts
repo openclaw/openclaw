@@ -125,7 +125,7 @@ describe("resolveCurrentTurnImages", () => {
   it.each([
     { images: [], imageOrder: ["offloaded", "offloaded"] },
     { images: [image("first"), image("second")], imageOrder: ["inline", "offloaded", "inline"] },
-  ] satisfies Parameters<typeof resolve>[])(
+  ] satisfies Parameters<typeof resolve>[0][])(
     "preserves provided image slots: $imageOrder",
     async (input) => {
       expect(await resolve(input)).toEqual({
