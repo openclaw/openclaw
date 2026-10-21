@@ -83,7 +83,6 @@ export async function expectAbsent(file: string) {
 export async function declarePluginSqliteResources(
   state: OpenClawTestState,
   relativePath = "plugins/dedicated",
-  { enabled = true, databaseFamily }: { enabled?: boolean; databaseFamily?: string } = {},
 ) {
   const rootDir = state.path("synthetic-backup-plugin");
   await fs.mkdir(rootDir, { recursive: true });
@@ -91,14 +90,10 @@ export async function declarePluginSqliteResources(
     rootDir,
     pluginId: "backup-owner",
     manifest: {
-      backupResources: [{ disposition: "include", scope: "state", relativePath, databaseFamily }],
+      backupResources: [{ disposition: "include", scope: "state", relativePath }],
     },
   });
-  const config = enabled
-    ? createColdPluginConfig(rootDir, fixture.pluginId)
-    : { plugins: { enabled: false, load: { paths: [rootDir] } } };
-  await state.writeConfig(config);
-  return config;
+  await state.writeConfig(createColdPluginConfig(rootDir, fixture.pluginId));
 }
 
 export function inspectDatabase(databasePath: string, inspect: (database: DatabaseSync) => void) {
