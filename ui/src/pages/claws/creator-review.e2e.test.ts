@@ -274,7 +274,9 @@ describe.skipIf(!canRunPlaywrightChromium(executablePath))(
             detail: { draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087" },
           },
         });
-        expect(sent?.message).not.toContain("ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
+        expect((sent as { message: string } | undefined)?.message).not.toContain(
+          "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
+        );
       } finally {
         await context.close();
       }

@@ -145,7 +145,9 @@ describe("Create Claw from the agent's main chat", () => {
     const request = vi.fn((method: string, params: Record<string, unknown>) => {
       requests.push({ method, params });
       if (method === "claws.drafts.create") {
-        return new Promise((resolve) => createResolvers.set(params.agentId as string, resolve));
+        return new Promise((resolve) => {
+          createResolvers.set(params.agentId as string, resolve);
+        });
       }
       if (method === "chat.send") {
         return Promise.resolve({ status: "started" });
