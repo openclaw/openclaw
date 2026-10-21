@@ -60,22 +60,9 @@ export function prepareWorkerPlacementForTest(params: WorkerToolFixture) {
 export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): WorkerToolSurface {
   const { assignment } = params;
   const { policy, tools } = prepareWorkerPlacementForTest(params);
-  type SurfaceTool = WorkerToolSurface["tools"][number];
-  const entries = new Map<string, SurfaceTool>();
-  const add = (definition: SurfaceTool["definition"], gateway = false) => {
-    const { name } = definition;
-    entries.set(name, {
-      id: name,
-      definition,
-      execution: gateway ? "gateway" : "placement",
-      ...(gateway && (name === "sessions_spawn" || name === "sessions_send")
-        ? { replay: true as const }
-        : {}),
-    });
-  };
-  tools.forEach((tool) => add(projectAgentToolDefinition(tool)));
+  const definitions = new Map(tools.map((tool) => [tool.name, projectAgentToolDefinition(tool)]));
   if (assignment.browser) {
-    add({
+    definitions.set("browser", {
       name: "browser",
       label: "Browser",
       description: "Control the attached worker browser.",
@@ -84,7 +71,8 @@ export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): Worke
     });
   }
   if (assignment.computer) {
-    add(
+    definitions.set(
+      "computer",
       projectAgentToolDefinition(
         createWorkerComputerTool({
           descriptor: assignment.computer,
@@ -104,16 +92,34 @@ export function createWorkerToolSurfaceForTest(params: WorkerToolFixture): Worke
     ["presence", PresenceQueryParamsSchema, PRESENCE_TOOL_DESCRIPTION],
   ] as const;
   for (const [name, parameters, description] of gatewayDefinitions) {
-    const definition = { name, label: name, description, parameters, executionMode: undefined };
-    add(definition, true);
+    definitions.set(name, {
+      name,
+      label: name,
+      description,
+      parameters,
+      executionMode: undefined,
+    });
   }
   const surface = {
     generation: "runtime-surface",
     presentation: createToolSurfacePresentationForTest(),
     policy,
     tools: assignment.toolAuthority.allowedToolNames.flatMap((name) => {
-      const entry = entries.get(name);
-      return entry ? [entry] : [];
+      const definition = definitions.get(name);
+      if (!definition) {
+        return [];
+      }
+      const gatewayTool = gatewayDefinitions.some(([toolName]) => toolName === name);
+      return [
+        {
+          id: name,
+          definition,
+          execution: gatewayTool ? "gateway" : "placement",
+          ...(name === "sessions_spawn" || name === "sessions_send"
+            ? { replay: true as const }
+            : {}),
+        },
+      ];
     }),
   };
   if (!Value.Check(WorkerToolSurfaceSchema, surface)) {

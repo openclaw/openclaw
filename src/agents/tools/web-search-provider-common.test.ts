@@ -26,7 +26,8 @@ async function requestSearch(
   received?: () => void,
 ) {
   let authorization: string | undefined;
-  const result = await withServer(
+  let result: unknown;
+  await withServer(
     (request, response) => {
       authorization = request.headers.authorization;
       response.writeHead(status, phrase).write(body);
@@ -35,14 +36,17 @@ async function requestSearch(
       }
     },
     async (baseUrl) => {
-      vi.stubGlobal("fetch", async (_input: RequestInfo | URL, init?: RequestInit) => {
-        const response = await realFetch(baseUrl, init);
-        received?.();
-        return response;
-      });
-      return postJson({ ...requestDefaults, ...params }, (response) => response.json()).catch(
-        (cause: unknown) => cause,
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          const response = await realFetch(baseUrl, init);
+          received?.();
+          return response;
+        }),
       );
+      result = await postJson({ ...requestDefaults, ...params }, (response) =>
+        response.json(),
+      ).catch((cause: unknown) => cause);
     },
   );
   return { result, authorization };
