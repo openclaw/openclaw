@@ -2079,6 +2079,9 @@ entry, header, and first event commit together. Cancellation after commit report
 the committed-error contract, and an unknown outcome fences fallback instead of
 repeating the append. Attempt teardown releases the actor only after accepted
 and nested writes actually drain, including when the consumer's bounded wait ends.
+Worker loss before actor admission fails that command without fencing the actor;
+later commands use the replacement worker. Loss after admission still requires
+confirmed settlement or reconciliation before another command can proceed.
 Released synchronous SDK methods and explicit compaction maintenance keep their
 named compatibility adapters and publish through the existing receipt owners.
 
