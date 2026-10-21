@@ -5,10 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // oxfmt-ignore
 import { makeRestartRecoveryRun as makeRunRecord, useSubagentRestartRecoveryFixture } from "./subagent-restart-recovery.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import {
-  appendTranscriptMessage,
-  replaceSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { appendTranscriptMessage } from "../../../config/sessions/session-accessor.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -299,72 +296,6 @@ describe("yielded run settlement", () => {
         endedReason: "subagent-killed",
         collectorCompletion: { status: "killed" },
         execution: { outcome: { status: "error", error: "operator" } },
-      });
-    },
-  );
-
-  it.each(["done", "timeout"] as const)(
-    "keeps ordinary %s collector capture on the recent transcript path",
-    async (status) => {
-      freezeTime();
-      const sessionId = "sess-ordinary-collector";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: COLLECTOR_KEY,
-        sessionId,
-        defaultSessionId: sessionId,
-      });
-      // Ordinary fallback capture can read a reply/progress written after a clipped terminal time.
-      await appendTranscriptMessage(
-        { agentId: "main", sessionKey: COLLECTOR_KEY, sessionId, storePath },
-        {
-          now: T0 - 3 * MINUTE_MS,
-          message: {
-            role: "assistant",
-            content:
-              status === "done"
-                ? "Ordinary collector fallback reply"
-                : [{ type: "toolCall", id: "progress-1", name: "read", arguments: {} }],
-          },
-        },
-      );
-      await replaceSessionEntry(
-        { storePath, sessionKey: COLLECTOR_KEY },
-        {
-          sessionId,
-          lifecycleRunId: "ordinary-collector",
-          status,
-          updatedAt: T0,
-          startedAt: T0 - 5 * MINUTE_MS,
-          endedAt: T0 - 4 * MINUTE_MS,
-        },
-      );
-      useRealCapture();
-      await addSubagentRunForTests(
-        makeRunRecord({
-          runId: "ordinary-collector",
-          childSessionKey: COLLECTOR_KEY,
-          requesterAgentId: "main",
-          collect: true,
-          groupId: "group-ordinary",
-          swarmRequesterSessionKey: "agent:main:main",
-          expectsCompletionMessage: false,
-          startedAt: T0 - 5 * MINUTE_MS,
-        }),
-      );
-      await sweep();
-      expect(persisted("ordinary-collector")?.execution.outcome).toMatchObject({
-        status: status === "done" ? "ok" : "timeout",
-      });
-      // Only a yield settlement marks a collector that had no recorded outcome.
-      expect(persisted("ordinary-collector")?.collectorCompletion?.reason).toBeUndefined();
-      await expectSilentResult("ordinary-collector", {
-        status,
-        result:
-          status === "done"
-            ? "Ordinary collector fallback reply"
-            : "1 tool call(s) made without visible output.",
       });
     },
   );

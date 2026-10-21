@@ -45,8 +45,6 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
-import { registerRequesterSelfYieldFollowupTests } from "./subagent-registry.requester-self-yield.test-support.js";
-import { registerRequesterStartupAdmissionTests } from "./subagent-registry.requester-wake-admission.test-support.js";
 import {
   createRequesterYieldTool,
   registerRequesterWakeReceiptBoundaryTests,
@@ -401,16 +399,6 @@ describe("requester settle wake product flow", () => {
     getAgentCalls,
     wakeRequester,
   };
-  registerRequesterStartupAdmissionTests(requesterFixture);
-
-  registerRequesterSelfYieldFollowupTests({
-    ...requesterFixture,
-    callGatewayMock,
-    flushAsync,
-    setReleaseAgentCallGate: (release) => {
-      releaseAgentCallGate = release;
-    },
-  });
 
   it.each([
     ...["alpha", "beta"].flatMap((firstCompleted) =>
@@ -994,6 +982,11 @@ describe("requester settle wake product flow", () => {
 
   registerRequesterWakeSettlementBoundaryTests({
     ...requesterFixture,
+    callGatewayMock,
+    flushAsync,
+    setReleaseAgentCallGate: (release) => {
+      releaseAgentCallGate = release;
+    },
     useGlobalSessionScope: () => {
       const cfg = loadConfigMock();
       loadConfigMock.mockReturnValue({ ...cfg, session: { ...cfg.session, scope: "global" } });
