@@ -38,6 +38,12 @@ function storeWith(profileId: string, overrides: Partial<OAuthCredential>): Auth
   };
 }
 
+const oauthRef = {
+  source: "openclaw-credentials",
+  provider: "openai-codex",
+  id: "0123456789abcdef0123456789abcdef",
+} as const;
+
 function shadowStore(
   profileId: string,
   now: number,
@@ -196,11 +202,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
             provider: "openai-codex",
             accountId: "acct-shared",
             expires: now - 60_000,
-            oauthRef: {
-              source: "openclaw-credentials",
-              provider: "openai-codex",
-              id: "0123456789abcdef0123456789abcdef",
-            },
+            oauthRef,
           },
         },
       });
@@ -331,11 +333,12 @@ describe("stale OAuth profile shadow doctor repair", () => {
     "rechecks a %s introduced after the scan before removal",
     async (change) => {
       const profileId = "openai-codex:default";
-      const childStore = storeWith(profileId, {
+      const credential = oauthCredential({
         provider: "openai-codex",
         expires: now - 60_000,
         accountId: "acct-shared",
       });
+      const childStore = storeWith(profileId, credential);
       await writeRawAuthStore(childAgentDir, childStore);
       saveAuthProfileStore(
         shadowStore(profileId, now, "main", { access: "access", refresh: "refresh" }),
@@ -343,23 +346,11 @@ describe("stale OAuth profile shadow doctor repair", () => {
       const authPath = resolveAuthStorePath(childAgentDir);
       await fs.writeFile(authPath, "{}");
       const keptStore = structuredClone(childStore);
-      if (change === "fresh credential") {
-        keptStore.profiles[profileId] = oauthCredential({
-          provider: "openai-codex",
-          accountId: "acct-shared",
-          expires: now + 7_200_000,
-        });
-      } else if (change === "sidecar reference") {
-        keptStore.profiles[profileId] = oauthCredential({
-          provider: "openai-codex",
-          accountId: "acct-shared",
-          expires: now - 60_000,
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "0123456789abcdef0123456789abcdef",
-          },
-        });
+      if (change !== "corrupt legacy file") {
+        keptStore.profiles[profileId] = {
+          ...credential,
+          ...(change === "fresh credential" ? { expires: now + 7_200_000 } : { oauthRef }),
+        };
       }
       const readFile = fs.readFile;
       let reads = 0;

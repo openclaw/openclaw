@@ -249,22 +249,6 @@ describe("runPostCorePluginConvergence", () => {
     },
   );
 
-  it("returns ok when no warnings/failures and includes repair changes", async () => {
-    mockRepairs(
-      { discord: { source: "npm", installPath: "/p/discord" } },
-      {
-        changes: ['Repaired missing configured plugin "discord".'],
-        repairedPluginIds: ["discord"],
-      },
-    );
-    expect(await converge(configured("discord"))).toMatchObject({
-      errored: false,
-      changes: ['Repaired missing configured plugin "discord".'],
-      repairedPluginIds: ["discord"],
-      warnings: [],
-    });
-  });
-
   it("repairs the selected generation before smoke checks without walking stale roots", async () => {
     const stateDir = makeTempDir();
     const packageName = "@fixture/selected";
@@ -291,7 +275,13 @@ describe("runPostCorePluginConvergence", () => {
       packages.push(packageDir);
     }
     const active = expectDefined(packages[0], "active package");
-    mockRepairs({ selected: { source: "npm", installPath: active } });
+    mockRepairs(
+      { selected: { source: "npm", installPath: active } },
+      {
+        changes: ['Repaired missing configured plugin "selected".'],
+        repairedPluginIds: ["selected"],
+      },
+    );
     const roots = await vi.importActual<
       typeof import("../../../plugins/installed-plugin-npm-roots.js")
     >("../../../plugins/installed-plugin-npm-roots.js");
@@ -311,7 +301,15 @@ describe("runPostCorePluginConvergence", () => {
       const result = await converge(configured("selected"), {
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
-      expect(result.errored).toBe(false);
+      expect(result).toMatchObject({
+        errored: false,
+        changes: [
+          'Repaired missing configured plugin "selected".',
+          "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
+        ],
+        repairedPluginIds: ["selected"],
+        warnings: [],
+      });
       expect(mocks.smokeCheck).toHaveBeenCalledOnce();
       for (const stale of packages.slice(1)) {
         expect(fs.existsSync(path.join(stale, "node_modules", "openclaw"))).toBe(false);
