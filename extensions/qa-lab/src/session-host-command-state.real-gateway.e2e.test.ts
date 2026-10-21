@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -7,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.ts";
+import { generateStoredDeviceIdentity as createDeviceIdentity } from "../../../src/infra/device-identity-material.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createControlUiE2eSuite,
@@ -339,14 +339,4 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
       capacity: { total: 1, available: 1 },
     },
   });
-}
-
-function createDeviceIdentity() {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyRaw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
-  return {
-    deviceId: crypto.createHash("sha256").update(publicKeyRaw).digest("hex"),
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
-    publicKeyPem: publicKey.export({ format: "pem", type: "spki" }),
-  };
 }
