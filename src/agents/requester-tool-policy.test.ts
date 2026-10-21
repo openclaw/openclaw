@@ -71,18 +71,34 @@ describe("resolveRequesterToolPolicies", () => {
     expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
   }
 
-  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
-    const root = "agent:front:main";
-    const visible = "agent:worker:dashboard:coding";
-    const helper = "agent:worker:subagent:helper";
-    const cfg = config({
-      tools: { toolsBySender: { "*": {} } },
+  function workerConfig(overrides: OpenClawConfig = {}) {
+    return config({
       agents: {
         entries: {
           front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
           worker: {},
         },
       },
+      ...overrides,
+    });
+  }
+
+  function expectInherited(
+    result: ReturnType<typeof resolveRequesterToolPolicies>,
+    source: "persisted-child" | "completion-handoff",
+    policy: { allow?: string[]; deny?: string[] },
+  ) {
+    expect(result.delegated).toBe(true);
+    expect(result.requesterPolicySource).toBe(source);
+    expect(result.inheritedToolPolicy).toEqual(policy);
+  }
+
+  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
+    const root = "agent:front:main";
+    const visible = "agent:worker:dashboard:coding";
+    const helper = "agent:worker:subagent:helper";
+    const cfg = workerConfig({
+      tools: { toolsBySender: { "*": {} } },
     });
     const delegatedToolPolicy = {
       requesterSessionKey: root,
@@ -257,11 +273,9 @@ describe("resolveRequesterToolPolicies", () => {
       expect(result.senderPolicy).toEqual({ deny: ["group:runtime", "group:fs"] });
       return;
     }
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expectInherited(result, "completion-handoff", { allow: ["read", "exec"], deny: ["write"] });
     expect(result.senderPolicy).toBeUndefined();
     expect(result.groupPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"], deny: ["write"] });
     expect(result.inheritedToolPolicySource).toBe("sender");
 
     const requesterOrigin = {
@@ -319,14 +333,12 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: parentSessionKey,
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("persisted-child");
-    expect(result.senderPolicy).toBeUndefined();
-    expect(result.groupPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({
+    expectInherited(result, "persisted-child", {
       allow: ["read", "sessions_spawn"],
       deny: ["exec"],
     });
+    expect(result.senderPolicy).toBeUndefined();
+    expect(result.groupPolicy).toBeUndefined();
     expect(result.subagentPolicy).toBeDefined();
   });
 
@@ -459,14 +471,7 @@ describe("resolveRequesterToolPolicies", () => {
             }
           : {}),
       });
-      const cfg = config({
-        agents: {
-          entries: {
-            front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
-            worker: {},
-          },
-        },
-      });
+      const cfg = workerConfig();
       const request = {
         agentId: "worker",
         sessionKey: childSessionKey,
@@ -538,10 +543,8 @@ describe("resolveRequesterToolPolicies", () => {
       ...handoff,
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
+    expectInherited(result, "completion-handoff", { allow: ["read", "exec"] });
     expect(result.senderPolicy).toBeUndefined();
-    expect(result.inheritedToolPolicy).toEqual({ allow: ["read", "exec"] });
 
     const controllerResult = await resolvePolicy({ sessionKey: controllerSessionKey, ...handoff });
     expect(controllerResult.delegated).toBe(false);
@@ -586,9 +589,7 @@ describe("resolveRequesterToolPolicies", () => {
       ...completionHandoffFacts(leafSessionKey, requesterSessionKey),
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec"] });
+    expectInherited(result, "completion-handoff", { deny: ["exec"] });
   });
 
   it("prioritizes a verified nested completion over the target subagent resume envelope", async () => {
@@ -600,9 +601,7 @@ describe("resolveRequesterToolPolicies", () => {
       ...completionHandoffFacts(leafSessionKey, parentChildSessionKey),
     });
 
-    expect(result.delegated).toBe(true);
-    expect(result.requesterPolicySource).toBe("completion-handoff");
-    expect(result.inheritedToolPolicy).toEqual({ deny: ["exec", "read"] });
+    expectInherited(result, "completion-handoff", { deny: ["exec", "read"] });
   });
 
   it("fails closed for untrusted or mismatched completion handoffs", async () => {

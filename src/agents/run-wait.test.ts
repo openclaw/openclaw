@@ -28,6 +28,36 @@ import {
 } from "./run-wait.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
+beforeEach(() => callGatewayMock.mockReset());
+
+const sessionKey = "agent:main:child";
+const readReply = () => readLatestAssistantReply({ sessionKey });
+const wait = (runId = "run-observed") => waitForAgentRun({ runId, timeoutMs: 500 });
+const observe = (untilTerminal?: true) =>
+  waitForAgentRunReply({ runId: "run-ended", timeoutMs: 1_000, untilTerminal });
+
+async function expectHistoryReply(messages: unknown[], expected: string) {
+  callGatewayMock.mockResolvedValue({ messages });
+  await expect(readReply()).resolves.toBe(expected);
+}
+function signedText(text: string, id: string, phase: string) {
+  return { type: "text", text, textSignature: JSON.stringify({ v: 1, id, phase }) };
+}
+function mockCappedLookup(lookup: () => { ok: true; message: ReturnType<typeof textAssistant> }) {
+  callGatewayMock.mockImplementation(async (request) =>
+    request.method === "chat.history"
+      ? {
+          messages: [
+            {
+              ...textAssistant("Report head\n...(truncated)..."),
+              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
+            },
+          ],
+        }
+      : lookup(),
+  );
+}
+
 type AgentWaitGatewayRequest = {
   method?: string;
   params?: {
@@ -79,152 +109,93 @@ function expectAgentWaitRequest(
 }
 
 describe("readLatestAssistantReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it("returns the most recent assistant message when compaction markers trail history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+    await expectHistoryReply(
+      [
         textAssistant("All checks passed and changes were pushed."),
         { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("All checks passed and changes were pushed.");
+      "All checks passed and changes were pushed.",
+    );
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "chat.history",
-      params: { sessionKey: "agent:main:child", limit: 50 },
+      params: { sessionKey, limit: 50 },
     });
   });
 
   it("falls back to older assistant text when latest assistant has no text", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "older output" }] },
+    await expectHistoryReply(
+      [
+        textAssistant("older output"),
         { role: "assistant", content: [] },
         { role: "system", content: [{ type: "text", text: "Compaction" }] },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("older output");
+      "older output",
+    );
   });
 
   it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+    await expectHistoryReply(
+      [
+        { ...textAssistant("real worker reply"), timestamp: 10 },
         {
-          role: "assistant",
-          content: [{ type: "text", text: "real worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "already delivered through message tool" }],
-          openclawMessageToolMirror: {
-            toolName: "message",
-            toolCallId: "call-message-send",
-          },
+          ...textAssistant("already delivered through message tool"),
+          openclawMessageToolMirror: { toolName: "message", toolCallId: "call-message-send" },
           timestamp: 11,
         },
         {
-          role: "assistant",
+          ...textAssistant("gateway notice"),
           provider: "openclaw",
           model: "gateway-injected",
-          content: [{ type: "text", text: "gateway notice" }],
           timestamp: 12,
         },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("real worker reply");
+      "real worker reply",
+    );
   });
 
-  it.each([
-    {
-      name: "cron run prompt",
-      provenance: {
-        kind: "internal_system",
-        sourceTool: "cron",
-        jobId: "job-1",
-        runId: "run-1",
-        sourceSessionKey: "agent:main:cron:job-1:run:run-1",
-      },
-    },
-  ])("skips a trailing projected $name for latest-reply reads", async ({ provenance }) => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+  it("skips a trailing projected cron run prompt for latest-reply reads", async () => {
+    await expectHistoryReply(
+      [
+        { ...textAssistant("older worker reply"), timestamp: 10 },
         {
-          role: "assistant",
-          content: [{ type: "text", text: "older worker reply" }],
-          timestamp: 10,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "forwarded input text" }],
-          provenance,
+          ...textAssistant("forwarded input text"),
           timestamp: 11,
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "cron",
+            jobId: "job-1",
+            runId: "run-1",
+            sourceSessionKey: "agent:main:cron:job-1:run:run-1",
+          },
         },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
-
-    expect(result).toBe("older worker reply");
+      "older worker reply",
+    );
   });
 
   it("preserves spaces across split final_answer history blocks", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
+    await expectHistoryReply(
+      [
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Hi ",
-              textSignature: JSON.stringify({ v: 1, id: "final_1", phase: "final_answer" }),
-            },
-            {
-              type: "text",
-              text: "there",
-              textSignature: JSON.stringify({ v: 1, id: "final_2", phase: "final_answer" }),
-            },
+            signedText("Need fix line quoting properly.", "commentary", "commentary"),
+            signedText("Hi ", "final_1", "final_answer"),
+            signedText("there", "final_2", "final_answer"),
           ],
         },
       ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Hi there");
+      "Hi there",
+    );
   });
 
   it("reads the full message when history returns a display-capped preview", async () => {
-    callGatewayMock.mockImplementation(async (request) => {
-      if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
-      }
-      return { ok: true, message: textAssistant("Report head and the full remainder.") };
-    });
+    mockCappedLookup(() => ({
+      ok: true,
+      message: textAssistant("Report head and the full remainder."),
+    }));
 
     const result = await readLatestAssistantReply({
       sessionKey: "agent:main:child",
@@ -239,45 +210,18 @@ describe("readLatestAssistantReply", () => {
   });
 
   it("returns no reply when the full-message lookup is rejected", async () => {
-    callGatewayMock.mockImplementation(async (request) => {
-      if (request.method === "chat.history") {
-        return {
-          messages: [
-            {
-              ...textAssistant("Report head\n...(truncated)..."),
-              __openclaw: { id: "msg-1", truncated: true, reason: "display-cap" },
-            },
-          ],
-        };
-      }
+    mockCappedLookup(() => {
       throw new Error("session changed while reading history; reload the conversation");
     });
-
-    await expect(readLatestAssistantReply({ sessionKey: "agent:main:child" })).resolves.toBe(
-      undefined,
-    );
+    await expect(readReply()).resolves.toBeUndefined();
   });
 });
 
 describe("waitForAgentRun", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it("preserves pending error diagnostics on wait timeouts", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "timeout",
-      error: "429 RESOURCE_EXHAUSTED",
-      pendingError: true,
-    });
-
-    const result = await waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 });
-
-    expect(result).toEqual({
-      status: "timeout",
-      error: "429 RESOURCE_EXHAUSTED",
-      pendingError: true,
-    });
+    const response = { status: "timeout", error: "429 RESOURCE_EXHAUSTED", pendingError: true };
+    callGatewayMock.mockResolvedValue(response);
+    await expect(wait()).resolves.toEqual(response);
   });
 
   it.each([
@@ -309,7 +253,7 @@ describe("waitForAgentRun", () => {
       },
     });
 
-    const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
+    const result = await wait("run-source-reply");
 
     expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
@@ -326,7 +270,7 @@ describe("waitForAgentRun", () => {
           ...(reason ? { details: { reason } } : {}),
         }),
       );
-      expect(await waitForAgentRun({ runId: "running-child", timeoutMs: 500 })).toEqual({
+      expect(await wait("running-child")).toEqual({
         status: "error",
         error: message,
         retryableTransportError: true,
@@ -337,7 +281,7 @@ describe("waitForAgentRun", () => {
         startedAt: 100,
         endedAt: 200,
       });
-      const terminal = await waitForAgentRun({ runId: "failed-child", timeoutMs: 500 });
+      const terminal = await wait("failed-child");
       expect(terminal).toMatchObject({
         status: "error",
         error: message,
@@ -377,7 +321,7 @@ describe("waitForAgentRun", () => {
     }
     try {
       callGatewayMock.mockRejectedValueOnce(entry.cause);
-      const result = await waitForAgentRun({ runId: "run-observed", timeoutMs: 500 });
+      const result = await wait();
       expect(result.status).toBe("error");
       expect(result.error).toBe(entry.cause.message);
       expect(result.retryableTransportError).toBe(entry.retryable ? true : undefined);
@@ -386,73 +330,30 @@ describe("waitForAgentRun", () => {
     }
   });
 
-  it("normalizes blocked ok waits to errors", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      livenessState: "blocked",
+  it.each([
+    {
+      fields: {
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
       error: "Context overflow: prompt too large for the model.",
-    });
-
-    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
-
-    expect(result).toEqual({
+    },
+    { fields: { stopReason: "aborted" }, error: "agent run aborted" },
+  ])("normalizes an ok wait with $fields to an error", async ({ fields, error }) => {
+    callGatewayMock.mockResolvedValue({ status: "ok", startedAt: 100, endedAt: 200, ...fields });
+    await expect(wait()).resolves.toEqual({
+      ...fields,
       status: "error",
-      error: "Context overflow: prompt too large for the model.",
+      error,
       startedAt: 100,
       endedAt: 200,
-      livenessState: "blocked",
-    });
-  });
-
-  it("normalizes aborted stop reasons to errors even when gateway reports ok", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      stopReason: "aborted",
-    });
-
-    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
-
-    expect(result).toEqual({
-      status: "error",
-      error: "agent run aborted",
-      startedAt: 100,
-      endedAt: 200,
-      stopReason: "aborted",
     });
   });
 });
 
 describe("waitForAgentRunReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it("returns the run's reply and metadata without consulting unrelated session history", async () => {
-    callGatewayMock.mockImplementation(async (request) => {
-      if (request.method !== "agent.wait") {
-        throw new Error("session history is not delivery evidence");
-      }
-      return {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 200,
-        stopReason: "completed",
-        yielded: true,
-        providerStarted: true,
-        terminalReply: { disposition: "visible", text: "authoritative reply" },
-      };
-    });
-
-    const result = await waitForAgentRunReply({
-      runId: "run-visible-terminal-reply",
-      timeoutMs: 1_000,
-    });
-
-    expect(result).toEqual({
+    const response = {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
@@ -460,8 +361,14 @@ describe("waitForAgentRunReply", () => {
       yielded: true,
       providerStarted: true,
       terminalReply: { disposition: "visible", text: "authoritative reply" },
-      replyText: "authoritative reply",
+    };
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error("session history is not delivery evidence");
+      }
+      return response;
     });
+    await expect(observe()).resolves.toEqual({ ...response, replyText: "authoritative reply" });
     expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
   });
 
@@ -476,7 +383,7 @@ describe("waitForAgentRunReply", () => {
       return { status: "ok", terminalReply };
     });
 
-    const result = await waitForAgentRunReply({ runId: "run-no-reply", timeoutMs: 1_000 });
+    const result = await observe();
 
     expect(result).toEqual({ status: "ok", terminalReply });
     expect(result.replyText).toBeUndefined();
@@ -489,11 +396,7 @@ describe("waitForAgentRunReply", () => {
   ])("ends completion observation for $status / $stopReason", async (terminal) => {
     callGatewayMock.mockResolvedValue(terminal);
 
-    const result = await waitForAgentRunReply({
-      runId: "run-ended",
-      timeoutMs: 1_000,
-      untilTerminal: true,
-    });
+    const result = await observe(true);
 
     expect(result).toMatchObject(terminal);
     expect(result.replyText).toBeUndefined();
@@ -505,11 +408,7 @@ describe("waitForAgentRunReply", () => {
     async (message) => {
       callGatewayMock.mockRejectedValue(new Error(message));
 
-      const result = await waitForAgentRunReply({
-        runId: "run-disconnected",
-        timeoutMs: 1_000,
-        untilTerminal: true,
-      });
+      const result = await observe(true);
 
       expect(result.error).toBe(message);
       expect(result.replyText).toBeUndefined();
@@ -522,13 +421,7 @@ describe("waitForAgentRunReply", () => {
     async (owner) => {
       const work = new AsyncWorkScope();
       callGatewayMock.mockResolvedValue({ status: "pending", timeoutPhase: "queue" });
-      const observation = work.run(() =>
-        waitForAgentRunReply({
-          runId: "run-queued",
-          timeoutMs: 1_000,
-          untilTerminal: true,
-        }),
-      );
+      const observation = work.run(() => observe(true));
       const rejection = expect(observation).rejects.toThrow();
       try {
         await vi.waitFor(() => expect(callGatewayMock).toHaveBeenCalledOnce());
@@ -549,10 +442,6 @@ describe("waitForAgentRunReply", () => {
 });
 
 describe("waitForAgentRunsToDrain", () => {
-  beforeEach(() => {
-    callGatewayMock.mockReset();
-  });
-
   it.each(["ok"])(
     "lets completion callbacks drain runs after immediate %s responses",
     async (status) => {

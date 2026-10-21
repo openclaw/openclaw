@@ -3,7 +3,6 @@
  * Exercises provider-family fallbacks and plugin replay hooks.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
@@ -147,19 +146,24 @@ describe("resolveTranscriptPolicy", () => {
     vi.clearAllMocks();
   });
 
-  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
-    const policy = resolveTranscriptPolicy({
-      provider,
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
+  function resolve(
+    provider: string,
+    modelId: string,
+    modelApi?: string,
+    extra: Partial<Parameters<typeof resolveTranscriptPolicy>[0]> = {},
+  ) {
+    return resolveTranscriptPolicy({ provider, modelId, modelApi, ...extra });
+  }
 
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
-    expect(policy.appendOnlyRuntimeContext).toBe(true);
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    expect(resolve(provider, "demo-model", "openai-completions")).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyGoogleTurnOrdering: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+      appendOnlyRuntimeContext: true,
+    });
   }
 
   function makeOpenAiCompatibleReasoningModel(
@@ -181,28 +185,23 @@ describe("resolveTranscriptPolicy", () => {
   }
 
   it("resolves replay policy from each supplied environment", () => {
-    const config = {} as OpenClawConfig;
     for (const mode of ["strict", "loose", "null"]) {
-      const policy = resolveTranscriptPolicy({
-        provider: "env-sensitive",
-        modelId: "env-demo",
-        config,
+      const policy = resolve("env-sensitive", "env-demo", undefined, {
+        config: {},
         env: { OPENCLAW_TEST_TRANSCRIPT_POLICY: mode },
       });
-      expect(policy.sanitizeMode).toBe("images-only");
-      expect(policy.sanitizeToolCallIds).toBe(mode === "strict");
-      expect(policy.toolCallIdMode).toBe(mode === "strict" ? "strict" : undefined);
-      expect(policy.applyGoogleTurnOrdering).toBe(mode === "strict");
+      expect(policy).toMatchObject({
+        sanitizeMode: "images-only",
+        sanitizeToolCallIds: mode === "strict",
+        toolCallIdMode: mode === "strict" ? "strict" : undefined,
+        applyGoogleTurnOrdering: mode === "strict",
+      });
       expect(policy).not.toHaveProperty("applyAssistantFirstOrderingFix");
     }
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "google",
-      modelId: "gemini-2.0-flash",
-      modelApi: "google-generative-ai",
-    });
+    const policy = resolve("google", "gemini-2.0-flash", "google-generative-ai");
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.sanitizeThoughtSignatures).toEqual({
       allowBase64Only: true,
@@ -211,41 +210,29 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("enables sanitizeToolCallIds for Mistral provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "mistral",
-      modelId: "mistral-large-latest",
+    expect(resolve("mistral", "mistral-large-latest")).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict9",
     });
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict9");
   });
 
   it("disables sanitizeToolCallIds for OpenAI provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "openai",
-      modelId: "gpt-4o",
-      modelApi: "openai",
+    expect(resolve("openai", "gpt-4o", "openai")).toMatchObject({
+      sanitizeToolCallIds: false,
+      toolCallIdMode: undefined,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
     });
-    expect(policy.sanitizeToolCallIds).toBe(false);
-    expect(policy.toolCallIdMode).toBeUndefined();
-    expect(policy.applyGoogleTurnOrdering).toBe(false);
-    expect(policy.validateGeminiTurns).toBe(false);
-    expect(policy.validateAnthropicTurns).toBe(false);
   });
 
   it("strips historical reasoning for strict OpenAI-compatible providers by default", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "custom-openai-proxy",
-      modelId: "qwen3.6-27b",
-      modelApi: "openai-completions",
-    });
-    expect(policy.dropReasoningFromHistory).toBe(true);
-
-    const responsesPolicy = resolveTranscriptPolicy({
-      provider: "custom-openai-proxy",
-      modelId: "qwen3.6-27b",
-      modelApi: "openai-responses",
-    });
-    expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
+    expect(
+      resolve("custom-openai-proxy", "qwen3.6-27b", "openai-completions").dropReasoningFromHistory,
+    ).toBe(true);
+    expect(
+      resolve("custom-openai-proxy", "qwen3.6-27b", "openai-responses").dropReasoningFromHistory,
+    ).toBe(false);
   });
 
   it.each([
@@ -265,13 +252,9 @@ describe("resolveTranscriptPolicy", () => {
   ])(
     "preserves historical reasoning for %s replay-required OpenAI-compatible models",
     (modelId) => {
-      const policy = resolveTranscriptPolicy({
-        provider: "custom-openai-proxy",
-        modelId,
-        modelApi: "openai-completions",
-      });
-
-      expect(policy.dropReasoningFromHistory).toBe(false);
+      expect(
+        resolve("custom-openai-proxy", modelId, "openai-completions").dropReasoningFromHistory,
+      ).toBe(false);
     },
   );
 
@@ -280,56 +263,34 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
-    const claudePolicy = resolveTranscriptPolicy({
-      provider: "anthropic-foundry",
-      modelId: "anthropic-foundry/claude-opus-4-7",
-      modelApi: "openai-responses",
+    expect(
+      resolve("anthropic-foundry", "anthropic-foundry/claude-opus-4-7", "openai-responses"),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      validateAnthropicTurns: true,
+      validateGeminiTurns: false,
     });
-    expect(claudePolicy.sanitizeToolCallIds).toBe(true);
-    expect(claudePolicy.toolCallIdMode).toBe("strict");
-    expect(claudePolicy.validateAnthropicTurns).toBe(true);
-    expect(claudePolicy.validateGeminiTurns).toBe(false);
-
-    const gptPolicy = resolveTranscriptPolicy({
-      provider: "custom-openai-proxy",
-      modelId: "gpt-5.4",
-      modelApi: "openai-responses",
-    });
-    expect(gptPolicy.validateAnthropicTurns).toBe(false);
+    expect(
+      resolve("custom-openai-proxy", "gpt-5.4", "openai-responses").validateAnthropicTurns,
+    ).toBe(false);
   });
 
-  it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
-    const opus46 = resolveTranscriptPolicy({
-      provider: "custom-anthropic-proxy",
-      modelId: "claude-opus-4-6",
-      modelApi: "anthropic-messages",
-    });
-    expect(opus46.dropThinkingBlocks).toBe(false);
-
-    const opus5 = resolveTranscriptPolicy({
-      provider: "custom-anthropic-proxy",
-      modelId: "claude-opus-5",
-      modelApi: "anthropic-messages",
-    });
-    expect(opus5.dropThinkingBlocks).toBe(false);
-
-    const sonnet45 = resolveTranscriptPolicy({
-      provider: "custom-anthropic-proxy",
-      modelId: "claude-sonnet-4-5-20250929",
-      modelApi: "anthropic-messages",
-    });
-    expect(sonnet45.dropThinkingBlocks).toBe(true);
-
-    const sonnet37 = resolveTranscriptPolicy({
-      provider: "custom-anthropic-proxy",
-      modelId: "claude-3-7-sonnet-20250219",
-      modelApi: "anthropic-messages",
-    });
-    expect(sonnet37.dropThinkingBlocks).toBe(true);
+  it("resolves unowned Anthropic thinking retention by model", () => {
+    for (const [modelId, dropThinkingBlocks] of [
+      ["claude-opus-4-6", false],
+      ["claude-opus-5", false],
+      ["claude-sonnet-4-5-20250929", true],
+      ["claude-3-7-sonnet-20250219", true],
+    ] as const) {
+      expect(
+        resolve("custom-anthropic-proxy", modelId, "anthropic-messages").dropThinkingBlocks,
+      ).toBe(dropThinkingBlocks);
+    }
   });
 
   it("resolves Anthropic policy from the canonical model identity", () => {
-    const config = {} as OpenClawConfig;
+    const config = {};
     const model = makeOpenAiCompatibleReasoningModel({
       id: "production-claude",
       name: "Production Claude",
@@ -337,33 +298,21 @@ describe("resolveTranscriptPolicy", () => {
       api: "anthropic-messages",
     });
 
-    const sonnet45 = resolveTranscriptPolicy({
-      config,
-      provider: "custom-anthropic-proxy",
-      modelId: model.id,
-      modelApi: model.api,
-      model: {
-        ...model,
-        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
-      },
-    });
-    const opus5 = resolveTranscriptPolicy({
-      config,
-      provider: "custom-anthropic-proxy",
-      modelId: model.id,
-      modelApi: model.api,
-      model: {
-        ...model,
-        params: { canonicalModelId: "claude-opus-5" },
-      },
-    });
-
-    expect(sonnet45.dropThinkingBlocks).toBe(true);
-    expect(opus5.dropThinkingBlocks).toBe(false);
+    for (const [canonicalModelId, expected] of [
+      ["claude-sonnet-4-5-20250929", true],
+      ["claude-opus-5", false],
+    ] as const) {
+      expect(
+        resolve(model.provider, model.id, model.api, {
+          config,
+          model: { ...model, params: { canonicalModelId } },
+        }).dropThinkingBlocks,
+      ).toBe(expected);
+    }
   });
 
   it("gates in-history updates by authenticated route", () => {
-    const config = {} as OpenClawConfig;
+    const config = {};
     const model = makeOpenAiCompatibleReasoningModel({
       id: "claude-opus-5",
       provider: "anthropic",
@@ -392,7 +341,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("uses the supplied environment for in-history route eligibility", () => {
-    const config = {} as OpenClawConfig;
+    const config = {};
     for (const [baseUrl, expected] of [
       ["https://proxy.example.test", false],
       ["https://api.anthropic.com", true],
@@ -411,7 +360,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("limits OpenAI prompt updates to native Responses routes", () => {
-    const config = {} as OpenClawConfig;
+    const config = {};
     for (const [provider, api, baseUrl, expected] of [
       ["openai", "openai-responses", "https://api.openai.com/v1", true],
       ["openai", "openai-responses", "https://proxy.example.test/v1", false],
@@ -419,7 +368,6 @@ describe("resolveTranscriptPolicy", () => {
       ["openai", "azure-openai-responses", "https://api.openai.com/v1", false],
       ["openai", "openai-completions", "https://api.openai.com/v1", false],
       ["custom-openai", "openai-responses", "https://api.openai.com/v1", false],
-      ["openai", "openai-responses", "https://api.openai.com/v1", true],
     ] as const) {
       const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
       const policy = resolveTranscriptPolicy({
@@ -471,67 +419,45 @@ describe("resolveTranscriptPolicy", () => {
   );
 
   it("resolves unowned Anthropic policy from reasoning compatibility", () => {
-    const config = {} as OpenClawConfig;
-    const model = {
+    const config = {};
+    const model = makeOpenAiCompatibleReasoningModel({
       id: "moonshotai/kimi-k2.5",
       name: "Kimi K2.5",
       provider: "qiniu",
-      api: "anthropic-messages" as const,
+      api: "anthropic-messages",
       baseUrl: "https://api.qnaigc.com",
-      reasoning: false,
-      input: ["text" as const, "image" as const],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      input: ["text", "image"],
       contextWindow: 256_000,
-      maxTokens: 16_384,
-    };
-
-    const defaultPolicy = resolveTranscriptPolicy({
-      config,
-      provider: "qiniu",
-      modelId: "moonshotai/kimi-k2.5",
-      modelApi: "anthropic-messages",
-      model,
     });
-    const noReasoningPolicy = resolveTranscriptPolicy({
-      config,
-      provider: "qiniu",
-      modelId: "moonshotai/kimi-k2.5",
-      modelApi: "anthropic-messages",
-      model: { ...model, compat: { supportsReasoningEffort: false } },
-    });
-
-    expect(defaultPolicy.dropThinkingBlocks).toBe(false);
-    expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
+    for (const supportsReasoningEffort of [undefined, false]) {
+      expect(
+        resolve(model.provider, model.id, model.api, {
+          config,
+          model:
+            supportsReasoningEffort === undefined
+              ? model
+              : { ...model, compat: { supportsReasoningEffort } },
+        }).dropThinkingBlocks,
+      ).toBe(supportsReasoningEffort === false);
+    }
   });
 
-  it("resolves OpenAI-compatible policy from reasoning metadata", () => {
-    const config = {} as OpenClawConfig;
-
-    const defaultPolicy = resolveTranscriptPolicy({
-      config,
-      provider: "custom-openai-proxy",
-      modelId: "qwen3.6-27b",
-      modelApi: "openai-completions",
-      model: makeOpenAiCompatibleReasoningModel(),
-    });
-    const reasoningPolicy = resolveTranscriptPolicy({
-      config,
-      provider: "custom-openai-proxy",
-      modelId: "qwen3.6-27b",
-      modelApi: "openai-completions",
-      model: makeOpenAiCompatibleReasoningModel({ reasoning: true }),
-    });
-
-    expect(defaultPolicy.dropReasoningFromHistory).toBe(true);
-    expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
+  it("resolves OpenAI-compatible reasoning metadata", () => {
+    for (const reasoning of [false, true]) {
+      const model = makeOpenAiCompatibleReasoningModel({ reasoning });
+      expect(
+        resolve(model.provider, model.id, model.api, { config: {}, model })
+          .dropReasoningFromHistory,
+      ).toBe(!reasoning);
+    }
   });
 
   it("enables Anthropic-compatible policies for Bedrock provider", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "amazon-bedrock",
-      modelId: "us.anthropic.claude-opus-4-6-v1",
-      modelApi: "bedrock-converse-stream",
-    });
+    const policy = resolve(
+      "amazon-bedrock",
+      "us.anthropic.claude-opus-4-6-v1",
+      "bedrock-converse-stream",
+    );
     expect(policy.repairToolUseResultPairing).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);
     expect(policy.allowSyntheticToolResults).toBe(true);
@@ -540,11 +466,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("keeps core replay defaults when an owning plugin returns no policy", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "ollama",
-      modelId: "llama3.2",
-      modelApi: "ollama",
-    });
+    const policy = resolve("ollama", "llama3.2", "ollama");
     expect(policy.preserveSignatures).toBe(false);
     expect(policy.appendOnlyRuntimeContext).toBe(true);
   });
@@ -596,33 +518,18 @@ describe("resolveTranscriptPolicy", () => {
     },
   );
 
-  it("allows immutable provider-owned thinking replay for anthropic-compatible native replay policies", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "minimax",
-      modelId: "MiniMax-M2.7",
-      modelApi: "anthropic-messages",
-    });
-    expect(
-      shouldAllowProviderOwnedThinkingReplay({
-        modelApi: "anthropic-messages",
-        policy,
-      }),
-    ).toBe(true);
-  });
-
-  it("allows immutable provider-owned thinking replay for bedrock claude replay policies", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "amazon-bedrock",
-      modelId: "us.anthropic.claude-opus-4-6-v1",
-      modelApi: "bedrock-converse-stream",
-    });
-    expect(
-      shouldAllowProviderOwnedThinkingReplay({
-        modelApi: "bedrock-converse-stream",
-        policy,
-      }),
-    ).toBe(true);
-  });
+  it.each([
+    ["minimax", "MiniMax-M2.7", "anthropic-messages", true],
+    ["amazon-bedrock", "us.anthropic.claude-opus-4-6-v1", "bedrock-converse-stream", true],
+    ["github-copilot", "claude-sonnet-4", "anthropic-messages", false],
+    ["vllm", "gemma-3-27b", "openai-completions", false],
+  ] as const)(
+    "resolves immutable thinking replay for %s",
+    (provider, modelId, modelApi, expected) => {
+      const policy = resolve(provider, modelId, modelApi);
+      expect(shouldAllowProviderOwnedThinkingReplay({ modelApi, policy })).toBe(expected);
+    },
+  );
 
   it.each(["anthropic", "amazon-bedrock"] as const)(
     "allows provider-owned thinking replay for signed-thinking %s recovery policies",
@@ -642,40 +549,8 @@ describe("resolveTranscriptPolicy", () => {
     },
   );
 
-  it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "github-copilot",
-      modelId: "claude-sonnet-4",
-      modelApi: "anthropic-messages",
-    });
-    expect(
-      shouldAllowProviderOwnedThinkingReplay({
-        modelApi: "anthropic-messages",
-        policy,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not allow immutable provider-owned thinking replay for strict openai-compatible replay", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "gemma-3-27b",
-      modelApi: "openai-completions",
-    });
-    expect(
-      shouldAllowProviderOwnedThinkingReplay({
-        modelApi: "openai-completions",
-        policy,
-      }),
-    ).toBe(false);
-  });
-
   it("enables turn-ordering and assistant-merge for strict OpenAI-compatible providers (#38962)", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "gemma-3-27b",
-      modelApi: "openai-completions",
-    });
+    const policy = resolve("vllm", "gemma-3-27b", "openai-completions");
     expect(policy.applyGoogleTurnOrdering).toBe(true);
     expect(policy.validateGeminiTurns).toBe(true);
     expect(policy.validateAnthropicTurns).toBe(true);

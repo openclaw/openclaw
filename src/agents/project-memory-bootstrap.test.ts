@@ -24,15 +24,6 @@ const bootstrap = (overrides: Partial<Parameters<typeof prepareProjectMemoryBoot
     ...overrides,
   });
 
-function expectProjectSelection(lines: string[]) {
-  const rendered = lines.join("\n");
-  expect(rendered).toContain("Use the release helper.");
-  expect(rendered).not.toMatch(
-    /Foreign fact|Untrusted project instruction|Missing-provenance project instruction|<!--/,
-  );
-  expect(rendered.length).toBeLessThanOrEqual(2_000);
-}
-
 const logMocks = vi.hoisted(() => ({ debug: vi.fn() }));
 
 vi.mock("../plugins/memory-state.js", () => ({
@@ -85,17 +76,6 @@ const nativeEntries = [
   hit("foreign", "Foreign fact.", ["github.com/example/other"], 10),
 ];
 
-async function prepareLegacy(
-  candidates: MemorySearchResult[],
-  activeProjectKeys: string[] = projectKeys,
-): Promise<string[]> {
-  runtimeMocks.listCurated.mockResolvedValue(candidates);
-  runtimeMocks.getManager.mockResolvedValue({
-    manager: { listCuratedProjectCandidates: runtimeMocks.listCurated },
-  });
-  return bootstrap({ activeProjectKeys });
-}
-
 function setProvider(
   overrides: Partial<Omit<MemoryProviderHandle, "capabilities">> & {
     capabilities?: Pick<MemoryProviderHandle["capabilities"], "candidates"> &
@@ -117,7 +97,14 @@ async function prepareNative(
   activeProjectKeys: string[] = projectKeys,
 ): Promise<string[]> {
   runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
-  setProvider();
+  return bootstrap({ activeProjectKeys });
+}
+
+async function prepareLegacy(
+  candidates: MemorySearchResult[],
+  activeProjectKeys: string[] = projectKeys,
+): Promise<string[]> {
+  runtimeMocks.listCurated.mockResolvedValue(candidates);
   return bootstrap({ activeProjectKeys });
 }
 
@@ -127,6 +114,16 @@ function resetRuntime(native: boolean) {
     ? undefined
     : { getMemorySearchManager: runtimeMocks.getManager };
   runtimeMocks.providerRuntime = native ? { open: vi.fn() } : undefined;
+  if (native) {
+    setProvider();
+  } else {
+    runtimeMocks.getManager.mockResolvedValue({
+      manager: {
+        listCuratedProjectCandidates: runtimeMocks.listCurated,
+        search: runtimeMocks.search,
+      },
+    });
+  }
 }
 
 it.each(["legacy", "native"])("filters project recall and its budget via %s", async (runtime) => {
@@ -153,19 +150,46 @@ it.each(["legacy", "native"])("filters project recall and its budget via %s", as
             }),
           ),
         ]);
-  expectProjectSelection(lines);
+  const rendered = lines.join("\n");
+  expect(rendered).toContain("Use the release helper.");
+  expect(rendered).not.toMatch(
+    /Foreign fact|Untrusted project instruction|Missing-provenance project instruction|<!--/,
+  );
+  expect(rendered.length).toBeLessThanOrEqual(2_000);
+});
+
+it.each(["legacy", "native"])("includes every active project via %s", async (runtime) => {
+  resetRuntime(runtime === "native");
+  const active = ["github.com/example/other", ...projectKeys];
+  const lines =
+    runtime === "native"
+      ? await prepareNative(nativeEntries, active)
+      : await prepareLegacy(entries, active);
+  expect(lines.join("\n")).toContain("Use the release helper.");
+  expect(lines.join("\n")).toContain("Foreign fact.");
+});
+
+it.each(["legacy", "native"])("uses curated listing rather than search via %s", async (runtime) => {
+  resetRuntime(runtime === "native");
+  const native = runtime === "native";
+  if (native) {
+    setProvider({
+      capabilities: { candidates: ["project"], projectFilter: true },
+      search: runtimeMocks.search,
+    });
+  }
+  const lines = native ? await prepareNative([nativeEntries[0]!]) : await prepareLegacy([entry]);
+  expect(lines.join("\n")).toContain("Use the release helper.");
+  expect(runtimeMocks.search).not.toHaveBeenCalled();
+  expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
+    ...(native ? { kind: "project" } : {}),
+    activeProjectKeys: projectKeys,
+    limit: 48,
+  });
 });
 
 describe("project memory bootstrap", () => {
   beforeEach(() => resetRuntime(false));
-
-  it("includes entries from every project retained in the session active set", async () => {
-    const rendered = (
-      await prepareLegacy(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(rendered).toContain("Foreign fact.");
-  });
 
   it("never emits a partial entry or exceeds the hard budget", async () => {
     const crowded = Array.from({ length: 10 }, (_, index) => ({
@@ -241,36 +265,6 @@ describe("project memory bootstrap", () => {
     expect(filterProjectScopedCuratedContextFiles({ contextFiles })).toEqual(contextFiles);
   });
 
-  it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
-    runtimeMocks.search.mockResolvedValue(
-      Array.from({ length: 100 }, (_, index) => ({
-        ...entries[0]!,
-        path: `memory/2026-07-${String(index + 1).padStart(2, "0")}.md`,
-      })),
-    );
-    runtimeMocks.listCurated.mockResolvedValue([entries[0]]);
-    runtimeMocks.getManager.mockResolvedValue({
-      manager: {
-        search: runtimeMocks.search,
-        listCuratedProjectCandidates: runtimeMocks.listCurated,
-      },
-    });
-
-    const rendered = (
-      await prepareProjectMemoryBootstrap({
-        cfg: {},
-        agentId: "main",
-        activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
-      })
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(runtimeMocks.search).not.toHaveBeenCalled();
-    expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
-      activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
-      limit: 48,
-    });
-  });
-
   it("cites legacy chunks by start line from the already-loaded runtime", async () => {
     const lines = await prepareLegacy([
       { ...entries[0]!, startLine: 5, endLine: 6, source: undefined as never },
@@ -297,17 +291,6 @@ describe("project memory bootstrap", () => {
 describe("native project memory bootstrap", () => {
   beforeEach(() => resetRuntime(true));
 
-  it("includes entries from every project retained in the session active set", async () => {
-    const rendered = (
-      await prepareNative(nativeEntries, [
-        "github.com/example/other",
-        "github.com/OpenClaw/OpenClaw",
-      ])
-    ).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(rendered).toContain("Foreign fact.");
-  });
-
   it("filters every project key without requesting unsupported provider filtering", async () => {
     setProvider({ capabilities: { candidates: ["trigger", "project"], projectFilter: false } });
     runtimeMocks.listCurated.mockResolvedValue({
@@ -325,24 +308,6 @@ describe("native project memory bootstrap", () => {
     });
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).not.toContain("Foreign fact.");
-  });
-
-  it("uses the dedicated curated listing instead of a daily-note-crowded search", async () => {
-    runtimeMocks.search.mockResolvedValue([]);
-    runtimeMocks.listCurated.mockResolvedValue({ hits: [nativeEntries[0]] });
-    setProvider({
-      capabilities: { candidates: ["project"], projectFilter: true },
-      search: runtimeMocks.search,
-    });
-
-    const rendered = (await bootstrap()).join("\n");
-    expect(rendered).toContain("Use the release helper.");
-    expect(runtimeMocks.search).not.toHaveBeenCalled();
-    expect(runtimeMocks.listCurated).toHaveBeenCalledWith({
-      kind: "project",
-      activeProjectKeys: ["github.com/OpenClaw/OpenClaw"],
-      limit: 48,
-    });
   });
 
   it("skips undeclared project capability and releases its lease", async () => {

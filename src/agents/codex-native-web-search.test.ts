@@ -19,6 +19,10 @@ import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-se
 type SearchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["search"];
 const searchConfig = (search: SearchConfig): OpenClawConfig => ({ tools: { web: { search } } });
 const baseConfig = searchConfig({ enabled: true, openaiCodex: { enabled: true, mode: "cached" } });
+const toolPolicy = (tools: OpenClawConfig["tools"]): OpenClawConfig => ({
+  ...baseConfig,
+  tools: { ...baseConfig.tools, ...tools },
+});
 function activate(params: Parameters<typeof resolveCodexNativeSearchActivation>[0] = {}) {
   return resolveCodexNativeSearchActivation({
     config: baseConfig,
@@ -68,13 +72,7 @@ describe("resolveCodexNativeSearchActivation", () => {
     [
       "provider policy",
       {
-        config: {
-          ...baseConfig,
-          tools: {
-            ...baseConfig.tools,
-            byProvider: { "gateway/gpt-5.5": { deny: ["web_search"] } },
-          },
-        },
+        config: toolPolicy({ byProvider: { "gateway/gpt-5.5": { deny: ["web_search"] } } }),
         modelId: "gpt-5.5",
       },
       "tool_policy_denied",
@@ -82,13 +80,9 @@ describe("resolveCodexNativeSearchActivation", () => {
     [
       "sender policy",
       {
-        config: {
-          ...baseConfig,
-          tools: {
-            ...baseConfig.tools,
-            toolsBySender: { "channel:msteams:alice": { deny: ["web_search"] } },
-          },
-        },
+        config: toolPolicy({
+          toolsBySender: { "channel:msteams:alice": { deny: ["web_search"] } },
+        }),
         modelId: "gpt-5.5",
         messageProvider: "teams",
         senderId: "alice",
@@ -181,10 +175,10 @@ describe("Codex native web-search payload helpers", () => {
     });
   });
 
-  it("injects native search restrictions into the Responses payload", () => {
-    const payload: Record<string, unknown> = {};
-    patchCodexNativeWebSearchPayload({
-      payload,
+  it.each([
+    {
+      name: "live search restrictions",
+      payload: {},
       config: searchConfig({
         openaiCodex: {
           enabled: true,
@@ -194,38 +188,37 @@ describe("Codex native web-search payload helpers", () => {
           userLocation: { country: "US" },
         },
       }),
-    });
-    expect(payload.tools).toEqual([
-      {
-        type: "web_search",
-        external_web_access: true,
-        filters: { allowed_domains: ["example.com"] },
-        search_context_size: "medium",
-        user_location: {
-          type: "approximate",
-          country: "US",
+      status: "injected",
+      tools: [
+        {
+          type: "web_search",
+          external_web_access: true,
+          filters: { allowed_domains: ["example.com"] },
+          search_context_size: "medium",
+          user_location: { type: "approximate", country: "US" },
         },
-      },
-    ]);
-  });
-
-  it("injects native web_search into provider payloads", () => {
-    const payload: Record<string, unknown> = { tools: [{ type: "function", name: "read" }] };
-    const result = patchCodexNativeWebSearchPayload({ payload, config: baseConfig });
-
-    expect(result.status).toBe("injected");
-    expect(payload.tools).toEqual([
-      { type: "function", name: "read" },
-      { type: "web_search", external_web_access: false },
-    ]);
-  });
-
-  it("does not inject a duplicate native web_search tool", () => {
-    const payload: Record<string, unknown> = { tools: [{ type: "web_search" }] };
-    const result = patchCodexNativeWebSearchPayload({ payload, config: baseConfig });
-
-    expect(result.status).toBe("native_tool_already_present");
-    expect(payload.tools).toEqual([{ type: "web_search" }]);
+      ],
+    },
+    {
+      name: "cached search alongside existing functions",
+      payload: { tools: [{ type: "function", name: "read" }] },
+      config: baseConfig,
+      status: "injected",
+      tools: [
+        { type: "function", name: "read" },
+        { type: "web_search", external_web_access: false },
+      ],
+    },
+    {
+      name: "existing native search without duplication",
+      payload: { tools: [{ type: "web_search" }] },
+      config: baseConfig,
+      status: "native_tool_already_present",
+      tools: [{ type: "web_search" }],
+    },
+  ])("projects $name", ({ payload, config, status, tools }) => {
+    expect(patchCodexNativeWebSearchPayload({ payload, config }).status).toBe(status);
+    expect(payload).toEqual({ tools });
   });
 });
 
