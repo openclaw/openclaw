@@ -322,7 +322,7 @@ suite.define(() => {
       // matches compact automation names without involving FTS.
       const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
       const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
-      await page.getByRole("button", { name: "Open command palette" }).click();
+      await page.getByRole("button", { name: "Command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("nightly invoices");
@@ -334,7 +334,7 @@ suite.define(() => {
 
       // Command palette is the single search surface: metadata and indexed
       // conversation text share one field, and selecting either navigates.
-      await page.getByRole("button", { name: "Open command palette" }).click();
+      await page.getByRole("button", { name: "Command palette" }).click();
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("view-only handshake");
       await page.clock.runFor(50);

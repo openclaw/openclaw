@@ -12,6 +12,7 @@ import { BrandIcon, Icon, type IconName } from "../../../components/solid/icon.t
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import type { ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -616,6 +617,7 @@ export function ChatActivityPills(props: ChatActivityPillsProps) {
                     <span
                       class="activity-pill__avatar"
                       style={{
+                        "--subagent-avatar-hue": fnv1aUtf16(agent().key) % 360,
                         "--avatar-bg": avatarColors(agent().key)[0],
                         "--avatar-ink": avatarColors(agent().key)[1],
                         "--wave-delay": `${index() * 120}ms`,

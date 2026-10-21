@@ -4359,9 +4359,17 @@ ${buildScript}`,
       workflow.jobs["build-artifacts"].steps,
       "Upload runtime for native policy tests",
     );
-    expect(workflow.jobs["macos-swift"].needs).toContain("build-artifacts");
+    expect(workflow.jobs["macos-swift"].needs).toEqual(["preflight"]);
+    const build = requiredWorkflowStep(steps, "Build Swift tests");
+    const wait = requiredWorkflowStep(steps, "Wait for native policy runtime");
+    expect(steps.indexOf(build)).toBeLessThan(steps.indexOf(wait));
+    expect(steps.indexOf(wait)).toBeLessThan(steps.indexOf(download));
+    expect(build.run).toContain("--build-tests");
+    expect(build.run).not.toContain("macos-native-runtime");
+    expect(wait.run).toContain('macos-native-runtime-artifact.mjs wait "$TARGET_SHA"');
+    expect(wait.env.TARGET_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(download.with).toMatchObject({
-      "artifact-ids": "${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}",
+      "artifact-ids": "${{ steps.native-runtime-ready.outputs.artifact-id }}",
       "merge-multiple": true,
     });
     expect(producer.with.name).toBe(
@@ -4429,6 +4437,12 @@ ${buildScript}`,
         repository: "openclaw/openclaw",
         runAttempt: 1,
         matrix: { phase },
+        steps: {
+          "native-runtime-download": {
+            outcome: phase === "tests" && hasOwner ? "success" : "skipped",
+            outputs: {},
+          },
+        },
         fileHashes: { [owner]: hasOwner ? "present" : "" },
       });
       expect(preparesCli).toBe(phase === "tests" && hasOwner);
@@ -4569,7 +4583,8 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
 `,
         { mode: 0o755 },
       );
-      const result = runWorkflowShellScript(testStep.run, {
+      const buildStep = requiredWorkflowStep(macosSwift.steps, "Build Swift tests");
+      const result = runWorkflowShellScript(`${buildStep.run}\n${testStep.run}`, {
         cwd: root,
         env: {
           ...process.env,
