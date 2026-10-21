@@ -497,10 +497,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       const InventoryContent = () => {
         const read = createMemo(() => view().inventory);
         // Refresh may retain rows, but must not hold scope retirement or live config updates.
-        const inventory = createDeferred(() => read().value);
-        const checking = () => isPending(inventory);
+        const displayedInventory = createDeferred(() => read().value);
+        const checking = () => isPending(displayedInventory);
         const outcome = createMemo(() => {
-          const failure = inventory().failure;
+          const failure = displayedInventory().failure;
           if (failure) {
             throw failure.error;
           }
@@ -530,7 +530,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             </Errored>
             <Show when={view().agents !== null}>
               <For
-                each={inventory().agents ?? []}
+                each={displayedInventory().agents ?? []}
                 keyed={(agent) => agent.id}
                 fallback={<SettingsEmpty message={t("modelProviders.installedAgents.empty")} />}
               >
