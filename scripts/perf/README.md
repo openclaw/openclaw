@@ -100,6 +100,7 @@ beside the originals with a `.candidate.ts` suffix and pass `--owner-suffix cand
 The child verifies both substitutions loaded; results record both owner hashes
 and the optional `--revision` label.
 
+
 ## Async context allocation
 
 `async-store-measure.mjs` compares Node's native runner, the shared single-copy
@@ -185,6 +186,35 @@ all clients connect, including partially warmed samples.
 `--metadata-owner /path/to/server-chat-metadata-lifecycle.baseline.ts` replaces
 only that module; place the baseline beside the original so relative imports
 remain valid. Swap the CPU halves for the next pair and compare paired differences.
+
+## Codex process inspection
+
+`codex-process-inspection-measure.ts` starts a real isolated Gateway, touches memory
+to reach `--rss-mib 8192`, then measures `CodexAppServerClient.start`, durable child
+registration, and `initialize` against a synthetic stdio peer. It verifies the
+initialized notification, registration fingerprint, polite shutdown, and deletion
+of the registration after each sample. It does not run model turns or full attempt
+policy preparation. Run only on the approved Linux benchmark host, using fresh
+state and loopback ports for each side:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/codex-process-inspection-measure.ts \
+  --state-dir /srv/perf-sandbox/<lane>/state-a --port 41570 \
+  --samples 200 --rss-mib 8192 --start-at <future-epoch-ms> \
+  --output /srv/perf-sandbox/<lane>/result-a.json
+```
+
+Use `--snapshot-owner <baseline-sibling.ts>` to replace only the process snapshot
+owner through a module resolution hook. Reports separate actual main-thread peer
+and inspection spawns and their synchronous durations, startup and cleanup time,
+CPU, observed RSS, event-loop sample counts, and total/major GC. Setup and one warmup
+are excluded; whole-run CPU/GC also include the registration verification reads.
+Hold one shared quiet lock around each concurrent pair, give its sides interleaved
+CPUs, then swap sides for the second pair. Use the production guard before and
+during each pair. Decide on the mean of paired deltas: reject a mean at least 20%
+adverse or a metric at least 10% adverse in both pairs. p95 requires 200 samples per
+side and p99 requires 1,000; reported eligibility is per side, so both sides must
+qualify. Major GC is context-only below 50 collections per side.
 
 ## Startup with a populated multi-agent fixture
 
