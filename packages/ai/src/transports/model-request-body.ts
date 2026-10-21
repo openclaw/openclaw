@@ -23,7 +23,7 @@ class ModelRequestJson {
         const end = this.valueEnd(index);
         const encodedKey = this.json.slice(index + 1, end - 1);
         key = encodedKey.includes("\\")
-          ? (JSON.parse(this.json.slice(index, end)) as string)
+          ? (JSON.parse(this.json.slice(index, end)) as string) // SAFETY: This is a JSON.stringify object key.
           : encodedKey;
         index = end + 1;
       }
