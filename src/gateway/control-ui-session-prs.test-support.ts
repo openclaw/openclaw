@@ -149,6 +149,7 @@ async function prepareTestSessionPrTarget(params: { sessionKey: string; agentId?
       repository.sessionKey === selected.canonicalKey
       ? repository
       : null,
+    { includeBoundPullRequest: true },
   );
 }
 

@@ -137,6 +137,16 @@ keeps the current directory and sandbox scope and records the original PR
 association. The sandbox's current branch and HEAD remain intact; the source
 files are staged for work on the PR.
 
+The conversation's PR display follows the prepared original PR, even before a
+new publication. It reads the PR's current status without implying that a newer
+remote head has been imported. A changed or inaccessible association clears the
+previous card. Guests can read only their own prepared PR in their own authorized
+conversation, using their current verified GitHub identity and repository access.
+This does not grant general GitHub browsing or additional write actions. Private
+PR metadata and CI details use the same trusted identity as the own-PR check.
+Ordinary temporary GitHub failures retain the same association's last verified
+status with a warning; a failed own-PR authorization clears it.
+
 Repeating a completed preparation of the same head preserves later edits without
 resetting or synchronizing source files. If the remote PR head has advanced,
 preparation refuses clearly; updating an already prepared workspace is not yet
