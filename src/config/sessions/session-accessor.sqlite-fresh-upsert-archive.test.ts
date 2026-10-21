@@ -37,25 +37,19 @@ const freshScope = () => ({
 it("skips empty archive recovery during warning-mode upserts", async () => {
   await replaceSessionEntry(freshScope(), freshEntry);
   const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
-  try {
-    for (let turn = 0; turn < 3; turn += 1) {
-      await applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        skipMaintenance: false,
-        maintenanceOverride: { mode: "warn" },
-        upserts: [
-          {
-            sessionKey: freshScope().sessionKey,
-            entry: { ...freshEntry, label: `turn-${turn}` },
-          },
-        ],
-      });
-    }
-    expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
-    expect(probe).not.toHaveBeenCalled();
-  } finally {
-    probe.mockRestore();
+  using _ = { [Symbol.dispose]: () => probe.mockRestore() };
+  for (let turn = 0; turn < 3; turn += 1) {
+    await applySessionEntryLifecycleMutation({
+      storePath: fixture.storePath(),
+      skipMaintenance: false,
+      maintenanceOverride: { mode: "warn" },
+      upserts: [
+        { sessionKey: freshScope().sessionKey, entry: { ...freshEntry, label: `turn-${turn}` } },
+      ],
+    });
   }
+  expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+  expect(probe).not.toHaveBeenCalled();
 });
 
 function readArchive() {
@@ -64,16 +58,7 @@ function readArchive() {
     database.db,
     getSessionKysely(database.db)
       .selectFrom("session_transcript_archives")
-      .select([
-        "archive_blob",
-        "archive_name",
-        "archive_sha256",
-        "generation",
-        "publish_attempts",
-        "last_publish_attempt_at",
-        "last_publish_error",
-        "published_at",
-      ])
+      .selectAll()
       .where("session_id", "=", archivedSessionId),
   );
   return expectDefined(row, "expected the unrelated canonical archive");

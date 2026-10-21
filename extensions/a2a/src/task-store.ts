@@ -31,10 +31,10 @@ export class A2aTaskStore {
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
 
-  create(contextId: string, ownerPeer?: string, messageId?: string): A2aTaskRecord {
+  create(contextId: string, ownerPeer: string, messageId: string): A2aTaskRecord {
     this.#pruneTerminalTasks();
-    const messageKey = messageId === undefined ? undefined : JSON.stringify([ownerPeer, messageId]);
-    const existing = messageKey === undefined ? undefined : this.#messageTasks.get(messageKey);
+    const messageKey = JSON.stringify([ownerPeer, messageId]);
+    const existing = this.#messageTasks.get(messageKey);
     if (existing) {
       return existing;
     }
@@ -46,19 +46,15 @@ export class A2aTaskStore {
       history: [],
     };
     this.#tasks.set(task.id, task);
-    if (ownerPeer !== undefined) {
-      this.#taskOwners.set(task.id, ownerPeer);
-    }
-    if (messageKey !== undefined) {
-      this.#messageTasks.set(messageKey, task);
-      this.#taskMessageKeys.set(task.id, messageKey);
-    }
+    this.#taskOwners.set(task.id, ownerPeer);
+    this.#messageTasks.set(messageKey, task);
+    this.#taskMessageKeys.set(task.id, messageKey);
     return task;
   }
 
-  get(taskId: string, ownerPeer?: string): A2aTaskRecord | undefined {
+  get(taskId: string, ownerPeer: string): A2aTaskRecord | undefined {
     this.#pruneTerminalTasks();
-    if (ownerPeer !== undefined && this.#taskOwners.get(taskId) !== ownerPeer) {
+    if (this.#taskOwners.get(taskId) !== ownerPeer) {
       return undefined;
     }
     return this.#tasks.get(taskId);

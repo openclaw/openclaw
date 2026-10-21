@@ -12,7 +12,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { expectMessages, expectNoCalls } from "./update-boundary.test-support.js";
 import { reportUnreportedUpdateAdmissionOutcome } from "./update-command-admission-report.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
@@ -292,7 +292,9 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
     const { env, run, read, fails, onResult } = fixture;
     let { recorded } = fixture;
     if (condition === "pending-publication") {
-      await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(env), ".openclaw-restore-fixture"));
+      await fs.mkdir(
+        path.join(path.dirname(resolveOpenClawStateSqlitePath(env)), ".openclaw-restore-fixture"),
+      );
     }
     const failure =
       condition === "lost-authority"

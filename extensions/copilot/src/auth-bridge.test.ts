@@ -309,14 +309,4 @@ describe("resolveCopilotAuth - defaults wiring", () => {
       true,
     );
   });
-
-  it("falls back to process.cwd() if os.homedir() throws", () => {
-    vi.mocked(osHomedir).mockImplementationOnce(() => {
-      throw new Error("no home");
-    });
-    const result = resolveCopilotAuth({ agentId: "agent-1" });
-    expect(result.copilotHome.includes(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
-      true,
-    );
-  });
 });

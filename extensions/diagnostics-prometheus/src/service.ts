@@ -685,7 +685,6 @@ export function createDiagnosticsPrometheusExporter() {
 
   return {
     handler: createMetricsHandler(store),
-    render: store.render,
     service,
   };
 }

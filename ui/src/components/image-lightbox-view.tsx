@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onSettled } from "solid-js";
+import { Show, action, createOptimistic } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
@@ -124,28 +124,18 @@ function LightboxImageDownload(props: {
   focusableRef: FocusableRef;
   onDownload: () => Promise<void>;
 }) {
-  const [downloading, setDownloading] = createSignal(false, { ownedWrite: true });
-  let active = true;
-  onSettled(() => () => {
-    active = false;
-  });
-  const download = async () => {
-    if (downloading()) {
-      return;
-    }
+  const [downloading, setDownloading] = createOptimistic(false);
+  const download = action(function* (button: HTMLButtonElement) {
     setDownloading(true);
     try {
-      await props.onDownload();
+      yield props.onDownload();
     } catch {
-      if (active) {
+      // An action can outlive the view, including a reconnect of its host.
+      if (button.isConnected) {
         showToast({ message: t("chat.imageLightbox.downloadFailed") });
       }
-    } finally {
-      if (active) {
-        setDownloading(false);
-      }
     }
-  };
+  });
   return (
     <button
       ref={props.focusableRef()}
@@ -154,8 +144,10 @@ function LightboxImageDownload(props: {
       disabled={downloading()}
       aria-busy={downloading() ? "true" : undefined}
       aria-label={t("chat.imageLightbox.download")}
-      onClick={() => {
-        void download();
+      onClick={(event) => {
+        if (!downloading()) {
+          void download(event.currentTarget);
+        }
       }}
     >
       <Icon name="download" />

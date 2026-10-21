@@ -684,9 +684,7 @@ export async function handleSlackAction(
           ...(nativeDataFallbackBaseText !== undefined ? { nativeDataFallbackBaseText } : {}),
         };
         const sendContentAndBlocks = async () => {
-          const shouldSplitLongContent =
-            content && content.length > SLACK_TEXT_LIMIT && !hasSlackNativeDataBlock(blocks);
-          if (content && shouldSplitLongContent) {
+          if (content && content.length > SLACK_TEXT_LIMIT && !hasSlackNativeDataBlock(blocks)) {
             // Reuse the resolved thread for both sends. Invoking the action twice
             // could consume replyToMode=first and move the full text off-thread.
             const { replyBroadcast: _replyBroadcast, ...blockSendOpts } = sendOpts;

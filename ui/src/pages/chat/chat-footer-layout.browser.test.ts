@@ -312,50 +312,38 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
     "reserves footer notice space and keeps menus actionable at %sx%s (%s)",
     async (width, height, label, menuPlacement, withPullRequest) => {
       await withBrowserPage(openBrowserPage(width, height), async (page) => {
-        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
-          <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
-            <main class="content content--chat" style="padding:0">
-              <div class="sidebar-region">
-                <div class="sidebar-region__header">
-                  <header class="chat-pane__header">Session</header>
-                </div>
-                  <div class="sidebar-region__primary" data-region="main"><section class="chat">
-                    ${nest(
-                      "chat-main > chat-main__conversation-column",
-                      `<div class="chat-topbar-notices"></div>${conversation(`
-                            <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-                            <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
-                            ${composerFooter(
-                              "Composer",
-                              `<div class="chat-footer__context">
-                            ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
-                              <openclaw-plugin-contributions></openclaw-plugin-contributions>
-                              <div class="agent-chat__composer-notices"></div>
-                              </div>`,
-                            )}
-                          `)}`,
-                    )}
-                  </section></div>
-              </div>
-            </main>
-            <openclaw-toast-host data-toast-placement="shell">
-              <div class="app-toast">Connection notice</div>
-            </openclaw-toast-host>
-          </div>
-        </body></html>`);
+        const footerContext = nest(
+          "chat-footer__context",
+          `
+          ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
+          <openclaw-plugin-contributions></openclaw-plugin-contributions>
+          <div class="agent-chat__composer-notices"></div>`,
+        );
+        const chat = nest(
+          "chat-main > chat-main__conversation-column",
+          `<div class="chat-topbar-notices"></div>${conversation(`
+            <div class="chat-thread" role="log">${nest("chat-thread-inner", "Transcript")}</div>
+            ${nest("chat-gutter-stack > task-suggestions", "Task suggestion")}
+            ${composerFooter("Composer", footerContext)}`)}`,
+        );
+        await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head>
+          <body style="margin:0;height:100vh;overflow:hidden">
+            <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
+              <main class="content content--chat" style="padding:0"><div class="sidebar-region">
+                ${nest("sidebar-region__header", '<header class="chat-pane__header">Session</header>')}
+                <div class="sidebar-region__primary" data-region="main"><section class="chat">${chat}</section></div>
+              </div></main>
+              <openclaw-toast-host data-toast-placement="shell">${nest("app-toast", "Connection notice")}</openclaw-toast-host>
+            </div>
+          </body></html>`);
         await waitForLayoutSettled(page, ".chat-main__conversation, .agent-chat__composer-shell");
 
         const geometry = async () =>
           await page.evaluate(() => {
             const element = (selector: string) => document.querySelector<HTMLElement>(selector)!;
             const rect = (selector: string) => {
-              const {
-                bottom,
-                top,
-                height: h,
-                width: w,
-              } = element(selector).getBoundingClientRect();
-              return { bottom, top, height: h, width: w };
+              const box = element(selector).getBoundingClientRect();
+              return { bottom: box.bottom, top: box.top, height: box.height, width: box.width };
             };
             const footer = element(".chat-footer").getBoundingClientRect();
             const threadElement = element(".chat-thread");

@@ -88,6 +88,8 @@ function createRetrySession(execute?: ToolDefinition["execute"], enabled = true)
             ...createStubTool("record"),
             execute,
           },
+          // Async tool calls need sessions_yield to collect their results.
+          { ...createStubTool("sessions_yield"), async: false },
         ]
       : undefined,
   });

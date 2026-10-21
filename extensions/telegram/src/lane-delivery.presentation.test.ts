@@ -4,7 +4,7 @@ import {
   markTelegramDroppedControlFallback,
   resolveFinalTelegramPresentationText,
 } from "./interactive-fallback.js";
-import { createHarness, expectPreviewFinalized } from "./lane-delivery.test-support.js";
+import { createHarness, deliver, expectPreviewFinalized } from "./lane-delivery.test-support.js";
 const statusTable = {
   type: "table" as const,
   caption: "Status",
@@ -49,13 +49,12 @@ describe("createLaneTextDeliverer streamed presentation finals", () => {
         },
       );
       const harness = createHarness({ answerMessageId: 999, resolveFinalPresentationText });
-      const deliver = (infoKind: "block" | "final") =>
-        harness.deliverLaneText({ laneName: "answer", text, payload, infoKind });
-      const block = await deliver("block");
+      const send = (infoKind: "block" | "final") => deliver(harness, text, { payload, infoKind });
+      const block = await send("block");
       expect(block.kind).toBe("preview-updated");
       expect(resolveFinalPresentationText).not.toHaveBeenCalled();
       expect(harness.answer?.lastDeliveredText()).toBe(text);
-      const delivery = expectPreviewFinalized(await deliver("final"));
+      const delivery = expectPreviewFinalized(await send("final"));
       expect(delivery.content).toBe(expected);
       expect(harness.answer?.lastDeliveredText()).toBe(expected);
       expect(harness.sendPayload).not.toHaveBeenCalled();

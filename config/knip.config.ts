@@ -84,6 +84,13 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // The performance guide and transcript driver invoke these tools and preloads by path.
+  "scripts/lib/gateway-bench-transport-preload.ts!",
+  "scripts/perf/async-store-measure.mjs!",
+  "scripts/perf/code-mode-store-measure.ts!",
+  "scripts/perf/gateway-agent-event-measure.ts!",
+  "scripts/perf/session-list-order-measure.ts!",
+  "scripts/perf/transcript-hydration-counts-preload.ts!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this synthetic reload fixture by path.

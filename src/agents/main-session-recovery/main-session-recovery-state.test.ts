@@ -5,10 +5,7 @@ import type {
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
-import {
-  inspectMainRestartRecoveryRolloverEligibility,
-  transitionMainSessionRecovery,
-} from "./main-session-recovery-state.js";
+import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
 import { claimForeground, recoveryState } from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";
@@ -127,27 +124,6 @@ describe("main session recovery state", () => {
       }).kind,
     ).toBe("reserved");
     expect(entry.status).toBe("interrupted");
-  });
-
-  it("allows rollover until the tombstone records its successor", () => {
-    const entry = interruptedEntry({}, { tombstone: { reason: "exhausted" } });
-    expect(inspectMainRestartRecoveryRolloverEligibility(entry)).toEqual({ eligible: true });
-    entry.archivedAt = 101;
-    expect(inspectMainRestartRecoveryRolloverEligibility(entry)).toEqual({ eligible: true });
-    const successor = {
-      recoveredSessionId: "recovered-id",
-      recoveredSessionKey: "agent:main:dashboard:recovered",
-    };
-    entry.mainRestartRecovery!.tombstone = { reason: "exhausted", ...successor };
-    expect(inspectMainRestartRecoveryRolloverEligibility(entry)).toEqual({
-      eligible: false,
-      reason: "already_recovered",
-      ...successor,
-    });
-    expect(inspectMainRestartRecoveryRolloverEligibility(interruptedEntry())).toEqual({
-      eligible: false,
-      reason: "not_tombstoned",
-    });
   });
 
   it("inspects a live reservation without adopting or releasing it", () => {
