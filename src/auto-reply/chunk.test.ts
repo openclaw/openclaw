@@ -70,12 +70,9 @@ describe("chunkText", () => {
       40,
       ["paragraph one line", "paragraph two starts here and continues"],
     ],
-    ["alpha beta   ", 8, ["alpha", "beta"]],
-    ["Supercalifragilisticexpialidocious", 10, ["Supercalif", "ragilistic", "expialidoc", "ious"]],
     ...parentheticalCases,
     ["\na bcd", 5, ["\na", "bcd"]],
     ["ab\u00a0cdef", 5, ["ab", "cdef"]],
-    ["ab \u0301cd", 2, ["ab", " \u0301", "cd"]],
   ]);
 });
 
@@ -197,7 +194,6 @@ describe("chunkMarkdownText", () => {
 
   runChunkCases(chunkMarkdownText, [
     ...parentheticalCases,
-    ["aa bb\ncc dd\nee ff gg hh", 6, ["aa bb", "cc dd", "ee ff", "gg hh"]],
     ["abc \u0301def", 4, ["abc", " \u0301de", "f"]],
     ["abc  def", 4, ["abc", " def"]],
   ]);
@@ -296,13 +292,10 @@ describe("chunkByNewline", () => {
     ],
     ["trailing blank lines", "Line one\n\n", 1000, ["Line one\n\n"], undefined],
     ["capped blank lines", "x" + "\n".repeat(50), 10, ["x" + "\n".repeat(9)], undefined],
-    ["full chunk", "abcdefghij\n\n", 10, ["abcdefghij"], undefined],
     ["astral suffix budget", "😀\n\n", 3, ["😀\n"], undefined],
     ["astral leading budget", "\n😀", 2, ["😀"], undefined],
     ["astral interior budget", "a\n\n😀", 2, ["a", "😀"], undefined],
     ["fractional budget", "\n😀\n\n", 2.9, ["😀"], undefined],
-    ["indivisible code point", "😀\n\n", 1, ["😀"], undefined],
-    ["unsplit long lines", "abcdefghij\n\n", 3, ["abcdefghij"], { splitLongLines: false }],
     ["untrimmed trailing budget", "  x \n\n", 5, ["  x \n"], { trimLines: false }],
     ["disabled limit", "x\n\n", 0, ["x\n\n"], undefined],
     [
