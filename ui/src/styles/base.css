@@ -517,6 +517,14 @@
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
 
+  --session-header-control-bg: color-mix(in srgb, var(--text) 4%, var(--bg-content));
+  --session-header-control-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg-content));
+  --session-header-control-active-bg: color-mix(in srgb, var(--text) 11%, var(--bg-content));
+  --session-header-control-active-color: color-mix(in srgb, var(--accent) 20%, var(--text));
+  --details-subagent-ink: 45% 36%;
+  --details-subagent-tint: 45% 94%;
+  --details-subagent-tint-strength: 100%;
+
   --card: #ffffff;
   --card-foreground: #211e1a;
   --card-highlight: rgba(60, 42, 24, 0.03);
