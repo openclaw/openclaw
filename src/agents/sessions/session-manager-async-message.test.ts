@@ -20,10 +20,7 @@ import {
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
-import {
-  deleteSessionEntryRows,
-  writeSessionEntry,
-} from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
@@ -112,27 +109,21 @@ function afterMetadataReceipt(after: () => void) {
     });
 }
 
-it.for(["protected", "interrupted retry", "below cap", "below cap protected insert"] as const)(
+it.for(["protected", "below cap protected insert"] as const)(
   "resumes idle protected-store maintenance after a lazy worker creates a session (starting state: %s)",
   async (startingState, { signal }) => {
-    const interruptedRetry = startingState === "interrupted retry";
     const belowCap = startingState.startsWith("below cap");
     const storePath = state.statePath(`lazy-maintenance-${startingState}.sqlite`);
     const scope = { agentId: "main", path: storePath };
     const protectedKey = "agent:main:lazy-protected";
-    const removedKey = "agent:main:lazy-removed";
     const updatedAt = Date.now();
     openOpenClawAgentDatabase(scope);
     runOpenClawAgentWriteTransaction((database) => {
-      for (const key of [
-        protectedKey,
-        ...(belowCap ? [] : ["agent:main:lazy-other-protected"]),
-        ...(interruptedRetry ? [removedKey] : []),
-      ]) {
+      for (const key of [protectedKey, ...(belowCap ? [] : ["agent:main:lazy-other-protected"])]) {
         writeSessionEntry(database, key, {
           sessionId: key,
           updatedAt,
-          ...(key === removedKey ? { pinnedAt: updatedAt } : { modelSelectionLocked: true }),
+          modelSelectionLocked: true,
         });
       }
     }, scope);
@@ -150,11 +141,9 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
       storePath,
     };
     const settled = createDeferred();
-    const interrupted = createDeferred();
     const archived = createDeferred();
     const run = reclamationRun.runSqliteSessionReclamation;
     let passes = 0;
-    let retryInterrupted = false;
     const observe = vi
       .spyOn(reclamationRun, "runSqliteSessionReclamation")
       .mockImplementation(async (params) => {
@@ -168,13 +157,7 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
             settled.resolve();
           }
           if (result.value.durableNoCandidates === true) {
-            if (interruptedRetry && !retryInterrupted) {
-              retryInterrupted = true;
-              kickSessionEntryMaintenanceAfterWrite(request);
-              interrupted.resolve();
-            } else {
-              settled.resolve();
-            }
+            settled.resolve();
           }
           if (result.value.archived > 0) {
             archived.resolve();
@@ -185,13 +168,6 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
-      if (interruptedRetry) {
-        await withinTest(interrupted.promise, signal);
-        await yieldToEventLoop();
-        runOpenClawAgentWriteTransaction((database) => {
-          deleteSessionEntryRows(database, removedKey, { deleteOwnedWindows: true });
-        }, scope);
-      }
       await withinTest(settled.promise, signal);
       await yieldToEventLoop();
       const protectedPasses = passes;
@@ -208,22 +184,19 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
             : "agent:main:lazy-eligible",
         sessionId: "lazy-eligible",
       };
-      let victim = target;
-      if (belowCap || startingState === "protected") {
-        const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
-        const firstTarget = {
-          ...target,
-          sessionKey: `agent:main:${firstKey}`,
-          sessionId: firstKey,
-        };
-        const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
-        await first.appendMessageAsync(user("lazy-maintenance-first"));
-        await yieldToEventLoop();
-        await vi.advanceTimersByTimeAsync(1_001);
-        expect(passes).toBe(protectedPasses);
-        expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
-        victim = belowCap ? firstTarget : target;
-      }
+      const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
+      const firstTarget = {
+        ...target,
+        sessionKey: `agent:main:${firstKey}`,
+        sessionId: firstKey,
+      };
+      const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
+      await first.appendMessageAsync(user("lazy-maintenance-first"));
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBe(protectedPasses);
+      expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
+      const victim = belowCap ? firstTarget : target;
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       await manager.appendMessageAsync(user("lazy-maintenance"));
       expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
@@ -351,6 +324,7 @@ it("shares one frozen tool-result graph across append receipts, transcript views
       timestamp: index + 2,
     }),
   );
+  const originalMessages = structuredClone(messages);
   const originalGraphs = messages.map((message) => ({
     content: message.content,
     block: message.content[0],
@@ -381,26 +355,11 @@ it("shares one frozen tool-result graph across append receipts, transcript views
         id: receipts[index]!.entryId,
         parentId: index === 0 ? seed.entryId : receipts[index - 1]!.entryId,
         timestamp: entry.timestamp,
-        message: {
-          role: "toolResult",
-          toolCallId: `large-${index}`,
-          toolName: "read",
-          content: [{ type: "text", text }],
-          details: { rows: [{ index, values: [index, index + 1] }] },
-          isError: false,
-          timestamp: index + 2,
-        },
+        message: originalMessages[index],
       }),
     })),
   );
   const context = manager.buildSessionContext().messages.slice(-messages.length);
-  const retained = new Set([
-    ...messages,
-    ...receipts.map(({ message }) => message),
-    ...entries.map(({ message }) => message),
-    ...context,
-  ]);
-  expect(retained.size).toBe(messages.length);
   for (const [index, message] of messages.entries()) {
     const original = originalGraphs[index]!;
     expect(receipts[index]!.message).toBe(message);

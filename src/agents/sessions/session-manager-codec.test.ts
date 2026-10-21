@@ -187,16 +187,6 @@ describe("model context projection isolation", () => {
   const missingDetails = { openclawSyntheticMissingToolResult: true };
   const missingResult = { ...toolResult, details: missingDetails };
   const cases: Array<[string, Message, unknown]> = [
-    [
-      "private user metadata",
-      Object.assign(userMessage("visible"), {
-        __openclaw: { upstreamUserText: "private", retained: { nested: "kept" } },
-      }),
-      {
-        ...userMessage("visible"),
-        __openclaw: { retained: { nested: "kept" } },
-      },
-    ],
     ["plain tool result", toolResult, toolResult],
     ["tool evidence", { ...toolResult, details: { evidence: "private" } }, toolResult],
     ["missing-result marker", missingResult, missingResult],
@@ -237,6 +227,7 @@ describe("model context projection isolation", () => {
     );
     const entry = messageEntry(message);
     const projected = cloneSessionModelContextEntries(null, [entry]);
+    expect(metadata.upstreamUserText).toBe("private");
     argumentsValue.nested.path = "caller-change.txt";
     metadata.retained.nested = "caller-change";
     expect(projected).toMatchObject([
@@ -257,6 +248,7 @@ describe("model context projection isolation", () => {
     assert(nested, "Missing nested tool arguments");
     nested.path = "context-change.txt";
     const projectedMetadata = asOptionalRecord(Reflect.get(projectedEntry.message, "__openclaw"));
+    expect(projectedMetadata).not.toHaveProperty("upstreamUserText");
     const retained = asOptionalRecord(projectedMetadata?.retained);
     assert(retained, "Missing retained metadata");
     retained.nested = "context-change";
