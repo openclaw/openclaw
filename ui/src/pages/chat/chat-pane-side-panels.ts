@@ -120,11 +120,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       reservedHeight: this.mobilePresentation.reservedHeight,
       destination: this.mobilePresentation.destination,
       detailsMount: this.mobilePresentation.detailsMount,
-      setDetailsMount: (element) => {
-        if (element !== this.mobilePresentation.detailsMount) {
-          this.mobilePresentation.detailsMount = element;
-        }
-      },
+      setDetailsMount: this.setMobileDetailsMount,
       navigate: (destination, source) => this.navigateMobileHost(destination, source),
       reveal: (source) => this.navigateMobileHost(this.mobilePresentation.destination, source),
       close: () => {
@@ -173,6 +169,13 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       onViewportChange: this.onMobileViewportChange,
     };
   }
+
+  // The renderer keys attachment cleanup by this pane's stable callback.
+  private readonly setMobileDetailsMount = (element: HTMLElement | null): void => {
+    if (element !== this.mobilePresentation.detailsMount) {
+      this.mobilePresentation.detailsMount = element;
+    }
+  };
 
   private readonly onMobileComposerEditingChange = (editing: boolean): void => {
     if (!this.usesMobileHost || editing === this.mobilePresentation.composerEditing) {

@@ -304,7 +304,6 @@ describe("session menu", () => {
       context,
       currentOwner: { type: "agent", id: "research:one" },
       work: {
-        loading: false,
         pullRequestUrl: "https://example.test/pr",
         worktreePath: "/work/openclaw",
       },
@@ -374,7 +373,7 @@ describe("session menu", () => {
       {
         selectionCount: 3,
         cloudWorkerStopAllowed: true,
-        work: { loading: false, pullRequestUrl: "https://example.test/pr", worktreePath: "/tmp/x" },
+        work: { pullRequestUrl: "https://example.test/pr", worktreePath: "/tmp/x" },
       },
       ["Mark 3 as unread", "Archive 3", "Move 3 to group", "Delete 3…"],
     ],
@@ -752,16 +751,15 @@ describe("session menu", () => {
 
   it.each([
     ["absent", null],
-    ["unresolved", { loading: true, pullRequestUrl: null, worktreePath: null }],
+    ["unresolved", { pullRequestUrl: null, worktreePath: null }],
     [
       "PR",
       {
-        loading: false,
         pullRequestUrl: "https://github.com/openclaw/openclaw/pull/12345",
         worktreePath: null,
       },
     ],
-    ["editor", { loading: false, pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
+    ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
     const { menu, onAction } = await actionMenu({ work });
     const openIn = menuItem(menu, "Open in");

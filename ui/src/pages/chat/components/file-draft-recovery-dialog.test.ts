@@ -6,7 +6,9 @@ import {
   waitForRenderedModalDialog,
 } from "../../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { reviewFileDrafts, type FileDraft } from "./file-draft-recovery-dialog.ts";
+import { reviewFileDrafts } from "./file-draft-recovery-dialog-view.tsx";
+
+type FileDraft = Parameters<typeof reviewFileDrafts>[0][number];
 
 const clipboard = vi.hoisted(() => ({ copy: vi.fn() }));
 vi.mock("../../../lib/clipboard.ts", async (importOriginal) => ({

@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { action, createMemo, createSignal, Show } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -7,6 +7,7 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
@@ -79,17 +80,42 @@ declare module "@solidjs/web" {
 
 const COPY_FEEDBACK_MS = 1_500;
 
-async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLabel: string) {
-  const copied = await copyToClipboard(commit);
-  button.dataset.copied = copied ? "1" : "0";
-  button.setAttribute("aria-label", t(copied ? "aboutPage.copiedCommit" : "common.copyFailed"));
-  window.setTimeout(() => {
+function BuildCommitCopy(props: {
+  commit: string;
+  buttonRef?: (element: HTMLButtonElement) => void;
+}) {
+  const [copied, setCopied] = createSignal<boolean | undefined>(undefined);
+  const reset = createTimeout(() => setCopied(undefined), COPY_FEEDBACK_MS);
+  const copy = action(async function* (button: HTMLButtonElement) {
+    const result = await copyToClipboard(props.commit, () => button.isConnected);
+    yield;
     if (!button.isConnected) {
       return;
     }
-    delete button.dataset.copied;
-    button.setAttribute("aria-label", idleLabel);
-  }, COPY_FEEDBACK_MS);
+    setCopied(result);
+    reset.schedule();
+  });
+  return (
+    <button
+      ref={(element) => props.buttonRef?.(element)}
+      type="button"
+      class="sidebar-build-hover-card__copy"
+      data-copied={copied() === undefined ? undefined : copied() ? "1" : "0"}
+      aria-label={
+        copied() === undefined
+          ? t("aboutPage.copyCommit")
+          : t(copied() ? "aboutPage.copiedCommit" : "common.copyFailed")
+      }
+      onClick={(event) => void copy(event.currentTarget)}
+    >
+      <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true">
+        <Icon name="copy" />
+      </span>
+      <span class="sidebar-build-hover-card__copy-done" aria-hidden="true">
+        <Icon name="check" />
+      </span>
+    </button>
+  );
 }
 
 function renderSidebarServerDetails(
@@ -111,7 +137,6 @@ function renderSidebarServerDetails(
       })} UTC`
     : null;
   const unavailable = t("aboutPage.unavailable");
-  const copyLabel = t("aboutPage.copyCommit");
   return (
     <div class="sidebar-hover-card__server-details">
       <div class="sidebar-hover-card__summary">
@@ -122,22 +147,7 @@ function renderSidebarServerDetails(
           <dt>{t("aboutPage.commit")}</dt>
           <dd class="sidebar-hover-card__metadata-value--mono sidebar-build-hover-card__commit">
             <span>{commit ?? unavailable}</span>
-            {commit ? (
-              <button
-                ref={copyButtonRef}
-                type="button"
-                class="sidebar-build-hover-card__copy"
-                aria-label={copyLabel}
-                onClick={(event) => void copyBuildCommit(event.currentTarget, commit, copyLabel)}
-              >
-                <span class="sidebar-build-hover-card__copy-idle" aria-hidden="true">
-                  <Icon name="copy" />
-                </span>
-                <span class="sidebar-build-hover-card__copy-done" aria-hidden="true">
-                  <Icon name="check" />
-                </span>
-              </button>
-            ) : null}
+            {commit ? <BuildCommitCopy commit={commit} buttonRef={copyButtonRef} /> : null}
           </dd>
         </div>
         <div class="sidebar-hover-card__metadata-row">

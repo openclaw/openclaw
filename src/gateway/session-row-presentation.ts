@@ -221,16 +221,34 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view = prepareSessionRowPublicationView(projection);
-  return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) =>
-    prepareProjectedSessionPresentation(read, client, now, projectRun, view);
+  return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
+    const recipient = prepareSessionRowRecipient(read, client, view);
+    let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
+    return {
+      get audienceKey() {
+        return JSON.stringify([
+          recipient.sharing.cacheKey,
+          recipient.presentFastMode("ultrafast"),
+          recipient.publicationState?.factsRevision,
+        ]);
+      },
+      // Event fanout needs display structures only on an audience miss, after live authority.
+      get presentation() {
+        return (presentation ??= prepareProjectedSessionPresentation(
+          read,
+          client,
+          now,
+          projectRun,
+          recipient,
+        ));
+      },
+    };
+  };
 }
 
-/** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
-export function prepareProjectedSessionPresentation(
+function prepareSessionRowRecipient(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
-  now = Date.now(),
-  projectRun?: VisibleActiveSessionRunProjector,
   publication?: PublicationView,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
@@ -240,6 +258,31 @@ export function prepareProjectedSessionPresentation(
       ? undefined
       : prepareOperatorModelPresentation({ cfg, policyConfig, client });
   const publicationState = publication?.();
+  const sharing = prepareProjectedSessionSharing({
+    cfg: policyConfig,
+    client: client ?? null,
+    isMember: (value, identityId) =>
+      projection
+        .readMembership({
+          agentId: value.agentId,
+          key: value.storeKey,
+          storePath: value.storePath,
+        })
+        ?.has(identityId) ?? false,
+  });
+  return { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing };
+}
+
+/** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
+export function prepareProjectedSessionPresentation(
+  projection: SessionRowReadView,
+  client?: GatewayClient | null,
+  now = Date.now(),
+  projectRun?: VisibleActiveSessionRunProjector,
+  recipient = prepareSessionRowRecipient(projection, client),
+) {
+  const { cfg, policyConfig, rowContext, presentFastMode, models, publicationState, sharing } =
+    recipient;
   const publicationRows = publicationState?.rows;
   const subagentRuns = rowContext.subagentRuns.atTime(now);
   const preparedRowContext = { ...rowContext, subagentRuns };
@@ -266,18 +309,6 @@ export function prepareProjectedSessionPresentation(
     const record = projection.describe(query);
     return record ? toProjectedSessionSharingTarget(record) : null;
   };
-  const sharing = prepareProjectedSessionSharing({
-    cfg: policyConfig,
-    client: client ?? null,
-    isMember: (value, identityId) =>
-      projection
-        .readMembership({
-          agentId: value.agentId,
-          key: value.storeKey,
-          storePath: value.storePath,
-        })
-        ?.has(identityId) ?? false,
-  });
   const profile = gatewayClientSessionCreator(client ?? null);
   const profiles = rowContext.userProfileIdentityById;
   const profileId = profile
@@ -582,13 +613,6 @@ export function prepareProjectedSessionPresentation(
     return projectModels(row);
   };
   return {
-    get audienceKey() {
-      return JSON.stringify([
-        sharing.cacheKey,
-        presentFastMode("ultrafast"),
-        publicationState?.factsRevision,
-      ]);
-    },
     rowContext: preparedRowContext,
     active,
     sharing,

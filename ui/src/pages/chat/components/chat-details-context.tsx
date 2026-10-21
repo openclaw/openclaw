@@ -1,4 +1,4 @@
-import { For, Loading, Show, createMemo, createSignal, lazy } from "solid-js";
+import { For, Loading, Show, action, createMemo, createOptimistic, lazy } from "solid-js";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -59,19 +59,15 @@ export function ChatDetailsContextSummary(props: Pick<ChatDetailsContextContentP
 /** Shared content, with the existing Context query and compaction owners unchanged. */
 export function ChatDetailsContextContent(props: ChatDetailsContextContentProps) {
   const context = createMemo(() => getContextNoticeViewModel(props.details.selectedSession));
-  const [compacting, setCompacting] = createSignal(false);
+  const [compacting, setCompacting] = createOptimistic(false);
   const budget = () => props.details.selectedSession?.contextBudgetStatus;
-  const compact = async () => {
+  const compact = action(function* () {
     if (!props.presented || compacting() || props.details.runActive) {
       return;
     }
     setCompacting(true);
-    try {
-      await props.details.onCompact?.();
-    } finally {
-      setCompacting(false);
-    }
-  };
+    yield props.details.onCompact?.();
+  });
   return (
     <Show when={context()}>
       {(usage) => (

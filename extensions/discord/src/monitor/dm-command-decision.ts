@@ -13,11 +13,7 @@ export async function handleDiscordDmCommandDecision(params: {
   onPairingCreated: (code: string) => Promise<void>;
   onUnauthorized: () => Promise<void>;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
-}): Promise<boolean> {
-  if (params.senderAccess.decision === "allow") {
-    return true;
-  }
-
+}): Promise<void> {
   if (params.senderAccess.decision === "pairing") {
     const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
     const result = await createChannelPairingChallengeIssuer({
@@ -42,9 +38,8 @@ export async function handleDiscordDmCommandDecision(params: {
     if (result.created && result.code) {
       await params.onPairingCreated(result.code);
     }
-    return false;
+    return;
   }
 
   await params.onUnauthorized();
-  return false;
 }

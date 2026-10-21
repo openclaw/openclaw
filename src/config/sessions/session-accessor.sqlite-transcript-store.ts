@@ -20,7 +20,6 @@ import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlit
 import {
   createTranscriptIdentityReader,
   readEventTimestamp,
-  type SqliteTranscriptSnapshotRow,
 } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -33,6 +32,10 @@ import {
   readIdempotencyKeyOwner,
   readTranscriptEventIdentity,
 } from "./session-accessor.sqlite-transcript-identity.js";
+import type {
+  TranscriptReplacementOptions,
+  TranscriptRewriteOptions,
+} from "./session-accessor.sqlite-transcript-rewrite.types.js";
 import {
   deleteTranscriptEventsInTransaction,
   ensureTranscriptGenerationInTransaction,
@@ -445,15 +448,7 @@ export function replaceSqliteTranscriptEventsInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   events: readonly TranscriptEvent[],
-  options: {
-    createdAtByIndex?: readonly number[];
-    /** Keep maintenance rewrites at their existing recency while invalidating stale projections. */
-    preserveSessionWindowRecency?: boolean;
-    scheduleProjectionReconcile?: boolean;
-    onProjectionReconcileNeeded?: () => void;
-    /** Capture inserted bytes only when the caller retains a replacement snapshot. */
-    writtenRows?: SqliteTranscriptSnapshotRow[];
-  } = {},
+  options: TranscriptReplacementOptions = {},
 ): void {
   return withSqliteDatabaseWriteScope(
     database.db,
@@ -581,7 +576,7 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     expectedEventJson: string;
     seq: number;
   }[],
-  options: { legacyTextStorage?: boolean; projectionCurrent?: boolean } = {},
+  options: TranscriptRewriteOptions = {},
 ): string | undefined {
   if (rows.length === 0) {
     return undefined;
@@ -669,7 +664,9 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
           reconcileRewrittenTranscriptIndex(database, resolved.sessionId, rebuildSynchronously);
         }
       }
-      touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      if (options.touchMutation !== false) {
+        touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      }
       return generation;
     });
   return projectionUnchanged && admissionUnchanged
