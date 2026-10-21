@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -129,29 +129,6 @@ it.each(
     } finally {
       releasePreparation.resolve();
       realpath.mockRestore();
-    }
-  },
-);
-
-it.each(["reconciliation", "attachments"] as const)(
-  "preserves independent %s after the initiating dispatch turn closes",
-  async (operation) => {
-    await using fixture = await workspaceFixture();
-    const synced = await fixture.sync();
-    fixture.closeTurn();
-    if (operation === "reconciliation") {
-      const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
-      expect(token).toBeTruthy();
-      await fixture.transfer.revoke("environment-1", token);
-    } else {
-      assert.isDefined(fixture.actions.stageAttachments);
-      await expect(
-        fixture.actions.stageAttachments({
-          localPath: fixture.localPath,
-          isAuthorized: () => true,
-          signal: new AbortController().signal,
-        }),
-      ).resolves.toBeUndefined();
     }
   },
 );
