@@ -137,7 +137,6 @@ it.each([
         );
         const lifecycle = buildGatewaySessionSnapshot({
           sessionRow: row,
-          includeSession: true,
           lifecycle: true,
         });
         expect(lifecycle).not.toHaveProperty("runtimeSelectionLocked");
