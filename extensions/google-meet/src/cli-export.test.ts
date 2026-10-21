@@ -28,47 +28,37 @@ describe("Google Meet export publication", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("keeps an existing bundle member when replacement fails", async () => {
-    const summaryPath = path.join(outputDir, "summary.md");
-    fs.mkdirSync(outputDir);
-    fs.writeFileSync(summaryPath, "previous summary\n");
-    const priorBytes = fs.readFileSync(summaryPath);
-
-    vi.spyOn(fsp, "writeFile").mockImplementationOnce(async (file) => {
-      expect(typeof file).toBe("string");
-      fs.writeFileSync(file as string, "partial replacement");
-      throw new Error("injected write failure");
-    });
-
-    await expect(writeBundle(outputDir)).rejects.toThrow("injected write failure");
-
-    expect(fs.readFileSync(summaryPath)).toEqual(priorBytes);
-    expect(fs.readdirSync(outputDir)).toEqual(["summary.md"]);
-  });
-
-  it("keeps an existing ZIP when replacement fails", async () => {
-    const zipPath = `${outputDir}.zip`;
-    const priorZip = await new JSZip()
-      .file("previous.txt", "previous export")
-      .generateAsync({ type: "nodebuffer" });
-    fs.writeFileSync(zipPath, priorZip);
-    const realWriteFile = fsp.writeFile;
-
-    vi.spyOn(fsp, "writeFile").mockImplementation(async (...args) => {
-      const [file, data] = args;
-      if (Buffer.isBuffer(data)) {
-        expect(typeof file).toBe("string");
-        fs.writeFileSync(file as string, "partial replacement");
-        throw new Error("injected ZIP write failure");
+  it.each([false, true])(
+    "preserves the existing file on failed replacement (zip=%s)",
+    async (zip) => {
+      const filePath = zip ? `${outputDir}.zip` : path.join(outputDir, "summary.md");
+      const previous = zip
+        ? await new JSZip()
+            .file("previous.txt", "previous export")
+            .generateAsync({ type: "nodebuffer" })
+        : Buffer.from("previous summary\n");
+      if (!zip) {
+        fs.mkdirSync(outputDir);
       }
-      await Reflect.apply(realWriteFile, fsp, args);
-    });
-
-    await expect(writeBundle(outputDir, true)).rejects.toThrow("injected ZIP write failure");
-
-    expect(fs.readFileSync(zipPath)).toEqual(priorZip);
-    expect(fs.readdirSync(tempDir).toSorted()).toEqual(["bundle", "bundle.zip"]);
-  });
+      fs.writeFileSync(filePath, previous);
+      const realWriteFile = fsp.writeFile;
+      const write = vi.spyOn(fsp, "writeFile");
+      write[zip ? "mockImplementation" : "mockImplementationOnce"](async (...args) => {
+        const [file, data] = args;
+        if (!zip || Buffer.isBuffer(data)) {
+          expect(typeof file).toBe("string");
+          fs.writeFileSync(file as string, "partial replacement");
+          throw new Error("injected write failure");
+        }
+        await Reflect.apply(realWriteFile, fsp, args);
+      });
+      await expect(writeBundle(outputDir, zip)).rejects.toThrow("injected write failure");
+      expect(fs.readFileSync(filePath)).toEqual(previous);
+      expect(fs.readdirSync(zip ? tempDir : outputDir).toSorted()).toEqual(
+        zip ? ["bundle", "bundle.zip"] : ["summary.md"],
+      );
+    },
+  );
 
   it.each([
     { label: "repeated native", trailingSeparators: path.sep.repeat(2) },

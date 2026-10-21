@@ -21,18 +21,15 @@ function invoke(params: unknown, config: unknown = {}) {
   return { result: policy.handle(ctx), invokeNode };
 }
 
-async function expectDenied(params: unknown, message?: string) {
-  const { result, invokeNode } = invoke(params);
-  await expect(result).resolves.toMatchObject({
-    ok: false,
-    code: "GOOGLE_MEET_NODE_POLICY_DENIED",
-    ...(message ? { message } : {}),
-  });
-  expect(invokeNode).not.toHaveBeenCalled();
-}
-
 describe("Google Meet node invoke policy", () => {
   it("rewrites start executable fields from trusted config", async () => {
+    const trusted = {
+      launch: false,
+      browserProfile: "Trusted Profile",
+      joinTimeoutMs: 45_000,
+      audioInputCommand: ["trusted-capture", "--raw"],
+      audioOutputCommand: ["trusted-play", "--raw"],
+    };
     const { result, invokeNode } = invoke(
       {
         action: "start",
@@ -46,15 +43,7 @@ describe("Google Meet node invoke policy", () => {
         audioInputCommand: ["malicious-capture"],
         audioOutputCommand: ["malicious-play"],
       },
-      {
-        chrome: {
-          launch: false,
-          browserProfile: "Trusted Profile",
-          joinTimeoutMs: 45_000,
-          audioInputCommand: ["trusted-capture", "--raw"],
-          audioOutputCommand: ["trusted-play", "--raw"],
-        },
-      },
+      { chrome: trusted },
     );
 
     await expect(result).resolves.toEqual({ ok: true, payload: { ok: true } });
@@ -65,36 +54,32 @@ describe("Google Meet node invoke policy", () => {
         action: "start",
         url: "https://meet.google.com/abc-defg-hij",
         mode: "bidi",
-        launch: false,
-        browserProfile: "Trusted Profile",
-        joinTimeoutMs: 45_000,
+        ...trusted,
         audioBackend: "auto",
         audioBufferBytes: 4_096,
         audioFormat: "g711-ulaw-8khz",
-        audioInputCommand: ["trusted-capture", "--raw"],
-        audioOutputCommand: ["trusted-play", "--raw"],
       },
     });
   });
 
   it("uses trusted configured external bridge commands for start", async () => {
-    const policy = createGoogleMeetChromeNodeInvokePolicy(
-      resolveGoogleMeetConfig({
+    const { result, invokeNode } = invoke(
+      {
+        action: "start",
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "bidi",
+        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+      },
+      {
         chrome: {
           audioBridgeHealthCommand: ["trusted-bridge", "status"],
           audioBridgeCommand: ["trusted-bridge", "start"],
         },
-      }),
+      },
     );
-    const { ctx, invokeNode } = createContext({
-      action: "start",
-      url: "https://meet.google.com/abc-defg-hij",
-      mode: "bidi",
-      audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
-      audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-    });
 
-    await policy.handle(ctx);
+    await result;
 
     const call = invokeNode.mock.calls[0]?.[0];
     expect(call?.params).toMatchObject({
@@ -102,13 +87,6 @@ describe("Google Meet node invoke policy", () => {
       audioBridgeHealthCommand: ["trusted-bridge", "status"],
       audioBridgeCommand: ["trusted-bridge", "start"],
     });
-  });
-
-  it("rejects direct start for non-Meet URLs before node dispatch", async () => {
-    await expectDenied(
-      { action: "start", url: "https://example.com/private", mode: "bidi" },
-      "url must be an explicit https://meet.google.com/... URL",
-    );
   });
 
   it("keeps direct setup diagnostics but strips extra fields", async () => {
@@ -129,27 +107,28 @@ describe("Google Meet node invoke policy", () => {
     });
   });
 
-  it("rejects malformed bridge control before node dispatch", async () => {
-    for (const params of [
-      { action: "pullAudio" },
-      { action: "pushAudio", bridgeId: "bridge-1" },
-      { action: "pushAudio", bridgeId: "bridge-1", base64: "not-base64!" },
-      {
-        action: "pushAudio",
-        bridgeId: "bridge-1",
-        base64: Buffer.from([1]).toString("base64"),
-        outputGeneration: -1,
-      },
-      { action: "clearAudio", bridgeId: "" },
-      { action: "clearAudio", bridgeId: "bridge-1", outputGeneration: 1.5 },
-      { action: "stopByUrl" },
-      { action: "stopByUrl", url: "https://example.com/not-meet" },
-    ]) {
-      await expectDenied(params);
-    }
-  });
-
-  it("rejects unsupported googlemeet.chrome actions before node dispatch", async () => {
-    await expectDenied({ action: "exec", command: ["id"] });
+  it.each([
+    { action: "start", url: "https://example.com/private", mode: "bidi" },
+    { action: "pullAudio" },
+    { action: "pushAudio", bridgeId: "bridge-1" },
+    { action: "pushAudio", bridgeId: "bridge-1", base64: "not-base64!" },
+    { action: "pushAudio", bridgeId: "bridge-1", base64: "AQ==", outputGeneration: -1 },
+    { action: "clearAudio", bridgeId: "" },
+    { action: "clearAudio", bridgeId: "bridge-1", outputGeneration: 1.5 },
+    { action: "stopByUrl" },
+    { action: "stopByUrl", url: "https://example.com/not-meet" },
+    { action: "exec", command: ["id"] },
+  ])("rejects invalid action before dispatch: %j", async (params) => {
+    const { result, invokeNode } = invoke(params);
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      code: "GOOGLE_MEET_NODE_POLICY_DENIED",
+      ...(params.action === "start"
+        ? {
+            message: "url must be an explicit https://meet.google.com/... URL",
+          }
+        : {}),
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
   });
 });

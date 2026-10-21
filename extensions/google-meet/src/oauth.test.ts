@@ -19,12 +19,6 @@ async function occupyPort(port: number): Promise<Server | null> {
   return server;
 }
 
-async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
 function mockTokenResponse(response: Response) {
   vi.stubGlobal(
     "fetch",
@@ -53,7 +47,6 @@ describe("Google Meet OAuth", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
   it("rejects oversized OAuth token responses", async () => {
@@ -77,22 +70,13 @@ describe("Google Meet OAuth", () => {
     expect(tokens).toMatchObject({ accessToken: "refreshed-token", refreshed: true });
   });
 
-  it("bounds fallback token lifetimes when the process clock is invalid", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-    mockTokenResponse(
-      Response.json({
-        access_token: "new-access-token",
-        expires_in: Number.MAX_SAFE_INTEGER,
-      }),
-    );
-    expect((await resolveToken()).expiresAt).toBe(3600 * 1000);
-  });
-
-  it("keeps explicit zero-second token lifetimes immediately stale", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
-    mockTokenResponse(Response.json({ access_token: "new-access-token", expires_in: 0 }));
-    expect((await resolveToken()).expiresAt).toBe(Date.now());
+  it.each([
+    ["invalid clock", 8_640_000_000_000_001, Number.MAX_SAFE_INTEGER, 3_600_000],
+    ["zero lifetime", 1_780_056_000_000, 0, 1_780_056_000_000],
+  ] as const)("bounds token expiry: %s", async (_name, now, expiresIn, expected) => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mockTokenResponse(Response.json({ access_token: "new-access-token", expires_in: expiresIn }));
+    expect((await resolveToken()).expiresAt).toBe(expected);
   });
 
   it("falls back to manual paste when the local callback port is occupied", async () => {
@@ -108,7 +92,9 @@ describe("Google Meet OAuth", () => {
       expect(lines.some((line) => line.includes("Switching to manual mode"))).toBe(true);
     } finally {
       if (blocker) {
-        await closeServer(blocker);
+        await new Promise<void>((resolve) => {
+          blocker.close(() => resolve());
+        });
       }
     }
   });
