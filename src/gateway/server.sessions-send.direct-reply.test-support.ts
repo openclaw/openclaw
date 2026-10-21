@@ -14,11 +14,7 @@ export async function runDirectSessionReplyScenario(params: {
   resolveGatewayContext: GatewayContextResolver;
 }): Promise<void> {
   const { dir, sessionKey, expectedAccountId } = params;
-  const sendCalls: Array<{
-    to?: string;
-    text?: string;
-    accountId?: string | null;
-  }> = [];
+  const sendCalls: Array<{ to?: string; text?: string; accountId?: string | null }> = [];
   const feishuPlugin = createOutboundTestPlugin({
     id: "feishu",
     label: "Feishu",
@@ -38,29 +34,16 @@ export async function runDirectSessionReplyScenario(params: {
       resolveDeliveryTarget: ({ conversationId }) => ({ to: `user:${conversationId}` }),
     },
   });
+  feishuPlugin.config.listAccountIds = () => ["default", "work"];
   setTestPluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "feishu",
-        source: "test",
-        plugin: {
-          ...feishuPlugin,
-          config: {
-            ...feishuPlugin.config,
-            listAccountIds: () => ["default", "work"],
-          },
-        },
-      },
-    ]),
+    createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
   );
 
   const storePath = path.join(dir, "sessions.json");
   const sessionId = `direct-reply-${expectedAccountId ?? "default"}-${sessionKey.includes(":dm:") ? "dm" : "direct"}`;
   testState.sessionStorePath = storePath;
   await writeSessionStore({
-    entries: {
-      [sessionKey]: { sessionId, updatedAt: Date.now() },
-    },
+    entries: { [sessionKey]: { sessionId, updatedAt: Date.now() } },
   });
   const entry = loadSessionEntry({ sessionKey, storePath });
   expect(entry?.sessionId).toBe(sessionId);
@@ -91,10 +74,11 @@ export async function runDirectSessionReplyScenario(params: {
     },
   });
 
-  expect(sendCalls).toHaveLength(1);
-  expect(sendCalls[0]).toMatchObject({
-    to: "user:ou_reply_recipient",
-    text: "same-session reply delivered",
-    ...(expectedAccountId ? { accountId: expectedAccountId } : {}),
-  });
+  expect(sendCalls).toMatchObject([
+    {
+      to: "user:ou_reply_recipient",
+      text: "same-session reply delivered",
+      ...(expectedAccountId ? { accountId: expectedAccountId } : {}),
+    },
+  ]);
 }

@@ -26,32 +26,25 @@ it.each([
       await requireGit(workspace, ["init", "-b", "main"]);
       await requireGit(workspace, ["config", "user.name", "Workspace Fixture"]);
       await requireGit(workspace, ["config", "user.email", "fixture@example.invalid"]);
-      await fs.writeFile(path.join(workspace, "AGENTS.md"), "Committed instructions.\n");
-      await fs.mkdir(path.join(workspace, "src"));
-      await fs.writeFile(path.join(workspace, "src/remaining.txt"), "Complete checkout.\n");
-      await fs.mkdir(path.join(workspace, "packages/core"), { recursive: true });
-      await fs.writeFile(
-        path.join(workspace, "packages/core/AGENTS.md"),
-        "Nested project rules.\n",
-      );
+      for (const [file, content] of [
+        ["AGENTS.md", "Committed instructions.\n"],
+        ["src/remaining.txt", "Complete checkout.\n"],
+        ["packages/core/AGENTS.md", "Nested project rules.\n"],
+      ] as const) {
+        const destination = path.join(workspace, file);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, content);
+      }
       await requireGit(workspace, ["add", "."]);
       await requireGit(workspace, ["commit", "-qm", "prompt fixture"]);
 
       const promptExposed = createDeferredCore();
       const releaseCheckout = createDeferredCore();
+      const bootstrapFiles = { enabled: true, paths: ["packages/*/AGENTS.md"] };
       const cfg: OpenClawConfig = {
         agents: { defaults: { workspace } },
         worktreeAcceleration: false,
-        hooks: {
-          internal: {
-            entries: {
-              "bootstrap-extra-files": {
-                enabled: true,
-                paths: ["packages/*/AGENTS.md"],
-              },
-            },
-          },
-        },
+        hooks: { internal: { entries: { "bootstrap-extra-files": bootstrapFiles } } },
       };
       setRuntimeConfigSnapshot(cfg);
       if (hookEvent) {

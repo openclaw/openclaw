@@ -79,13 +79,10 @@ test.each(["already retired", "caller retired"] as const)(
         }
       },
     });
-    const outcome = resetting.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
+    const outcome = expect(resetting).rejects.toThrow("reset caller retired");
     try {
       if (reason === "already retired") {
-        await expect(outcome).resolves.toMatchObject({ ok: false });
+        await outcome;
         expect(intercepted).not.toHaveBeenCalled();
       } else {
         await Promise.race([
@@ -96,11 +93,7 @@ test.each(["already retired", "caller retired"] as const)(
         ]);
         current = false;
         release.resolve();
-        const settled = await outcome;
-        expect(settled.ok).toBe(false);
-        if (!settled.ok) {
-          expect(String(settled.error)).toContain("reset caller retired");
-        }
+        await outcome;
       }
       expect(loadSessionEntry(scope)).toEqual(beforeEntry);
       expect(readAcpSessionEntry({ sessionKey })?.acp).toEqual(beforeMeta);
