@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
@@ -50,7 +49,11 @@ export function filterAgentRunTerminalPayloadsForPresentation(params: {
       return true;
     }
     const presentation = stripHeartbeatToken(text, { mode: "message" });
-    return !(presentation.shouldSkip && !resolveSendableOutboundReplyParts(payload).hasMedia);
+    // Keep this wrapper-extracted terminal helper independent of the outbound delivery graph.
+    const hasMedia =
+      payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim()) === true ||
+      Boolean(payload.mediaUrl?.trim());
+    return !(presentation.shouldSkip && !hasMedia);
   });
 }
 

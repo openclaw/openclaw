@@ -25,6 +25,16 @@ describe("prepareAgentRunTerminalReply", () => {
       visible: true,
     },
     {
+      name: "multiple media beside the acknowledgement",
+      payload: {
+        text: "HEARTBEAT_OK",
+        mediaUrl: "  ",
+        mediaUrls: ["  ", "https://example.invalid/chart.png"],
+      },
+      isHeartbeatTrigger: false,
+      visible: true,
+    },
+    {
       name: "a real heartbeat acknowledgement",
       payload: { text: "HEARTBEAT_OK" },
       isHeartbeatTrigger: true,
