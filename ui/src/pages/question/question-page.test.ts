@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -28,40 +27,23 @@ function question(id = "question-one") {
     status: "pending",
     createdAtMs: Date.now(),
     expiresAtMs: Date.now() + 60_000,
-    sessionKey: "agent:main:question-proof",
-    agentId: "main",
-    questions: [
-      {
-        questionId: "audience",
-        header: "Audience",
-        question: `Who should receive ${id}?`,
-        options: [],
-        isOther: true,
-      },
-    ],
+    questions: [{ questionId: "audience", header: "To", question: id, options: [], isOther: true }],
   };
 }
 
 async function mount(request: GatewayRequestHandler) {
   const harness = createApplicationGateway();
   const { gateway } = harness;
-  harness.publish({
-    ...gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: "connected",
-  });
+  const update = (patch: Partial<ApplicationGatewaySnapshot>) =>
+    harness.publish({ ...gateway.snapshot, ...patch });
+  update({ client: createTestGatewayClient(request), phase: "connected" });
   const provider = createApplicationContextProvider({ gateway } as ApplicationContext);
   const page = document.createElement(tag);
   page.questionId = "question-one";
   provider.append(page);
   document.body.append(provider);
   await settle(page);
-  return {
-    page,
-    update(this: void, patch: Partial<ApplicationGatewaySnapshot>) {
-      harness.publish({ ...gateway.snapshot, ...patch });
-    },
-  };
+  return { page, update };
 }
 
 async function settle(page: QuestionPage) {
@@ -179,12 +161,10 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
 });
 
 it("loads only the final question when native IDs change in one turn", async () => {
-  const request = vi.fn(async (_method: string, params?: unknown) => {
-    if (!isRecord(params) || typeof params.id !== "string") {
-      throw new Error("Expected a question ID");
-    }
-    return { question: question(params.id) };
-  });
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ question: question() })
+    .mockResolvedValueOnce({ question: question("question-three") });
   const { page } = await mount(request);
   await questionPanelIn(page);
 
@@ -197,5 +177,5 @@ it("loads only the final question when native IDs change in one turn", async () 
     { id: "question-one" },
     { id: "question-three" },
   ]);
-  expect(page.textContent).toContain("Who should receive question-three?");
+  expect(page.textContent).toContain("question-three");
 });
