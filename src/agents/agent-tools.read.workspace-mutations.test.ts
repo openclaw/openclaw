@@ -220,24 +220,18 @@ describe("host file paths", () => {
 });
 
 describe("unrestricted host tool writes", () => {
-  let tempDir = "";
-
-  async function createFile(content: string) {
-    tempDir = tempDirs.make("openclaw-host-write-");
-    const filePath = path.join(tempDir, "important.txt");
-    await fs.writeFile(filePath, content);
-    return filePath;
-  }
-
-  function write(filePath: string, content: string) {
-    return hostFileTools(tempDir).write(filePath, content);
-  }
-
-  function mutate(kind: "write" | "edit", filePath: string, content: string) {
-    const tools = hostFileTools(tempDir);
-    return kind === "write"
-      ? tools.write(filePath, content)
-      : tools.edit(filePath, "original", "replacement");
+  async function fixture(content = "original") {
+    const root = tempDirs.make("openclaw-host-write-");
+    const file = path.join(root, "important.txt");
+    await fs.writeFile(file, content);
+    const tools = hostFileTools(root);
+    return {
+      root,
+      file,
+      read: () => fs.readFile(file, "utf8"),
+      write: (next: string, target = file) => tools.write(target, next),
+      edit: () => tools.edit(file, "original", "replacement"),
+    };
   }
 
   function failWrites(filePath: string, originalByteLength: number, prefix = false) {
@@ -296,88 +290,81 @@ describe("unrestricted host tool writes", () => {
     "preserves the original after a %s failure through %s",
     async (failure, kind, inject, message) => {
       const original = `original\n${"important content\n".repeat(64)}`;
-      const filePath = await createFile(original);
-      inject(filePath, Buffer.byteLength(original));
+      const f = await fixture(original);
+      inject(f.file, Buffer.byteLength(original));
       const fallback = vi.spyOn(fs, "writeFile");
-      const pending = mutate(
-        kind,
-        filePath,
-        failure === "truncate" ? "short\n" : "replacement content\n".repeat(64),
-      );
+      const pending =
+        kind === "edit"
+          ? f.edit()
+          : f.write(failure === "truncate" ? "short\n" : "replacement content\n".repeat(64));
       await expect(pending).rejects.toMatchObject({
         message,
         code: failure === "extension" || failure === "prefix" ? "ENOSPC" : "EIO",
       });
       expect(fallback).not.toHaveBeenCalled();
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(original);
-      await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
+      await expect(f.read()).resolves.toBe(original);
+      await expect(fs.readdir(f.root)).resolves.toEqual(["important.txt"]);
     },
   );
 
   it("writes empty content", async () => {
-    const filePath = await createFile("replace me\n");
-    await write(filePath, "");
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("");
+    const f = await fixture("replace me\n");
+    await f.write("");
+    await expect(f.read()).resolves.toBe("");
   });
 
   it.runIf(process.platform !== "win32")("writes through an existing symlink", async () => {
-    const targetPath = await createFile("original");
-    const linkPath = path.join(tempDir, "linked.txt");
-    await fs.symlink(targetPath, linkPath);
-
-    await write(linkPath, "replacement");
-
-    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("replacement");
+    const f = await fixture();
+    const link = path.join(f.root, "linked.txt");
+    await fs.symlink(f.file, link);
+    await f.write("replacement", link);
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true);
+    await expect(f.read()).resolves.toBe("replacement");
   });
 
-  const asUnprivilegedUser = process.platform !== "win32" && process.getuid?.() !== 0;
-
-  it.runIf(asUnprivilegedUser)("rejects an unreadable existing file", async () => {
-    const originalContent = "original\n";
-    const filePath = await createFile(originalContent);
-    await fs.chmod(filePath, 0o222);
-
-    await expect(write(filePath, "replacement")).rejects.toMatchObject({ code: "EACCES" });
-
-    await fs.chmod(filePath, 0o644);
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
-  });
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "rejects an unreadable existing file",
+    async () => {
+      const f = await fixture("original\n");
+      await fs.chmod(f.file, 0o222);
+      await expect(f.write("replacement")).rejects.toMatchObject({ code: "EACCES" });
+      await fs.chmod(f.file, 0o644);
+      await expect(f.read()).resolves.toBe("original\n");
+    },
+  );
 
   it.runIf(process.platform !== "win32")("updates a hard-linked existing file", async () => {
-    const filePath = await createFile("original");
-    await fs.chmod(filePath, 0o640);
+    const f = await fixture();
+    const alias = path.join(f.root, "alias.txt");
     const content = "héllo crab 🦀 héllo\n";
-    const aliasPath = path.join(tempDir, "alias.txt");
-    await fs.link(filePath, aliasPath);
-    const { ino, dev, uid, gid } = await fs.stat(filePath);
-
-    await write(filePath, content);
-
-    const after = await fs.stat(filePath);
+    await fs.chmod(f.file, 0o640);
+    await fs.link(f.file, alias);
+    const { ino, dev, uid, gid } = await fs.stat(f.file);
+    await f.write(content);
+    const after = await fs.stat(f.file);
     expect(after).toMatchObject({ ino, nlink: 2, dev, uid, gid });
     expect(after.mode & 0o777).toBe(0o640);
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
-    await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe(content);
+    await expect(Promise.all([f.read(), fs.readFile(alias, "utf8")])).resolves.toEqual([
+      content,
+      content,
+    ]);
   });
 
   it.runIf(process.platform !== "win32")("falls back to a fifo without opening it", async () => {
-    await createFile("original");
-    const fifoPath = path.join(tempDir, "pipe");
-    execFileSync("mkfifo", [fifoPath]);
-    const fifoOpenFlags: string[] = [];
+    const f = await fixture();
+    const fifo = path.join(f.root, "pipe");
+    execFileSync("mkfifo", [fifo]);
+    const flagsSeen: string[] = [];
     const realOpen = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      if (String(target) === fifoPath) {
-        fifoOpenFlags.push(String(flags));
+      if (String(target) === fifo) {
+        flagsSeen.push(String(flags));
       }
       return realOpen(target, flags as never, mode as never);
     });
     const fallback = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
-
-    await write(fifoPath, "replacement").catch(() => undefined);
-
-    expect(fallback).toHaveBeenCalledWith(fifoPath, "replacement", "utf-8");
-    expect(fifoOpenFlags).toEqual([]);
+    await f.write("replacement", fifo).catch(() => undefined);
+    expect(fallback).toHaveBeenCalledWith(fifo, "replacement", "utf-8");
+    expect(flagsSeen).toEqual([]);
   });
 });

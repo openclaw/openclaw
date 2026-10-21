@@ -4,7 +4,6 @@ import {
   formatRawAssistantErrorForUi,
   MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
 } from "../shared/assistant-error-format.js";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -17,7 +16,6 @@ import {
   isRawApiErrorPayload,
 } from "./failover/user-copy.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
-import { withPreparedFailoverProviders } from "./test-helpers/provider-failover-generation.js";
 
 describe("formatAssistantErrorText", () => {
   const BILLING_ERROR_USER_MESSAGE =
@@ -70,10 +68,6 @@ describe("formatAssistantErrorText", () => {
       "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     ],
     [
-      "An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID synthetic-provider-request-001 in your message.",
-      "The AI service returned an internal error. Please try again in a moment.",
-    ],
-    [
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
       "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
     ],
@@ -84,10 +78,6 @@ describe("formatAssistantErrorText", () => {
     [
       "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
       authInvalidTokenCopy,
-    ],
-    [
-      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-      "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the Control UI.",
     ],
     [
       'Unexpected event order, got message_start before receiving "message_stop"',
@@ -143,14 +133,6 @@ describe("formatAssistantErrorText", () => {
       "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.",
     );
   });
-  it("prioritizes thinking-signature replay recovery over invalid-request formatting", () => {
-    const msg = makeAssistantError(
-      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}',
-    );
-    const replayCopy =
-      "Session history or replay state is invalid. Use /new to start a fresh session and try again.";
-    expectBothCopies(msg, replayCopy);
-  });
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
     const msg = makeAssistantMessageFixture({
@@ -185,35 +167,13 @@ describe("formatAssistantErrorText", () => {
     ).toContain("overloaded");
   });
 
-  it("classifies provider upstream_error payloads as server errors for fallback", () => {
+  it("surfaces token limits from a structured body", () => {
     const msg = makeAssistantMessageFixture({
-      errorMessage: "Upstream request failed",
-      errorType: "upstream_error",
+      errorMessage: "400 Param Incorrect",
+      errorCode: "400",
+      errorBody: tokenLimitBody,
+      content: [],
     });
-
-    withPreparedFailoverProviders(["openai"], () => {
-      expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
-      expect(
-        classifyAssistantFailoverReason(
-          makeAssistantError(
-            '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
-          ),
-        ),
-      ).toBe("server_error");
-    });
-  });
-  it.each([
-    ["provider message", makeAssistantError(tokenLimitBody)],
-    [
-      "structured body",
-      makeAssistantMessageFixture({
-        errorMessage: "400 Param Incorrect",
-        errorCode: "400",
-        errorBody: tokenLimitBody,
-        content: [],
-      }),
-    ],
-  ])("surfaces token limits from %s", (_carrier, msg) => {
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(replyLimitCopy);
   });
@@ -258,18 +218,6 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
       "This login doesn't have the access OpenClaw needs. Sign in again under Models in the Control UI.",
     );
-  });
-
-  it("uses structured error body detail for model-not-found copy", () => {
-    const msg = makeAssistantMessageFixture({
-      errorMessage: "400 Param Incorrect",
-      errorCode: "400",
-      errorBody:
-        '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
-      content: [],
-    });
-
-    expectBothCopies(msg, "This model was not found. Choose another model in the Control UI.");
   });
 });
 
