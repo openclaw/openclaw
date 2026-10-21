@@ -65,7 +65,11 @@ aroundEach(async (runTest) => {
   }
 });
 
-function record(conversationId: string, accountId = "default"): SessionBindingRecord {
+function record(
+  conversationId: string,
+  accountId = "default",
+  overrides: Partial<SessionBindingRecord> = {},
+): SessionBindingRecord {
   return {
     bindingId: `${accountId}:${conversationId}`,
     targetSessionKey: "agent:main:current",
@@ -74,6 +78,7 @@ function record(conversationId: string, accountId = "default"): SessionBindingRe
     status: "active",
     boundAt: Date.now(),
     metadata: { opaque: { data: [1, "persisted"] }, lastActivityAt: 1 },
+    ...overrides,
   };
 }
 
@@ -135,6 +140,22 @@ function recordPublications() {
   return publications;
 }
 
+function facts(value: CurrentConversationBindingPublication) {
+  return [...value.receipt.facts.values()];
+}
+
+function seed(...records: SessionBindingRecord[]) {
+  for (const value of records) {
+    updateRecord(value.conversation, () => value);
+  }
+}
+
+function allRows() {
+  return openOpenClawStateDatabase()
+    .db.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key")
+    .all();
+}
+
 it.each(["missing", "unsupported", "disabled"] as const)(
   "fences %s generic support when the registry changes during an ordered selection",
   async (mode) => {
@@ -193,35 +214,28 @@ it.each(["missing", "unsupported", "disabled"] as const)(
 it("reads an ordered, captured selection without creating or repairing stored bindings", async () => {
   const child = record("child");
   const base = record("base");
-  const expired = { ...record("expired"), expiresAt: 1 };
+  const expired = record("expired", "default", { expiresAt: 1 });
   const requestedBase = { ...base.conversation };
   const refs = [child.conversation, expired.conversation, requestedBase];
   expect(await readSelection(refs)).toEqual([null, null, null]);
   await expect(fs.stat(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
     code: "ENOENT",
   });
-  for (const value of [base, expired]) {
-    updateRecord(value.conversation, () => value);
-  }
-  const { db } = openOpenClawStateDatabase();
-  const before = db
-    .prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key")
-    .all();
+  seed(base, expired);
+  const before = allRows();
   const pending = readSelection(refs);
   requestedBase.conversationId = "different";
   refs.reverse();
   expect(await pending).toEqual([null, null, base]);
-  expect(
-    db.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all(),
-  ).toEqual(before);
+  expect(allRows()).toEqual(before);
 });
 
 it("selects live binding facts even inside an older retained discovery snapshot", async () => {
   const child = record("child");
   const base = record("base");
-  updateRecord(base.conversation, () => base);
+  seed(base);
   await withOpenClawStateDatabaseReadSnapshot(async () => {
-    updateRecord(child.conversation, () => child);
+    seed(child);
     expect(await inspectRecord(child.conversation)).toBeNull();
     expect(await readSelection([child.conversation, base.conversation])).toEqual([child, base]);
   });
@@ -229,7 +243,7 @@ it("selects live binding facts even inside an older retained discovery snapshot"
 
 it("refuses pending selection publication when its database lifecycle retires", async () => {
   const current = record("retired");
-  updateRecord(current.conversation, () => current);
+  seed(current);
   const pending = readSelection([current.conversation]);
   const refused = expect(pending).rejects.toThrow();
   await closeOpenClawStateDatabaseAsync();
@@ -243,11 +257,9 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
     code: "ENOENT",
   });
 
-  const expired = { ...record("expired"), expiresAt: 1 };
+  const expired = record("expired", "default", { expiresAt: 1 });
   const sibling = record("conversation", "sibling");
-  for (const value of [current, expired, sibling]) {
-    updateRecord(value.conversation, () => value);
-  }
+  seed(current, expired, sibling);
   const { db } = openOpenClawStateDatabase();
   const row = db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?");
   const before = row.get(expired.bindingId);
@@ -261,7 +273,7 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
     targetSessionKey: "agent:main:replacement",
     metadata: { opaque: { changed: true } },
   };
-  updateRecord(current.conversation, () => current);
+  seed(current);
   const hostSql = observeHostDataSql();
   try {
     expect(await inspectRecord(expired.conversation)).toBeNull();
@@ -316,7 +328,7 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
   };
   expect(await resolveRecord(original.conversation)).toBeNull();
   await cached(null);
-  updateRecord(original.conversation, () => original);
+  seed(original);
   const resolved = await cached(original);
   resolved!.metadata!.lastActivityAt = 99;
   await cached(original);
@@ -327,7 +339,7 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
   const touched = { ...replacement, metadata: { ...replacement.metadata, lastActivityAt: 100 } };
   await cached(touched);
   const sibling = record("sibling");
-  updateRecord(sibling.conversation, () => sibling);
+  seed(sibling);
   await cached(touched);
   await removeRecords({ conversation: original.conversation, bindingId: original.bindingId });
   await cached(null);
@@ -452,7 +464,7 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
     const at = original.boundAt + 1_000;
     manager.touchConversation("thread", at);
     const expected = row.get(original.bindingId);
-    updateRecord(ref, () => original);
+    seed(original);
     const service = getSessionBindingService();
     await service.touchAsync(original.bindingId, at, ref);
     expect(row.get(original.bindingId)).toEqual(expected);
@@ -503,15 +515,12 @@ it("joins expiry pruning refused by the stopped manager without deleting its row
 it.each(["replaced", "removed", "expired", "malformed"] as const)(
   "refreshes every batched session after a foreign binding is %s before expiry pruning",
   async (change) => {
-    const expired = {
-      ...record("expired-batch"),
+    const expired = record("expired-batch", "default", {
       targetSessionKey: "agent:main:expired",
       expiresAt: 1,
-    };
-    const original = { ...record("valid-batch"), targetSessionKey: "agent:main:valid" };
-    for (const value of [expired, original]) {
-      updateRecord(value.conversation, () => value);
-    }
+    });
+    const original = record("valid-batch", "default", { targetSessionKey: "agent:main:valid" });
+    seed(expired, original);
     const database = openOpenClawStateDatabase();
     const env = { ...process.env };
     const foreign = new (requireNodeSqlite().DatabaseSync)(database.path);
@@ -666,37 +675,28 @@ it("delivers committed worker bind, touch and batch-expiry facts before their re
   const bound = await bindRecord({ record: original });
   expect(bound).toMatchObject(original);
   expect(publications).toHaveLength(1);
-  expect([...publications[0]!.receipt.facts.values()]).toEqual([
-    { kind: "postimage", value: bound },
-  ]);
+  expect(facts(publications[0]!)).toEqual([{ kind: "postimage", value: bound }]);
   const touched = await touch(original, 50);
   expect(touched?.metadata?.lastActivityAt).toBe(50);
-  expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([
-    { kind: "postimage", value: touched },
-  ]);
+  expect(facts(publications.at(-1)!)).toEqual([{ kind: "postimage", value: touched }]);
   const expired = ["expired-one", "expired-two"].map((id) =>
-    Object.assign(record(id), { expiresAt: 1 }),
+    record(id, "default", { expiresAt: 1 }),
   );
-  for (const value of expired) {
-    updateRecord(value.conversation, () => value);
-  }
+  seed(...expired);
   publications.length = 0;
   expect(await listRecords([original.targetSessionKey], original.conversation)).toEqual([
     [touched],
   ]);
   expect(publications).toHaveLength(1);
-  expect([...publications[0]!.receipt.facts.values()]).toEqual([
-    { kind: "absent" },
-    { kind: "absent" },
-  ]);
+  expect(facts(publications[0]!)).toEqual([{ kind: "absent" }, { kind: "absent" }]);
   expect(publications[0]!.sessionKeys).toEqual([original.targetSessionKey]);
   expect(await removeRecords({ conversation: original.conversation })).toEqual([touched]);
-  expect([...publications.at(-1)!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
+  expect(facts(publications.at(-1)!)).toEqual([{ kind: "absent" }]);
 });
 
 it("cannot restore a newer native deletion when a committed worker receipt arrives late", async () => {
   const original = record("late-receipt");
-  updateRecord(original.conversation, () => original);
+  seed(original);
   const observe = admission.observeSqliteWorkerCommittedFacts;
   vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation((owner, listener) => {
     observe(owner, (receipt) => {
@@ -708,8 +708,8 @@ it("cannot restore a newer native deletion when a committed worker receipt arriv
   await touch(original, 20);
   expect(await inspectRecord(original.conversation)).toBeNull();
   expect(publications).toHaveLength(2);
-  expect([...publications[0]!.receipt.facts.values()]).toEqual([{ kind: "absent" }]);
-  expect([...publications[1]!.receipt.facts.values()]).toEqual([{ kind: "unknown" }]);
+  expect(facts(publications[0]!)).toEqual([{ kind: "absent" }]);
+  expect(facts(publications[1]!)).toEqual([{ kind: "unknown" }]);
 });
 
 it("retires binding coverage after unknown native settlement", async () => {
@@ -747,10 +747,7 @@ it("commits oversized expiry batches and retires binding coverage before replyin
   // Short record IDs keep only the real conversation keys responsible for receipt overflow.
   const suffix = "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 16);
   for (let index = 0; index < 17; index++) {
-    const expired = record(`${index}:${suffix}`);
-    expired.bindingId = `expired-${index}`;
-    expired.expiresAt = 1;
-    updateRecord(expired.conversation, () => expired);
+    seed(record(`${index}:${suffix}`, "default", { bindingId: `expired-${index}`, expiresAt: 1 }));
   }
   const { db } = openOpenClawStateDatabase();
   expect(db.prepare("SELECT count(*) AS count FROM current_conversation_bindings").get()).toEqual({

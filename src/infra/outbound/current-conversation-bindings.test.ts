@@ -35,7 +35,7 @@ function expectSessionBinding(
   return bound;
 }
 
-function persistedFields(record: SessionBindingRecord) {
+function persistedFields(record: SessionBindingRecord, updatedAt = Date.now()) {
   return {
     binding_id: record.bindingId,
     target_session_key: record.targetSessionKey,
@@ -45,6 +45,7 @@ function persistedFields(record: SessionBindingRecord) {
     expires_at: record.expiresAt ?? null,
     metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
     record_json: JSON.stringify(record),
+    updated_at: updatedAt,
   };
 }
 
@@ -61,13 +62,12 @@ function seedPersisted(record: SessionBindingRecord): void {
       db,
       bindingDb.insertInto("current_conversation_bindings").values({
         binding_key: buildConversationKey(record.conversation),
-        ...persistedFields(record),
+        ...persistedFields(record, record.boundAt),
         channel: record.conversation.channel,
         account_id: record.conversation.accountId,
         conversation_kind: "current",
         parent_conversation_id: record.conversation.parentConversationId ?? null,
         conversation_id: record.conversation.conversationId,
-        updated_at: record.boundAt,
       }),
     );
   });
@@ -80,10 +80,7 @@ function replacePersisted(record: SessionBindingRecord): void {
       db,
       bindingDb
         .updateTable("current_conversation_bindings")
-        .set({
-          ...persistedFields(record),
-          updated_at: Date.now(),
-        })
+        .set(persistedFields(record))
         .where("binding_key", "=", buildConversationKey(record.conversation)),
     );
   });
@@ -232,9 +229,7 @@ it("stores Control UI session-key conversations without a channel plugin", async
     metadata: { pluginBindingOwner: "plugin", pluginId: "codex", pluginRoot: "/codex" },
   });
 
-  expect(bound).toMatchObject({
-    targetSessionKey: "agent:main:adopted",
-  });
+  expect(bound).toMatchObject({ targetSessionKey: "agent:main:adopted" });
   expect(bound?.conversation).toEqual(conversation);
   expect(resolveGeneric(conversation)).toMatchObject({ targetSessionKey: "agent:main:adopted" });
 });
@@ -257,13 +252,10 @@ it.each(["bind", "touch", "expiry cleanup", "unbind"] as const)(
       metadata: { version: "latest", opaque: { nested: true } },
     };
     replacePersisted(latestExternal);
-    const inserted: SessionBindingRecord = {
-      ...owned,
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:inserted",
+    const inserted = persistedRecord(workspaceConversation("user:inserted"), {
       targetSessionKey: "agent:main:inserted",
-      conversation: workspaceConversation("user:inserted"),
       metadata: { opaque: "external owner" },
-    };
+    });
     seedPersisted(inserted);
 
     switch (mutation) {
@@ -374,13 +366,10 @@ it.each(["rebind", "delete"] as const)(
 
 it("does not hide another owner's committed row after a failed write", async () => {
   const owned = await bindWorkspace("user:owner");
-  const external: SessionBindingRecord = {
-    ...owned,
-    bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:external",
+  const external = persistedRecord(workspaceConversation("user:external"), {
     targetSessionKey: "agent:main:external",
-    conversation: workspaceConversation("user:external"),
     metadata: { opaque: { survives: true } },
-  };
+  });
   seedPersisted(external);
 
   await expect(
