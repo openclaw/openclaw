@@ -220,7 +220,7 @@ async function appendMemoryFlushContent(params: {
       params.assertCurrent();
       await root.append(params.relativePath, params.content, {
         mkdir: true,
-        prependNewlineIfNeeded: true,
+        prependNewlineIfNeeded: !params.content.startsWith("\r"),
         assertBeforeMutation: params.assertCurrent,
       });
       return;
@@ -235,7 +235,7 @@ async function appendMemoryFlushContent(params: {
     await withFileMutationQueueKeyResolution(queueKey, async () => {
       const existing = await readOptionalUtf8File(params);
       const separator =
-        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+        existing.length > 0 && !existing.endsWith("\n") && !/^[\r\n]/u.test(params.content)
           ? "\n"
           : "";
       params.assertCurrent();
@@ -303,7 +303,7 @@ function wrapToolMemoryFlushAppendOnlyWrite(
       });
       assertNewMemoryFlushContent(contentBefore, content);
       const separator =
-        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !content.startsWith("\n")
+        contentBefore.length > 0 && !contentBefore.endsWith("\n") && !/^[\r\n]/u.test(content)
           ? "\n"
           : "";
       const commit = () =>
