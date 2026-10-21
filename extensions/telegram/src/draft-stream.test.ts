@@ -9,34 +9,9 @@ import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./forma
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
 import { buildTelegramRichMarkdownPlan, type TelegramInputRichMessage } from "./rich-message.js";
 
-function draft(options: Parameters<typeof createDraftStream>[1] = {}) {
-  const api = createMockDraftApi();
-  return { api, stream: createDraftStream(api, options) };
+function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
+  return createDraftStream(api, { thread: { id: 99, scope: "forum" } });
 }
-
-function draftWithWarnings() {
-  const warn = vi.fn();
-  return { ...draft({ warn }), warn };
-}
-
-const fencedCode = "```ts\n  const one = 1;\n  const two = 2;\n  return one + two;\n```";
-const codeBody = "  const one = 1;\n  const two = 2;\n  return one + two;";
-const networkError = () => Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
-const renderRichText = (text: string) => ({
-  text,
-  richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
-});
-const floodError = () =>
-  Object.assign(new Error("429: retry after 1"), {
-    error_code: 429,
-    parameters: { retry_after: 1 },
-  });
-const richPages = (api: ReturnType<typeof createMockDraftApi>) =>
-  api.raw.sendRichMessage.mock.calls.map(([params]) => params.rich_message?.blocks ?? []);
-const joinCodePages = (pages: ReturnType<typeof richPages>) =>
-  pages
-    .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
-    .join("");
 
 function expectPreviewSend(
   api: ReturnType<typeof createMockDraftApi>,
@@ -97,7 +72,8 @@ describe("createTelegramDraftStream", () => {
   it("materializes only the newest lazy partial in a throttle window", async () => {
     await withFakeTimers(async () => {
       vi.setSystemTime(0);
-      const { api, stream } = draft({ throttleMs: 250 });
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { throttleMs: 250 });
       let materializeCount = 0;
 
       for (let index = 1; index <= 24; index += 1) {
@@ -173,7 +149,7 @@ describe("createTelegramDraftStream", () => {
   it("waits for in-flight updates before final flush edit", async () => {
     const firstSend = createDeferred<MockSentMessage>();
     const api = createMockDraftApi(() => firstSend.promise);
-    const stream = createDraftStream(api, { thread: { id: 99, scope: "forum" } });
+    const stream = createForumDraftStream(api);
 
     stream.update("Hello");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
@@ -188,36 +164,46 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("omits message_thread_id for general topic id", async () => {
-    const { api, stream } = draft({ thread: { id: 1, scope: "forum" } });
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { thread: { id: 1, scope: "forum" } });
 
     stream.update("Hello");
 
     await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("does not retry direct-messages preview sends without the topic id", async () => {
-    const api = createMockDraftApi();
-    api.sendMessage.mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"));
-    const warn = vi.fn();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "direct-messages" },
-      warn,
-    });
+  it.each([{ scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } }])(
+    "does not retry $scope message preview sends without the topic id",
+    async ({ scope, expected }) => {
+      const api = createMockDraftApi();
+      api.sendMessage.mockRejectedValueOnce(
+        new Error("400: Bad Request: message thread not found"),
+      );
+      const warn = vi.fn();
+      const stream = createDraftStream(api, {
+        thread: { id: 42, scope },
+        warn,
+      });
 
-    await updateAndFlush(stream, "Hello");
+      await updateAndFlush(stream, "Hello");
 
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expectPreviewSend(api, "Hello", { direct_messages_topic_id: 42 });
-    expect(warn).toHaveBeenCalledWith(
-      "telegram stream preview failed: 400: Bad Request: message thread not found",
-    );
-    expect(
-      warn.mock.calls.some(([message]) => String(message).includes("retrying without thread")),
-    ).toBe(false);
-  });
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expectPreviewSend(api, "Hello", expected);
+      expect(warn).toHaveBeenCalledWith(
+        "telegram stream preview failed: 400: Bad Request: message thread not found",
+      );
+      expect(
+        warn.mock.calls.some(([message]) => String(message).includes("retrying without thread")),
+      ).toBe(false);
+    },
+  );
 
   it("converts <br> joins to newlines before parse_mode=HTML transport", async () => {
-    const { api, stream } = draft({
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      // Progress drafts join rendered lines with <br>; Bot API parse_mode=HTML
+      // has no <br> tag, so sending it verbatim 400s every multi-line edit and
+      // drops the preview to the unformatted plain fallback.
       renderText: (text) => ({
         text: `<b>Shelling</b><br>🧠 <i>${text}</i>`,
         parseMode: "HTML",
@@ -231,38 +217,41 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("keeps a settled first reply target owned when reposition cleanup fails", async () => {
-    await withFakeTimers(async () => {
-      const api = createMockDraftApi();
-      api.sendMessage
-        .mockResolvedValueOnce({ message_id: 17 })
-        .mockResolvedValueOnce({ message_id: 42 })
-        .mockResolvedValueOnce({ message_id: 43 });
-      api.deleteMessage.mockRejectedValueOnce(new Error("delete rejected"));
-      const warn = vi.fn();
-      const stream = createDraftStream(api, {
-        replyToMessageId: 411,
-        replyToMode: "first",
-        thread: { id: 42, scope: "dm" },
-        warn,
+  it.each(["first"] as const)(
+    "keeps a settled %s reply target owned when reposition cleanup fails",
+    async (replyToMode) => {
+      await withFakeTimers(async () => {
+        const api = createMockDraftApi();
+        api.sendMessage
+          .mockResolvedValueOnce({ message_id: 17 })
+          .mockResolvedValueOnce({ message_id: 42 })
+          .mockResolvedValueOnce({ message_id: 43 });
+        api.deleteMessage.mockRejectedValueOnce(new Error("delete rejected"));
+        const warn = vi.fn();
+        const stream = createDraftStream(api, {
+          replyToMessageId: 411,
+          replyToMode,
+          thread: { id: 42, scope: "dm" },
+          warn,
+        });
+
+        await updateAndFlush(stream, "Old preview");
+        stream.rotateToNewMessageDeferringDelete();
+        await updateAndFlush(stream, "Replacement preview");
+
+        expectNthPreviewSend(api, 2, "Replacement preview", { message_thread_id: 42 });
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+
+        // The old message remains visible, so later pages must not reuse its
+        // single-use reply target after cleanup rejection.
+        stream.forceNewMessage();
+        await updateAndFlush(stream, "Later preview");
+        expectNthPreviewSend(api, 3, "Later preview", { message_thread_id: 42 });
       });
-
-      await updateAndFlush(stream, "Old preview");
-      stream.rotateToNewMessageDeferringDelete();
-      await updateAndFlush(stream, "Replacement preview");
-
-      expectNthPreviewSend(api, 2, "Replacement preview", { message_thread_id: 42 });
-      await vi.advanceTimersByTimeAsync(4_000);
-      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-
-      // The old message remains visible, so later pages must not reuse its
-      // single-use reply target after cleanup rejection.
-      stream.forceNewMessage();
-      await updateAndFlush(stream, "Later preview");
-      expectNthPreviewSend(api, 3, "Later preview", { message_thread_id: 42 });
-    });
-  });
+    },
+  );
 
   it("does not report a first preview cleared while its send is in flight", async () => {
     await withFakeTimers(async () => {
@@ -388,8 +377,12 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("retries the preview edit after a transient network failure", async () => {
-    const { api, stream, warn } = draftWithWarnings();
-    api.editMessageText.mockRejectedValueOnce(networkError());
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValueOnce(
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
 
     await updateAndFlush(stream, "Hello");
     await updateAndFlush(stream, "Hello again");
@@ -405,7 +398,8 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("keeps the newest preview pending when the account limiter skips a flooded edit", async () => {
-    const { api, stream, warn } = draftWithWarnings();
+    const api = createMockDraftApi();
+    const warn = vi.fn();
     const flooded = () =>
       Object.assign(new Error("429: Too Many Requests: retry after 5"), {
         error_code: 429,
@@ -416,6 +410,8 @@ describe("createTelegramDraftStream", () => {
       .mockRejectedValueOnce(flooded())
       .mockRejectedValueOnce(flooded())
       .mockRejectedValueOnce(flooded());
+    const stream = createDraftStream(api, { warn });
+
     await updateAndFlush(stream, "Hello");
     for (const text of ["one", "two", "three", "four"]) {
       await updateAndFlush(stream, `Hello ${text}`);
@@ -430,8 +426,12 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("stops the preview after repeated retryable edit failures", async () => {
-    const { api, stream, warn } = draftWithWarnings();
-    api.editMessageText.mockRejectedValue(networkError());
+    const api = createMockDraftApi();
+    api.editMessageText.mockRejectedValue(
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    );
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
 
     await updateAndFlush(stream, "Hello");
     await updateAndFlush(stream, "Hello again");
@@ -445,7 +445,9 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("falls back to plain preview text when an HTML edit renders empty", async () => {
-    const { api, stream, warn } = draftWithWarnings();
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
 
     stream.updatePreview({ text: "<b>Working</b>", parseMode: "HTML" });
     await stream.flush();
@@ -471,7 +473,8 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("uses rich send and edit for previews when explicitly enabled", async () => {
-    const { api, stream } = draft({ richMessages: true });
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
 
     await updateAndFlush(
       stream,
@@ -498,6 +501,13 @@ describe("createTelegramDraftStream", () => {
   });
 
   it("paginates rendered fenced code without losing code context", async () => {
+    const text = [
+      "```ts",
+      "  const one = 1;",
+      "  const two = 2;",
+      "  return one + two;",
+      "```",
+    ].join("\n");
     const pagePattern = /^<pre><code class="language-ts">[\s\S]*<\/code><\/pre>$/u;
     const api = createMockDraftApi();
     const onSupersededPreview = vi.fn();
@@ -510,14 +520,14 @@ describe("createTelegramDraftStream", () => {
       }),
     });
 
-    stream.update(fencedCode);
+    stream.update(text);
     await stream.stop();
 
     const pages = api.sendMessage.mock.calls.map((call) => call[1]);
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.every((page) => pagePattern.test(page))).toBe(true);
     const visiblePages = pages.map(telegramHtmlToPlainTextFallback);
-    expect(visiblePages.join("")).toBe(`${codeBody}\n`);
+    expect(visiblePages.join("")).toBe("  const one = 1;\n  const two = 2;\n  return one + two;\n");
     expect(onSupersededPreview.mock.calls.map(([page]) => page.textSnapshot)).toEqual(
       visiblePages.slice(0, -1),
     );
@@ -531,6 +541,13 @@ describe("createTelegramDraftStream", () => {
   it("paginates one rendered rich-code plan without reparsing Markdown tails", async () => {
     const api = createMockDraftApi();
     const onSupersededPreview = vi.fn();
+    const text = [
+      "```ts",
+      "  const one = 1;",
+      "  const two = 2;",
+      "  return one + two;",
+      "```",
+    ].join("\n");
     const stream = createDraftStream(api, {
       // Plain code body is shorter than HTML-wrapped rich text; keep the limit
       // under the pre body so pagination still splits across messages.
@@ -539,10 +556,13 @@ describe("createTelegramDraftStream", () => {
       onRetainedPage: onSupersededPreview,
     });
 
-    stream.update(fencedCode);
+    stream.update(text);
     await stream.stop();
 
-    const pages = richPages(api);
+    const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
+      const params = call[0] as { rich_message?: TelegramInputRichMessage };
+      return params.rich_message?.blocks ?? [];
+    });
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
     expect(
@@ -550,21 +570,34 @@ describe("createTelegramDraftStream", () => {
         blocks.some((block) => block.type === "pre" && block.language === "ts"),
       ),
     ).toBe(true);
-    expect(joinCodePages(pages)).toBe(codeBody);
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join(""),
+    ).toBe("  const one = 1;\n  const two = 2;\n  return one + two;");
     expect(onSupersededPreview).toHaveBeenCalledTimes(pages.length - 1);
   });
 
   it("preserves whitespace-only code content across rich pages", async () => {
+    const api = createMockDraftApi();
     const text = ["```", " ".repeat(80), "```"].join("\n");
-    const { api, stream } = draft({ maxChars: 40, richMessages: true });
+    const stream = createDraftStream(api, { maxChars: 40, richMessages: true });
 
     stream.update(text);
     await stream.stop();
 
-    const pages = richPages(api);
+    const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
+      const params = call[0] as { rich_message?: TelegramInputRichMessage };
+      return params.rich_message?.blocks ?? [];
+    });
     expect(pages.length).toBeGreaterThan(1);
     expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
-    expect(joinCodePages(pages).replace(/\n$/u, "")).toBe(" ".repeat(80));
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join("")
+        .replace(/\n$/u, ""),
+    ).toBe(" ".repeat(80));
   });
 
   it("keeps a single-use reply target until the first draft send is accepted", async () => {
@@ -574,7 +607,10 @@ describe("createTelegramDraftStream", () => {
     api.sendMessage.mockImplementation(async () => {
       if (!rejected) {
         rejected = true;
-        throw floodError();
+        throw Object.assign(new Error("429: retry after 1"), {
+          error_code: 429,
+          parameters: { retry_after: 1 },
+        });
       }
       return { message_id: nextMessageId++ };
     });
@@ -611,7 +647,10 @@ describe("createTelegramDraftStream", () => {
         attempts.push(page);
         if (page === "ABCDEFGHIJ" && !rejectedSecondPage) {
           rejectedSecondPage = true;
-          throw floodError();
+          throw Object.assign(new Error("429: retry after 1"), {
+            error_code: 429,
+            parameters: { retry_after: 1 },
+          });
         }
         accepted.push(page);
         return { message_id: nextMessageId++ };
@@ -641,7 +680,11 @@ describe("draft stream initial message debounce", () => {
   it("sends short complete rich progress and resumes after clear", async () => {
     const api = createMockDraftApi(async () => ({ message_id: 42 }));
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 30 });
-    const progress = (text: string) => ({ ...renderRichText(text), complete: true as const });
+    const progress = (text: string) => ({
+      text,
+      complete: true as const,
+      richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
+    });
     stream.updatePreview(progress("0/1 complete"));
     await stream.flush();
     expect(api.raw.sendRichMessage).toHaveBeenCalledOnce();
@@ -664,10 +707,11 @@ describe("Telegram draft link previews", () => {
   it.each([false, true])(
     "suppresses progress link cards through send, edit and stop (rich fallback: %s)",
     async (richMessages) => {
-      const { api, stream } = draft({ richMessages });
+      const api = createMockDraftApi();
       const error = new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID");
       api.raw.sendRichMessage.mockRejectedValue(error);
       api.raw.editMessageText.mockRejectedValue(error);
+      const stream = createDraftStream(api, { richMessages });
       const preview = (text: string) =>
         renderTelegramProgressDraftPreview(
           { lines: [text] },
@@ -705,7 +749,8 @@ describe("Telegram draft link previews", () => {
   );
 
   it("restores the answer policy even when only the frame's link policy changes", async () => {
-    const { api, stream } = draft();
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
     const text = "https://example.com";
     stream.updatePreview({ text, linkPreview: false });
     await stream.flush();
@@ -721,51 +766,74 @@ const replyQuote = {
 };
 
 describe("Telegram preview native quotes", () => {
-  it("retains the accepted rich preview after quote rejection", async () => {
-    const api = createMockDraftApi();
-    api.raw.sendRichMessage.mockRejectedValueOnce(new Error("Bad Request: quote not found"));
-    const stream = createDraftStream(api, {
-      thread: { id: 99, scope: "forum" },
-      replyToMessageId: 7,
-      replyToMode: "all",
-      replyQuote,
-      richMessages: true,
-      renderText: renderRichText,
-    });
-    try {
-      await updateAndFlush(stream, "First");
-      stream.update("Final");
-      await stream.stop();
-      const requests = api.raw.sendRichMessage.mock.calls.map(([params]) => params);
-      expect(requests).toHaveLength(2);
-      expect(requests[0]).toMatchObject({
-        message_thread_id: 99,
-        reply_parameters: {
-          message_id: 7,
-          allow_sending_without_reply: true,
-          quote: replyQuote.text,
-          quote_position: 0,
-          quote_entities: replyQuote.entities,
-        },
-      });
-      expect(requests[1]).toMatchObject({
-        message_thread_id: 99,
-        reply_parameters: { message_id: 7, allow_sending_without_reply: true },
-      });
-      expect(requests[1]).not.toHaveProperty("reply_parameters.quote");
-      expect(api.raw.editMessageText).toHaveBeenCalledWith(
-        expect.objectContaining({ chat_id: 123, message_id: 17 }),
-      );
-      expect(api.sendMessage).not.toHaveBeenCalled();
-      expect(stream.currentMessageSnapshot()).toMatchObject({
-        text: "Final",
+  it.each([false, true])(
+    "retains the accepted preview after quote rejection (rich: %s)",
+    async (rich) => {
+      const api = createMockDraftApi();
+      const send = rich ? api.raw.sendRichMessage : api.sendMessage;
+      send.mockRejectedValueOnce(new Error("Bad Request: quote not found"));
+      const stream = createDraftStream(api, {
+        thread: { id: 99, scope: "forum" },
         replyToMessageId: 7,
+        replyToMode: "all",
+        replyQuote,
+        richMessages: rich,
+        renderText: (text) =>
+          rich
+            ? { text, richMessage: buildTelegramRichMarkdownPlan(text).richMessage }
+            : { text, parseMode: "HTML" },
       });
-      expect(api.deleteMessage).not.toHaveBeenCalled();
-    } finally {
-      await stream.discard();
-    }
-  });
+      try {
+        await updateAndFlush(stream, "First");
+        stream.update("Final");
+        await stream.stop();
+        const requests = rich
+          ? api.raw.sendRichMessage.mock.calls.map(([params]) => params)
+          : api.sendMessage.mock.calls.map((call) => call[2]);
+        expect(requests).toHaveLength(2);
+        expect(requests[0]).toMatchObject({
+          message_thread_id: 99,
+          reply_parameters: {
+            message_id: 7,
+            allow_sending_without_reply: true,
+            quote: replyQuote.text,
+            quote_position: 0,
+            quote_entities: replyQuote.entities,
+          },
+        });
+        expect(requests[1]).toMatchObject(
+          rich
+            ? {
+                message_thread_id: 99,
+                reply_parameters: { message_id: 7, allow_sending_without_reply: true },
+              }
+            : {
+                message_thread_id: 99,
+                reply_to_message_id: 7,
+                allow_sending_without_reply: true,
+              },
+        );
+        expect(requests[1]).not.toHaveProperty("reply_parameters.quote");
+        if (rich) {
+          expect(api.raw.editMessageText).toHaveBeenCalledWith(
+            expect.objectContaining({ chat_id: 123, message_id: 17 }),
+          );
+          expect(api.sendMessage).not.toHaveBeenCalled();
+        } else {
+          expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Final", {
+            parse_mode: "HTML",
+          });
+        }
+        expect(stream.currentMessageSnapshot()).toMatchObject({
+          text: "Final",
+          replyToMessageId: 7,
+        });
+        expect(api.deleteMessage).not.toHaveBeenCalled();
+      } finally {
+        await stream.discard();
+      }
+    },
+  );
 
   it.each([
     { failure: "quote", retirement: "authorization" },
@@ -784,7 +852,10 @@ describe("Telegram preview native quotes", () => {
         replyToMode: "all",
         replyQuote,
         richMessages: true,
-        renderText: renderRichText,
+        renderText: (text) => ({
+          text,
+          richMessage: buildTelegramRichMarkdownPlan(text).richMessage,
+        }),
         warn: vi.fn(),
       });
       let discarding: Promise<void> | undefined;
@@ -867,7 +938,7 @@ describe("Telegram preview send authority", () => {
     await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalledOnce());
     stream.updateLazy(() => "Late partial");
     authorized = false;
-    firstFinalEdit.reject(networkError());
+    firstFinalEdit.reject(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
     await stopping.catch(() => undefined);
     expect(api.editMessageText).toHaveBeenCalledOnce();
   });

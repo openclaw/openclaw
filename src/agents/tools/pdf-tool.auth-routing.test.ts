@@ -175,13 +175,11 @@ it.each(["setup token", "provider-default setup token", "API key"] as const)(
         authModes: { anthropic: oauth ? ("token" as const) : ("api_key" as const) },
         pluginRegistry,
       };
-      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+      stubPdfInput();
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(Response.json({ content: [{ type: "text", text: "PDF summary" }] }));
-      const tool =
-        createPdfTool({ config, agentDir, preparedModelRuntime }) ??
-        expect.fail("PDF tool was not registered");
+      const tool = requirePdfTool({ config, agentDir, preparedModelRuntime });
       const result = await tool.execute("pdf-auth", {
         pdf: "/tmp/doc.pdf",
         prompt: "Summarize this PDF.",

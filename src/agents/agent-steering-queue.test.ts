@@ -100,24 +100,19 @@ function publishPlan<T>(runs: Map<string, SubagentRunRecord>, plan: SubagentRunM
 }
 
 async function leaseItems(
-  runs: Map<string, SubagentRunRecord>,
-  leaseId: string,
-  reader = readResult,
+  params: Parameters<typeof preparePendingAgentSteeringLease>[0] & {
+    runs: Map<string, SubagentRunRecord>;
+  },
 ) {
-  const prepared = await preparePendingAgentSteeringLease({
-    runs,
-    leaseId,
-    requesterSessionKey,
-    readResult: reader,
-  });
+  const prepared = await preparePendingAgentSteeringLease(params);
   if (!prepared) {
     return undefined;
   }
-  const plan = prepared.plan(runs);
+  const plan = prepared.plan(params.runs);
   if (!prepared.isCurrent() || !plan) {
     throw new Error("Child result changed while preparing the requester prompt");
   }
-  return publishPlan(runs, plan);
+  return publishPlan(params.runs, plan);
 }
 
 function ackItems(
@@ -158,7 +153,12 @@ describe("agent steering queue", () => {
         await held;
         return { text: "complete result", isCurrent: () => current };
       });
-      const leasing = leaseItems(runs, "held-lease", prepare);
+      const leasing = leaseItems({
+        runs,
+        requesterSessionKey,
+        leaseId: "held-lease",
+        readResult: prepare,
+      });
       expect(prepare).toHaveBeenCalledOnce();
       if (change === "generation") {
         runs.set(entry.runId, { ...entry, generation: 2 });
@@ -190,7 +190,12 @@ describe("agent steering queue", () => {
       const entry = makeRun({ requesterStorePath: "original-store" });
       publishSystemEventStoreResolver(() => "original-store");
       const runs = runMap([entry]);
-      const leased = await leaseItems(runs, "live-lease");
+      const leased = await leaseItems({
+        runs,
+        requesterSessionKey,
+        leaseId: "live-lease",
+        readResult,
+      });
       expect(leased?.isCurrent()).toBe(true);
       if (change === "generation") {
         runs.set(entry.runId, { ...runs.get(entry.runId)!, generation: 2 });
@@ -207,7 +212,12 @@ describe("agent steering queue", () => {
       makeRun({ runId: "run-early", createdAt: 10, endedAt: 30 }),
     ]);
 
-    const leased = await leaseItems(runs, "lease-exact-prompt");
+    const leased = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-exact-prompt",
+    });
 
     const section = (runId: string, position: number) =>
       [
@@ -298,7 +308,12 @@ describe("agent steering queue", () => {
       makeRun({ runId: "done", delivery: { status: "delivered", announcedAt: 1 } }),
     ]);
 
-    const leased = await leaseItems(runs, "lease-1");
+    const leased = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-1",
+    });
     expect(leased).toMatchObject({ runIds: ["run-1"] });
     expect(runs.get("run-1")?.delivery).toMatchObject({
       status: "in_progress",
@@ -324,8 +339,19 @@ describe("agent steering queue", () => {
     });
     expect(runs.get("run-1")?.delivery?.payload).toBeUndefined();
 
-    runs.set("retry", makeRun({ runId: "retry" }));
-    await leaseItems(runs, "lease-2");
+    runs.set(
+      "retry",
+      makeRun({
+        runId: "retry",
+        delivery: { status: "pending", payload: payload("retry") },
+      }),
+    );
+    await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-2",
+    });
     expect(
       releaseItems({
         runs,
@@ -358,7 +384,12 @@ describe("agent steering queue", () => {
       const before = structuredClone(blocked);
       const runs = runMap([blocked, makeRun({ runId: "selected", childSessionKey })]);
       for (const settle of [releaseItems, ackItems]) {
-        const leased = await leaseItems(runs, "selected-lease");
+        const leased = await leaseItems({
+          readResult,
+          runs,
+          requesterSessionKey,
+          leaseId: "selected-lease",
+        });
         expect(leased?.runIds).toEqual(["selected"]);
         expect(leased?.prompt).toContain("result for selected");
         expect(leased?.prompt).not.toContain("result for blocked");
@@ -373,7 +404,12 @@ describe("agent steering queue", () => {
     async (status) => {
       const run = makeRun();
       const runs = runMap([run]);
-      await leaseItems(runs, "retired-lease");
+      await leaseItems({
+        readResult,
+        runs,
+        requesterSessionKey,
+        leaseId: "retired-lease",
+      });
       const current = runs.get(run.runId)!;
       const blocked = {
         ...current,
@@ -411,6 +447,11 @@ describe("agent steering queue", () => {
   it("does not substitute captured fallback output for a resumed silent completion", async () => {
     const runs = runMap([
       makeRun({
+        runId: "run-1",
+        delivery: {
+          status: "pending",
+          payload: payload("run-1"),
+        },
         completion: {
           required: true,
           resultText: "NO_REPLY",
@@ -420,7 +461,12 @@ describe("agent steering queue", () => {
       }),
     ]);
 
-    const leased = await leaseItems(runs, "lease-fallback");
+    const leased = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-fallback",
+    });
 
     expect(leased?.prompt).toContain("No completion text was captured.");
     expect(leased?.prompt).not.toContain("findings captured before the wake");
@@ -449,7 +495,12 @@ describe("agent steering queue", () => {
       ),
     );
 
-    const leased = await leaseItems(runs, "lease-1");
+    const leased = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-1",
+    });
     const omitted = [...runs.keys()].filter((runId) => !leased?.runIds.includes(runId));
 
     expect(leased?.prompt.length).toBeLessThanOrEqual(24_000);
@@ -475,10 +526,15 @@ describe("agent steering queue", () => {
       makeRun({ runId: "run-next", endedAt: 2_000 }),
     ]);
 
-    const leased = await leaseItems(runs, "lease-expanded", async (entry) => ({
-      text: entry.runId === "run-expanded" ? fullResult : (await readResult(entry)).text,
-      isCurrent: () => true,
-    }));
+    const leased = await leaseItems({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-expanded",
+      readResult: async (entry) => ({
+        text: entry.runId === "run-expanded" ? fullResult : (await readResult(entry)).text,
+        isCurrent: () => true,
+      }),
+    });
     const projectedResult = extractSubagentResult(leased?.prompt ?? "");
 
     expect(projectedResult).toBe(`${"&lt;🚀&gt;".repeat(3_000)}-required-tail`);
@@ -492,7 +548,12 @@ describe("agent steering queue", () => {
       runIds: leased?.runIds ?? [],
       leaseId: "lease-expanded",
     });
-    const next = await leaseItems(runs, "lease-next");
+    const next = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-next",
+    });
     expect(next?.runIds).toEqual(["run-next"]);
     expect(extractSubagentResult(next?.prompt ?? "")).toBe("result for run-next");
   });
@@ -517,10 +578,22 @@ describe("agent steering queue", () => {
       }),
     ]);
 
-    expect(await leaseItems(runs, "too-early")).toBeUndefined();
+    expect(
+      await leaseItems({
+        readResult,
+        runs,
+        requesterSessionKey,
+        leaseId: "too-early",
+      }),
+    ).toBeUndefined();
 
     now.mockReturnValue(1_000 + 6 * 60 * 1_000);
-    const leased = await leaseItems(runs, "new-lease");
+    const leased = await leaseItems({
+      readResult,
+      runs,
+      requesterSessionKey,
+      leaseId: "new-lease",
+    });
     expect(leased?.runIds).toEqual(["stale"]);
     expect(runs.get("stale")?.delivery?.steeringLeaseId).toBe("new-lease");
     expect(leased?.prompt).toContain("labelmalicious");
@@ -531,7 +604,10 @@ describe("agent steering queue", () => {
 
   it("prepends steering data before the current parent prompt", async () => {
     expect(
-      prependAgentSteeringPrompt({ steeringPrompt: "steering", prompt: "current request" }),
+      prependAgentSteeringPrompt({
+        steeringPrompt: "steering",
+        prompt: "current request",
+      }),
     ).toBe("steering\n\nCurrent parent turn:\n\ncurrent request");
   });
 
@@ -550,7 +626,12 @@ describe("agent steering queue", () => {
       },
     });
 
-    const leased = await leaseItems(runMap([run]), "lease-emoji");
+    const leased = await leaseItems({
+      readResult,
+      runs: runMap([run]),
+      requesterSessionKey,
+      leaseId: "lease-emoji",
+    });
 
     const title = leased?.prompt.split("\n").find((line) => line.startsWith("1. "));
     expect(title).toBe(`1. ${"x".repeat(499)}`);
