@@ -12,7 +12,7 @@ function clock<T>(create: (callback: () => void) => T) {
   flush();
   return {
     ...timer,
-    advance(milliseconds: number, calls: number) {
+    advance: (milliseconds: number, calls: number) => {
       vi.advanceTimersByTime(milliseconds);
       expect(callback).toHaveBeenCalledTimes(calls);
     },
