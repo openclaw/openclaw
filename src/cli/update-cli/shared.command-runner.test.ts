@@ -66,13 +66,16 @@ async function expectFile(directory: string, name: string, content: string) {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(content);
 }
 
+async function writeClone(stagingDir: string, git = false) {
+  if (git) {
+    await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+  }
+  await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+}
+
 function mockCompleteClone(git = false) {
   runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-    const stagingDir = cloneTarget(argv);
-    if (git) {
-      await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-    }
-    await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+    await writeClone(cloneTarget(argv), git);
     return successfulCommandResult;
   });
 }
@@ -306,10 +309,7 @@ describe("update CLI shared helpers", () => {
           return successfulCommandResult;
         });
 
-        const result = await ensureGitCheckout({
-          dir: checkoutDir,
-          timeoutMs: 1_000,
-          env: process.env,
+        const result = await checkout(checkoutDir, {
           useStagedCheckout: async (stagingDir, publish, targetRoot, storageRoot) => {
             const artifacts = path.join(storageRoot, ".artifacts");
             await fs.mkdir(artifacts);
@@ -323,9 +323,7 @@ describe("update CLI shared helpers", () => {
         expect(result).toMatchObject({ checkoutDir, step: { exitCode: 0 } });
         expect(result.step?.warnings).toBeUndefined();
 
-        await expect(fs.readFile(path.join(checkoutDir, "checkout.marker"), "utf8")).resolves.toBe(
-          "complete\n",
-        );
+        await expectFile(checkoutDir, "checkout.marker", "complete\n");
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
         expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
@@ -467,8 +465,7 @@ describe("update CLI shared helpers", () => {
         runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
           const stagingDir = cloneTarget(argv);
           expect(path.dirname(path.dirname(stagingDir))).toBe(targetDir);
-          await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-          await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
+          await writeClone(stagingDir, true);
           if (retargeted) {
             await fs.unlink(checkoutDir);
             await fs.symlink(replacementDir, checkoutDir, "dir");
@@ -529,16 +526,11 @@ describe("update CLI shared helpers", () => {
           await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
         } else {
           await expect(fs.readdir(replacementStage)).resolves.toEqual(["user.marker"]);
-          await expect(
-            fs.readFile(
-              path.join(
-                displacedDir,
-                ...(replaced === "storage" ? ["repository"] : []),
-                "checkout.marker",
-              ),
-              "utf8",
-            ),
-          ).resolves.toBe("complete\n");
+          await expectFile(
+            replaced === "storage" ? path.join(displacedDir, "repository") : displacedDir,
+            "checkout.marker",
+            "complete\n",
+          );
         }
       });
     },
@@ -595,9 +587,7 @@ describe("update CLI shared helpers", () => {
           });
           await expectFile(checkoutDir, "checkout.marker", "complete\n");
           if (!missingStorage) {
-            expect(
-              await fs.readFile(path.join(retained, "repository", "user.marker"), "utf8"),
-            ).toBe("keep\n");
+            await expectFile(path.join(retained, "repository"), "user.marker", "keep\n");
           }
         } else {
           await expect(result).rejects.toThrow("changed before publication");
@@ -738,11 +728,7 @@ describe("update CLI shared helpers", () => {
         throw failure;
       });
 
-      await expect(
-        checkout(checkoutDir, {
-          useStagedCheckout,
-        }),
-      ).rejects.toBe(failure);
+      await expect(checkout(checkoutDir, { useStagedCheckout })).rejects.toBe(failure);
 
       expect(useStagedCheckout).toHaveBeenCalledOnce();
       await expect(fs.readFile(stagedFile, "utf8")).resolves.toBe("retain candidate bytes\n");

@@ -15,11 +15,12 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as restart from "../daemon-cli/restart-health.test-helpers.js";
+import { expectNoCalls } from "./update-boundary.test-support.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
 import {
   GatewayRestartHealthError,
   runUpdatedInstallGatewayCommand,
@@ -53,13 +54,6 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => ({
 let server: Server;
 let controller: AbortController;
 let pendingVerification: Promise<unknown> | undefined;
-const resultWith = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult => ({
-  status: "ok",
-  mode: "npm",
-  steps: [],
-  durationMs: 0,
-  ...overrides,
-});
 function useService(
   runtime: Parameters<typeof restart.makeGatewayService>[0] = { status: "running", pid: 8000 },
 ) {
@@ -155,7 +149,7 @@ it.each([
             server: { version, buildId, bootId: "watcher-successor" },
           }),
     );
-    const result = resultWith({
+    const result = resultFixture(undefined, {
       mode,
       after: { version: "2026.9.8", buildId: "candidate" },
     });
@@ -226,7 +220,7 @@ it.each(["transient-timeout", "mixed"])(
         },
       })(opts),
     );
-    const result = resultWith();
+    const result = resultFixture(undefined);
     const onVerified = vi.fn();
     const verification = await verifyGateway({
       result,
@@ -300,7 +294,10 @@ it.each(["slow inspection", "hung readiness"] as const)(
         res.writeHead(200).end();
       }
     });
-    const result = resultWith({ status: "error", ...(hung ? {} : { reason: "doctor-failed" }) });
+    const result = resultFixture(undefined, {
+      status: "error",
+      ...(hung ? {} : { reason: "doctor-failed" }),
+    });
     const startedAt = Date.now();
     const verification = verifyGateway({
       result,
@@ -362,7 +359,7 @@ it.each(["first read", "after listener observation", "recovery"])(
       entered.resolve();
       return released.promise;
     });
-    const result = resultWith();
+    const result = resultFixture(undefined);
     const onVerified = vi.fn();
     const lateMutation = vi.fn();
     const recoverHealth: Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"] =
@@ -407,8 +404,7 @@ it.each(["first read", "after listener observation", "recovery"])(
       expect(onVerified).not.toHaveBeenCalled();
       released.resolve({ status: "running", pid: 8000 });
       await vi.advanceTimersByTimeAsync(0);
-      expect(onVerified).not.toHaveBeenCalled();
-      expect(lateMutation).not.toHaveBeenCalled();
+      expectNoCalls(onVerified, lateMutation);
     } finally {
       controller.abort();
       released.resolve({ status: "running", pid: 8000 });
@@ -419,7 +415,7 @@ it.each(["first read", "after listener observation", "recovery"])(
 );
 
 it("prefers a pending recovery observation over previously saved healthy facts", async () => {
-  const result = resultWith({ status: "error" });
+  const result = resultFixture(undefined, { status: "error" });
   await expect(
     verifyGateway({
       result,
@@ -479,7 +475,7 @@ it.each(["runtime", "port", "command"] as const)(
         ? restart.inspectPortUsage
         : vi.spyOn(service, fault === "runtime" ? "readRuntime" : "readCommand");
     probe.mockRejectedValue(cleanup);
-    const result = resultWith({ status: "error", reason: "post-update-plugins" });
+    const result = resultFixture(undefined, { status: "error", reason: "post-update-plugins" });
     const verification = verifyGateway({
       result,
       opts: { json: true, run: { runId: "observed-recovery", env: {} } },
@@ -521,7 +517,7 @@ it.each([
       res.writeHead(200).end();
     });
     const verification = verifyGateway({
-      result: resultWith(),
+      result: resultFixture(undefined),
       gatewayPort,
       expectedVersion: "2026.9.4",
       expectedBuildId: "candidate-build",
@@ -562,13 +558,9 @@ it.each([
     const gatewayPort = await listen();
     const result = await maybeRestartService({
       shouldRestart: true,
-      result: {
-        status: "ok",
-        mode: "npm",
-        steps: [],
-        durationMs: 0,
+      result: resultFixture(undefined, {
         after: { version: "2026.9.4", buildId: "candidate-build" },
-      },
+      }),
       opts: { json: true },
       refreshServiceEnv,
       serviceEnv: { HOME: "/synthetic-home" },
@@ -603,7 +595,7 @@ it("preserves Windows cold startup within the default update timeout", async () 
     serviceEnv: { HOME: "/synthetic-home" },
     refreshServiceEnv: false,
     shouldRestart: true,
-    result: resultWith({ after: { version: "2026.9.4" } }),
+    result: resultFixture(undefined, { after: { version: "2026.9.4" } }),
     opts: { json: true, timeout: undefined },
     gatewayPort,
     requireRunningServiceAfterRestart: true,
@@ -661,7 +653,7 @@ it.each([
     const { waitForGatewayHealthyRestart } = await import("../daemon-cli/restart-health.js");
     const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
     const onVerified = vi.fn();
-    const updateResult = resultWith();
+    const updateResult = resultFixture(undefined);
     const verification = verifyGateway({
       result: updateResult,
       opts: { json: true, run: { runId: "synthetic-update", env: {} } },

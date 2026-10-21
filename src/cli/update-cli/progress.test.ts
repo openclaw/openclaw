@@ -30,6 +30,15 @@ const printed = () => log.mock.calls.flat().join("\n");
 const phaseLines = () =>
   log.mock.calls.flat().filter((line) => typeof line === "string" && line.startsWith("Phase:"));
 const reportPath = `/isolated/update-progress/${runId}.md`;
+const jsonOutput = () => vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+const silenceErrors = () => vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+const timeline = (phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord["phase"][]) => ({
+  phase,
+  steps: [
+    ...completed.map((completedPhase) => ({ step: completedPhase, status: "completed" as const })),
+    { step: phase, status: "in_progress" as const },
+  ],
+});
 
 function runRecord(): UpdateRunRecord {
   return {
@@ -77,6 +86,10 @@ describe("update progress", () => {
     return controller;
   }
 
+  async function printFailure(failed: UpdateRunResult["steps"][number]) {
+    await printResult({ ...result, runId: undefined, status: "error", steps: [failed] }, {});
+  }
+
   afterEach(() => {
     presentation?.dispose();
     presentation = undefined;
@@ -91,7 +104,7 @@ describe("update progress", () => {
 
   it("prepares report artifacts before emitting without later history or filesystem work", async () => {
     const outputLog = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const json = jsonOutput();
     const emit = await prepareResult(result, { json: true, run: context });
     expect(writeUpdateRunReportArtifact).toHaveBeenCalledOnce();
     expect(
@@ -170,18 +183,14 @@ describe("update progress", () => {
   );
 
   it("keeps the report available when initial history observation fails", async () => {
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const error = silenceErrors();
     vi.mocked(getUpdateRunForProgressAsync).mockRejectedValueOnce(
       new Error("initial ledger read failed"),
     );
     try {
       presentation = await observe(true, context);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("initial ledger read failed"));
-      run.phase = "verifying";
-      run.steps = [
-        { step: "requested", status: "completed" },
-        { step: "verifying", status: "in_progress" },
-      ];
+      Object.assign(run, timeline("verifying", "requested"));
       await printResult(result, { run: context });
       const lines = log.mock.calls.flat();
       expect(lines.join("\n")).toContain("OpenClaw update in progress: verifying.");
@@ -196,7 +205,7 @@ describe("update progress", () => {
   });
 
   it("cancels an in-flight read and releases the terminal spinner on disposal", async () => {
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const error = silenceErrors();
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
     const timerCount = vi.getTimerCount();
@@ -226,20 +235,11 @@ describe("update progress", () => {
       presentation = await observe(true, context);
       const captured: UpdateRunRecord = {
         ...run,
-        phase: "verifying",
-        steps: [
-          { step: "requested", status: "completed" },
-          { step: "verifying", status: "in_progress" },
-        ],
+        ...timeline("verifying", "requested"),
       };
       const later: UpdateRunRecord = {
         ...captured,
-        phase: "repairing",
-        steps: [
-          { step: "requested", status: "completed" },
-          { step: "verifying", status: "completed" },
-          { step: "repairing", status: "in_progress" },
-        ],
+        ...timeline("repairing", "requested", "verifying"),
       };
       vi.mocked(getUpdateRun)
         .mockReturnValueOnce(present ? captured : undefined)
@@ -264,7 +264,7 @@ describe("update progress", () => {
   );
 
   it("prints the failure and saved report when history cannot be read", async () => {
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    silenceErrors();
     vi.mocked(getUpdateRun).mockImplementation(() => {
       throw new Error("history temporarily unavailable");
     });
@@ -275,9 +275,8 @@ describe("update progress", () => {
   });
 
   it("settles the pending report before exit without reopening retained history", async () => {
-    vi.useFakeTimers();
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const output = jsonOutput();
+    silenceErrors();
     const entered = createDeferred();
     const saved = createDeferred<string>();
     vi.mocked(writeUpdateRunReportArtifact).mockImplementation(async () => {
@@ -358,10 +357,7 @@ describe("update progress", () => {
     expect(progress.match(/Unable to load plugin/gu)).toHaveLength(1);
     expect(progress).not.toContain("The CLI command failed");
     log.mockClear();
-    await printResult(
-      { ...result, runId: undefined, status: "error", steps: [{ ...failed, cwd: "/fixture" }] },
-      {},
-    );
+    await printFailure({ ...failed, cwd: "/fixture" });
     const report = printed();
     expect(report.match(/Unable to load plugin/gu)).toHaveLength(1);
     expect(report).not.toContain("Help: openclaw --help");
@@ -374,26 +370,16 @@ describe("update progress", () => {
       presentation.progress.onStepComplete?.(detailed);
       expect(printed()).toContain("Additional diagnostic");
       log.mockClear();
-      await printResult({ ...result, runId: undefined, status: "error", steps: [detailed] }, {});
+      await printFailure(detailed);
       expect(printed()).toContain("Additional diagnostic");
     }
     log.mockClear();
-    await printResult(
-      {
-        ...result,
-        runId: undefined,
-        status: "error",
-        steps: [
-          {
-            ...failed,
-            cwd: "/fixture",
-            stdoutTail: "x".repeat(160),
-            stderrTail: `[openclaw] Reason: Unable to load plugin\nDistinct detail ${"y".repeat(160)}\n[openclaw] Help: openclaw --help\ndoctor: Candidate doctor failed (deadline exceeded) (1000ms)`,
-          },
-        ],
-      },
-      {},
-    );
+    await printFailure({
+      ...failed,
+      cwd: "/fixture",
+      stdoutTail: "x".repeat(160),
+      stderrTail: `[openclaw] Reason: Unable to load plugin\nDistinct detail ${"y".repeat(160)}\n[openclaw] Help: openclaw --help\ndoctor: Candidate doctor failed (deadline exceeded) (1000ms)`,
+    });
     expect(printed()).toContain(`Distinct detail ${"y".repeat(40)}`);
     expect(printed()).toContain("deadline exceeded");
     log.mockClear();
@@ -406,7 +392,6 @@ describe("update progress", () => {
   });
 
   it("follows restart verification after step progress stops and flushes before the final report", async () => {
-    vi.useFakeTimers();
     presentation = await observe(true, context);
     presentation.stop();
     // The restarted gateway writes these phases while the CLI has no active step.
@@ -438,7 +423,7 @@ describe("update progress", () => {
   });
 
   it("keeps JSON silent until one public result without mutating private history", async () => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const writeJson = jsonOutput();
     presentation = await observe(false, context);
     presentation.suspend();
     presentation.resume();
@@ -473,7 +458,7 @@ describe("update progress", () => {
   ] as const)(
     "prints current failure facts over $history history (verified rollback=$rolledBack)",
     async ({ history, rolledBack }) => {
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const writeJson = jsonOutput();
       run.status = history;
       run.phase = history === "running" ? "verifying" : "finished";
       run.reason = rolledBack ? "doctor-failed" : "build-failed";
@@ -522,7 +507,7 @@ describe("update progress", () => {
   it.each([true, false, undefined])(
     "prints raw recovery observations without rewriting saved history (running=%s)",
     async (serviceRunning) => {
-      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const writeJson = jsonOutput();
       run.status = "failed";
       run.phase = "finished";
       run.reason = "post-update-plugins";
@@ -607,7 +592,7 @@ describe("update progress", () => {
   );
 
   it("preserves a captured success receipt over stale raw recovery proof", async () => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const writeJson = jsonOutput();
     const captured: UpdateRunRecord = {
       ...run,
       status: "succeeded",
@@ -664,7 +649,6 @@ describe("update progress", () => {
   });
 
   it("suspends every ledger reader through activation and resumes the recorded timeline", async () => {
-    vi.useFakeTimers();
     presentation = await observe(true, context);
     presentation.suspend();
     const read = vi
