@@ -1172,7 +1172,7 @@ board widget, and creates a synthetic workboard with one card per viewer. Reusin
 the fixture paginates its cards, removes surplus cards, and creates missing cards
 to preserve that count when the viewer count changes. The GitHub preview uses the real plugin with a
 benchmark-only in-process HTTP transport serving one synthetic public issue;
-other non-loopback fetches fail. No GitHub account is connected, so options and
+other non-loopback fetches fail. By default no GitHub account is connected, so options and
 PR subscriptions exercise disconnected-account reads and subscription admission,
 not remote PR discovery or credential refresh. The model catalog uses the local
 synthetic provider configuration. Board widgets are read through RPC, without a
@@ -1208,6 +1208,63 @@ time for every method's initial staggered poll. Shorter cohorts may require a
 shorter polling interval. This option does not add automatic mid-soak restarts;
 separate invocations against the same retained fixture start separate Gateways,
 and normal setup still resets the foreground sessions.
+
+To measure connected GitHub options, generate the fixture and run the dashboard
+soak with `--github-options-connected`. Generation registers the synthetic
+`openclaw-fixture/soak` origin before recording each repository fingerprint;
+existing disconnected fixtures cannot be reused for this mode. The harness gives
+the isolated Gateway a synthetic native GitHub token, serves `/user`, repository
+metadata, an empty PR list, and the preview issue entirely in process. Account
+verification (`/user`) cycles through deterministic 300, 600, and 900 ms delays;
+other routes retain the existing preview fixture's immediate responses. Delaying
+every preview request would exceed its shared two-second budget across serial
+visibility checks and item reads. No request reaches GitHub.
+This measures shared-account verification and discovery, not personal OAuth refresh.
+Setup creates session-owned managed worktrees through `sessions.create` and uses
+their returned roots for the foreground and diff sessions. This mode requires
+fresh foreground sessions (`--history-turns` is unsupported); the fixture's
+retained session histories remain part of the dashboard load.
+
+For either account mode, add `--entry src/entry.ts --github-options-observe` to
+record handler, admission, shared identity, native token lookup, credential
+verification, target discovery, receipt-read, and response-serialization durations in
+`dashboardRpc.githubObservation.stages`. A benchmark-only loader wraps the source
+owners and refuses missing source shapes; production imports remain unchanged.
+The nested `session-preparation` stage covers options admission's session reader,
+while `publication-session` records durable session preparation inside the
+publication owner. Use these stages to distinguish admission work from repeated
+session reads during target qualification.
+These durations overlap, and stale refresh work may finish after its originating
+handler. Use request IDs and timestamps to distinguish the critical path from
+background work; never add stage totals together. Gateway diagnostics separately
+record response bytes and dispatch work.
+For simultaneous comparisons using one checkout, place the baseline receipt
+owner beside `src/gateway/github-publication-shared-read.ts` and the baseline
+availability owner beside `src/gateway/github-publication-availability.ts`.
+Pass `--github-observation-owner <baseline-receipt-file>` and
+`--github-availability-owner <baseline-availability-file>` only on A. The result
+records their loaded paths and override flags in `githubObservation.owner` and
+`githubObservation.availabilityOwner`, and rejects a run unless both owners loaded
+and the handler was observed. Both sides must
+enable identical observation and use separate fixtures, ports, and CPU sets.
+
+Connected options use one additional socket per viewer granted only
+`operator.sessions.read`: broad dashboard grants skip repository qualification.
+The connected soak authenticates its synthetic operator through loopback
+trusted-proxy handshakes so the normal profile owner supplies a verified identity.
+An initial concurrent batch is retained in `coldSetupRpc`, before preview preflight;
+warm polls rotate over every session in `dashboardRpc.diffWorktrees`. Each polling
+record includes `githubOptionsSessionKey`. Every options response must expose the
+synthetic shared account without an unsupported-workspace reason.
+`dashboardRpc.githubOptionsConnected` records the additional socket count,
+every upstream route/sequence/delay/elapsed time/status, totals per route, and
+options observations by phase, session, latency, stale flag, and account login.
+The synthetic account changes login after sixty seconds from its first `/user`
+request; `accountRenameObserved` reports whether normal refresh made that change
+visible. Use a long enough soak to observe it; a short smoke is not freshness proof.
+The upstream elapsed times include the injected wait and fetch header resolution;
+they are not additive handler self-time. Use Gateway diagnostics for handler time
+and the existing RPC byte counts for serialization volume.
 
 Each allocation profile includes collected objects and reports decimal
 `allocatedMbPerTurn`. Allocation soaks keep one continuous sampling window and
