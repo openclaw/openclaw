@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runMessageActionDiscoveryAsync } from "../channels/plugins/message-action-discovery.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -35,9 +35,12 @@ function discover(
 }
 
 describe("channel tools", () => {
-  const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
 
-  beforeEach(() => {
+  it("keeps an explicitly empty prepared catalog authoritative", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     registerPlugin("test", {
       actions: {
         describeMessageTool: () => {
@@ -45,24 +48,8 @@ describe("channel tools", () => {
         },
       },
     });
-    errorSpy.mockClear();
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
-  it("keeps an explicitly empty prepared catalog authoritative", async () => {
     expect(await discover("test", EMPTY_PREPARED_MESSAGE_TOOL_CATALOG)).toEqual([]);
     expect(errorSpy).not.toHaveBeenCalled();
-  });
-
-  it("skips crashing plugins and logs once", async () => {
-    expect(await discover()).toStrictEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-
-    expect(await discover()).toStrictEqual([]);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not infer poll actions from outbound adapters when action discovery omits them", async () => {

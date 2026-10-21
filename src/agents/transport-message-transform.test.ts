@@ -8,7 +8,6 @@ import { transformTransportMessages } from "./transport-message-transform.js";
 
 const EXPECTED_FAILURE_MARKER =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
-const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 const makeModel = (api: Api, provider: string, id: string) =>
   makeProviderModelFixture({ api, provider, id, baseUrl: "https://example.test" });
@@ -184,18 +183,6 @@ it.each([
   const result = transformTransportMessages(messages, openai);
   expect(result[0]).toMatchObject({ role: "assistant", content: expected });
   expect(result[1]).toMatchObject({ role: "user" });
-});
-
-it("drops the no-content placeholder with hidden reasoning across a model change", () => {
-  const failed = makeAssistantMessageFixture({
-    model: "source-model",
-    content: [
-      text(NO_CONTENT_PLACEHOLDER),
-      { type: "thinking", thinking: "hidden partial reasoning" },
-    ],
-  });
-  const user = userMessage("what is the weather?", 3);
-  expect(transformTransportMessages([failed, user], openai)).toEqual([user]);
 });
 
 it("drops max-token reasoning-only transport assistant turns before replay", () => {

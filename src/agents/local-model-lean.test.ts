@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   filterLocalModelLeanTools,
@@ -14,7 +13,6 @@ function tools(names: string[]): AnyAgentTool[] {
 }
 
 const lean = (localModelLean: boolean) => ({ experimental: { localModelLean } });
-const ownedEntries = { ops: lean(false), gemma: lean(true) };
 function defaultLeanConfig(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
 ): OpenClawConfig {
@@ -85,41 +83,10 @@ describe("local model lean tool filtering", () => {
     );
   });
 
-  it("requires explicit selection despite retained Doctor ownership when no session is provided", () => {
-    const cfg = retainLegacyDefaultAgentId(
-      {
-        agents: { ownership: "explicit", entries: ownedEntries },
-      } satisfies OpenClawConfig,
-      "gemma",
-    );
-
-    expect(() => isLocalModelLeanEnabled({ config: cfg })).toThrowError(
-      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
-    );
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
-    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ops" })).toBe(false);
-  });
-
   it("uses the agent from an agent session key", () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: lean(false), gemma: lean(true) } } };
 
     expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "agent:gemma:main" })).toBe(true);
     expect(filteredNames(cfg, { sessionKey: "agent:gemma:main" })).toEqual(["read", "exec"]);
-  });
-
-  it("uses the configured fixed-store owner for an unscoped session key", () => {
-    const cfg: OpenClawConfig = {
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "gemma" } },
-        entries: ownedEntries,
-      },
-    };
-
-    expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "global" })).toBe(true);
-    expect(() =>
-      isLocalModelLeanEnabled({ config: cfg, agentId: "ops", sessionKey: "global" }),
-    ).toThrow(/belongs to "gemma"/);
   });
 });

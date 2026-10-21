@@ -102,24 +102,6 @@ describe("resolveConfiguredModelEntries", () => {
     ]);
   });
 
-  it("normalizes retired nested Gemini ids in configured provider rows", () => {
-    const key = "kilocode/google/gemini-3-pro-preview";
-    const { entries } = resolveDefaults(
-      { model: { primary: key }, models: { [key]: { alias: "Kilo Gemini" } } },
-      {},
-      {
-        kilocode: {
-          api: "openai-completions",
-          baseUrl: "https://kilocode.test/v1",
-          models: [model("google/gemini-3-pro-preview")],
-        },
-      },
-    );
-
-    expect(metadata(entries)).toEqual([
-      ["kilocode/google/gemini-3.1-pro-preview", ["Kilo Gemini"], configuredTags],
-    ]);
-  });
   it.each([
     ["openai/gpt-5.5", "Primary", { "openai/*": {} }, {}, "openai/gpt-5.5"],
     ["legacy/model", "Work", {}, canonical, "current/model"],

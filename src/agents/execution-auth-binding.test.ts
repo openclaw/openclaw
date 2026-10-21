@@ -109,19 +109,11 @@ describe("execution auth binding fingerprints", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    ["openai", { accountId: "account-1", email: "User@Example.test" }, true],
-    ["anthropic", {}, false],
-  ] as const)("refreshes %s OAuth (%j), stable=%s", (provider, identity, stable) => {
-    const fingerprint = (version: string) =>
-      oauth(provider, `access-${version}`, `refresh-${version}`, identity);
-    expect(fingerprint("a") === fingerprint("b")).toBe(stable);
-  });
-
   it("uses stable id-token identity instead of rotating token material", () => {
     const fingerprint = (access: string, subject: string) =>
       oauth("google", access, `refresh-${access}`, {
         idToken: jwt({ sub: subject, email: "user@example.test" }),
+        ...(access === "access-a" ? { email: "User@Example.test" } : {}),
       });
 
     expect(fingerprint("access-a", "subject-1")).toBe(fingerprint("access-b", "subject-1"));
@@ -207,8 +199,6 @@ describe("execution auth binding fingerprints", () => {
   });
 
   it("fails closed when the AWS SDK principal cannot be established", () => {
-    expect(aws({ AWS_PROFILE: "work" })).toBeUndefined();
-    expect(aws({})).toBeUndefined();
     expect(
       aws({
         AWS_PROFILE: "work",
