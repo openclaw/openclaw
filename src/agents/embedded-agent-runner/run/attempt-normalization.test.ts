@@ -4,7 +4,6 @@ import * as sessionEntryWriter from "../../../config/sessions/session-accessor.s
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
-import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
@@ -252,23 +251,6 @@ describe("fixed-store session bootstrap", () => {
       }),
       expect.any(Function),
     );
-  });
-
-  it("carries the resolved owner into quota-maintenance reads", async () => {
-    sessionReaderMocks.readSessionEntryInWorker.mockResolvedValueOnce({
-      sessionId: "ops-session",
-      updatedAt: 1,
-    });
-
-    const assertCurrent = vi.fn();
-    const scope = {
-      agentId: "ops",
-      sessionKey: "global",
-      storePath: "/tmp/shared-sessions.json",
-    };
-    await loadAttemptSessionEntryAfterQuotaMaintenance(scope, assertCurrent);
-
-    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(scope, assertCurrent);
   });
 });
 

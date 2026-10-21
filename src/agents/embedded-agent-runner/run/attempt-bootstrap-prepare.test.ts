@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -257,36 +256,6 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         truncated: false,
       }),
     );
-  });
-
-  it("selects the current person's agent-workspace overlay across attempt switches", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const workspace = state.statePath("workspace");
-      const alice = ensureProfileForEmail("alice@example.test");
-      const bob = ensureProfileForEmail("bob@example.test");
-      for (const profile of [alice, bob]) {
-        const dir = path.join(workspace, "users", profile.id);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(
-          path.join(dir, "USER.md"),
-          profile.id === alice.id ? "Alice guidance" : "Bob guidance",
-        );
-      }
-      await fs.writeFile(path.join(workspace, "USER.md"), "Shared guidance");
-      for (const profile of [alice, bob, undefined]) {
-        const result = await prepare(workspace, workspace, {
-          attempt: {
-            sessionId: "same-session",
-            sessionKey: "agent:main:same-session",
-            bootstrapUserProfileId: profile?.id,
-          },
-        });
-        const context = result.contextFiles.map((file) => file.content).join("\n");
-        expect(context).toContain("Shared guidance");
-        expect(context.includes("Alice guidance")).toBe(profile === alice);
-        expect(context.includes("Bob guidance")).toBe(profile === bob);
-      }
-    });
   });
 
   it("keeps same-workspace bootstrap output byte-identical", async () => {

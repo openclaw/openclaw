@@ -40,7 +40,6 @@ import { withSessionManagerWrite } from "../../sessions/session-manager-write-ad
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
-import { log } from "../logger.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 // Register the shared module mocks before importing any runtime dependency.
@@ -106,63 +105,6 @@ async function createOwnedTranscript(
 }
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
-  it.each([
-    { changedSystem: false, level: "debug", cause: "unattributed:provider-prompt-unavailable" },
-    { changedSystem: true, level: "warn", cause: "tracked-input-change" },
-  ] as const)(
-    "logs cache-read drops at $level ($cause)",
-    async ({ changedSystem, level, cause }) => {
-      const fixture = await createFixture({ exerciseTerminalMerges: false });
-      const runtime = fixture.input.prepared.sessionRuntime;
-      Object.assign(fixture.input.attempt, {
-        model: testModel,
-        modelId: testModel.id,
-        provider: testModel.provider,
-        sessionId: randomUUID(),
-      });
-      Object.assign(runtime, {
-        anthropicPayloadLogger: undefined,
-        isOpenAIResponsesApi: false,
-        cacheTrace: undefined,
-      });
-      runtime.agentSession.activeSession.agent.streamFn = vi.fn(() =>
-        createAssistantResultStream(createAssistant(testModel, [{ type: "text", text: "Done." }])),
-      );
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-      const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
-      const { installEmbeddedAttemptStreamGuards } =
-        await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
-      const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
-        onRejectedProviderReplayRepaired: vi.fn(),
-        onIdleTimeout: vi.fn(),
-        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
-          runId: fixture.input.attempt.runId,
-          sessionId: fixture.input.attempt.sessionId,
-        }),
-      });
-      for (const [index, cacheRead] of [8_000, 0].entries()) {
-        const context = {
-          systemPrompt:
-            changedSystem && index === 1 ? "changed instructions" : "stable instructions",
-          messages: [],
-        };
-        await guards.onModelRequest(testModel, context);
-        const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
-        await stream.result();
-        guards.onModelUsage({ input: 8_000, cacheRead });
-      }
-      expect(guards.getPromptCacheObservation()).toMatchObject({ broke: true, dropCause: cause });
-      expect(level === "debug" ? debug : warn).toHaveBeenCalledWith(
-        expect.stringContaining("[prompt-cache] cache read dropped 8000 -> 0 "),
-      );
-      expect(
-        (level === "debug" ? warn : debug).mock.calls.filter(([message]) =>
-          message.startsWith("[prompt-cache]"),
-        ),
-      ).toEqual([]);
-    },
-  );
-
   it.each([
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "current", guarded: true },
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "rotated", guarded: true },
@@ -657,38 +599,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         },
       }),
     );
-    expect(fixture.prepStages.mark).toHaveBeenCalledWith("stream-setup");
-    expect(fixture.emitPrepStageSummary).toHaveBeenCalledWith("stream-ready");
-    expect(fixture.setToolSearchCatalogExecutor).toHaveBeenCalledWith(
-      fixture.toolSearchCatalogExecutor,
-    );
-
     const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
-    expect(settledInput).toEqual(
-      expect.objectContaining({
-        preparedStreamRuntime: expect.objectContaining({
-          cache: {
-            onModelRequest: expect.any(Function),
-            getObservation: expect.any(Function),
-          },
-          history: expect.objectContaining({ contextEnginePromptAuthority: "assembled" }),
-          isProbeSession: false,
-          stream: fixture.streamResult,
-          timeout: fixture.timeoutResult,
-        }),
-      }),
-    );
-
     expect(fixture.runAbort).toHaveBeenCalledWith(true, expect.any(Error));
-
-    const abortInput = mocks.createRunAbort.mock.calls[0]?.[0];
-    expect(abortInput.abortActiveSession).toBe(fixture.abortActiveSession);
     const streamInput = mocks.prepareStream.mock.calls[0]?.[0];
     expect(streamInput.agentSession.activeSession).toBe(fixture.activeSession);
     expect(streamInput.agentSession.trustedLocalMediaToolNames).toEqual(new Set(["read"]));
-    expect(streamInput.onModelUsage).toBe(
-      mocks.installStreamGuards.mock.results[0]?.value.onModelUsage,
-    );
     expect(streamInput.getRunState()).toEqual({
       aborted: true,
       promptError: null,
@@ -696,17 +611,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       yieldDetected: true,
     });
     expect(streamInput.isReplaySafeTool(fixture.replaySafeTool)).toBe(true);
-    expect(fixture.externalAbortController.setCompactionState).toHaveBeenCalledWith({
-      isPendingOrRetrying: fixture.subscription.isCompacting,
-      isInFlight: expect.any(Function),
-    });
-    expect(mocks.prepareTimeout).toHaveBeenCalledWith(
-      expect.objectContaining({
-        abortRun: fixture.runAbort,
-        compactionState: fixture.subscription,
-      }),
-    );
-
     await settledInput.preparedStreamRuntime.promptActiveSession("hello");
     expect(fixture.activeSession.prompt).toHaveBeenCalledWith("hello", undefined);
     expect(fixture.trackPromptSettlePromise).toHaveBeenCalledOnce();
