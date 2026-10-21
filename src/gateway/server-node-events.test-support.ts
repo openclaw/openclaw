@@ -1,12 +1,9 @@
 import { vi } from "vitest";
-import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntryAsync as loadSessionEntryTypeAsync } from "./session-entry-load.test-support.js";
 import type { resolveGatewayModelSupportsImages } from "./session-utils.js";
 
@@ -171,25 +168,3 @@ vi.mock("./ws-log.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./ws-log.js")>()),
   formatForLog: runtimeMocks.formatForLog,
 }));
-
-const deviceProof = {
-  publicKey: "public-key",
-  signature: "signature",
-  signedAt: 1,
-  nonce: "nonce",
-};
-
-export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
-  const socket = { readyState: WebSocket.OPEN, send: () => {} };
-  return {
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: { id: "node-host", version: "1.0.0", platform: "linux", mode: "node" },
-      device: { ...deviceProof, id: nodeId },
-    } as GatewayWsClient["connect"],
-  };
-}

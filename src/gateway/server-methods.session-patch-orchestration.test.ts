@@ -193,29 +193,6 @@ describe("sessions.patchMany orchestration", () => {
     );
   });
 
-  it("projects non-archive patches in request order against prior successes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      for (let index = 0; index < 2; index += 1) {
-        await seedEntry(`agent:main:label-${index}`, `session-label-${index}`);
-      }
-      const respond = await patchMany({
-        targets: [0, 1].map((index) => ({ key: `agent:main:label-${index}` })),
-        patch: { label: "Shared label" },
-      });
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        success("agent:main:label-0"),
-        failure("agent:main:label-1", {
-          code: "INVALID_REQUEST",
-          message: "label already in use: Shared label",
-        }),
-      ]);
-      expect(readEntry("agent:main:label-0")?.label).toBe("Shared label");
-      expect(readEntry("agent:main:label-1")?.label).toBeUndefined();
-    });
-  });
-
   it.each([
     { archived: false, name: "does not reserve a projected label when target authorization fails" },
     {

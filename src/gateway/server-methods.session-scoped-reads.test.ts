@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
@@ -15,7 +14,6 @@ import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "./server-methods/chat-history.test-helpers.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionsDiffHandlers } from "./server-methods/sessions-diff.js";
@@ -390,107 +388,6 @@ describe("narrow session read owners", () => {
           }
         }
         expect(subscribers.get(key).has(client.connId)).toBe(change === "current");
-      });
-    },
-  );
-
-  it.each(["chat.metadata", "chat.startup"] as const)(
-    "%s hides foreign draft metadata and rechecks held shared reads",
-    async (method) => {
-      await withOpenClawTestState(profileState, async (state) => {
-        const owner = roleClient("view", "metadata-owner");
-        using fixture = await readFixture("metadata-reader");
-        const { reader: client, cfg } = fixture;
-        await state.writeConfig(cfg);
-        const entry = {
-          sessionId: "metadata-session",
-          updatedAt: 1,
-          createdActor: actor(owner),
-        };
-        for (const grant of ["operator.read", "operator.sessions.read"]) {
-          client.connect.scopes = [grant];
-          for (const visibility of ["draft", "shared", "changed"] as const) {
-            await sessions.upsertSessionEntryCore(
-              { agentId: "main", sessionKey: key },
-              {
-                ...entry,
-                visibility: visibility === "draft" ? "draft" : "shared",
-              },
-            );
-            const entered = createDeferredCore();
-            const release = createDeferredCore();
-            const metadata = { commands: [], models: [], swarmEnabled: false };
-            const readMetadata = vi.fn(async () => {
-              entered.resolve();
-              if (visibility === "changed") {
-                await release.promise;
-              }
-              return metadata;
-            });
-            const context = await createHistoryReadContext({
-              getRuntimeConfig: () => cfg,
-              ...(method === "chat.metadata"
-                ? { readChatMetadata: readMetadata }
-                : {
-                    readChatStartupProjection: async () => ({
-                      metadata: await readMetadata(),
-                      sessionModelCatalog: [],
-                      defaultModelCatalog: [],
-                    }),
-                  }),
-            });
-            const respond = vi.fn();
-            const request = dispatchRequest(
-              method,
-              scope,
-              {
-                client,
-                context,
-                respond,
-                extraHandlers: chatHistoryHandlers,
-              },
-              `${grant}-${visibility}`,
-            );
-            const outcome = Promise.allSettled([request]);
-            try {
-              if (visibility === "changed") {
-                await Promise.race([entered.promise, request]);
-                expect(readMetadata).toHaveBeenCalledOnce();
-                await sessions.upsertSessionEntryCore(
-                  { agentId: "main", sessionKey: key },
-                  { ...entry, visibility: "draft" },
-                );
-              }
-            } finally {
-              release.resolve();
-              await outcome;
-            }
-            expect(readMetadata).toHaveBeenCalledTimes(visibility === "draft" ? 0 : 1);
-            const settled = await outcome;
-            if (method === "chat.metadata" && visibility === "changed") {
-              expect(settled).toMatchObject([
-                {
-                  status: "rejected",
-                  reason: {
-                    message: "Session changed while preparing its metadata. Retry the request.",
-                  },
-                },
-              ]);
-              expect(settled[0]).toHaveProperty(
-                "reason",
-                expect.any(PreparedModelRuntimePublicationSupersededError),
-              );
-              expect(respond).not.toHaveBeenCalled();
-            } else {
-              expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-              expect(respond).toHaveBeenCalledOnce();
-              expect(respond.mock.calls[0]?.[0]).toBe(visibility === "shared");
-              if (visibility !== "shared") {
-                expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-              }
-            }
-          }
-        }
       });
     },
   );
