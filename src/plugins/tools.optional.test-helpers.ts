@@ -19,19 +19,22 @@ export type MockRegistryToolEntry = {
   factory: (ctx: unknown) => unknown;
 };
 
-export function createXaiToolManifest() {
+function toolManifest(id: string, tool: string) {
   return {
-    id: "xai",
+    id,
     origin: "bundled",
     enabledByDefault: true,
     channels: [],
+    providers: [],
+    contracts: { tools: [tool] },
+  };
+}
+
+export function createXaiToolManifest() {
+  return {
+    ...toolManifest("xai", "x_search"),
     providers: ["xai"],
-    setup: {
-      providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }],
-    },
-    contracts: {
-      tools: ["x_search"],
-    },
+    setup: { providers: [{ id: "xai", envVars: ["XAI_API_KEY"] }] },
     toolMetadata: {
       x_search: {
         replaySafe: true,
@@ -49,28 +52,13 @@ export function createXaiToolManifest() {
 }
 
 export function createFeishuToolManifest() {
+  const credentials = { rootPath: "channels.feishu", required: ["appId", "appSecret"] };
   return {
-    id: "feishu",
-    origin: "bundled",
-    enabledByDefault: true,
+    ...toolManifest("feishu", "feishu_doc"),
     channels: ["feishu"],
-    providers: [],
-    contracts: {
-      tools: ["feishu_doc"],
-    },
     toolMetadata: {
       feishu_doc: {
-        configSignals: [
-          {
-            rootPath: "channels.feishu",
-            required: ["appId", "appSecret"],
-          },
-          {
-            rootPath: "channels.feishu",
-            overlayMapPath: "accounts",
-            required: ["appId", "appSecret"],
-          },
-        ],
+        configSignals: [credentials, { ...credentials, overlayMapPath: "accounts" }],
       },
     },
   };
@@ -98,8 +86,7 @@ export function createNamedToolEntry(
     optional: false,
     source: `/tmp/${pluginId}.js`,
     names: toolNames,
-    factory: () =>
-      toolNames.length === 1 ? makeTool(toolNames[0]!) : toolNames.map((name) => makeTool(name)),
+    factory: () => (toolNames.length === 1 ? makeTool(toolNames[0]!) : toolNames.map(makeTool)),
     ...overrides,
   };
 }
@@ -147,7 +134,7 @@ export function createToolRegistry(
   return registry;
 }
 
-function createToolRuntimeRecord(
+export function createToolRuntimeRecord(
   id: string,
   source = `/tmp/${id}.js`,
   origin: MockRegistryToolEntry["origin"] = "bundled",
