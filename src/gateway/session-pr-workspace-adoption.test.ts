@@ -757,6 +757,7 @@ it("refuses another guest and lost access before binding, PR import and earlier 
             definitions: {
               // Team guests can view shared conversations they do not own.
               guest: { sessions: { others: "view" }, agents: ["main"], scopes },
+              admin: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
               revoked: { sessions: { others: "none" }, agents: [], scopes: [] },
             },
           },
@@ -765,13 +766,16 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       setRuntimeConfigSnapshot(cfg);
       const guest = (await ensureCanonicalUserProfileForEmail("adoption-guest@example.test")).id;
       const other = (await ensureCanonicalUserProfileForEmail("adoption-other@example.test")).id;
+      const admin = (await ensureCanonicalUserProfileForEmail("adoption-admin@example.test")).id;
+      await setCanonicalUserProfileRole(admin, "admin");
+      invalidateOperatorRolePolicy(admin);
       const setGuestRole = async (role: "guest" | "revoked") => {
         await setCanonicalUserProfileRole(guest, role);
         invalidateOperatorRolePolicy(guest);
       };
-      // Each caller is an authenticated guest connection; only the creator owns the conversation.
-      const connect = (profileId: string) => {
-        const client = createOperatorWsClient({ connId: profileId, scopes });
+      // Each caller is an authenticated connection; only the creator owns the conversation.
+      const connect = (profileId: string, clientScopes: string[] = scopes) => {
+        const client = createOperatorWsClient({ connId: profileId, scopes: clientScopes });
         client.authenticatedUserProfile = {
           profileId,
           displayName: null,
@@ -784,6 +788,7 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       };
       const guestClient = connect(guest);
       const otherClient = connect(other);
+      const adminClient = connect(admin, ["operator.admin"]);
       const target = {
         agentId: "main",
         sessionKey: "agent:main:adopt-authority",
@@ -866,15 +871,18 @@ it("refuses another guest and lost access before binding, PR import and earlier 
           true,
           { file: { content: "original notes\n" } },
         ]);
-        // The other guest may view the conversation's current files, never its originals.
+        // A viewing guest or an admin sees the current files, never the owner's originals.
         const worktree = await managedWorktrees.findLiveByOwner("session", target.sessionKey);
         assert(worktree, "Preparation must bind the PR workspace");
         await fs.writeFile(path.join(worktree.path, "notes.md"), "PR notes\n");
-        expect(await requestSessionFile(context, target.sessionKey, {}, otherClient)).toMatchObject(
-          [true, { file: { content: "PR notes\n" } }],
-        );
         const refused = [false, undefined];
-        expect((await readEarlier(otherClient)).slice(0, 2)).toEqual(refused);
+        for (const client of [otherClient, adminClient]) {
+          expect(await requestSessionFile(context, target.sessionKey, {}, client)).toMatchObject([
+            true,
+            { file: { content: "PR notes\n" } },
+          ]);
+          expect((await readEarlier(client)).slice(0, 2)).toEqual(refused);
+        }
         await setGuestRole("revoked");
         expect((await readEarlier(guestClient)).slice(0, 2)).toEqual(refused);
       } finally {

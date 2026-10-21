@@ -4,11 +4,7 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import {
-  authorizeSessionAgentRun,
-  canManageSessionSharing,
-  prepareSessionSharingRole,
-} from "../session-sharing-policy.js";
+import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -30,22 +26,23 @@ export function assertSessionFileReadPolicy(
   options: GatewayRequestHandlerOptions,
   target: SessionFileReadPolicyTarget,
 ) {
-  if (target.historical) {
-    // Shared viewing and membership never extend to the original files; owners and admins do.
-    const role =
+  // Shared viewing, membership and admin scope never extend to the original files.
+  if (
+    target.historical &&
+    !(
       target.entry &&
-      prepareSessionSharingRole(
+      isSessionOwnRequester(
         { cfg: options.context.getRuntimeConfig(), client: options.client },
-        { value: "none" },
-      )({ canonicalKey: target.canonicalKey, entry: target.entry });
-    if (!role || !canManageSessionSharing(role)) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Only this conversation's owner can open its files from before the PR workspace.",
-        ),
-      );
-    }
+        { canonicalKey: target.canonicalKey, entry: target.entry },
+      )
+    )
+  ) {
+    throw new SessionMutationAuthorizationChangedError(
+      errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Only this conversation's owner can open its files from before the PR workspace.",
+      ),
+    );
   }
   if (!target.unscopedHostRoot) {
     return;

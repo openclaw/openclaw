@@ -342,6 +342,18 @@ export function canManageSessionSharing(role: SessionSharingRole): boolean {
   return role === "admin" || role === "owner";
 }
 
+/** Owner-only conversation data: an attributed person must be the creator, even with admin scope. */
+export function isSessionOwnRequester(
+  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry">,
+): boolean {
+  const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
+  return identity
+    ? isSessionCreatorProfile(target.entry.createdActor, identity.id)
+    : // Unattributed gateway-owner and solo callers keep their owner-equivalent role.
+      canManageSessionSharing(prepareSessionSharingRole(params, { value: "none" })(target));
+}
+
 export function hiddenSessionNotFound(sessionKey: string, incognito = false): ErrorShape {
   const label = incognito ? "Incognito session" : "Session";
   return errorShape(ErrorCodes.INVALID_REQUEST, `${label} "${sessionKey}" was not found.`);
