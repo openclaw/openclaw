@@ -19,6 +19,8 @@ export type CompactionRequestBudget = Readonly<{
 /** Input preservation exists before the foreground prompt can supply a token budget. */
 export type CompactionRequestConstraints = Readonly<{
   requestBudget?: CompactionRequestBudget;
+  /** Source of the active run, including after its input has been processed. */
+  requestFromEntryId?: string;
   pendingUserEntryId?: string;
 }>;
 

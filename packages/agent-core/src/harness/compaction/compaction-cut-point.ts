@@ -11,7 +11,7 @@ import {
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
-  formatPersistedSenderSuffix,
+  formatCompactionUserLabel,
   getCompactionContent,
   stringifyCompactionValue,
 } from "./utils.js";
@@ -64,8 +64,8 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "user": {
       chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      // User text is the baseline; charge the exact added source and sender label.
+      chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
@@ -138,6 +138,8 @@ interface CompactionRetentionBudget {
 }
 
 export interface CompactionRetentionConstraints {
+  /** The run's source input; later internal updates do not replace its human ask. */
+  requestFromEntryId?: string;
   /** An admitted, unprocessed user remains intact even before its budget is prepared. */
   preserveFromEntryId?: string;
   budget?: CompactionRetentionBudget;

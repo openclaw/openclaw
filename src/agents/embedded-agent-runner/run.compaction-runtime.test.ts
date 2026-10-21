@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,
@@ -14,6 +17,7 @@ import {
   waitForCompactionAbort,
   withRecoveryFixture,
 } from "./run.compaction-runtime.test-support.js";
+import { readCompactionAccountingRecorder as readRecoveryAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 type Snapshot = Awaited<ReturnType<RecoveryFixture["snapshot"]>>;
 
@@ -78,6 +82,73 @@ describe("embedded compaction recovery authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it.each(["human", "internal"] as const)(
+    "keeps the admitted %s source after a later internal observation",
+    async (source) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+        const writer = await fixture.openWriter();
+        const request = {
+          role: "user" as const,
+          content: "Review this patch; do not publish it.",
+          timestamp: 10,
+          idempotencyKey: `${fixture.runId}:user`,
+          ...(source === "internal" ? { provenance: { kind: "internal_system" as const } } : {}),
+        };
+        const appended = await writer.appendMessageWithTranscriptAnchorAsync(request);
+        const recorder = createUserTurnTranscriptRecorder({
+          target: { ...fixture.target, sessionEntry: fixture.loadEntry() },
+          message: request,
+        });
+        recorder.markRuntimePersisted(
+          request,
+          expectDefined(appended.anchor, "Fixture requires a durable input admission"),
+          { appended: false },
+        );
+        await recorder.waitForRuntimePersistence();
+        fixture.runParams.userTurnTranscriptRecorder = recorder;
+        const observation: PersistedUserTurnMessage = {
+          role: "user",
+          content: "A child reports progress on the same active run.",
+          timestamp: 11,
+          provenance: { kind: "inter_session" },
+        };
+        await writer.appendMessageAsync(observation);
+        let selectedRequest: string | undefined;
+        fixture.compact.mockImplementation(async (params) => {
+          const owned = await fixture.openWriter();
+          const preparation = prepareCompaction(
+            owned.getBranch(),
+            { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 },
+            "unresolved",
+            readRecoveryAccountingRecorder(params.runtimeContext),
+          );
+          if (!preparation.ok || !preparation.value) {
+            throw new Error("Expected compactable admitted fixture history");
+          }
+          selectedRequest = preparation.value.latestUnresolvedUserRequest;
+          await owned.appendCompactionAsync(
+            "Previous work completed; continue the admitted source run.",
+            preparation.value.firstKeptEntryId,
+            preparation.value.tokensBefore,
+            selectedRequest ? { latestUnresolvedUserRequest: selectedRequest } : {},
+          );
+          return {
+            ok: true,
+            compacted: true,
+            result: { tokensBefore: preparation.value.tokensBefore, tokensAfter: 3_000 },
+          };
+        });
+        await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+        expect(selectedRequest).toBe(source === "human" ? request.content : undefined);
+        const reopened = await fixture.openWriter();
+        expect(reopened.getBranch().at(-1)).toMatchObject({
+          type: "compaction",
+          details: source === "human" ? { latestUnresolvedUserRequest: request.content } : {},
+        });
+      });
+    },
+  );
 
   it.each(["truncate", "small", "beyond-reader-window"] as const)(
     "preserves archived resets while recovering %s output",

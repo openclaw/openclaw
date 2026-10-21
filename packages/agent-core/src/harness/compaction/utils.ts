@@ -285,6 +285,90 @@ export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): st
   return sender ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
+function compactionUserRole(message: PersistedSenderCarrier): string {
+  if (hasRuntimeContextMarker(message)) {
+    return "Runtime context";
+  }
+  if (Reflect.get(message, "synthetic") === true) {
+    return "Synthetic input";
+  }
+  if (Reflect.get(message, "operatorMessage") !== undefined) {
+    return "Operator input";
+  }
+  const metadata = asRecord(Reflect.get(message, "__openclaw"));
+  if (metadata?.beforeAgentRunBlocked !== undefined) {
+    return "Internal system input";
+  }
+  const rawProvenance = Reflect.get(message, "provenance");
+  // Unmarked external turns are a shipped transcript contract. An explicit
+  // unrecognized record must not acquire that legacy meaning by normalization.
+  if (rawProvenance === undefined) {
+    return "User";
+  }
+  const provenance = asRecord(rawProvenance);
+  switch (provenance?.kind) {
+    case "external_user":
+      return "User";
+    case "realtime_voice":
+      // Talk persists actual spoken user text outside the foreground turn.
+      return provenance.sourceChannel === "talk" ? "User" : "Unknown-origin input";
+    case "inter_session":
+      return "Inter-session input";
+    case "internal_system":
+      return "Internal system input";
+    default:
+      return "Unknown-origin input";
+  }
+}
+
+/** Compaction request attribution only; admitted internal inputs still start runtime turns. */
+export function isCompactionUserRequest(message: PersistedSenderCarrier): boolean {
+  return message.role === "user" && compactionUserRole(message) === "User";
+}
+
+/** Callers retain their text projection; request attribution has one owner. */
+export function findLatestCompactionUserMessage(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): Extract<AgentMessage, { role: "user" }> | undefined {
+  return messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "user" }> =>
+      message.role === "user" &&
+      isCompactionUserRequest(message) &&
+      Boolean(getText(message).trim()),
+  );
+}
+
+export function extractCompactionMessageText(message: AgentMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  return Array.isArray(content)
+    ? content
+        .flatMap((block) => {
+          const text =
+            block && typeof block === "object" ? (block as { text?: unknown }).text : undefined;
+          return typeof text === "string" && text.trim() ? [text.trim()] : [];
+        })
+        .join("\n")
+    : "";
+}
+
+/** Legacy producers cannot search past an independent input for a pending ask. */
+export function extractCurrentCompactionUserRequest(
+  messages: readonly AgentMessage[],
+  getText: (message: Extract<AgentMessage, { role: "user" }>) => string,
+): string | null {
+  const message = messages.findLast((item) => item.role === "user");
+  return message && isCompactionUserRequest(message) ? getText(message) : null;
+}
+
+/** Shared by summary input, preserved excerpts, and their token accounting. */
+export function formatCompactionUserLabel(message: PersistedSenderCarrier): string {
+  return `${compactionUserRole(message)}${formatPersistedSenderSuffix(message)}`;
+}
+
 /** Serialize LLM messages to plain text for summarization prompts. */
 export function serializeConversation(messages: Message[]): string {
   return serializeConversationEntries(messages).entries.join(ENTRY_SEPARATOR);
@@ -311,7 +395,7 @@ function serializeConversationEntries(messages: Message[]): {
   entries: string[];
   /** Tool-result entries rendered with the call that produced them, for sampled input. */
   labeledResults: Map<number, string>;
-  /** User-message entries, which carry the asks, decisions and corrections. */
+  /** External-user entries, which carry the asks, decisions and corrections. */
   userEntries: number[];
 } {
   const parts: string[] = [];
@@ -350,8 +434,10 @@ function serializeConversationEntries(messages: Message[]): {
         labeledResults.set(parts.length, `[Tool result of ${label}]: ${content}`);
         parts.push(`[Tool result]: ${content}`);
       } else {
-        userEntries.push(parts.length);
-        parts.push(`[User${formatPersistedSenderSuffix(msg)}]: ${content}`);
+        if (isCompactionUserRequest(msg)) {
+          userEntries.push(parts.length);
+        }
+        parts.push(`[${formatCompactionUserLabel(msg)}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];

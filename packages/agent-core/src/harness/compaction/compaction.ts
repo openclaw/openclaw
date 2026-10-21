@@ -26,7 +26,9 @@ import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  findLatestCompactionUserMessage,
   type FileOperations,
+  formatCompactionUserLabel,
   formatFileOperations,
   getCompactionContent,
   mergeSummaryFileOperations,
@@ -62,16 +64,11 @@ const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
 function latestUserText(messages: AgentMessage[]): string {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const source = getCompactionContent(message.content).text.trim();
-      if (source) {
-        return source;
-      }
-    }
-  }
-  return "";
+  const message = findLatestCompactionUserMessage(
+    messages,
+    (m) => getCompactionContent(m.content).text,
+  );
+  return message ? getCompactionContent(message.content).text.trim() : "";
 }
 
 function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
@@ -368,6 +365,8 @@ export interface CompactionPreparation {
   /** Prefix messages summarized separately when compaction splits a turn. */
   turnPrefixMessages: AgentMessage[];
   isSplitTurn: boolean;
+  /** Run-owner selection is authoritative, including an empty pending request. */
+  requestState?: "unresolved" | "none";
   /** Bounded request that the run owner will resume after compaction. */
   latestUnresolvedUserRequest?: string;
   tokensBefore: number;
@@ -439,8 +438,36 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
+  // An admitted request can have later internal updates. Without that identity,
+  // only the latest input is known to belong to this run; do not scan past an
+  // independent internal input and revive an older human task.
+  const requestEntryId = constraints?.requestFromEntryId ?? constraints?.preserveFromEntryId;
+  const admittedIndex = requestEntryId
+    ? pathEntries.findIndex((entry) => entry.id === requestEntryId)
+    : -1;
+  const admittedEntry = pathEntries[admittedIndex];
+  if (
+    requestEntryId &&
+    (!admittedEntry || getMessageFromEntryForCompaction(admittedEntry)?.role !== "user")
+  ) {
+    return err(
+      new CompactionError("invalid_session", "Compaction cannot find the admitted request."),
+    );
+  }
+  const latestInput = contextMessages.findLast((message) => message.role === "user");
+  const requestMessages =
+    admittedIndex >= 0
+      ? pathEntries.slice(admittedIndex).flatMap((entry) => {
+          const message = getMessageFromEntryForCompaction(entry);
+          return message ? [message] : [];
+        })
+      : latestInput
+        ? [latestInput]
+        : [];
+  const hasRequestInput = requestMessages.some((message) => message.role === "user");
   const latestUnresolvedUserRequest = requestState
-    ? (extractLatestUserRequest(contextMessages) ?? previousLatestUnresolvedUserRequest)
+    ? (extractLatestUserRequest(requestMessages) ??
+      (hasRequestInput ? undefined : previousLatestUnresolvedUserRequest))
     : undefined;
   const contextUsage = estimateContextTokens(contextMessages);
   const tokensBefore = contextUsage.tokens;
@@ -529,6 +556,7 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    requestState: requestState ?? "none",
     ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
     tokensBefore,
     previousSummary,
@@ -637,8 +665,18 @@ export function compactWithoutSummary(
 ): Result<CompactionResult, CompactionError> {
   const droppedCount =
     preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
-  const sourceAsk = preparation.isSplitTurn
-    ? formatRequiredAskContext(latestUserText(preparation.turnPrefixMessages))
+  const sourceMessage = preparation.isSplitTurn
+    ? preparation.turnPrefixMessages.findLast(
+        (message): message is Extract<AgentMessage, { role: "user" }> =>
+          message.role === "user" && Boolean(getCompactionContent(message.content).text.trim()),
+      )
+    : undefined;
+  const sourceText = sourceMessage ? getCompactionContent(sourceMessage.content).text : "";
+  const sourceLabel = sourceMessage ? formatCompactionUserLabel(sourceMessage) : "User";
+  const sourceAsk = sourceMessage
+    ? formatRequiredAskContext(
+        sourceLabel === "User" ? sourceText : `[${sourceLabel}]: ${sourceText}`,
+      )
     : "";
   // The notice and the already-bounded split-turn source ask are required; only the
   // carried summary shrinks to fit.
