@@ -57,7 +57,8 @@ vi.mock("../../../plugins/manifest-registry.js", () => {
   };
 });
 
-vi.mock("./channel-legacy-config-migrate.js", () => ({
+vi.mock("./channel-legacy-config-migrate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-legacy-config-migrate.js")>()),
   applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
     next: cfg,
     changes: [],

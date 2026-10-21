@@ -1,52 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { createXApiClient, type XPost } from "./api.js";
+import type { XPost } from "./api.js";
 import { resolveXRecipient } from "./recipient.js";
-import { createXTestSpend } from "./test-support/spend.js";
+import { createContextApi } from "./test-support/context-api.js";
 
 describe("X reply recipients", () => {
   it.each([
-    {
-      label: "reassigned configured handle",
-      mention: { username: "oldbot" },
-      resolvedId: "99",
-      expected: undefined,
-      lookups: 1,
-    },
-    {
-      label: "current bot handle",
-      mention: { username: "currentbot" },
-      resolvedId: "9",
-      expected: "20",
-      lookups: 1,
-    },
-    {
-      label: "stable bot id",
-      mention: { id: "9", username: "oldbot" },
-      resolvedId: "99",
-      expected: "20",
-      lookups: 0,
-    },
-  ])(
-    "verifies the numeric recipient for $label",
-    async ({ mention, resolvedId, expected, lookups }) => {
+    ["reassigned configured handle", { username: "oldbot" }, "99", undefined, 1],
+    ["current bot handle", { username: "currentbot" }, "9", "20", 1],
+    ["stable bot id", { id: "9", username: "oldbot" }, "99", "20", 0],
+  ] as const)(
+    "verifies the numeric recipient for %s",
+    async (_label, mention, resolvedId, expected, lookups) => {
       let userLookups = 0;
-      const api = createXApiClient({
-        spend: createXTestSpend(),
-        clientId: "client",
-        clientSecret: "secret",
-        refreshToken: "seed",
-        saveRefreshToken: async () => {},
-        fetch: async (input) => {
-          const url = new URL(input);
-          if (url.pathname.endsWith("/oauth2/token")) {
-            return Response.json({ access_token: "access" });
-          }
-          if (url.pathname.startsWith("/2/users/by/username/")) {
-            userLookups++;
-            return Response.json({ data: { id: resolvedId, username: mention.username } });
-          }
-          throw new Error("Unexpected X lookup");
-        },
+      const api = createContextApi(async (input) => {
+        const url = new URL(input);
+        if (url.pathname.startsWith("/2/users/by/username/")) {
+          userLookups++;
+          return Response.json({ data: { id: resolvedId, username: mention.username } });
+        }
+        throw new Error("Unexpected X lookup");
       });
       const result = await resolveXRecipient({
         api,
@@ -59,8 +31,7 @@ describe("X reply recipients", () => {
         },
         userId: "9",
       });
-      expect(result?.post.id).toBe(expected);
-      expect(userLookups).toBe(lookups);
+      expect([result?.post.id, userLookups]).toEqual([expected, lookups]);
     },
   );
 
@@ -79,30 +50,19 @@ describe("X reply recipients", () => {
         entities: {},
       };
       const requested: string[] = [];
-      const api = createXApiClient({
-        spend: createXTestSpend(),
-        clientId: "client",
-        clientSecret: "secret",
-        refreshToken: "seed",
-        saveRefreshToken: async () => {},
-        fetch: async (input) => {
-          const url = new URL(input);
-          if (url.pathname.endsWith("/oauth2/token")) {
-            return Response.json({ access_token: "access" });
-          }
-          const id = url.searchParams.get("ids")!;
-          requested.push(id);
-          return Response.json({
-            data:
-              id === "20"
-                ? [target]
-                : [{ id: "10", author_id: quotedAuthor, conversation_id: "10", text: "Original" }],
-          });
-        },
+      const api = createContextApi(async (input) => {
+        const url = new URL(input);
+        const id = url.searchParams.get("ids")!;
+        requested.push(id);
+        return Response.json({
+          data:
+            id === "20"
+              ? [target]
+              : [{ id: "10", author_id: quotedAuthor, conversation_id: "10", text: "Original" }],
+        });
       });
       const result = await resolveXRecipient({ api, post: "20", userId: "9" });
-      expect(result?.post.id).toBe(eligible ? "20" : undefined);
-      expect(requested).toEqual(["20", "10"]);
+      expect([result?.post.id, requested]).toEqual([eligible ? "20" : undefined, ["20", "10"]]);
     },
   );
 });

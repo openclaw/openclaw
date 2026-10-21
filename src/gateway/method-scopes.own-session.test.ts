@@ -71,7 +71,15 @@ afterEach(() => {
 
 describe("method scope resolution and authorization", () => {
   it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
-    for (const action of ["refresh_base", "edit", "request_review", "ready", "upload_evidence"]) {
+    for (const action of [
+      "inspect_pr",
+      "prepare_pr",
+      "refresh_base",
+      "edit",
+      "request_review",
+      "ready",
+      "upload_evidence",
+    ]) {
       allow("sessions.github.action", ["operator.sessions.write"], { action });
     }
     deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
@@ -394,12 +402,16 @@ describe("session-scoped method admission", () => {
 
   it.each([
     ["sessions.diff", { sessionKey: "agent:main:own" }, true],
+    ["controlUi.sessionPullRequests.subscribe", { sessionKeys: ["agent:main:own"] }, true],
+    ["controlUi.sessionPullRequests.checks", { sessionKey: "agent:main:own" }, true],
     [
       "sessions.files.assets",
       { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },
       true,
     ],
     ["config.get", undefined, false],
+    ["controlUi.githubDetail", { sessionKey: "agent:main:own" }, false],
+    ["controlUi.githubPreview", { sessionKey: "agent:main:own" }, false],
   ] as const)(
     "restricts the narrow read alternative to session and bootstrap methods: %s",
     (method, params, narrow) => {

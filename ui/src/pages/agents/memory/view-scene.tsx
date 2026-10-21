@@ -1,8 +1,9 @@
 import { createMemo, For } from "solid-js";
 import { LobsterSvg } from "../../../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
-import { createLobsterPetLook } from "../../../components/lobster-pet-look.ts";
+import { createLobsterPetLook } from "../../../components/lobster-pet-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { DREAM_PHRASE_KEYS } from "./dreaming.ts";
 import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
@@ -28,7 +29,8 @@ const STARS: {
   { top: 88, left: 18, size: 2, delay: 2.3, hue: "neutral" },
 ];
 
-export function renderScene(props: DreamingProps, dreamText: () => string) {
+export function DreamingScene(props: DreamingProps) {
+  const dreamText = () => t(DREAM_PHRASE_KEYS[props.viewState.dreamIndex] ?? DREAM_PHRASE_KEYS[0]);
   // Keep the sleeper's seeded identity consistent with this agent's sidebar pet.
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;

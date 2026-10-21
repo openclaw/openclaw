@@ -40,7 +40,7 @@ async function publicationFixture(controlState = false) {
   });
   return {
     projection,
-    present: () => prepareSessionRowPublication(projection, 1)(),
+    present: () => prepareSessionRowPublication(projection, 1)().presentation,
     invalidate: (cause: "projection-revision" | "config" | "identity") => {
       if (cause === "identity") {
         state.rowContext.identityProjection?.invalidate();

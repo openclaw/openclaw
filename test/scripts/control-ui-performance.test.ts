@@ -326,9 +326,11 @@ describe("Control UI performance budgets", () => {
     ["deferred growth below 1.5 KiB", 46_080, 46_080, 52_000, 50_465, null],
     ["deferred growth at 1.5 KiB", 46_080, 46_080, 52_000, 50_464, "largest CSS"],
     ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
-    ["startup above the hard cap", 51_201, 51_201, 50_000, 50_000, "startup CSS"],
+    ["startup newly above the hard cap", 51_201, 51_200, 50_000, 50_000, "startup CSS"],
+    ["startup unchanged above the hard cap", 51_201, 51_201, 50_000, 50_000, null],
     ["deferred at the hard cap", 46_080, 46_080, 53_400, 53_400, null],
-    ["deferred above the hard cap", 46_080, 46_080, 53_401, 53_401, "largest CSS"],
+    ["deferred newly above the hard cap", 46_080, 46_080, 53_401, 53_400, "largest CSS"],
+    ["deferred unchanged above the hard cap", 46_080, 46_080, 53_401, 53_401, null],
   ])("checks %s against built base assets", (_name, css, baseCss, lazy, baseLazy, metric) => {
     const current = createCliFixture(css, lazy);
     const base = createCliFixture(baseCss, baseLazy);
@@ -341,30 +343,123 @@ describe("Control UI performance budgets", () => {
     expect(report.report).toContain(`${css} B`);
   });
 
-  it.each(["size", "baseline"])(
-    "warns about %s growth in Actions while local CI stays strict",
-    (kind) => {
-      const { rootDir, run, baselinePath } = createCliFixture(kind === "size" ? 51_201 : 15);
-      if (kind === "baseline") {
-        fs.writeFileSync(
-          baselinePath,
-          JSON.stringify(startupBaseline(CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1)),
-        );
-      }
-      const local = run(["--json"], { CI: "1" });
-      const summaryPath = path.join(rootDir, "summary.md");
-      const actions = run(["--json"], {
-        GITHUB_ACTIONS: "true",
-        GITHUB_STEP_SUMMARY: summaryPath,
-      });
+  it.each(["size", "baseline"])("rejects %s violations in Actions and local CI", (kind) => {
+    const { rootDir, run, baselinePath } = createCliFixture(kind === "size" ? 51_201 : 15);
+    if (kind === "baseline") {
+      fs.writeFileSync(
+        baselinePath,
+        JSON.stringify(startupBaseline(CONTROL_UI_PERFORMANCE_BUDGETS.startupJsGzipBytes + 1)),
+      );
+    }
+    const local = run(["--json"], { CI: "1" });
+    const summaryPath = path.join(rootDir, "summary.md");
+    const actions = run(["--json"], {
+      GITHUB_ACTIONS: "true",
+      GITHUB_STEP_SUMMARY: summaryPath,
+    });
 
-      expect(local.status, local.stderr).toBe(1);
-      expect(actions.status, actions.stderr).toBe(0);
-      expect(JSON.parse(actions.stdout).violations).toEqual(JSON.parse(local.stdout).violations);
-      expect(actions.stderr).toContain("::warning file=");
-      expect(fs.readFileSync(summaryPath, "utf8")).toContain("Control UI asset budget");
+    expect(local.status, local.stderr).toBe(1);
+    expect(actions.status, actions.stderr).toBe(1);
+    expect(JSON.parse(actions.stdout).violations).toEqual(JSON.parse(local.stdout).violations);
+    expect(actions.stderr).toContain("::warning file=");
+    expect(fs.readFileSync(summaryPath, "utf8")).toContain("Control UI asset budget");
+  });
+
+  it.each(["startup", "chat", "new", "locale"] as const)(
+    "allows only build variance while the base %s bytes exceed the cap",
+    (area) => {
+      const base = createCliFixture();
+      const head = createCliFixture();
+      const cap =
+        area === "locale"
+          ? 307_200
+          : area === "startup"
+            ? 641
+            : CONTROL_UI_PERFORMANCE_BUDGETS[`${area}BootJsGzipBytes`];
+      const writeBytes = (fixture: ReturnType<typeof createCliFixture>, bytes: number) => {
+        const assetsDir = path.join(fixture.distDir, "assets");
+        if (area === "startup") {
+          writeAssetAt(assetsDir, "index-a.js", bytes, bytes, bytes);
+        } else if (area === "locale") {
+          writeAssetAt(assetsDir, "ru-a.js", bytes, bytes, bytes);
+        } else {
+          const links: string[] = [];
+          for (let remaining = bytes - 65, index = 0; remaining > 0; index++) {
+            const file = `route-${index}.js`;
+            const size = Math.min(200_000, remaining);
+            writeAssetAt(assetsDir, file, size, size, size);
+            links.push(preload(file));
+            remaining -= size;
+          }
+          fs.writeFileSync(
+            path.join(fixture.distDir, "index.html"),
+            startupHtml + routeTemplate(area, links),
+          );
+        }
+      };
+      writeBytes(base, cap + 100);
+      for (const growth of [-1, 0, 64, 65]) {
+        writeBytes(head, cap + 100 + growth);
+        const result = jsonCli(head, ["--base-dist", base.distDir], growth > 64 ? 1 : 0);
+        if (growth > 64) {
+          expect(result.report).toContain("base already exceeds the cap");
+          expect(result.report).toContain("no growth beyond 64 B build variance");
+        } else {
+          expect(result.violations).toEqual([]);
+        }
+      }
     },
   );
+
+  it("checks an over-budget locale independently when the largest locale shrinks", () => {
+    const base = createCliFixture();
+    const head = createCliFixture();
+    for (const [fixture, ru, de] of [
+      [base, 310_000, 320_000],
+      [head, 310_065, 315_000],
+    ] as const) {
+      writeAssetAt(path.join(fixture.distDir, "assets"), "ru-a.js", ru, ru, ru);
+      writeAssetAt(path.join(fixture.distDir, "assets"), "de-a.js", de, de, de);
+    }
+    const result = jsonCli(head, ["--base-dist", base.distDir], 1);
+    expect(result.violations).toEqual([
+      expect.objectContaining({
+        metric: "ru locale catalog pair JS gzip",
+        actual: 310_065,
+        limit: 310_064,
+      }),
+    ]);
+  });
+
+  it("allows no request-count growth when the base is already over budget", () => {
+    const base = createCliFixture();
+    const head = createCliFixture();
+    const writeRequests = (fixture: ReturnType<typeof createCliFixture>, count: number) => {
+      const links: string[] = [];
+      for (let index = 1; index < count; index++) {
+        const file = `preload-${index}.js`;
+        writeAssetAt(path.join(fixture.distDir, "assets"), file, 1, 1, 1);
+        links.push(preload(file));
+      }
+      fs.writeFileSync(path.join(fixture.distDir, "index.html"), startupHtml + links.join(""));
+    };
+    writeRequests(base, 10);
+    for (const count of [9, 10, 11]) {
+      writeRequests(head, count);
+      const result = jsonCli(head, ["--base-dist", base.distDir], count > 10 ? 1 : 0);
+      expect(result.violations).toEqual(
+        count > 10
+          ? [
+              expect.objectContaining({
+                metric: "startup JS requests",
+                actual: 11,
+                limit: 10,
+              }),
+            ]
+          : [],
+      );
+    }
+  });
 
   it.each([
     ["chat", "requests"],
@@ -427,7 +522,7 @@ describe("Control UI performance budgets", () => {
       const failing = jsonCli(fixture, [], 1, actions);
       expect(failing.violations).toEqual([
         {
-          metric: "largest locale catalog pair JS gzip",
+          metric: `${locale} locale catalog pair JS gzip`,
           actual: 307_201,
           limit: 307_200,
           unit: "bytes",

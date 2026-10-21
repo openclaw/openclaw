@@ -62,7 +62,8 @@ describe("serialized cold-load probes", () => {
           hostElement: sidebar, isConnected: true,
           sessionData: { requestSessionDataUpdate() { return this; } },
           shouldPublishSessionData() { return true; },
-          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; }
+          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; },
+          releaseSidebarSnapshot() {}
         };
         const originalPublicationGate = owner.shouldPublishSessionData;
         if (${ownerProbes}) map.set(sidebar, owner);

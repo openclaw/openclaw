@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  agentChip: TranslationMap;
   logbook: TranslationMap;
   gatewayLogs: TranslationMap;
   standingGrants: TranslationMap;
@@ -24,35 +25,74 @@ export const en: TranslationMap & {
   board: TranslationMap & { widget: TranslationMap };
   browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   shortcutsOverlay: TranslationMap & { title: string };
-  chat: TranslationMap & {
-    composer: TranslationMap;
-    queue: TranslationMap;
-    mentions: TranslationMap;
-    permissions: TranslationMap;
-    voice: TranslationMap;
-    sendErrors: TranslationMap;
-    codeBlock: TranslationMap;
-    commandResults: TranslationMap & { fast: TranslationMap };
-    commands: TranslationMap;
-    detailPanel: TranslationMap;
-    welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
-    goals: TranslationMap;
-    messages: TranslationMap &
-      Record<
-        | "copySelection"
-        | "replyingTo"
-        | "message"
-        | "showLess"
-        | "showMore"
-        | "tooLargeToDisplay"
-        | "unattributedSender"
-        | "toolSender"
-        | "errorSender",
-        string
-      >;
-    pullRequests: TranslationMap & Record<"open" | "draft" | "merged" | "closed", string>;
-    processesPanel: TranslationMap;
-  };
+  chat: TranslationMap &
+    Record<
+      | "sessionAutomation"
+      | "activityPills"
+      | "usageLimit"
+      | "providerPolicy"
+      | "diskSpace"
+      | "workerRuntimeInstall"
+      | "subagentsPanel"
+      | "reactions"
+      | "sessionHeader"
+      | "board"
+      | "taskSuggestions"
+      | "view"
+      | "workspaceConflict"
+      | "skillLearned"
+      | "asyncQuestions"
+      | "youtube"
+      | "rail"
+      | "thread"
+      | "sessionDiscussion",
+      TranslationMap
+    > & {
+      composer: TranslationMap;
+      queue: TranslationMap;
+      mentions: TranslationMap;
+      permissions: TranslationMap;
+      voice: TranslationMap;
+      sendErrors: TranslationMap;
+      sessionDetails: TranslationMap &
+        Record<
+          | "automationAttention"
+          | "automationEmpty"
+          | "automationEnabled"
+          | "automationError"
+          | "automationLoading"
+          | "automationMore"
+          | "automationPaused"
+          | "automationUnavailable"
+          | "automations"
+          | "progressOptions",
+          string
+        >;
+      sessionDiff: TranslationMap & Record<"title" | "show", string>;
+      sessionSharing: TranslationMap & Record<"draft", string>;
+      workspaceFiles: TranslationMap & Record<"copyPath", string>;
+      codeBlock: TranslationMap;
+      commandResults: TranslationMap & { fast: TranslationMap };
+      commands: TranslationMap;
+      detailPanel: TranslationMap;
+      welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
+      goals: TranslationMap;
+      messages: TranslationMap &
+        Record<
+          | "copySelection"
+          | "replyingTo"
+          | "message"
+          | "showLess"
+          | "showMore"
+          | "tooLargeToDisplay"
+          | "unattributedSender"
+          | "toolSender"
+          | "errorSender",
+          string
+        >;
+      pullRequests: TranslationMap & Record<"open" | "draft" | "merged" | "closed", string>;
+      processesPanel: TranslationMap;
+    };
   configForm: TranslationMap & { sections: TranslationMap };
   configPage: TranslationMap;
   profilePage: TranslationMap & {
@@ -1995,181 +2035,18 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
-    sessionAutomation: {
-      emptyHint: "Automations attached to this session will appear here.",
-      scheduleUnavailable: "Schedule unavailable",
-      atTime: "at {time}",
-      daily: "Daily",
-      weekdays: "Weekdays",
-      everySecond: "Every second",
-      everyMinute: "Every minute",
-      everyHour: "Every hour",
-      everyMinutes: "Every {count} minutes",
-      everyHours: "Every {count} hours",
-      everyDuration: "Every {duration}",
-      hourMinutes: "At minutes {minutes} of every hour",
-      clockFields: "Hours: {hours}; minutes: {minutes}; seconds: {seconds}",
-      monthDays: "Days {days} of the month",
-      lastDay: "Last day of the month",
-      lastWeekday: "Last weekday of the month",
-      nearestWeekday: "Weekday nearest day {day}",
-      monthWeekday: "{occurrence} {day} of the month",
-      occurrence1: "First",
-      occurrence2: "Second",
-      occurrence3: "Third",
-      occurrence4: "Fourth",
-      occurrence5: "Fifth",
-      occurrence6: "Last",
-      bothDays: "{monthDays} and {weekDays}",
-      eitherDays: "{monthDays} or {weekDays}",
-      inMonths: "In {months}",
-      inYears: "In {years}",
-    },
-    activityPills: {
-      label: "Session activity",
-      working: "{count} working",
-      withBadge: "{label}, {badge}",
-      paused: "Paused",
-      pending: "Pending",
-      goal: {
-        resumeUnconfirmed: "Goal resume unconfirmed",
-        pursuing: "Pursuing goal",
-        active: "Goal active",
-        paused: "Goal paused",
-        achieved: "Goal achieved",
-        blocked: "Goal blocked",
-        usageLimit: "Goal usage limit",
-        budgetReached: "Goal budget reached",
-        description: "{status}: {objective}",
-      },
-      progress: {
-        updating: "Updating saved progress",
-        updateUnavailable: "Progress update unavailable; last plan preserved",
-        timedOut: "Execution timed out; plan preserved",
-        failed: "Execution failed; plan preserved",
-        stopped: "Execution stopped; plan preserved",
-        count: "{completed}/{total}",
-        description: "Task progress, {step}, {completed} of {total} completed, {status}",
-      },
-      pullRequest: {
-        number: "#{number}",
-        checksPassed: "Checks passed",
-        checksFailed: "Checks failed",
-        checksRunning: "Checks running",
-        rateLimitedSuffix: ", update rate-limited; last received data preserved",
-        unavailableSuffix: ", update unavailable; last received data preserved",
-        description: "{owner}/{repo} #{number}, {title}, {state}{checks}{query}",
-        checksSuffix: ", {checks}",
-        states: {
-          open: "open",
-          draft: "draft",
-          merged: "merged",
-          closed: "closed",
-        },
-      },
-      publication: {
-        verifying: "Verifying publication…",
-        checkingOptions: "Checking publication options…",
-        publishing: "Publishing PR…",
-        published: "PR published",
-        publishedBadge: "Published",
-        failed: "Publish failed",
-        unavailable: "Publication unavailable",
-        discoveryUnavailable: "Account discovery unavailable",
-        confirm: "Confirm publication",
-        unconfirmed: "Publication not confirmed",
-        verifyBeforeRetry: "Verify the result before publishing again",
-        review: "Review pull request publication on GitHub",
-        requestedBadge: "requested",
-        publishingBadge: "publishing",
-      },
-    },
+    sessionAutomation: {},
+    activityPills: {},
     mobileDetails: {
       people: "People",
       outputs: "Outputs",
       generatedFiles: "Generated files",
     },
     sessionDetails: {
-      menu: "Session details",
-      title: "Details",
-      close: "Close details",
-      session: "Session details",
-      environment: "Environment",
-      context: "Context",
-      contextMessages: "Messages & other",
-      contextFiles: "Workspace files",
-      contextTools: "Tool schemas",
-      contextAgentWorkspace: "Agent workspace",
-      contextProject: "Project",
-      contextPersonal: "Personal instructions",
-      contextOtherFiles: "Other files",
-      contextSystemTools: "System tools",
-      contextMcpTools: "MCP tools",
-      contextClientTools: "Client tools",
-      contextAvailableOnDemand: "Available on demand",
-      contextNotLoaded: "Not loaded",
-      contextDeferredEstimate:
-        "Potential schema sizes, not included in usage above. Discovery descriptions and previously retrieved schemas still use context.",
-      contextSkills: "Skills catalog",
-      contextSystem: "System instructions",
-      contextFree: "Free space",
-      contextUnverified: "Unverified",
-      contextEstimate:
-        "Last saved prompt · token sizes estimated from characters. Messages include other untracked context.",
-      contextLoading: "Loading context breakdown…",
-      contextError: "Couldn't load the context breakdown. Try refreshing.",
-      contextOffline: "Connect to the Gateway to load the context breakdown.",
-      contextUnavailable: "No matching context report. Send a message to capture one.",
-      contextHeadroom: "{tokens} tokens until the last run's prompt budget",
-      contextReserve: "{tokens} tokens reserved outside this prompt budget",
-      contextCompact: "Compact session",
-      contextCompacting: "Compacting…",
-      worktree: "Worktree",
-      changes: "Changes",
-      subagents: "Subagents",
-      processes: "Processes",
-      allSubagents: "All subagents",
-      allProcesses: "All processes",
-      processesError: "Couldn't load processes.",
-      planSteps: "{completed} of {total} steps",
-      showMore: "Show {count} more",
-      showLess: "Show less",
-      stopped: "Stopped",
-      tally: {
-        done: "{count} done",
-        failed: "{count} failed",
-        stopped: "{count} stopped",
-        running: "{count} running",
-        queued: "{count} queued",
-      },
-      createdBy: "Created by",
-      owner: "Owner",
-      participants: "{count} participants",
-      moreParticipants: "{count} more participants",
-      workspaceUnavailable: "Workspace unavailable",
-      allChanges: "All changes",
-      changedFile: "1 file",
-      changedFiles: "{count} files",
-      changeSummary: "{files}, +{additions} lines, −{deletions} lines.",
-      changesUnavailable: "Change summary unavailable.",
-      changesUnavailableShort: "Unavailable",
-      changesPartial: "partial",
-      changesPartialDescription: "Partial summary; some changes are not included.",
-      changesStale: "stale",
-      changesStaleDescription: "Last-known changes; the summary could not be refreshed.",
-      pullRequests: "Pull requests",
-      noPullRequests: "No pull requests",
       automations: "Automations",
       progressOptions: "Task progress options",
-      hideProgress: "Don't show task progress again",
-      collapseDefault: "Collapse task progress by default",
-      settings: "Task progress settings",
-      progressHidden: "Task progress hidden in this browser.",
       automationError: "Couldn't load automations.",
-      automationUpdateError: "Couldn't update automations.",
-      automationShowMore: "Show more",
       automationUnavailable: "Automations unavailable for this session.",
-      automationOffline: "Offline · last-known automations",
       automationLoading: "Loading automations…",
       automationEmpty: "No automations for this session",
       automationMore: "Load more automations",
@@ -2210,51 +2087,14 @@ export const en: TranslationMap & {
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
-    usageLimit: {
-      title: "ChatGPT usage limit reached",
-      businessBody:
-        "You’ve reached your workspace's limit for using your ChatGPT plan in other apps. Copy a message below to ask your workspace admin for increased usage limits.",
-      consumerBody: "Review your usage settings in ChatGPT.",
-      request:
-        "I’ve reached the limit for using my ChatGPT plan in OpenClaw. Could you increase our workspace’s usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!",
-      copy: "Copy request for admin",
-      copied: "Request copied. Send it to your workspace admin.",
-      copyFailed:
-        "Couldn't copy the request. Select and copy the text below, then send it to your workspace admin.",
-      manage: "Manage usage",
-    },
+    usageLimit: {},
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",
     providerReview: {},
-    providerPolicy: {
-      bufferingTitle: "Cyber safety review",
-      bufferingBody: "OpenAI is reviewing this response for cyber safety.",
-      blockedTitle: "Cyber policy block",
-      blockedBody: "OpenAI blocked this response under its cyber policy.",
-      fallbackTitle: "Provider changed the model",
-      fallbackBody: "OpenAI routed this response to {model}.",
-      fallbackUnknownBody: "OpenAI routed this response to another model.",
-      escalatedTitle: "Retried on Daybreak",
-      escalatedBody: "OpenAI declined this request; retried on {model}.",
-      unavailableTitle: "Daybreak unavailable",
-      unavailableBody: "OpenAI declined this request; {model} is not authorized.",
-    },
-    diskSpace: {
-      warningTitle: "Cloud session disk space is low",
-      criticalTitle: "Cloud session disk space is critically low",
-      warningBody:
-        "{percent}% used · {free} free. Delete unneeded files or stop the cloud worker before large writes.",
-      criticalBody:
-        "{percent}% used · {free} free. New writes may fail and stop the agent. Delete unneeded files or stop the cloud worker before large writes.",
-    },
-    workerRuntimeInstall: {
-      transferringTitle: "Updating worker runtime · {transferred} of {total} ({percent}%)",
-      installingTitle: "Installing worker runtime",
-      transferringBody:
-        "Transferring the new worker runtime to this device: {transferred} of {total} ({percent}%). The next turn starts when it finishes.",
-      installingBody: "Installing the new worker runtime on this device.",
-    },
+    providerPolicy: {},
+    diskSpace: {},
+    workerRuntimeInstall: {},
     sendErrors: {},
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
@@ -2284,38 +2124,7 @@ export const en: TranslationMap & {
     subagentViewOnly: "View-only subagent",
     subagentSessionDisabled: "Continue in {parent}.",
     processesPanel: { title: "Processes", refresh: "Refresh processes" },
-    subagentsPanel: {
-      title: "Subagents",
-      desktopFilter: { all: "All", active: "Active", waiting: "Waiting", done: "Done" },
-      desktopFilterLabel: "Filter subagents",
-      desktopSearch: "Search subagents",
-      desktopCloseSearch: "Close search",
-      desktopWorking: "Working",
-      workingFor: "Working for",
-      desktopWaiting: "Waiting for subagents",
-      desktopFor: "for",
-      desktopShowMore: "Show more",
-      desktopNoResults: "No subagents found",
-      desktopNoResultsDescription: "Try a different name or filter.",
-      mobileFinished: "Finished",
-      stopConfirmTitle: "Stop subagent?",
-      stopConfirmMessage:
-        "This ends its current work. Messages already recorded will remain available.",
-      stopConfirmAction: "Stop subagent",
-      back: "Back to Subagents",
-      running: "Running ({count})",
-      finished: "Finished ({count})",
-      callsOne: "{count} call",
-      callsMany: "{count} calls",
-      callsAtLeast: "{count}+ calls",
-      empty: "No subagents in this conversation.",
-      noRunning: "No running subagents",
-      refresh: "Refresh subagents",
-      stop: "Stop {name}",
-      stopping: "Stopping…",
-      elapsed: "Elapsed time",
-      duration: "Run duration",
-    },
+    subagentsPanel: {},
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
@@ -2362,68 +2171,9 @@ export const en: TranslationMap & {
       redirect: {},
     },
     sessionSharing: {
-      sessionAccess: "Session access",
-      sharedDescription: "Everyone with access can send",
-      readOnlyDescription: "Others can only read",
-      suggestDescription: "Others suggest for approval",
-      draftDescription: "Creator and admins only",
-      linkSharing: "Link sharing",
-      anyoneWithLink: "Anyone with the link",
-      publicLinkDescription: "Anyone can read without signing in.",
-      publicDraftDescription: "The public link stays readable in Draft.",
-      linkUnavailable: "Link unavailable",
-      messagePermissions: "Message permissions",
-      creator: "Creator",
-      permissionUnavailable: "Unavailable",
-      permissionUnavailableDescription:
-        "Effective permission is not provided by the Gateway. The check only indicates membership.",
-      searchPeople: "Search people…",
-      closeSearch: "Close search",
-      noPeopleFound: "No people found",
-      tryAnotherName: "Try another name",
-      sharingOptions: "Sharing options",
-      menu: "Session sharing",
-      share: "Share",
-      current: "Session visibility: {visibility}",
-      visibility: "Visibility",
-      shared: "Shared",
-      readOnly: "Read-only",
-      suggest: "Suggest",
       draft: "Draft",
-      publishDraft: "Publish draft",
-      owner: "Owner",
-      members: "Members",
-      selected: "Member",
-      noPeople: "No paired people found.",
-      readOnlyNotice: "Only the session owner and members can act in this session.",
-      scopeReadOnlyNotice: "Sending messages is unavailable with your current access.",
-      publicAccess: "Public access",
-      publicIndicator: "Public",
-      worldReadable: "Public — anyone can read without signing in.",
-      notPublic: "Only signed-in people with access can view this session.",
-      enablePublicAccess: "Enable public access…",
-      disablePublicAccess: "Disable public access",
-      copyPublicLink: "Copy public link",
-      publicConfirmTitle: "Make this session world-readable?",
-      publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
-      publicConfirmEnable: "Make public",
-      publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
-      publicDisabled: "Public access disabled.",
-      publicUnavailable: "Public access requires a saved, non-incognito session.",
     },
-    reactions: {
-      add: "Add reaction",
-      quick: "Quick reactions",
-      emoji: "Emoji",
-      more: "More…",
-      back: "Back to quick reactions",
-      search: "Search emoji…",
-      noMatches: "No matching emoji",
-      you: "You",
-      andOthers: "{names} and {count} others",
-      reactedWith: "{names} reacted with {emoji}",
-    },
+    reactions: {},
     sessionSuggestions: {
       suggest: "Suggest",
       suggestMessage: "Suggest message",
@@ -2445,73 +2195,8 @@ export const en: TranslationMap & {
         dismissed: "Dismissed",
       },
     },
-    sessionHeader: {
-      people: "People",
-      peopleParticipants: "Participants",
-      mentionRejected: "Mention was not inserted. Return to the composer and try again.",
-      mentionsTruncated: "Some people are not included. Type @ in the composer to search.",
-      mention: "Mention",
-      mentionPerson: "Mention {name}",
-      morePeople: "{count} more people",
-      renameTooltip: "Rename session",
-      renameAria: "Rename session {title}",
-      renameInputAria: "Session title",
-      renameInputPlaceholder: "Session title",
-      openParent: "Open parent session {title}",
-      subagentsRunning: "Subagents · {count} running",
-      layout: "Layout",
-      panels: "Panels",
-      continueInTerminal: {
-        action: "Continue in terminal…",
-        title: "Continue in terminal",
-        description:
-          "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
-        authNote:
-          "The command contains no credentials. The terminal authenticates independently, and the session's access controls still apply.",
-        disconnected: "Connect to the Gateway to continue this session in a terminal.",
-        queryRouted:
-          "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
-        unavailable: "This session or Gateway address cannot be continued in a terminal.",
-      },
-      workspaceAria: "Workspace actions for {workspace}",
-      revealFinder: "Reveal in Finder",
-      revealFileExplorer: "Reveal in File Explorer",
-      revealFileManager: "Open in file manager",
-      copyPath: "Copy path",
-      copyBranch: "Copy branch name",
-      copied: "Copied",
-      branches: "Versions",
-      versionsHelpLabel: "About versions",
-      versionsHelp:
-        "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.",
-      versionsEmptyTitle: "No earlier versions",
-      versionsEmptyDescription: "Saved versions appear after a rewind or repair.",
-      branchSwitchUnavailable: "Versions cannot be switched while the agent is working.",
-      untitledBranch: "Untitled version",
-      oneMessage: "{count} message",
-      messages: "{count} messages",
-      activeBranch: "Current version",
-    },
-    board: {
-      faceLabel: "Session face",
-      chatFace: "Chat",
-      splitFace: "Split",
-      dashboardFace: "Dashboard",
-      dockMenu: "Chat dock: {dock}",
-      dockLeft: "Dock chat left",
-      dockRight: "Dock chat right",
-      dockBottom: "Dock chat bottom",
-      resizeDock: "Resize chat dock",
-      enterFullscreen: "Enter fullscreen",
-      exitFullscreen: "Exit fullscreen",
-      fullscreenUnavailable: "Fullscreen is unavailable in this browser",
-      fullscreenFailed: "Could not change fullscreen mode: {error}",
-      workboardCard: "Workboard card: {title}, {status}",
-      defaultTab: "Main",
-      mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
-      resetTitle: "Reset conversation?",
-      resetDescription: "The conversation context resets. Your dashboard stays.",
-    },
+    sessionHeader: {},
+    board: {},
     catalog: {
       remoteViewOnly: "This session is on a paired device and is view-only.",
       unsupportedViewOnly: "This external session source is view-only.",
@@ -2529,29 +2214,7 @@ export const en: TranslationMap & {
         "Delete this external session from OpenClaw? Make sure no other runner is using it. Beamed sessions are deleted permanently. Sessions kept by another tool, such as Codex, are archived there and may be restorable.",
       terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
-    taskSuggestions: {
-      eyebrow: "Suggested task · in {repo}",
-      startSession: "Start in a new session",
-      startOptions: "Choose where to start the task",
-      startWorktree: "Start in a new worktree",
-      chooseRepository: "Choose repository",
-      repositoryFolder: "Repository folder",
-      chooseRepositoryHelp:
-        "Choose a Git repository with a commit. Your task will start in a new worktree; its instructions are preserved.",
-      startCurrentSession: "Start in this session",
-      copyPrompt: "Copy prompt",
-      copyPromptFailed: "Couldn't copy the prompt to the clipboard",
-      promptCopied: "Copied",
-      showInstructions: "Show instructions",
-      hideInstructions: "Hide instructions",
-      previous: "Previous suggested task",
-      next: "Next suggested task",
-      starting: "Starting…",
-      dismiss: "Dismiss {title}",
-      started: "Task started",
-      startUnconfirmed: "Couldn't confirm the task started. Retry checks the same task.",
-      adminRequired: "Administrator access is required to start suggested tasks.",
-    },
+    taskSuggestions: {},
     pullRequests: {
       open: "Open",
       draft: "Draft",
@@ -2559,15 +2222,7 @@ export const en: TranslationMap & {
       closed: "Closed",
     },
     usageRemaining: "Usage Remaining",
-    view: {
-      menu: "View",
-      speechBubbles: "Speech bubbles",
-      activityDetails: "View activity details",
-      workingDetails: "Agent is working. View details",
-      reasoning: "Reasoning",
-      toolCalls: "Tool calls",
-      commentary: "Keep commentary",
-    },
+    view: {},
     sendShortcut: "Send shortcut",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
@@ -2609,31 +2264,7 @@ export const en: TranslationMap & {
       imageError: "The diagram image could not be displayed. Reload the dashboard to try again.",
     },
     codeBlock: {},
-    workspaceConflict: {
-      titleOne: "1 cloud workspace conflict",
-      titleMany: "{count} cloud workspace conflicts",
-      description:
-        "OpenClaw kept your local versions and applied the other cloud changes. Inspect the staged result or take its version for a conflicted path.",
-      summary: "Local versions kept; inspect or take the cloud version.",
-      showCommands: "Show commands",
-      morePaths: "+{count} more paths",
-      stagedResult: "Staged cloud result",
-      copyStagedResult: "Copy staged result ref",
-      inspectCloud: "Inspect the first cloud version",
-      takeCloud: "Take the first cloud version",
-      copyInspectCommand: "Copy cloud inspect command",
-      copyTakeCommand: "Copy take-cloud command",
-      commandHelp:
-        "Run these in Bash or zsh (Git Bash on Windows). If inspect says the path does not exist, the cloud deleted it; verify and remove the local path manually. If checkout reports a file/directory conflict, move or remove the blocking local path, then retry. If the staged ref is missing, the notice is stale; do not change the local path.",
-      commandsUnavailable:
-        "This filename contains terminal control characters, so OpenClaw will not build a copyable shell command for it. Inspect the staged ref directly and enter the path manually with care.",
-      dismiss: "Dismiss workspace conflict notice",
-      eventSender: "Cloud workspace",
-      eventTitleOne: "Cloud result applied with 1 conflict",
-      eventTitleMany: "Cloud result applied with {count} conflicts",
-      eventDescription:
-        "Local versions were kept for these paths; other cloud changes were applied.",
-    },
+    workspaceConflict: {},
     compaction: {
       label: "Compacted history",
       savedTokens: "saved {count} tokens",
@@ -2743,18 +2374,7 @@ export const en: TranslationMap & {
         label: "{plugin} guidance",
       },
     },
-    skillLearned: {
-      label: "Learned",
-      created: "Created",
-      updated: "Updated",
-      archived: "Archived",
-      restored: "Restored",
-      open: "Open {name} in Skill Workshop",
-      undo: "Undo",
-      undoing: "Undoing…",
-      undone: "Undone",
-      undoError: "Could not undo: {error}",
-    },
+    skillLearned: {},
     progressLabels: {
       shelling: "Shelling",
       scuttling: "Scuttling",
@@ -2854,30 +2474,7 @@ export const en: TranslationMap & {
     },
     queue: {},
     goals: {},
-    asyncQuestions: {
-      title: "Optional · work can continue",
-      dismiss: "Dismiss",
-      dismissing: "Dismissing…",
-      dismissed: "Dismissed",
-      reopening: "Restoring answer…",
-      dismissedReason: "You can still answer this question later.",
-      dismissedNotice: "Question dismissed. Work continues.",
-      pendingOne: "{count} unanswered question",
-      pendingMany: "{count} unanswered questions",
-      inComposer: "Answer above the message box.",
-      archived: "No longer pending",
-      archivedReason: "The conversation moved on. You can still answer this question.",
-      sendFailed: "Could not send your answer. Your draft is preserved.",
-      queued: "Answer queued",
-      sending: "Sending answer…",
-      sent: "Answer sent",
-      failed: "Answer not sent",
-      awaitingConfirmation: "Awaiting delivery confirmation",
-      retry: "Retry answer",
-      draftStorageFailed:
-        "This answer is not saved on this device. Keep this page open or copy your answer.",
-      draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
-    },
+    asyncQuestions: {},
     questions: {
       showSecret: "Show secret",
       hideSecret: "Hide secret",
@@ -2960,62 +2557,11 @@ export const en: TranslationMap & {
       videoPreview: "Video preview: {title}",
       closeVideoPreview: "Close video preview",
     },
-    youtube: {
-      provider: "YouTube",
-      video: "YouTube video",
-      player: "YouTube player: {title}",
-      play: "Play {title}",
-      open: "Open on YouTube",
-      openVideo: "Open {title} on YouTube",
-      close: "Close player",
-      strict: "Inline playback is disabled in strict embed mode. Open this video on YouTube.",
-      narrow: "Open this video on YouTube to play it in a larger window.",
-    },
+    youtube: {},
     modelControls: {},
     nativeRuntimeRecovery: {},
     permissionControls: {},
-    rail: {
-      title: "Side chat",
-      subtitle: "Ask about this session or its project",
-      expand: "Expand side chat",
-      collapse: "Collapse side chat",
-      close: "Close side chat",
-      show: "Show side chat",
-      clear: "Clear side chat",
-      pullRequests: "Pull requests",
-      checksPassing: "{count} passed",
-      checksFailing: "{count} failed",
-      checksPending: "{count} running",
-      finished: "Finished {time}",
-      empty: "Answers come from this session's transcript and its project files.",
-      askLabel: "Ask in side chat",
-      askPlaceholder: "Ask a question",
-      askImageQuestion: "What does this image show?",
-      selectionTooLong:
-        "These comments are too long for Side chat. Use a shorter selection or comment.",
-      selectionQuoteOnly:
-        "The selection is too long to attach. A short quote is ready in Side chat.",
-      askSubmit: "Ask",
-      askBusy: "Side chat is already answering a question.",
-      askHistoryUnavailable: "Couldn't load this session's history.",
-      askMissing: "This session is no longer available.",
-      askModelUnavailable: "No utility model is configured for this session.",
-      askImageUnsupported:
-        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
-      askRateLimited: "Side chat reached its question limit. Try again shortly.",
-      askUnavailable: "Side chat cannot answer right now.",
-      askRetry: "Retry",
-      asOf: "as of {time}",
-      health: {
-        "on-track": "On track",
-        grinding: "Working",
-        stuck: "Stuck",
-        "waiting-on-user": "Waiting on you",
-        "wrapping-up": "Wrapping up",
-        done: "Done",
-        failed: "Failed",
-      },
-    },
+    rail: {},
     detailPanel: {},
     sidebarColumns: {
       close: "Close {panel}",
@@ -3088,21 +2634,7 @@ export const en: TranslationMap & {
       dashboardSize: "Size",
       dashboardEmpty: "This task does not have a dashboard yet.",
     },
-    thread: {
-      search: "Search messages",
-      searchPlaceholder: "Search messages...",
-      closeSearch: "Close search",
-      loading: "Loading chat",
-      showEarlier: "Show earlier",
-      loadingEarlier: "Loading earlier…",
-      noMatches: "No matching messages",
-      positionRail: "Conversation position",
-      positionMarker: "{label}, marker {position} of {count}",
-      positionUserMessage: "User message",
-      positionAssistantMessage: "Assistant message",
-      positionMarkerHint:
-        "Use arrow keys or Home and End to choose a marker, Enter or Space to jump, and Escape to return to the conversation. Tab leaves the rail.",
-    },
+    thread: {},
     pendingInputs: {
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
@@ -3289,157 +2821,15 @@ export const en: TranslationMap & {
       toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
-      expandFile: "Expand file",
-      collapseFile: "Collapse file",
-      unmodifiedLine: "{count} unmodified line",
-      collapseContextLine: "Hide {count} unmodified line",
-      contextLine: "{count} line",
-      contextLines: "{count} lines",
-      modeAuto: "Auto",
-      modeUnified: "Unified",
-      modeSplit: "Split",
-      wrapLines: "Wrap lines",
-      wordDiffs: "Word diffs",
-      jump: "Jump",
-      jumpToFile: "Jump to file",
-      fileCount: "{count} files",
-      fileCountOne: "{count} file",
-      commits: "Commits",
-      readMarkdown: "Open formatted Markdown",
-      readHighlighted: "Open highlighted source",
-      readPlain: "Open plain source",
-      fileTree: "Changed files tree",
-      searchFiles: "Search changed files",
-      noMatchingFiles: "No matching files",
-      cycleMode: "Diff mode: {mode}. Switch to next mode",
-      editFile: "Edit file",
-      collapseContext: "Hide {count} unmodified lines",
       title: "Changes",
       show: "Show session changes",
-      refresh: "Refresh changes",
-      loading: "Loading changes…",
-      empty: "No changes in this session's checkout.",
-      emptyTitle: "No changes",
-      notGit: "This session's workspace is not a git checkout.",
-      unknownSession: "No workspace is associated with this session.",
-      unknownCommit: "This commit is no longer available in the session checkout.",
-      workspaceStopped:
-        "Saved changed files are shown. Start the cloud session to load full diffs and line counts.",
-      workspaceStoppedFile: "Start the cloud session to load this diff.",
-      disconnected: "Gateway is disconnected.",
-      allChanges: "All Changes",
-      uncommitted: "Uncommitted",
-      commitsAhead: "{count} commits ahead of {base}",
-      head: "HEAD",
-      mergeBase: "Merge Base",
-      scopeMenu: "Choose change scope",
-      sync: "Sync",
-      syncLocally: "Sync Locally",
-      syncDescription:
-        "Run this command in a local checkout to mirror this session's committed changes.",
-      copyCommand: "Copy sync command",
-      syncCommandLabel: "Command",
-      mobileAhead: "{count} ahead",
-      mobileEmpty: "No files changed in this scope.",
-      mobileCommitCount: "Commits ({count})",
-      checkoutPath: "Checkout path",
-      branchName: "Branch name",
-      uncommittedStay: "Uncommitted changes stay in the session checkout.",
-      viewOptions: "Change view options",
-      collapseCode: "Collapse Code",
-      collapseFunctions: "Collapse Functions and Classes",
-      expandCode: "Expand Code",
-      collapseCodeRegion: "Collapse code at line {line}",
-      expandCodeRegion: "Expand code at line {line}",
-      foldedLines: "{count} folded lines",
-      collapseAll: "Collapse All",
-      expandAll: "Expand All",
-      enableWrapping: "Enable Wrapping",
-      disableWrapping: "Disable Wrapping",
-      switchSplit: "Switch to Split Diff",
-      switchUnified: "Switch to Unified Diff",
-      fileActions: "Actions for {path}",
-      copyPath: "Copy Path",
-      openFile: "Open File",
-      openInEditor: "Open in Editor",
-      revealInFileTree: "Reveal in File Tree",
-      unmodifiedLines: "{count} unmodified lines",
-      expandPreviousLines: "Show previous {count} unmodified lines",
-      expandNextLines: "Show next {count} unmodified lines",
-      expandAllLines: "Show all {count} unmodified lines",
-      binaryFile: "Binary file",
-      untracked: "untracked",
-      previewUnavailable: "Diff preview is unavailable.",
-      truncatedFile: "Diff truncated.",
-      truncatedResult: "Some changes could not be displayed.",
-      statusAdded: "Added",
-      statusDeleted: "Deleted",
-      statusRenamed: "Renamed",
-      statusModified: "Modified",
     },
-    sessionDiscussion: {
-      show: "Show discussion",
-      hide: "Hide discussion",
-      disconnected: "Gateway is disconnected.",
-      loading: "Loading discussion…",
-      opening: "Opening discussion…",
-      requiresWriteAccess: "Operator write access is required to open this discussion.",
-      openExternal: "Open discussion in a new tab",
-      frameTitle: "Session discussion",
-      unavailable: "This discussion cannot be embedded.",
-    },
+    sessionDiscussion: {},
     workspaceFiles: {
-      attachments: "Attachments",
-      attachmentsLoading: "Loading transcript attachments…",
-      attachmentsUnknown: "Transcript attachment coverage is not yet known.",
-      attachmentsPartial:
-        "Showing attachments available in the loaded transcript. Earlier or omitted content may contain more.",
-      mobile: {
-        searchFolder: "Search in {folder}",
-        empty: "No files match this view.",
-        unavailable: "Workspace files are unavailable.",
-        disconnected: "Gateway is disconnected.",
-      },
-      desktop: {
-        sessionFiles: "Session files",
-        project: "Project",
-        closeSearch: "Close file search",
-        filePath: "File path",
-        hiddenFolders: "Show hidden folders",
-      },
-      label: "Session workspace",
-      collapse: "Collapse session workspace",
-      showFiles: "Show session files",
-      dockRight: "Dock to the right",
-      dockBottom: "Dock to the bottom",
-      workspace: "Session",
-      files: "Workspace",
-      refresh: "Refresh session workspace",
-      loading: "Loading session workspace…",
-      changed: "Changed",
-      read: "Read",
-      artifacts: "Artifacts",
-      browser: "Project files",
-      root: "Root",
-      search: "Search files",
-      searchResults: "Search results",
-      parentFolder: "Parent folder",
-      noBrowserFiles: "No files in this folder.",
-      folderUnavailable: "This folder is unavailable. Open its parent folder to continue browsing.",
-      noSearchResults: "No matching files.",
-      truncated: "Showing the first matching files. Refine the search to narrow results.",
-      session: "Session",
-      missing: "Missing",
-      filterAll: "All",
-      filters: "Filter files",
-      changedCount: "{count} changed",
-      readCount: "{count} read",
-      artifactCount: "{count} artifacts",
-      actions: "Workspace file actions",
-      preview: "Preview",
       copyPath: "Copy path",
     },
   },
+
   languages: {
     en: "English",
     zhCN: "简体中文 (Simplified Chinese)",
@@ -3496,6 +2886,8 @@ export const en: TranslationMap & {
     runEntry: {},
     errors: {
       nameRequired: "Name is required.",
+      activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
+      activeHoursTimezone: "Enter a valid IANA timezone, local, or user.",
       scheduleAtInvalid: "Enter a valid date/time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:

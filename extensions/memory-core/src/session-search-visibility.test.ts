@@ -1,9 +1,9 @@
-// Memory Core tests cover session search visibility plugin behavior.
+import * as engineSessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import * as sessionVisibility from "openclaw/plugin-sdk/session-visibility";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import {
   searchHit,
@@ -19,6 +19,11 @@ const visibilityConfig = (visibility: "all" | "agent" | "self" = "self") =>
 const entry = (id: string, updatedAt: number, metadata?: Parameters<typeof sessionEntry>[3]) =>
   sessionEntry(id, updatedAt, `/tmp/sessions/${id}.jsonl`, metadata);
 const directEntry = (id: string, updatedAt: number) => entry(id, updatedAt, { chatType: "direct" });
+const directDelivery = (id: string) =>
+  normalizeSessionDeliveryState({
+    context: { channel: "discord", to: `user:${id}` },
+    origin: { provider: "discord", chatType: "direct", to: `user:${id}` },
+  });
 function filter(hits: MemorySearchResult[], overrides: Partial<FilterOptions> = {}) {
   return filterMemorySearchHitsBySessionVisibility({
     cfg: visibilityConfig(),
@@ -30,10 +35,19 @@ function filter(hits: MemorySearchResult[], overrides: Partial<FilterOptions> = 
 }
 function recall(hits: MemorySearchResult[], overrides: Partial<FilterOptions> = {}) {
   return filter(hits, {
-    conversationRecall: { anchorSessionKey, scope: "same-agent-private", corpus: "sessions" },
+    conversationRecall: recallContext(),
     ...overrides,
   });
 }
+
+const recallContext = (
+  anchor = anchorSessionKey,
+  corpus: "sessions" | "configured" = "sessions",
+) => ({
+  anchorSessionKey: anchor,
+  scope: "same-agent-private" as const,
+  corpus,
+});
 
 const crossAgentStore: Record<string, TestSessionEntry> = {
   "agent:peer:only": sessionEntry("w1", 1, "/tmp/sessions/w1.jsonl"),
@@ -74,11 +88,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const filtered = await filter(hits, {
       cfg: visibilityConfig("all"),
       requesterSessionKey: "agent:main:main",
-      conversationRecall: {
-        anchorSessionKey: "agent:main:main",
-        scope: "same-agent-private",
-        corpus: "configured",
-      },
+      conversationRecall: recallContext("agent:main:main", "configured"),
     });
     expect(filtered).toEqual(hits);
     expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).not.toHaveBeenCalled();
@@ -106,31 +116,17 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const explicitAnchor = "agent:main:explicit:laptop";
     combinedSessionStore = {
       [explicitAnchor]: entry("current", 2, {
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "discord", to: "user:current" },
-          origin: { provider: "discord", chatType: "direct", to: "user:current" },
-        }),
+        delivery: directDelivery("current"),
       }),
       "agent:main:explicit:phone:group:shadow": entry("explicit-private", 1, {
         chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "discord", to: "user:explicit-private" },
-          origin: {
-            provider: "discord",
-            chatType: "direct",
-            to: "user:explicit-private",
-          },
-        }),
+        delivery: directDelivery("explicit-private"),
       }),
     };
     const hit = searchHit("sessions/explicit-private.jsonl", "sessions", "private context");
     const filtered = await recall([hit], {
       requesterSessionKey: `${explicitAnchor}:active-memory:123456abcdef`,
-      conversationRecall: {
-        anchorSessionKey: explicitAnchor,
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
+      conversationRecall: recallContext(explicitAnchor),
     });
 
     expect(filtered).toEqual([hit]);
@@ -184,11 +180,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const filtered = await recall([hit], {
       cfg,
       requesterSessionKey: "agent:main:global",
-      conversationRecall: {
-        anchorSessionKey: "agent:main:global",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
+      conversationRecall: recallContext("agent:main:global"),
     });
 
     expect(filtered).toStrictEqual([]);
@@ -234,11 +226,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const filtered = await recall([hit], {
       cfg: visibilityConfig("agent"),
       requesterSessionKey: "agent:main:explicit:laptop:active-memory:123456abcdef",
-      conversationRecall: {
-        anchorSessionKey: "agent:main:explicit:laptop",
-        scope: "same-agent-private",
-        corpus: "sessions",
-      },
+      conversationRecall: recallContext("agent:main:explicit:laptop"),
     });
 
     expect(filtered).toStrictEqual([]);
@@ -273,11 +261,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       "agent:main:webchat:direct:owner": directEntry("past", 1),
     };
     const hit = searchHit("sessions/past.jsonl", "sessions", "private context");
-    const conversationRecall = {
-      anchorSessionKey: "agent:main:telegram:group:family",
-      scope: "same-agent-private" as const,
-      corpus: "sessions" as const,
-    };
+    const conversationRecall = recallContext("agent:main:telegram:group:family");
 
     const [sharedAnchor, mismatchedAnchor, sandboxed] = await Promise.all([
       recall([hit], {
@@ -309,11 +293,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     const filtered = await recall([memoryHit, sessionHit], {
       cfg: visibilityConfig("all"),
       requesterSessionKey: "agent:main:main:active-memory:abcdef123456",
-      conversationRecall: {
-        anchorSessionKey: "agent:main:main",
-        scope: "same-agent-private",
-        corpus: "configured",
-      },
+      conversationRecall: recallContext("agent:main:main", "configured"),
     });
 
     expect(filtered).toEqual([memoryHit]);
@@ -372,5 +352,144 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       requesterSessionKey: "agent:main:main",
     });
     expect(filtered).toStrictEqual([]);
+  });
+});
+
+const archiveRecord = (archiveName: string, sessionId: string) => ({
+  agentId: "main",
+  archiveName,
+  sessionId,
+  sessionKey: anchorSessionKey,
+  createdAt: 1,
+});
+function resetFilter(hits: MemorySearchResult[], overrides: Partial<FilterOptions> = {}) {
+  return recall(hits, {
+    agentId: "main",
+    requesterSessionKey: `${anchorSessionKey}:active-memory:123456abcdef`,
+    ...overrides,
+  });
+}
+
+describe("reset-generation session search visibility", () => {
+  beforeEach(() => {
+    combinedSessionStore = { [anchorSessionKey]: directEntry("current", 2) };
+    vi.spyOn(engineSessions, "readSessionResetRecallCutoff").mockResolvedValue({ state: "absent" });
+    vi.spyOn(engineSessions, "loadArchivedSessionsAsync").mockResolvedValue([]);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    combinedSessionStore = crossAgentStore;
+  });
+
+  it("resolves bounded archive filenames through canonical SQLite identity", async () => {
+    const archivedSessionId = `oversized-${"x".repeat(300)}`;
+    const archiveName = `session-${"a".repeat(64)}.jsonl.reset.2026-08-11T08-00-00.000Z.zst`;
+    combinedSessionStore = {
+      [anchorSessionKey]: directEntry("current-after-reset", 2),
+    };
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockResolvedValue([
+      archiveRecord(archiveName, archivedSessionId),
+    ]);
+    const hit = searchHit(`sessions/main/${archiveName}`, "sessions", "retained context");
+
+    await expect(
+      resetFilter([hit], {
+        cfg: asOpenClawConfig({
+          session: { store: "/tmp/memory-search-archive-test/sessions.json" },
+          tools: { sessions: { visibility: "self" } },
+        }),
+        requesterSessionKey: anchorSessionKey,
+        conversationRecall: undefined,
+      }),
+    ).resolves.toEqual([hit]);
+    expect(engineSessions.loadArchivedSessionsAsync).toHaveBeenCalledWith({
+      agentId: "main",
+      archiveNames: [archiveName],
+      storePath: "/tmp/memory-search-archive-test/sessions.json",
+    });
+  });
+
+  it("rechecks private conversation metadata after awaiting archive inventory", async () => {
+    const archiveName = "previous.jsonl.reset.2026-08-11T08-00-00.000Z";
+    combinedSessionStore = {
+      [anchorSessionKey]: sessionEntry("current", 2, "/tmp/current.jsonl", { chatType: "direct" }),
+    };
+    vi.mocked(engineSessions.loadArchivedSessionsAsync).mockImplementationOnce(async () => {
+      combinedSessionStore = {
+        [anchorSessionKey]: sessionEntry("current", 3, "/tmp/current.jsonl", { chatType: "group" }),
+      };
+      return [archiveRecord(archiveName, "previous")];
+    });
+    await expect(
+      resetFilter([searchHit(`sessions/main/${archiveName}`, "sessions", "private context")], {
+        requesterSessionKey: anchorSessionKey,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it.each([
+    { name: "crossing", range: [3, 4], cutoff: { state: "valid", cutoffLine: 4 } },
+    { name: "read-failure", range: [1, 2], cutoff: undefined },
+  ] as const)("handles a $name live SQLite reset-generation hit", async ({ range, cutoff }) => {
+    if (cutoff === undefined) {
+      vi.mocked(engineSessions.readSessionResetRecallCutoff).mockRejectedValue(
+        new Error("read failed"),
+      );
+    } else {
+      vi.mocked(engineSessions.readSessionResetRecallCutoff).mockResolvedValue(cutoff);
+    }
+    const hit = searchHit("sessions/main/current.jsonl", "sessions", "short fact", {
+      startLine: range[0],
+      endLine: range[1],
+    });
+
+    await expect(resetFilter([hit])).resolves.toEqual([]);
+  });
+
+  it("resolves the live anchor reset cutoff once per filter pass", async () => {
+    vi.mocked(engineSessions.readSessionResetRecallCutoff).mockResolvedValue({
+      state: "valid",
+      cutoffLine: 5,
+    });
+    const hits: MemorySearchResult[] = [
+      searchHit("sessions/main/current.jsonl", "sessions", "first pre-reset chunk"),
+      searchHit("sessions/main/current.jsonl", "sessions", "second pre-reset chunk", {
+        score: 0.9,
+        startLine: 3,
+        endLine: 4,
+      }),
+    ];
+
+    await expect(resetFilter(hits)).resolves.toEqual(hits);
+    expect(engineSessions.readSessionResetRecallCutoff).toHaveBeenCalledTimes(1);
+    expect(engineSessions.readSessionResetRecallCutoff).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "current",
+      sessionKey: anchorSessionKey,
+      storePath: "(test)",
+    });
+  });
+
+  it("allows an archived reset generation of the private anchor conversation", async () => {
+    const hit = searchHit(
+      "sessions/main/current.jsonl.reset.2026-08-11T08-00-00.000Z",
+      "sessions",
+      "prior conversation context",
+    );
+    await expect(resetFilter([hit])).resolves.toEqual([hit]);
+  });
+
+  it("denies an archived deleted generation from another private conversation", async () => {
+    combinedSessionStore["agent:main:telegram:direct:deleted-source"] = directEntry(
+      "deleted-source",
+      1,
+    );
+    const hit = searchHit(
+      "sessions/main/deleted-source.jsonl.deleted.2026-08-11T08-00-00.000Z",
+      "sessions",
+      "intentionally deleted private context",
+    );
+    await expect(resetFilter([hit])).resolves.toEqual([]);
   });
 });

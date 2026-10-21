@@ -84,9 +84,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
-  if (attempt.operation === "settled-tool-finalization") {
-    // Finalization resumes the settled transcript with only the host prompt.
-    // Do not invoke provider/plugin contributors or assemble ambient context.
+  if (
+    attempt.operation === "settled-tool-finalization" ||
+    (params.isRawModelRun &&
+      attempt.sessionPersistence === "detached" &&
+      attempt.disableTools === true)
+  ) {
+    // These requests send only the caller's prompt. Preparing an ambient prompt
+    // for discarded diagnostics would still read workspace, node, and plugin state.
     params.setup.prepStages?.mark("system-prompt");
     return {
       runtimeChannel: undefined,

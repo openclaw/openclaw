@@ -19,6 +19,13 @@ import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-sta
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
+type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
+
+type ProjectSearchRead = Readonly<{
+  query: string;
+  completed: Promise<ProjectSearchOutcome>;
+}>;
+
 type DraftPickerKind = "where" | "project" | "checkout";
 export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
 
@@ -64,19 +71,18 @@ export class DraftPlaceBrowser {
   readonly browser: PlaceBrowserState;
 
   private projectSearchArgs: readonly unknown[] = [];
-  private projectSearchStatus: "initial" | "pending" | "complete" | "error" = "initial";
-  private projectSearchValue: ProjectsSearchRemoteResult | null = null;
-  private projectSearchFailure: unknown;
+  private projectSearchReadValue: ProjectSearchRead | null = null;
+  private finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
   private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
     task: ([client, query]: readonly [GatewayBrowserClient, string], { signal }) =>
       client.request<ProjectsSearchRemoteResult>("projects.searchRemote", { query }, { signal }),
     onComplete: (result) => {
-      this.projectSearchStatus = "complete";
-      this.projectSearchValue = result;
+      this.finishProjectSearch?.({ result });
+      this.finishProjectSearch = undefined;
     },
     onError: (error) => {
-      this.projectSearchStatus = "error";
-      this.projectSearchFailure = error;
+      this.finishProjectSearch?.({ error });
+      this.finishProjectSearch = undefined;
     },
   });
 
@@ -150,14 +156,17 @@ export class DraftPlaceBrowser {
   private searchProjects(args = this.projectSearchInput()) {
     this.projectSearchArgs = args;
     this.projectSearchRequest.cancel();
-    this.projectSearchStatus = "initial";
-    this.projectSearchValue = null;
-    this.projectSearchFailure = undefined;
+    // A cancelled transport may never settle; retire its presentation immediately.
+    this.finishProjectSearch?.(null);
+    this.finishProjectSearch = undefined;
+    this.projectSearchReadValue = null;
     const [client, advertised, query] = args;
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
-    this.projectSearchStatus = "pending";
+    const completion = Promise.withResolvers<ProjectSearchOutcome>();
+    this.projectSearchReadValue = { query, completed: completion.promise };
+    this.finishProjectSearch = completion.resolve;
     void this.projectSearchRequest.run([client, query]);
   }
 
@@ -217,29 +226,10 @@ export class DraftPlaceBrowser {
     this.callbacks.changed();
   }
 
-  get projectSearchResult(): ProjectsSearchRemoteResult | null {
-    return this.projectSearchStatus === "complete" &&
-      this.debouncedProjectQuery === this.projectQueryValue.trim()
-      ? this.projectSearchValue
+  get projectSearchRead(): ProjectSearchRead | null {
+    return this.projectSearchReadValue?.query === this.projectQueryValue.trim()
+      ? this.projectSearchReadValue
       : null;
-  }
-
-  get projectSearchLoading(): boolean {
-    return (
-      this.debouncedProjectQuery.length >= 2 &&
-      this.debouncedProjectQuery === this.projectQueryValue.trim() &&
-      this.projectSearchStatus === "pending"
-    );
-  }
-
-  get projectSearchError(): string | null {
-    if (
-      this.projectSearchStatus !== "error" ||
-      this.debouncedProjectQuery !== this.projectQueryValue.trim()
-    ) {
-      return null;
-    }
-    return formatUiError(this.projectSearchFailure);
   }
 
   get browserOpen(): boolean {

@@ -412,7 +412,7 @@ function IntroSection(props: { view: MemoryImportViewProps }) {
         <button
           class="btn btn--sm"
           disabled={!props.view.connected || busy()}
-          onClick={props.view.onRefresh}
+          onClick={() => props.view.onRefresh()}
         >
           {t(props.view.loading ? "common.refreshing" : "common.refresh")}
         </button>
@@ -497,7 +497,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn"
                   data-test-id="memory-backfill-preview"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillPreview}
+                  onClick={() => props.view.onBackfillPreview()}
                 >
                   {t(
                     props.view.backfillBusy === "preview"
@@ -509,7 +509,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn primary"
                   data-test-id="memory-backfill-apply"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillApply}
+                  onClick={() => props.view.onBackfillApply()}
                 >
                   {t(
                     props.view.backfillBusy === "apply"
@@ -521,7 +521,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn danger"
                   data-test-id="memory-backfill-rollback"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillRollbackRequest}
+                  onClick={() => props.view.onBackfillRollbackRequest()}
                 >
                   {t("memoryImport.backfill.rollback")}
                 </button>

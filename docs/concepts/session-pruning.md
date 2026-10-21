@@ -114,17 +114,24 @@ attachments for history viewers.
 
 ## Smart defaults
 
-The bundled Anthropic plugin auto-configures pruning and heartbeat cadence the first time it resolves an Anthropic (or Claude CLI) auth profile, but only for fields you have not already set explicitly:
+The bundled Anthropic plugin supplies pruning defaults when it resolves an
+Anthropic (or Claude CLI) auth profile, but only for fields you have not set
+explicitly. It also supplies the initial cadence when setup provisions the
+ordinary proactive-check job:
 
-| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | `heartbeat.every` |
-| ---------------------------------------- | --------------------- | -------------------- | ----------------- |
-| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`              |
-| API key                                  | `cache-ttl`           | `1h`                 | `30m`             |
+| Auth mode                                | `contextPruning.mode` | `contextPruning.ttl` | Initial proactive-check cadence |
+| ---------------------------------------- | --------------------- | -------------------- | ------------------------------- |
+| OAuth/token (including Claude CLI reuse) | `cache-ttl`           | `1h`                 | `1h`                            |
+| API key                                  | `cache-ttl`           | `1h`                 | `30m`                           |
 
-If you set `agents.defaults.contextPruning.mode` or `agents.defaults.heartbeat.every` yourself, OpenClaw does not override them. This auto-default only fires for Anthropic-family auth; other providers get pruning `off` unless you configure it.
+Explicit `agents.defaults.contextPruning.mode` remains authoritative. These
+pruning defaults apply only to Anthropic-family auth; other providers keep
+pruning off unless configured. Job cadence is stored once at provisioning;
+changing auth or provider later does not rewrite the job. Edit it with
+`openclaw automations edit <job-id> --every <duration>`.
 
 The seeded `ttl` applies to client-side pruning. Direct Anthropic API-key requests
-use the token thresholds above while retaining the same heartbeat defaults.
+use the token thresholds above while retaining the same initial job cadence.
 
 ## Enable or disable
 

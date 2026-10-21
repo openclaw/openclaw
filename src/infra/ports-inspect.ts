@@ -80,7 +80,14 @@ function parseLsofListenerRecordsByPort(output: string): Map<number, PortListene
     }
     if (line.startsWith("n")) {
       const listener = { ...processFields, address: line.slice(1) };
-      const port = parseLsofListenerPort(listener.address);
+      const normalized = listener.address
+        .replace(/^tcp\s+/i, "")
+        .replace(/\s*\([^)]*\)\s*$/i, "")
+        .trim();
+      const port =
+        normalized && !normalized.includes("->")
+          ? (parseTcpEndpoint(normalized)?.port ?? null)
+          : null;
       if (port !== null) {
         const records = recordsByPort.get(port) ?? [];
         records.push(listener);
@@ -89,39 +96,6 @@ function parseLsofListenerRecordsByPort(output: string): Map<number, PortListene
     }
   }
   return recordsByPort;
-}
-
-function parseLsofListenerPort(address: string | undefined): number | null {
-  const normalized = address
-    ?.replace(/^tcp\s+/i, "")
-    .replace(/\s*\([^)]*\)\s*$/i, "")
-    .trim();
-  if (!normalized || normalized.includes("->")) {
-    return null;
-  }
-  return parseTcpEndpoint(normalized)?.port ?? null;
-}
-
-function listenerIdentity(listener: PortListener): string {
-  return `${listener.pid ?? ""}\0${listener.command ?? ""}\0${listener.address ?? ""}`;
-}
-
-function readLsofListenersForPort(
-  recordsByPort: Map<number, PortListener[]>,
-  port: number,
-): PortListener[] {
-  const records = recordsByPort.get(port) ?? [];
-  const seen = new Set<string>();
-  const listeners: PortListener[] = [];
-  for (const record of records) {
-    const key = listenerIdentity(record);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    listeners.push(record);
-  }
-  return listeners;
 }
 
 function parseLsofTcpConnectionAddress(
@@ -371,7 +345,17 @@ async function readUnixListeners(
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
   if (!listenerSnapshot.lsofUnavailable) {
-    const listeners = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    const records = listenerSnapshot.recordsByPort.get(port) ?? [];
+    const seen = new Set<string>();
+    const listeners: PortListener[] = [];
+    for (const record of records) {
+      const key = `${record.pid ?? ""}\0${record.command ?? ""}\0${record.address ?? ""}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      listeners.push(record);
+    }
     return { entries: listeners, errors: listenerSnapshot.errors };
   }
   return await readUnixSocketEntries(

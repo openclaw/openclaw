@@ -690,4 +690,72 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       }
     },
   );
+
+  it.each([
+    ["direct", "automatic", false],
+    ["direct", "automatic", true],
+    ["direct", "message_tool", false],
+    ["direct", "message_tool", true],
+    ["group", "automatic", false],
+    ["group", "automatic", true],
+    ["group", "message_tool", false],
+    ["group", "message_tool", true],
+  ] as const)(
+    "respects send denial for %s/%s commentary (denied=%s)",
+    async (chat, ownership, denied) => {
+      const commentary = "Checking the requested workspace.";
+      const finalText = "The requested inspection is complete.";
+      const context = http.createContext();
+      context.isGroup = chat === "group";
+      context.ctxPayload.ChatType = chat;
+      context.ctxPayload.WasMentioned = chat === "group";
+      if (chat === "group") {
+        const group = { id: -100123, type: "supergroup" as const, title: "Inspection fixture" };
+        context.chatId = group.id;
+        context.msg.chat = group;
+        context.primaryCtx.message.chat = group;
+        context.route.sessionKey = "agent:default:telegram:group:-100123";
+        Object.assign(context.ctxPayload, {
+          SessionKey: context.route.sessionKey,
+          From: "telegram:group:-100123",
+          To: "telegram:-100123",
+        });
+      }
+      await runTurn(
+        async (options) => {
+          await options?.onReasoningProgress?.({ progressTokens: 200 });
+          await emitPreamble(options, commentary);
+          await tool(options, "exec", "inspect-tool");
+          if (!denied) {
+            await waitForContaining(commentary);
+            expect(texts().join("\n")).toContain(commentary);
+          }
+        },
+        {
+          mode: "progress",
+          context,
+          telegramCfg: {
+            streaming: { mode: "progress", progress: { commentary: true, toolProgress: true } },
+          },
+          cfg: {
+            messages: { visibleReplies: ownership, groupChat: { visibleReplies: ownership } },
+            ...(denied ? { session: { sendPolicy: { default: "deny" } } } : {}),
+          },
+          finalReply: { text: finalText },
+        },
+      );
+      if (denied) {
+        expect(
+          calls.filter((call) =>
+            ["sendMessage", "editMessageText", "deleteMessage", "sendChatAction"].includes(
+              call.method,
+            ),
+          ),
+        ).toEqual([]);
+      } else {
+        expect(calls.some((call) => call.method === "deleteMessage")).toBe(true);
+      }
+      expect(texts()).toEqual(!denied && ownership === "automatic" ? [finalText] : []);
+    },
+  );
 });

@@ -4,7 +4,7 @@ import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.def
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import {
   projectSessionSharingEntry,
-  retainPreparedSessionSharingFacts,
+  retainPreparedSessionGenerationFacts,
 } from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { captureSessionActorStorageOwner } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
@@ -193,14 +193,13 @@ export async function captureRequesterSessionEntryCurrent(
       if (!databaseIdentity) {
         return { readCurrent: () => undefined, release() {} };
       }
-      const retained = retainPreparedSessionSharingFacts({
+      const retained = retainPreparedSessionGenerationFacts({
         databaseIdentity: `file:${databaseIdentity}`,
         sessionKey: storageKey,
         entry: entry ? projectSessionSharingEntry(entry) : undefined,
-        membership: new Set(),
       });
       return {
-        readCurrent: () => retained.readCurrent()?.entry,
+        readCurrent: () => retained.readCurrent() ?? undefined,
         release: retained.release,
       };
     },

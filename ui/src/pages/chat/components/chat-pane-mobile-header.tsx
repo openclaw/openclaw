@@ -5,13 +5,16 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { GatewayStatus } from "../../../lib/gateway-status.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import "./chat-pane-mobile-header.css";
 import {
   ChatSessionPublicIndicator,
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.solid.tsx";
-import "./chat-pane-mobile-header.css";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatPaneMobileHeaderNotice =
   | { kind: "gateway"; status: GatewayStatus; onRetry?: () => void }

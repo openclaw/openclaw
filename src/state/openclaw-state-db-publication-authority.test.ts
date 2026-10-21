@@ -194,6 +194,7 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "state-write-indexes-v27", path: databasePath },
         { kind: "github-publication-draft-v28", path: databasePath },
         { kind: "local-client-credentials-v29", path: databasePath },
+        { kind: "automation-policy-fence-v30", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(

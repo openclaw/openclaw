@@ -256,7 +256,9 @@ test(
         if (!denied) {
           throw new Error("expected lifecycle tool overrides");
         }
-        denied.push("response-only");
+        expect(denied).toEqual(["blocked"]);
+        expect(Object.isFrozen(denied)).toBe(true);
+        expect(() => denied.push("response-only")).toThrow(TypeError);
         expect((await rowReader.snapshot(parentA, { now })).row).toEqual(row);
       });
     }

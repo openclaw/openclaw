@@ -2,6 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { setImmediate as flushImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
@@ -28,6 +29,7 @@ const timeoutProbe = { timedOut: true, error: "health collection timed out after
 const blockedAccounts = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
 let scope: AsyncWorkScope;
 const cleanup: Array<() => void> = [];
+let sessionPrepared = createDeferredCore();
 
 function hold<T>(value: T) {
   const deferred = createDeferredCore<T>();
@@ -70,6 +72,7 @@ function installProbe(accountIds: string[], probe: Probe, id = "deadline-test") 
 }
 
 async function collectDeadlineSnapshot(audience: "public" | "admin" = "admin") {
+  sessionPrepared = createDeferredCore();
   return await scope.track(() => collectGatewayHealthSnapshot({ audience, probe: true }));
 }
 
@@ -79,7 +82,13 @@ function installBlockedProbes(accountIds: string[]) {
   return { work, release: () => blocked.resolve({ ok: true }) };
 }
 
-async function flushHealthPreparation() {
+async function flushHealthPreparation(collecting: Promise<unknown>) {
+  // Receipt reads use real I/O; fake time starts only after the controlled session read.
+  await awaitGateBeforeSettlement(
+    sessionPrepared.promise,
+    collecting,
+    "Health collection settled before session preparation",
+  );
   await vi.advanceTimersByTimeAsync(0);
   // The fake deadline clock does not drive the real yield after a session read.
   await flushImmediate();
@@ -94,7 +103,11 @@ beforeAll(async () => {
   }));
   // mock-isolation: control worker-read completion independently of the health deadline clock.
   vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
-    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(readSummary),
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(() => {
+      const summary = readSummary();
+      sessionPrepared.resolve();
+      return summary;
+    }),
   }));
   vi.doMock("../../channels/plugins/read-only.js", () => ({
     listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
@@ -168,7 +181,7 @@ it.each(["imessage", "deadline-test"])(
       },
     };
     const collecting = collectDeadlineSnapshot("public");
-    await flushHealthPreparation();
+    await flushHealthPreparation(collecting);
     await enteredSummary.promise;
     await vi.advanceTimersByTimeAsync(7_000);
     const result = await collecting;
@@ -198,7 +211,7 @@ it("preserves healthy accounts at the deadline and retains unfinished probe work
   });
 
   const snapshotPromise = collectDeadlineSnapshot();
-  await flushHealthPreparation();
+  await flushHealthPreparation(snapshotPromise);
   await vi.advanceTimersByTimeAsync(7_000);
   const snap = await snapshotPromise;
   const channel = snap.channels["deadline-test"];
@@ -226,7 +239,7 @@ it("does not start queued probes after the aggregate deadline", async () => {
   const { work } = installBlockedProbes(accountIds);
 
   const snapshotPromise = collectDeadlineSnapshot("public");
-  await flushHealthPreparation();
+  await flushHealthPreparation(snapshotPromise);
   expect(work.started).toEqual(accountIds.slice(0, 5));
   await vi.advanceTimersByTimeAsync(7_000);
   const snap = await snapshotPromise;
@@ -251,7 +264,7 @@ it.each([60_000, -60_000])(
     });
 
     const snapshotPromise = collectDeadlineSnapshot();
-    await flushHealthPreparation();
+    await flushHealthPreparation(snapshotPromise);
     await vi.advanceTimersByTimeAsync(7_000);
     const snap = await snapshotPromise;
     slowProbe.resolve({ ok: true });
@@ -269,13 +282,13 @@ it("retains timed-out permits across repeated health collections", async () => {
   const { work, release } = installBlockedProbes(accountIds);
 
   const firstSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation();
+  await flushHealthPreparation(firstSnapshot);
   expect(work.started).toEqual(accountIds);
   await vi.advanceTimersByTimeAsync(7_000);
   await firstSnapshot;
 
   const secondSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation();
+  await flushHealthPreparation(secondSnapshot);
   expect(work.started).toEqual(accountIds);
   await vi.advanceTimersByTimeAsync(7_000);
   const second = await secondSnapshot;

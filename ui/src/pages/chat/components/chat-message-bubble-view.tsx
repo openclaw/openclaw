@@ -17,15 +17,18 @@ import {
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
+import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
-import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
@@ -71,6 +74,9 @@ import { TranscriptMessageElementsContext } from "./chat-transcript-message-elem
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { ToolPreview } from "./widget-card.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 export type GroupedMessageProps = {
@@ -115,12 +121,15 @@ export function GroupedMessage(props: GroupedMessageProps) {
         <Show when={!state().empty}>
           {(_visible) => {
             const entryRef = messageElements?.forKey(initialMessageKey);
-            onCleanup(() => entryRef?.(undefined));
+            const bindEntry = elementRef((element) => {
+              entryRef?.(element);
+              return () => entryRef?.(undefined);
+            });
             return (
               <>
                 <div
                   class={state().bubbleClasses}
-                  ref={(element) => entryRef?.(element)}
+                  ref={[bindEntry]}
                   data-message-id={props.messageKey}
                   data-file-session-key={props.options.fileLinkSessionKey}
                   data-entry-id={props.options.entryId || undefined}
@@ -198,13 +207,16 @@ export function GroupedMessage(props: GroupedMessageProps) {
     >
       {(conflict) => {
         const entryRef = messageElements?.forKey(initialMessageKey);
-        onCleanup(() => entryRef?.(undefined));
+        const bindEntry = elementRef((element) => {
+          entryRef?.(element);
+          return () => entryRef?.(undefined);
+        });
         return (
           <WorkspaceConflictTranscriptMessage
             conflict={conflict()}
             messageKey={props.messageKey}
             entryId={props.options.entryId}
-            ref={entryRef}
+            ref={bindEntry}
           />
         );
       }}
@@ -480,6 +492,7 @@ function BubbleContents(props: ContentProps) {
         onOpenSidebar={props.onOpenSidebar}
         onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
         inlinePlayback={props.state().normalizedRole === "assistant"}
+        inlineComments={props.state().inlineComments}
       />
       <Show when={props.state().isStandaloneToolMessage}>
         <AssistantViews {...props} />

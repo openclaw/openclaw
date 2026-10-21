@@ -11,17 +11,14 @@ vi.mock("node:child_process", async (importOriginal) => ({
   execFileSync: execFileSyncMock,
 }));
 function createRunner(responses: Record<string, string>) {
-  const calls: string[] = [];
-  const runner = async (argv: string[]) => {
+  return vi.fn(async (argv: string[]) => {
     const key = argv.join(" ");
-    calls.push(key);
     const stdout = responses[key];
     if (stdout === undefined) {
       throw new Error(`unexpected command: ${key}`);
     }
     return { stdout, stderr: "", code: 0 };
-  };
-  return { runner, calls };
+  });
 }
 
 describe("update install surface and command ownership", () => {
@@ -37,7 +34,7 @@ describe("update install surface and command ownership", () => {
   const resolveSurface = (
     root: string,
     installKind: "git" | "package",
-    runCommand: ReturnType<typeof createRunner>["runner"],
+    runCommand: ReturnType<typeof createRunner>,
   ) => resolveUpdateInstallSurface({ root, installKind, timeoutMs: 1000, runCommand });
   it("owns default updater subprocess trees", async () => {
     const runCommandWithTimeoutMock = vi.fn(async () => ({ stdout: "", stderr: "", code: 0 }));
@@ -84,7 +81,7 @@ describe("update install surface and command ownership", () => {
         fs.symlink(installDir, path.join(globalRoot, "hash-openclaw"), "dir"),
       ]);
 
-      const { runner } = createRunner({
+      const runner = createRunner({
         "npm root -g": `${path.join(tempDir, "npm", "node_modules")}\n`,
         "pnpm root -g": `${globalRoot}\n`,
       });
@@ -106,14 +103,16 @@ describe("update install surface and command ownership", () => {
         "npm root -g": path.join(tempDir, "npm-global"),
         "pnpm root -g": path.join(tempDir, "pnpm-global"),
       };
-      const { runner, calls } = createRunner(installKind === "git" ? {} : responses);
+      const runner = createRunner(installKind === "git" ? {} : responses);
       await expect(resolveSurface(root, installKind, runner)).resolves.toEqual({
         kind: installKind === "git" ? "git" : "package-root",
         mode: installKind === "git" ? "git" : "unknown",
         root,
         packageRoot: root,
       });
-      expect(calls).toEqual(installKind === "git" ? [] : ["npm root -g", "pnpm root -g"]);
+      expect(runner.mock.calls.map(([argv]) => argv.join(" "))).toEqual(
+        installKind === "git" ? [] : ["npm root -g", "pnpm root -g"],
+      );
     },
   );
 });

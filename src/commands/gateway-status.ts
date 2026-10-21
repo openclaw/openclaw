@@ -14,15 +14,13 @@ import { probeGateway } from "../gateway/probe.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  buildGatewayDiscoveryTarget,
+  serializeGatewayDiscoveryBeacon,
+} from "../infra/gateway-discovery-targets.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
-import {
-  inferSshTargetFromRemoteUrl,
-  pickAutoSshTargetFromDiscovery,
-  resolveSshTarget,
-  serializeGatewayDiscoveryBeacon,
-} from "./gateway-status/discovery.js";
 import {
   buildNetworkHints,
   extractConfigSummary,
@@ -46,6 +44,20 @@ type GatewayStatusProbedTarget = {
   self: ReturnType<typeof pickGatewaySelfPresence>;
   authDiagnostics: string[];
 };
+
+function buildSshTarget(input: { user?: string; host?: string; port?: number }): string | null {
+  const host = normalizeOptionalString(input.host) ?? "";
+  if (!host) {
+    return null;
+  }
+  const user = normalizeOptionalString(input.user) ?? "";
+  const base = user ? `${user}@${host}` : host;
+  const port = input.port ?? 22;
+  if (input.port !== undefined && port) {
+    return `${base}:${port}`;
+  }
+  return base;
+}
 
 function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
   if (!entry.self) {
@@ -114,20 +126,37 @@ export async function gatewayStatusCommand(
   if (!sshTarget && useConfiguredRemoteTargets) {
     // Remote URL inference gives users a useful SSH default without requiring
     // gateway.remote.sshTarget when the host already appears in config.
-    sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);
+    const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url);
+    const host = remoteUrl ? URL.parse(remoteUrl)?.hostname : undefined;
+    sshTarget = host ? buildSshTarget({ user: process.env.USER, host }) : null;
   }
 
   const sshRouteTarget = sshTarget;
   if (sshTarget) {
-    const resolved = await resolveSshTarget({
-      rawTarget: sshTarget,
-      identity: sshIdentity,
-      overallTimeoutMs,
-    });
-    if (resolved) {
-      sshTarget = resolved.target;
-      if (!sshIdentity && resolved.identity) {
-        sshIdentity = resolved.identity;
+    const [{ resolveSshConfig }, { parseSshTarget }] = await Promise.all([
+      import("../infra/ssh-config.js"),
+      import("../infra/ssh-tunnel.js"),
+    ]);
+    const parsed = parseSshTarget(sshTarget);
+    if (parsed) {
+      const config = await resolveSshConfig(parsed, {
+        explicitPort: /:\d+$/.test(sshTarget.trim()),
+        identity: sshIdentity ?? undefined,
+        timeoutMs: Math.min(800, overallTimeoutMs),
+      });
+      if (config) {
+        const target = buildSshTarget({
+          user: config.user ?? parsed.user,
+          host: config.host ?? parsed.host,
+          port: config.port ?? parsed.port,
+        });
+        if (target) {
+          sshTarget = target;
+          if (!sshIdentity) {
+            sshIdentity =
+              config.identityFiles.find((entry) => normalizeOptionalString(entry)) ?? null;
+          }
+        }
       }
     }
   }
@@ -204,11 +233,14 @@ export async function gatewayStatusCommand(
 
           if (!sshTarget && opts.sshAuto) {
             const { parseSshTarget } = await import("../infra/ssh-tunnel.js");
-            sshTarget = pickAutoSshTargetFromDiscovery({
-              discovery,
-              parseSshTarget,
-              sshUser: normalizeOptionalString(process.env.USER) ?? "",
-            });
+            const sshUser = normalizeOptionalString(process.env.USER) ?? "";
+            for (const beacon of discovery) {
+              const target = buildGatewayDiscoveryTarget(beacon, { sshUser }).sshTarget;
+              if (target && parseSshTarget(target)) {
+                sshTarget = target;
+                break;
+              }
+            }
           }
 
           // Prefer the concurrently-started tunnel, but allow auto-discovered SSH

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, getOwner, runWithOwner, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -66,7 +66,6 @@ export function useSessionMenuEntries(
   readState: () => MenuState,
   options: { openInExtra?: () => readonly MenuEntry[]; controls?: MenuControls } = {},
 ) {
-  const owner = getOwner();
   const state = readState();
   const batch = () => state.selectionCount > 1;
   const count = () => String(state.selectionCount);
@@ -81,8 +80,10 @@ export function useSessionMenuEntries(
   const details = useSessionMenuDetails(actions, readState, disabled, options.controls);
   const multipleOwners = actions.ownerMenu.multipleOwners;
   const involvementAvailable = createMemo(() => actions.involvementAvailable);
-  let appearanceContent: JSX.Element;
-  let snoozeEntries: ReturnType<typeof useSessionSnoozeEntries> | undefined;
+  const appearanceContent = createMemo(() => appearance.render(), { lazy: true });
+  const snoozeEntries = createMemo(() => useSessionSnoozeEntries(actions, readState), {
+    lazy: true,
+  });
   const icon = (name: IconName) => (
     <span class="session-menu__icon" aria-hidden="true">
       <Icon name={name} />
@@ -298,8 +299,7 @@ export function useSessionMenuEntries(
           deleteAction(),
         ];
       case "snooze":
-        snoozeEntries ??= runWithOwner(owner, () => useSessionSnoozeEntries(actions, readState));
-        return snoozeEntries();
+        return snoozeEntries()();
       case "copy":
         return [
           ...(state.navigationAllowed ? items(["copy-session-preview-link"]) : []),
@@ -326,8 +326,7 @@ export function useSessionMenuEntries(
             : []),
         ];
       case "icon":
-        appearanceContent ??= runWithOwner(owner, () => appearance.render());
-        return [content("appearance", appearanceContent)];
+        return [content("appearance", appearanceContent())];
       case "group":
         return groupOptions();
       case "assign-owner":

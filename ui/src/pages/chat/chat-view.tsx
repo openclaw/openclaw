@@ -12,7 +12,7 @@ import {
 } from "../../lib/keyboard-shortcut-contract.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
-import { elementRef } from "../../lib/reactive/element-ref.ts";
+import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
@@ -66,6 +66,7 @@ type ChatViewInput = {
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
+  getScrollToLatestElement: () => HTMLButtonElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
@@ -234,6 +235,7 @@ function ChatComposerView(input: ChatViewInput) {
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
+      getScrollToLatestElement={input.getScrollToLatestElement}
       progressCard={
         input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
       }
@@ -386,25 +388,11 @@ export function ChatView(input: {
 
 function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) {
   // Composer sizing needs the viewport even before the virtualizer has rows.
-  let transcriptViewport: HTMLDivElement | undefined;
-  const bindTranscriptViewport = (element: HTMLDivElement) => {
-    transcriptViewport = element;
-    return () => {
-      if (transcriptViewport === element) {
-        transcriptViewport = undefined;
-      }
-    };
-  };
-  const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
-  let replacementComposer: HTMLElement | undefined;
-  const registerReplacementComposer = (element: HTMLElement) => {
-    replacementComposer = element;
-    return () => {
-      if (replacementComposer === element) {
-        replacementComposer = undefined;
-      }
-    };
-  };
+  const { bind: bindTranscriptViewport, read: getTranscriptElement } =
+    connectedElementRef<HTMLDivElement>();
+  const { bind: bindScrollToLatestButton, read: getScrollToLatestElement } =
+    connectedElementRef<HTMLButtonElement>();
+  const replacementComposer = connectedElementRef<HTMLElement>();
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -432,10 +420,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     return createChatViewFrame(
       input.props,
       (replacement) => {
+        const replacementElement = replacement && replacementComposer.read();
         const target =
-          replacement && replacementComposer?.isConnected
-            ? replacementComposer
-            : getChatComposerState(input.props.paneId).composerTextarea;
+          replacementElement || getChatComposerState(input.props.paneId).composerTextarea;
         target?.focus({ preventScroll: true });
       },
       // This view mounts only while its pane's question source exists.
@@ -450,6 +437,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     application,
     bindTranscriptViewport,
     getTranscriptElement,
+    getScrollToLatestElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -589,6 +577,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       <div class="chat-scroll-to-bottom-wrap">
                         <button
                           class="chat-scroll-to-bottom"
+                          ref={elementRef(bindScrollToLatestButton)}
                           data-visible={input.props.showNewMessages ? "true" : "false"}
                           type="button"
                           inert={!input.props.showNewMessages}
@@ -639,7 +628,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         viewProps={viewProps()}
                         view={ChatComposerView}
                         companion={ChatComposerCompanion}
-                        replacementRef={registerReplacementComposer}
+                        replacementRef={replacementComposer.bind}
                       />
                     </div>
                   </div>

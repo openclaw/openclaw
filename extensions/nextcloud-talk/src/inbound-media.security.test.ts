@@ -186,7 +186,7 @@ describe("nextcloud-talk inbound media security", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=user-1`,
+      `nextcloud-talk: inbound media non-outcome reason=${reason} account=default message=msg-1 sender=users/user-1`,
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({

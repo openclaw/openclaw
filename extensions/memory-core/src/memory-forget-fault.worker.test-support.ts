@@ -62,39 +62,35 @@ export function bindSqliteWorkerBackend(
     },
     close() {
       const failures: unknown[] = [];
-      try {
-        backend.close();
-      } catch (error) {
-        failures.push(error);
-      }
+      const attempt = (cleanup: () => void) => {
+        try {
+          cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      attempt(() => backend.close());
       if (input.reportPath) {
         db.prepare = prepare;
-        for (const restore of restoreStatements) {
-          restore();
-        }
+        restoreStatements.forEach((restore) => restore());
       }
-      try {
+      attempt(() => {
         if (db.isOpen && input.trigger) {
           db.exec("DROP TRIGGER temp.forget_fixture_failure");
         }
         if (db.isOpen && input.originTrigger) {
           db.exec(`DROP TRIGGER ${input.originTrigger.name}`);
         }
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
+      });
+      attempt(() => {
         if (input.reportPath) {
           appendFileSync(input.reportPath, `${JSON.stringify(counts)}\n`);
         }
-      } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Memory Forget fixture cleanup failed");
+      });
+      if (failures.length) {
+        throw failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, "Memory Forget fixture cleanup failed");
       }
     },
   };

@@ -1,6 +1,3 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
 import type {
@@ -14,7 +11,11 @@ import type {
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
 import {
+  finishPullRequest,
+  loadBoundSessionPullRequest,
+  parsePullListItem,
   pullRequestMetadataSignature,
+  stateOnlyPullRequestChip,
   readSessionPullRequestMetadata,
 } from "./control-ui-session-pr-metadata.js";
 import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
@@ -22,12 +23,10 @@ import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
 } from "./control-ui-session-pr-request.js";
-import {
-  fetchSessionPullRequestCheckRollup,
-  sessionPullRequestRepositoryApiUrl,
-} from "./control-ui-session-prs-checks.js";
+import { sessionPullRequestRepositoryApiUrl } from "./control-ui-session-prs-checks.js";
 import { readTaskPullRequestReceipts } from "./control-ui-session-task-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
+import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 
 const SUCCESS_CACHE_MS = 90_000;
@@ -182,49 +181,6 @@ async function resolveSessionBranch(
   };
 }
 
-function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (readNonBlankString(value.merged_at)) {
-    return "merged";
-  }
-  if (value.state !== "open") {
-    return "closed";
-  }
-  return value.draft === true ? "draft" : "open";
-}
-
-function parsePullListItem(value: unknown) {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const number = asFiniteNumber(value.number);
-  const title = readNonBlankString(value.title);
-  const url = readNonBlankString(value.html_url);
-  const base = isRecord(value.base) ? value.base : {};
-  const baseRepo = isRecord(base.repo) ? base.repo : {};
-  const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = readNonBlankString(baseOwner.login);
-  const repo = readNonBlankString(baseRepo.name);
-  const head = isRecord(value.head) ? value.head : {};
-  if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
-    return null;
-  }
-  const user = isRecord(value.user) ? value.user : {};
-  const authorLogin = readNonBlankString(user.login);
-  return {
-    number,
-    title,
-    url,
-    owner,
-    repo,
-    state: derivePullState(value),
-    ...(authorLogin ? { author: { login: authorLogin } } : {}),
-    branch: readNonBlankString(head.ref),
-    headSha: readNonBlankString(head.sha),
-    baseRef: readNonBlankString(base.ref),
-    mergeCommitSha: readNonBlankString(value.merge_commit_sha),
-  };
-}
-
 function parsePullList(value: unknown, host: string): PullListItem[] {
   if (!Array.isArray(value)) {
     return [];
@@ -247,71 +203,6 @@ function parsePullList(value: unknown, host: string): PullListItem[] {
 function pullsByHeadUrl(owner: string, repo: string, head: string, apiBaseUrl: string): string {
   const encHead = encodeURIComponent(head);
   return `${sessionPullRequestRepositoryApiUrl({ owner, repo, apiBaseUrl })}/pulls?head=${encHead}&state=all&sort=updated&direction=desc&per_page=5`;
-}
-
-// Sub-fetch degradation: quota errors abort the whole refresh (so the caller
-// serves stale chips with the rate-limit flag); anything else just drops the
-// optional field the sub-fetch would have filled.
-function rethrowRateLimit(error: unknown): undefined {
-  if (error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429) {
-    throw error;
-  }
-  return undefined;
-}
-
-/**
- * The facts a chip carries without spending quota on per-PR detail calls. The
- * rate-limited path renders exactly this, so both callers share one shape.
- */
-function stateOnlyPullRequestChip(item: PullListItem, branch: string): ControlUiSessionPullRequest {
-  return {
-    number: item.number,
-    owner: item.owner,
-    repo: item.repo,
-    branch,
-    title: item.title,
-    url: item.url,
-    state: item.state,
-    ...(item.headSha && /^[0-9a-f]{40}$/i.test(item.headSha)
-      ? { headSha: item.headSha.toLowerCase() }
-      : {}),
-    ...(item.author ? { author: item.author } : {}),
-  };
-}
-
-async function finishPullRequest(
-  item: PullListItem,
-  branch: string,
-  read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
-  preparedDetails?: unknown,
-): Promise<ControlUiSessionPullRequest> {
-  const chip = stateOnlyPullRequestChip(item, branch);
-  // Merged/closed chips render state only; diff counts and CI rollup are
-  // live-work signals, so spend GitHub quota on open PRs alone.
-  if (item.state !== "open" && item.state !== "draft") {
-    return chip;
-  }
-  const detailUrl = `${sessionPullRequestRepositoryApiUrl({ ...item, apiBaseUrl: read.apiBaseUrl })}/pulls/${item.number}`;
-  const [details, checks] = await Promise.all([
-    preparedDetails === undefined
-      ? read.request(detailUrl).catch(rethrowRateLimit)
-      : Promise.resolve(preparedDetails),
-    fetchSessionPullRequestCheckRollup(
-      { ...item, apiBaseUrl: read.apiBaseUrl },
-      read.request,
-    ).catch(rethrowRateLimit),
-  ]);
-  return {
-    ...chip,
-    ...(isRecord(details)
-      ? {
-          additions: asFiniteNumber(details.additions),
-          deletions: asFiniteNumber(details.deletions),
-          changedFiles: asFiniteNumber(details.changed_files),
-        }
-      : {}),
-    ...(checks ? { checks, checksUrl: `${item.url}/checks` } : {}),
-  };
 }
 
 function mergedHeadsOf(items: readonly PullListItem[]): MergedPullHead[] {
@@ -462,8 +353,18 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
+  if (deps.read.target.ownGitHubProfileId && deps.read.target.taskReceiptsOnly) {
+    return {
+      ...(deps.read.branchSnapshot ?? { pullRequests: [], rateLimited: false }),
+      branchRead: false,
+    };
+  }
   // Publication controls deliberately consume the current branch only.
-  if (deps.read.projection === "publication" || !deps.read.target.taskReceipts) {
+  if (
+    deps.read.projection === "publication" ||
+    !deps.read.target.taskReceipts ||
+    deps.read.target.ownGitHubProfileId
+  ) {
     return loadControlUiSessionBranchPullRequests(params, deps);
   }
   const branch: ControlUiSessionPullRequests = deps.read.target.taskReceiptsOnly
@@ -533,7 +434,7 @@ export async function loadControlUiSessionPullRequests(
         {
           refresh: params.refresh,
           signal: deps.cacheSignal,
-          retainFailure: true,
+          retainFailure: () => true,
           onRetainedFailure: () => {
             taskMetadataUnavailable = true;
           },
@@ -564,6 +465,77 @@ async function loadControlUiSessionBranchPullRequests(
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
+    const ownProfileId = target.ownGitHubProfileId;
+    const binding = target.githubPullRequest;
+    if (binding && projection !== "publication") {
+      try {
+        if (!binding.preparedHeadCommit || binding.host !== target.githubHost) {
+          throw new Error("The session pull request is not prepared on the current host");
+        }
+        let credential:
+          | import("./control-ui-session-pr-request.js").SessionPullRequestReadCredential
+          | undefined;
+        let preparedDetails: unknown;
+        if (ownProfileId) {
+          const { readOwnGitHubPullRequest } = await import("./github-publication-inspect.js");
+          const inspected = await readOwnGitHubPullRequest({
+            pullRequestUrl: binding.url,
+            agentId: target.params.agentId,
+            reader: captureOwnGitHubPullRequestReader(ownProfileId, () => binding.host),
+            assertCurrent,
+          });
+          inspected.assertCurrent();
+          const selected = inspected.result;
+          if (
+            !inspected.credential ||
+            selected.url !== binding.url ||
+            selected.host !== binding.host ||
+            selected.number !== binding.number ||
+            selected.base.repositoryId !== binding.base.repositoryId ||
+            (selected.head &&
+              (selected.head.repositoryId !== binding.head.repositoryId ||
+                selected.head.branch !== binding.head.branch))
+          ) {
+            throw new Error("The session pull request association changed");
+          }
+          credential = inspected.credential;
+          preparedDetails = inspected.details;
+          deps.read.retainReadAuthority?.(inspected.assertIdentityCurrent, credential);
+        }
+        const read = prepareSessionPullRequestGitHubRead(binding.host, assertCurrent, {
+          signal: deps.cacheSignal,
+          credential,
+        });
+        let unavailable = false;
+        let rateLimited = false;
+        const pullRequest = await loadBoundSessionPullRequest(binding, read, {
+          bindingIdentity: JSON.stringify([target.identity, deps.read.sourceIdentity]),
+          refresh: request.refresh,
+          signal: deps.cacheSignal,
+          preparedDetails,
+          onRetainedFailure: (error) => {
+            unavailable = true;
+            rateLimited =
+              error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
+          },
+        });
+        assertCurrent();
+        return {
+          pullRequests: [pullRequest],
+          repository: { owner: pullRequest.owner, repo: pullRequest.repo },
+          rateLimited,
+          ...(unavailable && !rateLimited ? { status: "unavailable" as const } : {}),
+        };
+      } catch (error) {
+        assertCurrent();
+        const rateLimited =
+          error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429;
+        // Quota exhaustion withholds nothing that was verified; the UI keeps the last card with a warning.
+        return rateLimited
+          ? { pullRequests: [], rateLimited: true, status: "rate-limited" }
+          : { pullRequests: [], discardPrevious: true, rateLimited: false, status: "unavailable" };
+      }
+    }
     const source = target.source;
     const context =
       typeof source === "string"

@@ -1,3 +1,4 @@
+import { sliceToolResultTextToBudget } from "../agents/embedded-agent-runner/tool-result-text-budget.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -8,6 +9,7 @@ import {
 } from "../security/external-content-source.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { STARTUP_INTERRUPTED_ERROR } from "./execution-error-constants.js";
+import type { CronJobScratchState } from "./scratch-contract.js";
 import type { CronJob } from "./types.js";
 
 const cronExternalContentRuntimeLoader = createLazyImportLoader(
@@ -82,4 +84,20 @@ export async function buildCronCommandBody(params: {
     restartContinuation: job.state?.lastError === STARTUP_INTERRUPTED_ERROR,
   });
   return { sourcePromptPrefix, isExternalHook, commandBody };
+}
+
+/** The scratch owner injects one bounded revision and warns before a partial replacement. */
+export function appendCronJobScratchPrompt(
+  prompt: string,
+  scratch: CronJobScratchState["scratch"],
+): string {
+  if (!scratch) {
+    return prompt;
+  }
+  const bounded = sliceToolResultTextToBudget(scratch.content, 2000);
+  return `${prompt}\n\nAutomation scratch (revision ${scratch.revision}):\n${bounded}${
+    bounded !== scratch.content
+      ? "\n[Scratch shortened for this prompt; reread the complete scratch before replacing it.]"
+      : ""
+  }`;
 }
