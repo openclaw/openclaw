@@ -122,7 +122,7 @@ async function restoreGatewayOperatorSnapshot(params: {
   const revoke = (cause?: unknown) =>
     signal.abort(
       cause instanceof GatewayOperatorRecoveryAuthorizationError
-        ? cause
+        ? new GatewayOperatorRecoveryAuthorizationError(undefined, { cause })
         : new Error("Restart recovery operator authority changed; start a new user turn.", {
             cause,
           }),
