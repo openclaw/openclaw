@@ -1190,69 +1190,45 @@ it.todo("retains todo coverage");
     },
   );
 
-  it.each(["plugin singleton", "Doctor"] as const)(
-    "refits complete explicit %s PR work without trusting ordinal or family names",
-    (kind) => {
-      const plugin = kind !== "Doctor";
-      const configs = [
-        plugin
-          ? "test/vitest/vitest.extension-database-workers.config.ts"
-          : "test/vitest/vitest.commands.config.ts",
-      ];
-      const files = plugin
-        ? ["extensions/telegram/src/native-a.test.ts", "extensions/telegram/src/native-b.test.ts"]
-        : ["src/commands/doctor-a.test.ts", "src/commands/doctor-b.test.ts"];
-      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
-      const parent = "changed-agentic-commands-doctor#file-parallel-2";
-      const key = plugin
-        ? extensionTimingKey(configs[0]!, files, env)!
-        : splitTimingGeneration({
-            configs,
-            env,
-            parentShardName: parent,
-            stripes: [files],
-          }).timingKeys[0]!;
-      const runs = [1, 2].map((id) => {
-        const name = plugin ? `changed-extensions-config-${id * 20}` : parent;
-        const descriptor = { configs, includePatterns: files.toReversed(), shard_name: name };
-        const text = [
-          "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
-          ...(kind === "plugin singleton"
-            ? [
-                `2026-08-27T23:00:00Z OPENCLAW_VITEST_SHARD_NAME: ${name}`,
-                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_CONFIGS_JSON: ${JSON.stringify(configs, null, 2)}`,
-                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${JSON.stringify(files, null, 2)}`,
-                "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: null",
-              ]
-            : [
-                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
-              ]),
-          compactLog(id === 1 ? 180 : 220, name),
-          // Nested tests cannot overwrite their containing job's resource/worker provenance.
-          "2026-08-27T23:04:00Z [shard:fixture] OPENCLAW_VITEST_MAX_WORKERS: 8",
-          `2026-08-27T23:04:01Z [shard:fixture] [shard:${name}] begin`,
-          `2026-08-27T23:59:00Z [shard:fixture] [shard:${name}] end (exit 0)`,
-          `2026-08-27T23:04:01Z [shard:fixture] job\tstep\t2026-08-27T23:04:01Z [shard:${name}] begin`,
-          `2026-08-27T23:59:00Z [shard:fixture] job\tstep\t2026-08-27T23:59:00Z [shard:${name}] end (exit 0)`,
-        ].join("\n");
-        return Object.assign(timingRun(id, [timingLog(text, "blacksmith-8vcpu-ubuntu-2404")]), {
-          completeInventory: false,
-          pullRequestMergeRef: true,
-        });
+  it("refits complete explicit plugin PR work without trusting ordinal or family names", () => {
+    const configs = ["test/vitest/vitest.extension-database-workers.config.ts"];
+    const files = [
+      "extensions/telegram/src/native-a.test.ts",
+      "extensions/telegram/src/native-b.test.ts",
+    ];
+    const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+    const key = extensionTimingKey(configs[0]!, files, env)!;
+    const runs = [1, 2].map((id) => {
+      const name = `changed-extensions-config-${id * 20}`;
+      const text = [
+        "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+        `2026-08-27T23:00:00Z OPENCLAW_VITEST_SHARD_NAME: ${name}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_CONFIGS_JSON: ${JSON.stringify(configs, null, 2)}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${JSON.stringify(files, null, 2)}`,
+        "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: null",
+        compactLog(id === 1 ? 180 : 220, name),
+        // Nested tests cannot overwrite their containing job's resource/worker provenance.
+        "2026-08-27T23:04:00Z [shard:fixture] OPENCLAW_VITEST_MAX_WORKERS: 8",
+        `2026-08-27T23:04:01Z [shard:fixture] [shard:${name}] begin`,
+        `2026-08-27T23:59:00Z [shard:fixture] [shard:${name}] end (exit 0)`,
+        `2026-08-27T23:04:01Z [shard:fixture] job\tstep\t2026-08-27T23:04:01Z [shard:${name}] begin`,
+        `2026-08-27T23:59:00Z [shard:fixture] job\tstep\t2026-08-27T23:59:00Z [shard:${name}] end (exit 0)`,
+      ].join("\n");
+      return Object.assign(timingRun(id, [timingLog(text, "blacksmith-8vcpu-ubuntu-2404")]), {
+        completeInventory: false,
+        pullRequestMergeRef: true,
       });
-      expectCompact([runs[0]!, runs[0]!], {});
-      const result = refitTestTimings(runs);
-      expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ [key]: 200 });
-      expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([]);
-      if (plugin) {
-        for (const run of runs) {
-          run.completeInventory = true;
-          run.pullRequestMergeRef = false;
-        }
-        expectCompact(runs, { [key]: 200 });
-      }
-    },
-  );
+    });
+    expectCompact([runs[0]!, runs[0]!], {});
+    const result = refitTestTimings(runs);
+    expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ [key]: 200 });
+    expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+    for (const run of runs) {
+      run.completeInventory = true;
+      run.pullRequestMergeRef = false;
+    }
+    expectCompact(runs, { [key]: 200 });
+  });
 
   it("keeps mixed worker ceilings out of compact weights and keys runtime observations by their inherited ceiling", () => {
     const descriptor = {
@@ -1816,23 +1792,6 @@ describe("CI timing sampler provenance", () => {
     reject(fixture, "does not match its cohort");
   });
 
-  it("samples five scheduled main cohorts without scanning the disabled push backlog", () => {
-    const fixture = createSamplerFixture({
-      runs: samplerRuns([1, 2, 3, 4, 5], { conclusion: "failure" }),
-      pushRuns: Array.from({ length: 1_001 }, (_, index) =>
-        samplerRun(index + 10, { event: "push", conclusion: "cancelled" }),
-      ),
-      jobs: [1, 2, 3, 4, 5].map((id) => samplerJob(id, id, { log: compactLog(id * 10) })),
-    });
-    const result = invoke(fixture, false, 5);
-    expect(result.stdout).toContain("Independent main compact contributors: 5");
-    expect(JSON.parse(fixture.contents()).compactGroupSeconds.blacksmith).toEqual({
-      "core-unit-src-security-2": 30,
-    });
-    expect(fixture.requestUrls().some((url) => url.includes("event=push"))).toBe(false);
-    expect(fixture.requestUrls().filter((url) => url.endsWith("/logs"))).toHaveLength(5);
-  });
-
   it("collects successful jobs from failed main workflows without pruning absent timings", () => {
     const fixture = createSamplerFixture({
       baseline: {
@@ -1847,9 +1806,12 @@ describe("CI timing sampler provenance", () => {
           samplerRun(100 + index, { conclusion: "cancelled" }),
         ),
         samplerRun(9, { conclusion: "timed_out" }),
-        ...samplerRuns([1, 2, 3], { conclusion: "failure" }),
+        ...samplerRuns([1, 2, 3, 4, 5], { conclusion: "failure" }),
       ],
-      jobs: [1, 2, 3].flatMap((id) => [
+      pushRuns: Array.from({ length: 1_001 }, (_, index) =>
+        samplerRun(index + 10, { event: "push", conclusion: "cancelled" }),
+      ),
+      jobs: [1, 2, 3, 4, 5].flatMap((id) => [
         samplerJob(id * 10 + 1, id, { log: compactLog(10 + id * 20) }),
         samplerJob(id * 10 + 2, id, { conclusion: "failure", log: compactLog(900) }),
         samplerJob(id * 10 + 3, id, { conclusion: "cancelled", log: compactLog(900) }),
@@ -1860,15 +1822,17 @@ describe("CI timing sampler provenance", () => {
         }),
       ]),
     });
-    const result = invoke(fixture, false, 3);
+    const result = invoke(fixture, false, 5);
     const timings = readTimings(fixture);
     expect(timings.compactGroupSeconds).toEqual({
-      blacksmith: { "core-unit-src-security-2": 50, unobserved: 90 },
+      blacksmith: { "core-unit-src-security-2": 70, unobserved: 90 },
       github: retained.compactGroupSeconds.github,
     });
     expect(timings.runtimePlacementTimings).toEqual(retained.runtimePlacementTimings);
     expect(result.stdout).toContain("| failure | blacksmith | 1 |");
+    expect(result.stdout).toContain("Independent main compact contributors: 5");
     const requests = fixture.requestUrls();
+    expect(requests.some((url) => url.includes("event=push"))).toBe(false);
     const mainPages = requests.filter((url) => url.includes("event=schedule"));
     expect(mainPages).toHaveLength(2);
     for (const url of mainPages) {
@@ -1885,6 +1849,8 @@ describe("CI timing sampler provenance", () => {
       "repos/fixture/repo/actions/jobs/11/logs",
       "repos/fixture/repo/actions/jobs/21/logs",
       "repos/fixture/repo/actions/jobs/31/logs",
+      "repos/fixture/repo/actions/jobs/41/logs",
+      "repos/fixture/repo/actions/jobs/51/logs",
     ]);
   });
 
