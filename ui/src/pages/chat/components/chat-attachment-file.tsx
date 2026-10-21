@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentVideoPosterUrl } from "../attachment-payload-store.ts";
@@ -53,6 +54,7 @@ export function CompactAttachmentFile(props: {
   attachment: ChatAttachment;
   label?: string;
   metadata?: JSX.Element;
+  preview?: JSX.Element;
   onOpen?: () => void;
 }) {
   let openButton: HTMLButtonElement | undefined;
@@ -71,13 +73,14 @@ export function CompactAttachmentFile(props: {
         }
       }}
     >
-      {icon().family === "video" ? (
-        <AttachmentVideoPreview attachment={props.attachment} />
-      ) : (
-        <span class="chat-attachment-file__icon" data-family={icon().family}>
-          <Icon name={icon().family === "audio" ? "music" : "fileText"} />
-        </span>
-      )}
+      {props.preview ??
+        (icon().family === "video" ? (
+          <AttachmentVideoPreview attachment={props.attachment} />
+        ) : (
+          <span class="chat-attachment-file__icon" data-family={icon().family}>
+            <Icon name={icon().family === "audio" ? "music" : "fileText"} />
+          </span>
+        ))}
       <span class="chat-attachment-file__body">
         {props.onOpen ? (
           <button
@@ -92,7 +95,14 @@ export function CompactAttachmentFile(props: {
         ) : (
           <span class="chat-attachment-file__name">{name()}</span>
         )}
-        {props.metadata ?? <span class="chat-attachment-file__type">{icon().extensionLabel}</span>}
+        {props.metadata ?? (
+          <span class="chat-attachment-file__type">
+            {icon().extensionLabel}
+            {icon().family === "video" && props.attachment.sizeBytes !== undefined
+              ? ` · ${formatBytes(props.attachment.sizeBytes)}`
+              : ""}
+          </span>
+        )}
       </span>
     </div>
   );

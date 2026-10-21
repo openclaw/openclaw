@@ -54,7 +54,9 @@ export function AttachmentPreview(
       errorMessage: read.errorMessage,
     }));
   });
-  const failures = createMemo(() => entries().filter((entry) => entry.state === "error"));
+  const failures = createMemo(() =>
+    entries().filter((entry) => entry.state === "error" && !entry.read.compress),
+  );
   return (
     <Show when={entries().length > 0}>
       <Loading>

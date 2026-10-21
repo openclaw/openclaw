@@ -146,6 +146,9 @@ function AttachmentTile(props: {
                 "chat-attachment-thumb",
                 {
                   "chat-attachment-thumb--preparation": preparing(),
+                  "chat-attachment-thumb--preparation-error":
+                    failed() && preparing() && !props.entry.read.compress,
+                  "chat-attachment-thumb--video": att().mimeType.startsWith("video/"),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
                   "chat-attachment-thumb--error": failed(),
                 },
@@ -153,7 +156,7 @@ function AttachmentTile(props: {
               aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
             >
               {preparing() ? (
-                failed() ? (
+                failed() && !props.entry.read.compress ? (
                   <div class="chat-attachment-preparation">
                     <span class="chat-attachment-file__name" title={att().fileName ?? ""}>
                       {att().fileName}
@@ -165,25 +168,75 @@ function AttachmentTile(props: {
                 ) : (
                   <CompactAttachmentFile
                     attachment={att()}
+                    preview={
+                      <span class="chat-attachment-file__preview" aria-hidden="true">
+                        {props.entry.preparation === "compressing" ? (
+                          <svg class="chat-attachment-compression-progress" viewBox="0 0 32 32">
+                            <circle
+                              class="chat-attachment-compression-progress__track"
+                              cx="16"
+                              cy="16"
+                              r="13"
+                            />
+                            <circle
+                              cx="16"
+                              cy="16"
+                              r="13"
+                              pathLength="100"
+                              stroke-dasharray={`${(props.entry.progress ?? 0) * 100} 100`}
+                            />
+                          </svg>
+                        ) : (
+                          <>
+                            <Icon name="play" />
+                            <span
+                              class={[
+                                "chat-attachment-preparation-badge",
+                                { "chat-attachment-preparation-badge--error": failed() },
+                              ]}
+                            >
+                              <Icon name="alertTriangle" />
+                            </span>
+                          </>
+                        )}
+                      </span>
+                    }
                     metadata={
-                      props.entry.preparation === "offer" ? (
-                        <span class="chat-attachment-file__type">
-                          <button
-                            type="button"
-                            class="chat-attachment-compress"
-                            title={t("chat.attachments.compressionHint")}
-                            disabled={props.controls.disabled}
-                            onClick={() => props.entry.read.compress?.()}
-                          >
-                            <span>{t("chat.attachments.compressToFit")}</span>
-                            <Icon name="chevronRight" />
-                          </button>
-                        </span>
-                      ) : (
+                      props.entry.preparation === "compressing" ? (
                         <span class="chat-attachment-file__type" role="status">
                           {t("chat.attachments.compressing", {
                             progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
                           })}
+                        </span>
+                      ) : (
+                        <span class="chat-attachment-file__type">
+                          {failed() && (
+                            <span class="sr-only" role="status">
+                              {failureLabel()}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            class={[
+                              "chat-attachment-compress",
+                              { "chat-attachment-compress--retry": failed() },
+                            ]}
+                            title={
+                              failed() ? failureLabel() : t("chat.attachments.compressionHint")
+                            }
+                            disabled={props.controls.disabled}
+                            onClick={() => props.entry.read.compress?.()}
+                          >
+                            {failed() && <Icon name="refresh" />}
+                            <span>
+                              {t(
+                                failed()
+                                  ? "chat.attachments.retryCompression"
+                                  : "chat.attachments.compressToFit",
+                              )}
+                            </span>
+                            {!failed() && <Icon name="chevronRight" />}
+                          </button>
                         </span>
                       )
                     }
@@ -218,7 +271,7 @@ function AttachmentTile(props: {
               )}
               <span
                 class="chat-attachment-loading"
-                data-state={props.entry.preparation === "offer" ? "offer" : props.entry.state}
+                data-state={preparing() ? "preparation" : props.entry.state}
                 data-indeterminate={
                   reading() && props.entry.progress === undefined ? "true" : "false"
                 }

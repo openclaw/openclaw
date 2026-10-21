@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as toast from "../../../lib/toast.ts";
 import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
-import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
+import type { VideoCompressionRequest, VideoCompressionResponse } from "./chat-attachment-video.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 
 class EncoderWorker extends EventTarget {
   static jobs: EncoderWorker[] = [];
   terminate = vi.fn();
-  postMessage() {
+  request?: VideoCompressionRequest;
+  postMessage(request: VideoCompressionRequest) {
+    this.request = request;
     EncoderWorker.jobs.push(this);
   }
   reply(data: VideoCompressionResponse) {
@@ -44,6 +47,7 @@ afterEach(() => {
   draft.dispose();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 it("keeps consent optional, reserves remaining batch bytes, and leaves small files unchanged", async () => {
@@ -79,12 +83,12 @@ it("keeps encoding alive beyond the read timeout and publishes only verified byt
   expect(reads.project([])[0]?.progress).toBeCloseTo(0.38);
   worker.reply({
     type: "ready",
-    file: new File([new Uint8Array(50)], "screen-compressed.webm", { type: "video/webm" }),
+    file: new File([new Uint8Array(50)], "screen.webm", { type: "video/webm" }),
   });
   await vi.advanceTimersByTimeAsync(0);
   expect(reads.pendingReads).toBe(0);
   expect(attachments()[0]).toMatchObject({
-    fileName: "screen-compressed.webm",
+    fileName: "screen.webm",
     sizeBytes: 50,
     mimeType: "video/webm",
   });
@@ -119,4 +123,70 @@ it.each(["unsupported", "failed", "oversize"] as const)("removes %s errors", asy
   expect(attachments()).toEqual([]);
   reads.remove(entry);
   expect(reads.project([])).toHaveLength(0);
+});
+
+it("retries the original video once within the remaining batch budget", async () => {
+  const { reads, entry, worker, attachments, props } = await encoding();
+  vi.useFakeTimers();
+  const id = entry.attachment.id;
+  worker.reply({ type: "error", reason: "failed" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reads.pendingReads).toBe(0);
+  appendChatAttachmentFiles([new File([new Uint8Array(30)], "notes.txt")], props);
+  const retry = entry.compress!;
+  retry();
+  retry();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(EncoderWorker.jobs).toHaveLength(2);
+  const second = EncoderWorker.jobs[1]!;
+  expect(second.request?.file).toBe(worker.request?.file);
+  expect(second.request?.maxBytes).toBe(70);
+  expect(reads.pendingReads).toBe(1);
+  second.reply({
+    type: "ready",
+    file: new File([new Uint8Array(50)], "screen.mp4", { type: "video/mp4" }),
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reads.pendingReads).toBe(0);
+  expect(attachments().map((attachment) => attachment.fileName)).toEqual([
+    "screen.mp4",
+    "notes.txt",
+  ]);
+  expect(attachments()[0]?.id).toBe(id);
+  expect(EncoderWorker.jobs).toHaveLength(2);
+});
+
+it.each(["remove", "reset"] as const)("cannot retry a failed video after %s", async (action) => {
+  const { reads, entry, worker, attachments } = await encoding();
+  vi.useFakeTimers();
+  worker.reply({ type: "error", reason: "failed" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(entry.state).toBe("error");
+  const retry = entry.compress!;
+  if (action === "remove") {
+    reads.remove(entry);
+  } else {
+    reads.abortReads();
+  }
+  retry();
+  expect(reads.pendingReads).toBe(0);
+  expect(reads.project(attachments())).toHaveLength(0);
+  expect(EncoderWorker.jobs).toHaveLength(1);
+});
+
+it("reports a full batch without restarting the failed encoder", async () => {
+  const { reads, entry, worker, props } = await encoding();
+  vi.useFakeTimers();
+  worker.reply({ type: "error", reason: "failed" });
+  await vi.advanceTimersByTimeAsync(0);
+  appendChatAttachmentFiles(
+    [new File([new Uint8Array(80)], "first.txt"), new File([new Uint8Array(20)], "second.txt")],
+    props,
+  );
+  const notification = vi.spyOn(toast, "showToast");
+  entry.compress?.();
+  expect(notification).toHaveBeenCalledWith({ message: "Too large to send: screen.mp4" });
+  expect(entry.state).toBe("error");
+  expect(reads.pendingReads).toBe(0);
+  expect(EncoderWorker.jobs).toHaveLength(1);
 });

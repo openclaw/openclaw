@@ -54,7 +54,7 @@ suite.define(() => {
         const offerBox = (await offer.boundingBox())!;
         expect(normalBox.height).toBe(56);
         expect(offerBox.height).toBe(normalBox.height);
-        expect(offerBox.width).toBeLessThan(normalBox.width);
+        expect(offerBox.width).toBeLessThanOrEqual(240);
         expect(offerBox.y).toBe(normalBox.y);
         const name = offer.locator(".chat-attachment-file__name");
         const clipping = await name.evaluate((element) => ({
@@ -119,7 +119,7 @@ suite.define(() => {
         attachments: Array<{ content: string; mimeType: string; fileName: string }>;
       };
       const output = params.attachments[0]!;
-      expect(output.fileName).toMatch(/^screen-compressed\.(mp4|webm)$/u);
+      expect(output.fileName).toMatch(/^screen\.(mp4|webm)$/u);
       const bytes = Buffer.from(output.content, "base64");
       expect(bytes.length).toBeGreaterThan(0);
       expect(bytes.length).toBeLessThanOrEqual(limit);
@@ -160,7 +160,7 @@ suite.define(() => {
       const status = page.locator(".chat-attachment-thumb").getByRole("status");
       const expectError = async (error: string) => {
         await status.filter({ hasText: error }).waitFor();
-        await page.getByRole("alert").getByText(error, { exact: true }).waitFor();
+        await button(page, "Retry compression").waitFor();
       };
       await upload(page, "invalid.mp4", Buffer.alloc(256 * 1024));
       await button(page, "Compress to fit").click();

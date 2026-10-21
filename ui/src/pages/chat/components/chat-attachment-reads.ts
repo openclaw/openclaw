@@ -9,6 +9,7 @@ import {
 import {
   admitAttachmentFiles,
   attachmentReservationBytes,
+  chatAttachmentBatchBytes,
   type ChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
 import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
@@ -156,15 +157,38 @@ export class ChatAttachmentReadLifecycle {
     return this.entries;
   }
 
-  settle(entry: ChatAttachmentRead, state: "ready" | "error"): void {
+  settle(entry: ChatAttachmentRead, state: "ready" | "error", retryCompression?: () => void): void {
     if (!this.entries.includes(entry)) {
       return;
     }
     entry.state = state;
     entry.preparation = undefined;
-    entry.compress = undefined;
+    entry.compress = retryCompression;
     entry.cancel = undefined;
     this.notify();
+  }
+
+  retry(entry: PendingChatAttachmentRead, file: File, limits?: ChatAttachmentLimits): boolean {
+    if (!this.entries.includes(entry) || entry.state !== "error") {
+      return false;
+    }
+    const stagedBytes =
+      chatAttachmentBatchBytes(entry.destination.getAttachments()) + this.pendingBytes(limits);
+    if (admitAttachmentFiles([file], limits, stagedBytes, { compressVideos: true }).length === 0) {
+      return false;
+    }
+    entry.reservedBytes = attachmentReservationBytes(
+      file.size,
+      file.type,
+      limits,
+      (limits?.maxBatchBytes ?? Infinity) - stagedBytes,
+    );
+    entry.state = "reading";
+    entry.errorMessage = undefined;
+    entry.compress = undefined;
+    entry.progress = undefined;
+    this.notify();
+    return true;
   }
 
   updateProgress(entry: ChatAttachmentRead, fraction: number): void {
@@ -221,7 +245,7 @@ export function readChatAttachmentFile(
       // Ignore reader abort errors on stalled handles.
     }
   };
-  const finish = (outcome: "ready" | "error" | "aborted") => {
+  const finish = (outcome: "ready" | "error" | "aborted", retryCompression?: () => void) => {
     if (settled) {
       return;
     }
@@ -255,7 +279,7 @@ export function readChatAttachmentFile(
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
     } else {
-      reads.settle(entry, "error");
+      reads.settle(entry, "error", retryCompression);
     }
     entry.destination.onPendingReadsChange?.(-1);
   };
@@ -339,7 +363,17 @@ export function readChatAttachmentFile(
               : reason === "too-large"
                 ? "chat.attachments.compressionTooLarge"
                 : "chat.attachments.compressionFailed";
-          finish("error");
+          finish("error", () => {
+            if (
+              signal.aborted ||
+              !uploadsEnabled(props.uploadConfig) ||
+              !reads.retry(entry, file, props.attachmentLimits)
+            ) {
+              return;
+            }
+            readChatAttachmentFile(file, entry, reads, props);
+            entry.compress?.();
+          });
         });
     };
     reads.updateProgress(entry, 0);
