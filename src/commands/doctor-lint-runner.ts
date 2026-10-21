@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   createConfigIO,
@@ -45,7 +46,10 @@ import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { tryProjectRetiredHeartbeatConfig } from "./doctor-heartbeat-legacy.js";
+import {
+  resolveLegacyHeartbeatAgents,
+  tryProjectRetiredHeartbeatConfig,
+} from "./doctor-heartbeat-legacy.js";
 import type { DoctorLintCliOptions } from "./doctor-lint-options.js";
 import {
   createDeferredInspectionExecution,
@@ -336,10 +340,18 @@ async function executeDoctorLint(
     snapshot.exists && !snapshot.valid
       ? tryProjectRetiredHeartbeatConfig(snapshot.sourceConfig)
       : undefined;
-  const projectedHeartbeatValidation = projectedHeartbeatConfig
-    ? validateConfigObjectWithPlugins(projectedHeartbeatConfig, {
+  const admittedHeartbeatConfig =
+    projectedHeartbeatConfig &&
+    (resolveLegacyHeartbeatAgents(snapshot.sourceConfig).some(
+      (agent) => agent.heartbeat !== undefined,
+    ) ||
+      !isDeepStrictEqual(snapshot.sourceConfig.channels, projectedHeartbeatConfig.channels))
+      ? projectedHeartbeatConfig
+      : undefined;
+  const projectedHeartbeatValidation = admittedHeartbeatConfig
+    ? validateConfigObjectWithPlugins(admittedHeartbeatConfig, {
         env: stateView.pluginMetadataEnv,
-        sourceRaw: projectedHeartbeatConfig,
+        sourceRaw: admittedHeartbeatConfig,
       })
     : undefined;
   if (snapshot.exists && !snapshot.valid && !projectedHeartbeatValidation?.ok) {

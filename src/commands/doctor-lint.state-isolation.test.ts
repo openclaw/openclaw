@@ -317,6 +317,27 @@ describe("doctor lint state isolation", () => {
     });
   });
 
+  it("rejects config syntax errors before running health checks", async () => {
+    await withOpenClawTestState({ prefix: "doctor-lint-config-syntax-" }, async (state) => {
+      fs.writeFileSync(state.configPath, "{ malformed");
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const exitCode = await runDoctorLintCli(runtime, { json: true });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(exitCode).toBe(1);
+        expect(report.findings).toEqual([
+          expect.objectContaining({
+            checkId: "core/doctor/final-config-validation",
+            severity: "error",
+          }),
+        ]);
+        expect(mocks.resolveDoctorContributionHealthChecks).not.toHaveBeenCalled();
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  });
+
   it("retains auth findings and source paths when mixed lint uses legacy-main shared auth", async () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-lint-auth-" }, async (state) => {
       const customDir = state.path("custom-agent");
