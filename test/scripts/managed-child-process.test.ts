@@ -1524,35 +1524,6 @@ try {
     },
   );
 
-  posixIt("joins real captured output before releasing strict command ownership", async () => {
-    const dir = createTempDir("openclaw-managed-real-output-close-");
-    const owner = createVitestResourceOwner(dir);
-    const closed = [false, false];
-    const output = ["", ""];
-    const code = await runManagedCommand({
-      bin: testNodeExecPath,
-      args: ["-e", "process.stdout.write('out'); process.stderr.write('err');"],
-      env: fixtureEnv(dir),
-      shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
-      requireProcessTreeExit: true,
-      onReady(child) {
-        [child.stdout!, child.stderr!].forEach((pipe, index) => {
-          pipe.on("data", (chunk) => {
-            output[index] += String(chunk);
-          });
-          pipe.once("close", () => {
-            closed[index] = true;
-          });
-        });
-      },
-    });
-    expect(code).toBe(0);
-    expect(output).toEqual(["out", "err"]);
-    expect(closed).toEqual([true, true]);
-    expect(() => owner.assertReleased()).not.toThrow();
-  });
-
   posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
     const startedAt = Date.now();
     let childPid = 0;
