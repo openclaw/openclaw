@@ -1253,7 +1253,6 @@
 ["extensions/tlon/src/channel.runtime.test.ts","./urbit/auth.js","490ca97fb24cf79c8b2f81095936cac9a22be4bd32b24ce7e90e8bcbd1c50f37",1]
 ["extensions/tlon/src/channel.runtime.test.ts","./urbit/fetch.js","5d4eb22d0ed4041932f0ea1afd3a809159c385b6621dc8efd2dd24a728144828",1]
 ["extensions/tlon/src/monitor/media.test.ts","openclaw/plugin-sdk/media-runtime","be12d331c7bed767b83cc93927f7a4c19f7935e814a89b963c349cb97fc9df77",1]
-["extensions/tlon/src/monitor/monitor.test-harness.ts","../runtime.js","840fcc44b890243db2442bb183224c616a1457ea132546e142df92fa43336666",1]
 ["extensions/tlon/src/monitor/monitor.test-harness.ts","../urbit/auth.js","2b4c1ddf133cc6cf4fbf9788023a58d16dcc68405ea86e8bd44f4132ab49a0f9",1]
 ["extensions/tlon/src/monitor/monitor.test-harness.ts","./ingress.js","5e865b7e30d57ad59a4e9976e331defb4fb1471d4eba41fe26bb1e294192816a",1]
 ["extensions/tlon/src/monitor/monitor.test-harness.ts","openclaw/plugin-sdk/agent-runtime","de23018546480ac5af7d3c7028a85ead2400c719621824e5e3e31bba942e1f84",1]

@@ -3,7 +3,6 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import { join } from "node:path";
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -866,7 +865,7 @@ describe("monitorTlonProvider shutdown", () => {
   });
 
   it("streams deeply nested poison and capped messages over real HTTP SSE through production handlers and recovers on the next messages", async () => {
-    const createdDir = await fs.mkdtemp(path.join(os.tmpdir(), "tlon-live-stream-"));
+    const createdDir = await fs.mkdtemp(join(os.tmpdir(), "tlon-live-stream-"));
     const stateDir = await fs.realpath(createdDir);
     const controller = new AbortController();
     const ackedEventIds: number[] = [];
