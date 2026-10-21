@@ -374,7 +374,13 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
               }
             : null;
           if (shared && read.sessionScoped) {
-            if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
+            if (
+              !(await hasSupportedGitHubPublicationTarget(
+                session,
+                assertResponseCurrent,
+                read.currentSessionRead,
+              ))
+            ) {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }
