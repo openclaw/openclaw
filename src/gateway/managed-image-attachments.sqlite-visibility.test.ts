@@ -159,27 +159,14 @@ describe("managed attachment SQLite visibility", () => {
   }) => {
     const nowMs = 2_000_000;
     const originals = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-    const kept = path.join(originals, "kept.png");
-    await insertManagedImageRecord(
-      {
-        attachmentId: "11111111-1111-4111-8111-111111111111",
-        sessionKey: "agent:main:main",
-        messageId: null,
-        createdAt: new Date(nowMs).toISOString(),
-        alt: "Retained transient image",
-        original: {
-          mediaRoot: path.join(stateDir, "media"),
-          mediaId: "kept.png",
-          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-          contentType: "image/png",
-          width: 1,
-          height: 1,
-          sizeBytes: 4,
-          filename: "kept.png",
-        },
-      },
-      stateDir,
-    );
+    const { originalPath: kept } = await createFixture(stateDir, {
+      messageId: null,
+      createdAt: new Date(nowMs).toISOString(),
+      body: Buffer.from("kept"),
+      filename: "kept.png",
+    });
+    await fsAsync.unlink(kept);
+    await fsAsync.rmdir(originals);
     const reads: string[] = [];
     onTestFinished(
       onInternalDiagnosticEvent(

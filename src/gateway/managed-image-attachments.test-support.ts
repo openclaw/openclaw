@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { IncomingHttpHeaders } from "node:http";
+import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
+import { buffer as readResponseBuffer } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -19,11 +20,29 @@ import {
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 
-export type RequestResult = {
+type RequestResult = {
   statusCode: number;
   headers: IncomingHttpHeaders;
   body: Buffer;
 };
+
+export async function requestManagedImageHttp(
+  origin: string,
+  pathName: string,
+  method = "GET",
+  headers?: http.ClientRequestArgs["headers"],
+): Promise<RequestResult> {
+  const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    http
+      .get(`${origin}${pathName}`, { method, headers, agent: false }, resolve)
+      .on("error", reject);
+  });
+  return {
+    statusCode: response.statusCode ?? 0,
+    headers: response.headers,
+    body: await readResponseBuffer(response),
+  };
+}
 
 export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";

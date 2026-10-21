@@ -135,6 +135,12 @@ function publishGatewayTestConfig(
   return config;
 }
 
+function configObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 async function persistTestSessionConfig(): Promise<void> {
   const configPaths = new Set<string>();
   if (process.env.OPENCLAW_CONFIG_PATH) {
@@ -150,22 +156,14 @@ async function persistTestSessionConfig(): Promise<void> {
     try {
       const raw = await fs.readFile(configPath, "utf-8");
       const parsed = parseConfigJson5(raw);
-      if (
-        parsed.ok &&
-        parsed.parsed &&
-        typeof parsed.parsed === "object" &&
-        !Array.isArray(parsed.parsed)
-      ) {
-        config = parsed.parsed as Record<string, unknown>;
+      if (parsed.ok) {
+        config = configObject(parsed.parsed) ?? {};
       }
     } catch {
       // Fixture setup accepts absent or malformed files.
     }
     parsedConfigs.set(configPath, config);
-    const session =
-      config.session && typeof config.session === "object" && !Array.isArray(config.session)
-        ? (config.session as Record<string, unknown>)
-        : undefined;
+    const session = configObject(config.session);
     const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
     if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
       preservedTemplateStore = existingStore;
@@ -177,10 +175,7 @@ async function persistTestSessionConfig(): Promise<void> {
       : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
-    const session =
-      config.session && typeof config.session === "object" && !Array.isArray(config.session)
-        ? { ...(config.session as Record<string, unknown>) }
-        : {};
+    const session = { ...configObject(config.session) };
     delete session.mainKey;
     delete session.store;
     if (typeof nextStoreValue === "string" && nextStoreValue.trim().length > 0) {
@@ -254,12 +249,7 @@ export async function writeSessionStore(params: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt ?? 0,
     } as SessionEntry);
-    upserts.push({
-      sessionKey: storeKey,
-      entry: {
-        ...canonicalEntry,
-      },
-    });
+    upserts.push({ sessionKey: storeKey, entry: { ...canonicalEntry } });
     if (typeof entry.sessionFile === "string" && entry.sessionFile.trim()) {
       transcriptImports.push({
         agentId,
@@ -364,14 +354,10 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   lastSyncedSessionStorePath = undefined;
   lastSyncedSessionConfigJson = undefined;
   testIsNixMode.value = false;
-  cronIsolatedRun.mockReset();
-  cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "ok" });
-  agentCommandMock.mockReset();
-  agentCommandMock.mockResolvedValue(undefined);
-  gatewayReplyMock.mockReset();
-  gatewayReplyMock.mockResolvedValue(undefined);
-  sendWhatsAppMock.mockReset();
-  sendWhatsAppMock.mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
+  cronIsolatedRun.mockReset().mockResolvedValue({ status: "ok", summary: "ok" });
+  agentCommandMock.mockReset().mockResolvedValue(undefined);
+  gatewayReplyMock.mockReset().mockResolvedValue(undefined);
+  sendWhatsAppMock.mockReset().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" });
   embeddedRunMock.activeIds.clear();
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
@@ -382,8 +368,7 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
   }
   embeddedRunMock.endWaiters.clear();
   embeddedRunMock.resolveEndBeforeTimeoutIds.clear();
-  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset().mockResolvedValue({
     ok: true,
     compacted: true,
     result: {
@@ -393,6 +378,10 @@ function resetGatewayMutableTestFixtures(sessionStorePath?: string): void {
       tokensAfter: 80,
     },
   });
+}
+
+async function removeGatewayTestDir(dir: string) {
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
@@ -413,21 +402,11 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   tempConfigRoot = options.uniqueConfigRoot
     ? path.join(tempHome, ".openclaw-test-suite", `case-${suiteConfigRootSeq++}`)
     : path.join(tempHome, ".openclaw-test");
-  await fs.rm(tempConfigRoot, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
+  await removeGatewayTestDir(tempConfigRoot);
   await fs.mkdir(tempConfigRoot, { recursive: true });
   setTestConfigRoot(tempConfigRoot);
   tempControlUiRoot = path.join(tempHome, ".openclaw-test-control-ui");
-  await fs.rm(tempControlUiRoot, {
-    recursive: true,
-    force: true,
-    maxRetries: 20,
-    retryDelay: 25,
-  });
+  await removeGatewayTestDir(tempControlUiRoot);
   await fs.mkdir(tempControlUiRoot, { recursive: true });
   await fs.writeFile(
     path.join(tempControlUiRoot, "index.html"),
@@ -459,12 +438,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
     gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
-    await fs.rm(tempHome, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
+    await removeGatewayTestDir(tempHome);
     tempHome = undefined;
   }
   tempConfigRoot = undefined;
@@ -827,7 +801,7 @@ export async function withGatewayServer<T>(
     opts: opts?.serverOptions,
   });
   try {
-    return await fn({ port: started.port, server: started.server });
+    return await fn(started);
   } finally {
     await started.server.close();
   }
@@ -847,14 +821,8 @@ export async function createGatewaySuiteHarness(opts?: {
     opts: opts?.serverOptions,
   });
   return {
-    port: started.port,
-    server: started.server,
-    openWs: async (headers?: Record<string, string>) => {
-      return await openTrackedWebSocket({
-        port: started.port,
-        headers,
-      });
-    },
+    ...started,
+    openWs: (headers) => openTrackedWebSocket({ port: started.port, headers }),
     close: async () => {
       await started.server.close();
     },
@@ -872,9 +840,7 @@ export async function startServer(token?: string, opts?: GatewayServerOptions) {
   }
   const fallbackToken =
     token ??
-    (typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-      ? (testState.gatewayAuth as { token?: string }).token
-      : undefined);
+    (typeof testState.gatewayAuth?.token === "string" ? testState.gatewayAuth.token : undefined);
   if (fallbackToken === undefined) {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   } else {
@@ -953,13 +919,30 @@ export async function startConnectedServerWithClient(
   return await acquireGatewayServerClient(token, opts, connectOk);
 }
 
-type ConnectResponse = {
+type GatewayTestResponse<T> = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: Record<string, unknown>;
+  payload?: T;
   error?: { message?: string; code?: string; details?: unknown };
 };
+type ConnectResponse = GatewayTestResponse<Record<string, unknown>>;
+
+function responseForId(id: string): (value: unknown) => boolean {
+  return (value) => {
+    const response = configObject(value);
+    return response?.type === "res" && response.id === id;
+  };
+}
+
+function defaultAuthValue(key: "token" | "password", skip: boolean | undefined) {
+  const value = testState.gatewayAuth?.[key];
+  return skip === true
+    ? undefined
+    : typeof value === "string"
+      ? value
+      : process.env[key === "token" ? "OPENCLAW_GATEWAY_TOKEN" : "OPENCLAW_GATEWAY_PASSWORD"];
+}
 
 function resolveDefaultTestDeviceIdentityPath(params: {
   clientId: string;
@@ -1090,22 +1073,10 @@ export async function connectReq(
     mode: GATEWAY_CLIENT_MODES.TEST,
   };
   const role = opts?.role ?? "operator";
-  const defaultToken =
-    opts?.skipDefaultAuth === true
-      ? undefined
-      : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
-        ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_TOKEN;
-  const defaultPassword =
-    opts?.skipDefaultAuth === true
-      ? undefined
-      : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
-        ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_PASSWORD;
-  const token = opts?.token ?? defaultToken;
+  const token = opts?.token ?? defaultAuthValue("token", opts?.skipDefaultAuth);
   const bootstrapToken = normalizeOptionalString(opts?.bootstrapToken);
   const deviceToken = normalizeOptionalString(opts?.deviceToken);
-  const password = opts?.password ?? defaultPassword;
+  const password = opts?.password ?? defaultAuthValue("password", opts?.skipDefaultAuth);
   const authTokenForSignature = token ?? bootstrapToken ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
@@ -1158,13 +1129,7 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
-  if (
-    device &&
-    shouldPrePairTestDevice({
-      client,
-      opts,
-    })
-  ) {
+  if (device && shouldPrePairTestDevice({ client, opts })) {
     await prePairTestDevice({
       device,
       client,
@@ -1173,14 +1138,7 @@ export async function connectReq(
       browserOrigin: opts?.browserOrigin,
     });
   }
-  const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
-  const responsePromise = onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  const responsePromise = onceMessage<ConnectResponse>(ws, responseForId(id), opts?.timeoutMs);
   ws.send(
     JSON.stringify({
       type: "req",
@@ -1257,21 +1215,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
-  const responsePromise = onceMessage<{
-    type: "res";
-    id: string;
-    ok: boolean;
-    payload?: T | null | undefined;
-    error?: { message?: string; code?: string; details?: unknown };
-  }>(
+  const responsePromise = onceMessage<GatewayTestResponse<T | null | undefined>>(
     ws,
-    (o) => {
-      if (!o || typeof o !== "object" || Array.isArray(o)) {
-        return false;
-      }
-      const rec = o as Record<string, unknown>;
-      return rec.type === "res" && rec.id === id;
-    },
+    responseForId(id),
     timeoutMs,
   );
   ws.send(JSON.stringify({ type: "req", id, method, params }));
