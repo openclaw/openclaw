@@ -1,6 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { cloneHookIsolationValue } from "../../plugins/hook-isolation.js";
+import { cloneHookIsolationValue, HookIsolationError } from "../../plugins/hook-isolation.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
@@ -8,6 +8,37 @@ import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-cal
 import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
+
+/**
+ * Isolates a tool result for after_tool_call observers.
+ *
+ * Plugin tools that return class instances anywhere in their result (for example
+ * Firestore Timestamps nested in a document) come back as plugin-owned value
+ * views, which are Proxies and rejected by structuredClone. after_tool_call is a
+ * best-effort observation, so such results are handed to hooks as an isolated
+ * JSON data projection instead of dropping the whole event. When even that is
+ * impossible the event is still delivered, just without `result`.
+ */
+function isolateAfterToolCallResult(toolName: string, result: unknown): unknown {
+  try {
+    return cloneHookIsolationValue("after_tool_call", result);
+  } catch (error) {
+    if (!(error instanceof HookIsolationError)) {
+      throw error;
+    }
+    try {
+      const json = JSON.stringify(result);
+      return json === undefined
+        ? undefined
+        : cloneHookIsolationValue("after_tool_call", JSON.parse(json) as unknown);
+    } catch (projectionError) {
+      log.debug(
+        `after_tool_call result omitted: tool=${toolName} cause=${String(error.cause ?? error)} projection=${String(projectionError)}`,
+      );
+      return undefined;
+    }
+  }
+}
 
 /** Runs best-effort after-tool-call hooks for a completed tool invocation. */
 export async function runAgentHarnessAfterToolCallHook(params: {
@@ -35,7 +66,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   }
   try {
     const eventArgs = structuredClone(resolvedArgs);
-    const eventResult = cloneHookIsolationValue("after_tool_call", params.result);
+    const eventResult = isolateAfterToolCallResult(params.toolName, params.result);
     await hookRunner.runAfterToolCall(
       {
         toolName: params.toolName,
