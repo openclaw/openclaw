@@ -18,6 +18,16 @@ const swiftStep =
   swiftBuildStep +
   "\n" +
   swiftSteps.find((step: { name?: string }) => step.name === "Swift test").run;
+const swiftBuildArgs = [
+  "--package-path",
+  "apps/macos",
+  "--build-system",
+  "native",
+  "--enable-code-coverage",
+  "--disable-index-store",
+  "-Xswiftc",
+  "-gline-tables-only",
+];
 
 function eventStream(...kinds: string[]) {
   return (
@@ -290,40 +300,62 @@ if (tool === 'swift' && args[0] === 'test') {
   };
 }
 
+function launchNamed(f: ReturnType<typeof fixture>, readyText: string) {
+  const child = spawn(
+    process.execPath,
+    ["scripts/test-macos-native.mts", "named", "--skip-build"],
+    {
+      cwd: repo,
+      env: f.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const completion = once(child, "close");
+  let stdout = "",
+    stderr = "";
+  child.stderr.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  const ready = new Promise<void>((resolve) => {
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+      if (stdout.includes(readyText)) {
+        resolve();
+      }
+    });
+  });
+  return {
+    child,
+    completion,
+    stderr: () => stderr,
+    ready: () =>
+      Promise.race([
+        ready,
+        completion.then(() => {
+          throw new Error(stderr || `launcher exited before ${readyText}`);
+        }),
+      ]),
+  };
+}
+
 describe.skipIf(process.platform === "win32")("native test launch ownership", () => {
   it.each([
-    {
-      events: appHostEventStream("complete"),
-      inspection: "absent",
-      expected: 0,
-      hosts: 2,
-    },
-    {
-      events: appHostEventStream("complete"),
-      inspection: "absent",
-      expected: 0,
-      hosts: 1,
-      filters: ["credential-startup"],
-    },
-    {
-      events: appHostEventStream("complete"),
-      inspection: "absent",
-      expected: 0,
-      hosts: 3,
-      filters: ["retry", "credential-startup", "relaunch"],
-    },
-    { events: eventStream("runStarted", "runEnded"), inspection: "absent", expected: 1, hosts: 1 },
-    { events: appHostEventStream("skipped"), inspection: "absent", expected: 1, hosts: 1 },
-    { events: appHostEventStream("suite-only"), inspection: "absent", expected: 1, hosts: 1 },
-    {
-      events: appHostEventStream("complete"),
-      inspection: "unknown",
-      expected: 1,
-      hosts: 2,
-    },
-  ])(
-    "owns fresh app hosts and refuses incomplete proof ($inspection, $hosts hosts)",
-    ({ events, inspection, expected, hosts, filters = ["retry", "relaunch"] }) => {
+    [appHostEventStream("complete"), "absent", 0, 2],
+    [appHostEventStream("complete"), "absent", 0, 1, ["credential-startup"]],
+    [appHostEventStream("complete"), "absent", 0, 3, ["retry", "credential-startup", "relaunch"]],
+    [eventStream("runStarted", "runEnded"), "absent", 1, 1],
+    [appHostEventStream("skipped"), "absent", 1, 1],
+    [appHostEventStream("suite-only"), "absent", 1, 1],
+    [appHostEventStream("complete"), "unknown", 1, 2],
+  ] satisfies [
+    events: string,
+    inspection: string,
+    expected: number,
+    hosts: number,
+    filters?: string[],
+  ][])(
+    "owns fresh app hosts and refuses incomplete proof (case %#)",
+    (events, inspection, expected, hosts, filters = ["retry", "relaunch"]) => {
       const f = fixture(0, false, 0, "", "3", events);
       const contents = path.join(f.root, "Fixture.app/Contents");
       fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
@@ -465,32 +497,14 @@ if (process.argv[2] === 'print') {
         .filter((line) => /^menu-(?:default|named)-artifact-path=/.test(line))
         .map((line) => line.slice(line.indexOf("=") + 1));
       expect(captures).toHaveLength(tests.length);
-      expect(build.args).toEqual([
-        "build",
-        "--package-path",
-        "apps/macos",
-        "--build-system",
-        "native",
-        "--enable-code-coverage",
-        "--disable-index-store",
-        "-Xswiftc",
-        "-gline-tables-only",
-        "--build-tests",
-      ]);
+      expect(build.args).toEqual(["build", ...swiftBuildArgs, "--build-tests"]);
       expect(build.env.HOME).toBe(f.env.HOME);
       const roots = new Set<string>();
       const cleanupTokens = new Set<string>();
       for (const [index, test] of tests.entries()) {
         expect(test.args).toEqual([
           "test",
-          "--package-path",
-          "apps/macos",
-          "--build-system",
-          "native",
-          "--enable-code-coverage",
-          "--disable-index-store",
-          "-Xswiftc",
-          "-gline-tables-only",
+          ...swiftBuildArgs,
           "--skip-build",
           "--experimental-maximum-parallelization-width",
           expectedWidth,
@@ -676,32 +690,9 @@ if (process.argv[2] === 'print') {
     "keeps resources alive until interrupted %s has stopped",
     async (tool) => {
       const f = fixture(0, tool);
-      const child = spawn(
-        process.execPath,
-        ["scripts/test-macos-native.mts", "named", "--skip-build"],
-        {
-          cwd: repo,
-          env: f.env,
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const completion = once(child, "close");
+      const { child, completion, ready } = launchNamed(f, "fake-child-ready");
       try {
-        const ready = new Promise<void>((resolve) => {
-          let output = "";
-          child.stdout.on("data", (chunk) => {
-            output += String(chunk);
-            if (output.includes("fake-child-ready")) {
-              resolve();
-            }
-          });
-        });
-        await Promise.race([
-          ready,
-          completion.then(() => {
-            throw new Error("launcher exited before fake child was ready");
-          }),
-        ]);
+        await ready();
         const ownedRoot = path.dirname(f.calls()[0].env.HOME);
         expect(fs.existsSync(ownedRoot)).toBe(true);
         expect(fs.statSync(ownedRoot).mode & 0o777).toBe(0o700);
@@ -759,37 +750,10 @@ const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSO
 child.once('message', () => process.exit(0));
 `,
     );
-    const child = spawn(
-      process.execPath,
-      ["scripts/test-macos-native.mts", "named", "--skip-build"],
-      {
-        cwd: repo,
-        env: f.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    const completion = once(child, "close");
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
-    });
-    const held = new Promise<void>((resolve) => {
-      let stdout = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-        if (stdout.includes("fake-output-held")) {
-          resolve();
-        }
-      });
-    });
+    const { child, completion, ready, stderr } = launchNamed(f, "fake-output-held");
     let ownedRoot: string | undefined;
     try {
-      await Promise.race([
-        held,
-        completion.then(() => {
-          throw new Error(stderr || "launcher exited before output fixture");
-        }),
-      ]);
+      await ready();
       const calls = f.calls();
       ownedRoot = path.dirname(calls[0].env.HOME);
       const ownedKeychain = calls[0].args.at(-1);
@@ -800,7 +764,7 @@ child.once('message', () => process.exit(0));
         fs.writeFileSync(release, "release");
       }
       const [code] = await completion;
-      expect(code, stderr).toBe(mode === "drained" ? 0 : 1);
+      expect(code, stderr()).toBe(mode === "drained" ? 0 : 1);
       if (mode === "drained") {
         expect(f.calls().at(-2)).toEqual({ tool: "output-close", keychainPresent: true });
         expect(f.calls().at(-1).args).toEqual(["delete-keychain", ownedKeychain]);
@@ -827,8 +791,8 @@ child.once('message', () => process.exit(0));
         expect(f.capturePath("named")).toBeUndefined();
         expect(fs.existsSync(ownedKeychain)).toBe(true);
         expect(f.calls().some((call) => call.args?.[0] === "delete-keychain")).toBe(false);
-        expect(stderr).toContain("EPROCESSGROUP_CLEANUP_FAILED");
-        expect(stderr).toContain(ownedRoot);
+        expect(stderr()).toContain("EPROCESSGROUP_CLEANUP_FAILED");
+        expect(stderr()).toContain(ownedRoot);
       }
     } finally {
       fs.writeFileSync(release, "release");
