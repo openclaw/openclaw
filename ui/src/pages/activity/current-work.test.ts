@@ -39,6 +39,21 @@ function pendingRefresh(query: Parameters<typeof fixture.controller.load>[1] = "
   return pending;
 }
 
+function expectRows(
+  rows: GatewaySessionRow[],
+  state?: Partial<Pick<typeof fixture.controller, "incomplete" | "loading" | "error">>,
+) {
+  expect(fixture.controller.result?.sessions).toEqual(rows);
+  if (state) {
+    expect(fixture.controller).toMatchObject(state);
+  }
+}
+
+async function advance(ms: number, calls: number) {
+  await vi.advanceTimersByTimeAsync(ms);
+  expect(fixture.request).toHaveBeenCalledTimes(calls);
+}
+
 it("publishes usable snapshots while new work keeps starting during refresh", async () => {
   const { client, request, controller } = fixture;
   request.mockResolvedValueOnce(listing([]));
@@ -68,16 +83,13 @@ it("publishes usable snapshots while new work keeps starting during refresh", as
     observed.push(controller.result?.sessions);
     // This short turn finishes before the next snapshot captures membership.
     controller.invalidate(settled(transient, transient.updatedAt + 1));
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(request).toHaveBeenCalledTimes(2 + round);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(3 + round);
+    await advance(4_999, 2 + round);
+    await advance(1, 3 + round);
   }
   expect(controller.incomplete).toBe(true);
   responses[3]!.resolve(listing([active]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([active]);
-  expect(controller.loading).toBe(false);
+  expectRows([active], { loading: false });
   expect(observed).toEqual([[active], [active], [active]]);
   expect(request).toHaveBeenCalledTimes(5);
 });
@@ -90,16 +102,11 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
   controller.invalidate({ ...active, updatedAt: 200 });
   pending.resolve(listing([]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([]);
-  expect(controller.incomplete).toBe(true);
-  expect(controller.loading).toBe(true);
+  expectRows([], { incomplete: true, loading: true });
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.error).toBe("Unavailable");
-  expect(controller.loading).toBe(false);
+  expect(controller).toMatchObject({ error: "Unavailable", loading: false });
   await controller.load(client, "current", "retry");
-  expect(controller.error).toBeUndefined();
-  expect(controller.result?.sessions).toEqual([active]);
-  expect(controller.incomplete).toBe(false);
+  expectRows([active], { error: undefined, incomplete: false });
 });
 
 it.each([
@@ -110,22 +117,20 @@ it.each([
   await controller.load(client, query);
   const stale = pendingRefresh(query);
   void controller.load(client, query, "query", false, false);
-  expect(controller.result?.sessions).toEqual([active]);
-  expect(controller.loading).toBe(false);
+  expectRows([active], { loading: false });
   stale.resolve(listing([]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([active]);
+  expectRows([active]);
   request.mockRejectedValueOnce(new Error("refresh unavailable"));
   await controller.load(client, query);
-  expect(controller.result?.sessions).toEqual([active]);
-  expect(controller.error).toBe("refresh unavailable");
+  expectRows([active], { error: "refresh unavailable" });
   const fresh = createDeferred<SessionsListResult>();
   request.mockReturnValueOnce(fresh.promise);
   void controller.load(client, query, "retry");
-  expect(controller.result?.sessions).toEqual([active]);
+  expectRows([active]);
   fresh.resolve(listing([]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([]);
+  expectRows([]);
   const replacement = setup();
   const replacementRead = createDeferred<SessionsListResult>();
   replacement.request.mockReturnValueOnce(replacementRead.promise);
@@ -133,7 +138,7 @@ it.each([
   expect(controller.result).toBeUndefined();
   replacementRead.resolve(listing([active]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([active]);
+  expectRows([active]);
 });
 
 it.each([
@@ -189,8 +194,7 @@ it.each([
         .slice(terminalPublication)
         .some((rows) => rows?.some((row) => row.activeRunIds?.includes("release-run"))),
     ).toBe(false);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(2);
+    await advance(5_000, 2);
   },
 );
 
@@ -207,7 +211,7 @@ it("uses canonical replacement liveness before a delayed old completion", async 
   const stale = pendingRefresh();
   request.mockResolvedValue(listing([latest]));
   controller.invalidate({ ...replacement, runId: "next-run", activeRunIds: null });
-  expect(controller.result?.sessions).toEqual([replacement]);
+  expectRows([replacement]);
   controller.invalidate({
     key: active.key,
     agentId: active.agentId,
@@ -218,15 +222,13 @@ it("uses canonical replacement liveness before a delayed old completion", async 
     activeRunIds: [],
     status: "done",
   });
-  expect(controller.result?.sessions).toEqual([replacement]);
+  expectRows([replacement]);
   controller.invalidate(snapshot(latest));
   stale.resolve(listing([active]));
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([latest]);
-  expect(controller.incomplete).toBe(true);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.result?.sessions).toEqual([latest]);
-  expect(request).toHaveBeenCalledTimes(3);
+  expectRows([latest], { incomplete: true });
+  await advance(5_000, 3);
+  expectRows([latest]);
 });
 
 it("keeps a replacement run after an older terminal event", async () => {
@@ -240,7 +242,7 @@ it("keeps a replacement run after an older terminal event", async () => {
     status: "done",
     hasActiveRun: false,
   });
-  expect(controller.result?.sessions).toEqual([active]);
+  expectRows([active]);
 });
 
 it("refreshes a conflicting delete generation without confusing global owners during a read", async () => {
@@ -263,12 +265,9 @@ it("refreshes a conflicting delete generation without confusing global owners du
   });
   stale.resolve(initial);
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([literal, work]);
-  expect(controller.incomplete).toBe(true);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.result?.sessions).toEqual([literal]);
-  expect(controller.incomplete).toBe(false);
-  expect(request).toHaveBeenCalledTimes(3);
+  expectRows([literal, work], { incomplete: true });
+  await advance(5_000, 3);
+  expectRows([literal], { incomplete: false });
 });
 
 it.each(["current", { personId: null, time: "all", query: "" }] as const)(
@@ -289,13 +288,9 @@ it.each(["current", { personId: null, time: "all", query: "" }] as const)(
     }
     pending.resolve(listing([active]));
     await vi.advanceTimersByTimeAsync(59_999);
-    expect(controller.result?.sessions).toEqual([
-      sample(active, 1_600, { label: "Revision 1500" }),
-    ]);
-    expect(controller.loading).toBe(false);
+    expectRows([sample(active, 1_600, { label: "Revision 1500" })], { loading: false });
     expect(request).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(request).toHaveBeenCalledTimes(3);
+    await advance(5_001, 3);
   },
 );
 
@@ -309,9 +304,8 @@ it("excludes certified dock snapshots from current work even with space", async 
     isDock: true,
   });
   controller.invalidate(snapshot(added, [], "agent.run.started"));
-  expect(controller.result?.sessions).toEqual([active]);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledTimes(1);
+  expectRows([active]);
+  await advance(5_000, 1);
 });
 
 it("refreshes held parent facts after uncertified child completion during a read", async () => {
@@ -339,16 +333,12 @@ it("refreshes held parent facts after uncertified child completion during a read
   await controller.load(client, "current");
   const stale = pendingRefresh();
   controller.invalidate(snapshot({ ...settled(child, 200), snapshotAt: 200 }));
-  expect(controller.result?.sessions).toEqual([parent]);
-  expect(controller.incomplete).toBe(true);
+  expectRows([parent], { incomplete: true });
   stale.resolve(initial);
   await vi.advanceTimersByTimeAsync(0);
-  expect(controller.result?.sessions).toEqual([parent]);
-  expect(controller.incomplete).toBe(true);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(controller.result?.sessions).toEqual([settledParent]);
-  expect(controller.incomplete).toBe(false);
-  expect(request).toHaveBeenCalledTimes(3);
+  expectRows([parent], { incomplete: true });
+  await advance(5_000, 3);
+  expectRows([settledParent], { incomplete: false });
 });
 
 it("applies certified ancestor rows and references without refetching current work during a read", async () => {
@@ -433,6 +423,5 @@ it("applies certified ancestor rows and references without refetching current wo
     ancestorSessionRefs: [{ ...reference, sessionId: "retired-parent", snapshotAt: 301 }],
   });
   expect(heldParent()?.sessionId).toBe(parent.sessionId);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(request).toHaveBeenCalledTimes(3);
+  await advance(5_000, 3);
 });

@@ -2,7 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
-import type { PrincipalRefV1 } from "../../../../packages/gateway-protocol/src/schema/audit-run.ts";
+import { presentResult as inspectionFixture } from "../../e2e/activity-run-inspector.test-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
@@ -11,57 +11,7 @@ import { renderRunInspector } from "./run-inspector-view.tsx";
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 const expired = [{ code: "run_again_after_expiry", text: "Run it again." }];
 const missingEvidence = ["identity.context"];
-function principal(kind: PrincipalRefV1["kind"]): PrincipalRefV1 {
-  return { kind, domainRef: hmacRef, principalRef: hmacRef };
-}
-
-const presentResult: RunInspectorResult = {
-  schemaVersion: 1,
-  run: { runId: "run-1", executionId: "execution-1", status: "known" },
-  identity: {
-    state: "present",
-    context: {
-      schemaVersion: 1,
-      contextId: "context-1",
-      executionId: "execution-1",
-      runId: "run-1",
-      createdAt: 1,
-      trustDomain: { kind: "gateway-cell", domainRef: hmacRef, state: "present" },
-      invoker: { state: "absent" },
-      ingress: { kind: "local-cli", boundary: "cli", sourceRef: hmacRef, state: "present" },
-      agentPrincipal: { ...principal("agent"), principalRef: "main", displayLabel: "Main" },
-      agentDefinition: { definitionRef: "main", state: "unknown" },
-      runtimeInstance: { runtimeRef: hmacRef, kind: "embedded", state: "unsupported" },
-      representedSubject: { principal: principal("person"), state: "unknown" },
-      sponsor: { principal: principal("service"), state: "unsupported" },
-      applicableGrants: [{ grantRef: hmacRef, state: "absent" }],
-      assurance: [{ kind: "runtime-binding", evidenceRef: hmacRef, strength: "boundary-verified" }],
-      lineage: { parentRunId: "parent-run", depth: 1 },
-      coverageState: "unattributed",
-      missingEvidence: ["invoker.principal"],
-    },
-  },
-  decisionDisplays: [
-    {
-      schemaVersion: 1,
-      selectorId: "receipt-1",
-      occurredAt: 1,
-      action: { family: "run", operation: "admission", summary: "Admission" },
-      decision: { outcome: "not-applicable", reasonCode: "identity_not_evaluated" },
-      enforcement: {
-        coverageState: "unattributed",
-        policyCount: 0,
-        grantCount: 0,
-        contextFieldsUsed: [],
-      },
-      provenance: { state: "verified", producer: "run-admission" },
-      missingEvidence: ["invoker.principal"],
-      remediation: [{ code: "no_authorization", text: "Do not treat this as authorization." }],
-    },
-  ],
-  coverage: { state: "unattributed", missingEvidence: ["invoker.principal"] },
-  nextDecisionCursor: "1",
-};
+const presentResult = inspectionFixture("run-1", "execution-1");
 
 const unavailableResult = (
   state: "unknown" | "unsupported",
@@ -150,10 +100,10 @@ it("renders every identity dimension with explicit text states and safe refs", (
     "Additional decision receipts are available",
     "Not applicable",
     "Unattributed",
-    "identity_not_evaluated",
+    "run_admission_identity_not_evaluated",
     "Verified producer",
     "run-admission",
-    "Do not treat this as authorization.",
+    "Treat this receipt as attribution only; it does not prove authorization.",
     "Best-effort audit warning",
   ]) {
     expect(text).toContain(label);
@@ -162,12 +112,12 @@ it("renders every identity dimension with explicit text states and safe refs", (
     expect(text).toContain(state);
     expect(container.querySelector(`[aria-label="Evidence state: ${state}"]`)).not.toBeNull();
   }
-  for (const ref of ["receipt-1", "context-1", "execution-1"]) {
+  for (const ref of ["receipt-safe-ref", "context-safe-ref", "execution-1"]) {
     expect(text).not.toContain(ref);
   }
   expect(
     container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
-  ).toBe("/operator/activity?view=run&run=parent-run");
+  ).toBe("/operator/activity?view=run&run=parent-safe-ref");
 });
 
 it("labels a generic receipt's selected authority without claiming human intent or verification", () => {
