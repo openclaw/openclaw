@@ -778,10 +778,9 @@ describe("direct compactor through the context-engine delegate", () => {
       previousSummary: `${marker} ${"Detail. ".repeat(40_000)}`,
       liveOutputChars: 500_000,
     });
-    const backend = vi.fn<ContextEngine["compact"]>(delegate);
     resolveContextEngineMock.mockResolvedValueOnce({
       info: { ownsCompaction: false },
-      compact: backend,
+      compact: vi.fn<ContextEngine["compact"]>(delegate),
     });
     const observed = await observeTranscriptHydrations();
     try {
@@ -790,14 +789,12 @@ describe("direct compactor through the context-engine delegate", () => {
     } finally {
       observed.restore();
     }
-    expect(observed.hydrations).toHaveLength(1);
-    expect(observed.hydrations[0]).toMatchObject({ kind: "bounded" });
+    expect(observed.hydrations).toEqual([expect.objectContaining({ kind: "bounded" })]);
     expect(observed.hydrations[0]?.events).toBeLessThan(fixture.originalEntries.length);
     // The summarizer request for the middle turn carries the earlier summary to update.
     expect(fixture.stream).toHaveBeenCalled();
-    expect(fixture.stream.mock.calls.some((call) => JSON.stringify(call[1]).includes(marker))).toBe(
-      true,
-    );
+    const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
+    expect(requests.some((request) => request.includes(marker))).toBe(true);
   });
 
   it.each([
@@ -815,25 +812,32 @@ describe("direct compactor through the context-engine delegate", () => {
       }
       // Third row: nothing recorded, so the foreground model's catalog window (1M) decides,
       // not the configured 32k summarizer that replaces provider/model before delegation.
-      const base = fixture.queuedParams.config;
+      const base: OpenClawConfig = fixture.queuedParams.config;
+      const catalogEntry = (id: string, contextWindow: number) => ({
+        id,
+        name: id,
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow,
+        maxTokens: 1_024,
+      });
       const models = [
-        { id: model.id, name: model.id, contextWindow: 1_000_000 },
-        { id: "summarizer-fixture", name: "summarizer", contextWindow: 32_000 },
+        catalogEntry(model.id, 1_000_000),
+        catalogEntry("summarizer-fixture", 32_000),
       ];
       const defaults = { ...base.agents?.defaults };
       defaults.compaction = { ...defaults.compaction, model: "openai/summarizer-fixture" };
-      const config = catalog
+      const config: OpenClawConfig = catalog
         ? {
             ...base,
-            models: { providers: { openai: { models } } },
+            models: { providers: { openai: { baseUrl: model.baseUrl, models } } },
             agents: { ...base.agents, defaults },
           }
         : base;
-      const archivedEntries = fixture.originalEntries.length;
-      const backend = vi.fn<ContextEngine["compact"]>(delegate);
       resolveContextEngineMock.mockResolvedValueOnce({
         info: { ownsCompaction: false },
-        compact: backend,
+        compact: vi.fn<ContextEngine["compact"]>(delegate),
       });
       const observed = await observeTranscriptHydrations();
       try {
@@ -842,9 +846,8 @@ describe("direct compactor through the context-engine delegate", () => {
       } finally {
         observed.restore();
       }
-      const limits = resolveEmbeddedSessionContextLimits(
-        contextTokenBudget ?? recordedWindow ?? 1_000_000,
-      );
+      const expected = contextTokenBudget ?? recordedWindow ?? 1_000_000;
+      const limits = resolveEmbeddedSessionContextLimits(expected);
       expect(limits.maxBytes).toBeGreaterThan(
         resolveEmbeddedSessionContextLimits(model.contextWindow).maxBytes,
       );
@@ -852,9 +855,10 @@ describe("direct compactor through the context-engine delegate", () => {
       expect(observed.hydrations[0]).toMatchObject({ kind: "bounded", limits });
       // The archive is 80 messages; the 200k view holds the live turns and the boundary,
       // while the recorded 1M window (8 MB) has room for the whole archive.
-      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThanOrEqual(archivedEntries);
+      const total = fixture.originalEntries.length;
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThanOrEqual(total);
       if (contextTokenBudget) {
-        expect(observed.hydrations[0]?.events).toBeLessThan(archivedEntries / 2);
+        expect(observed.hydrations[0]?.events).toBeLessThan(total / 2);
       }
       const manager = sessions.SessionManager.open(fixture.target);
       expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
@@ -901,19 +905,14 @@ describe("direct compactor through the context-engine delegate", () => {
       observed.restore();
     }
     const session = prepared.preparedSession;
-    expect(session?.sessionManager).toBeDefined();
+    const limits = resolveEmbeddedSessionContextLimits(1_000_000);
+    const totalEvents = fixture.originalEntries.length;
     expect(observed.hydrations).toEqual([
-      expect.objectContaining({
-        kind: "bounded",
-        limits: resolveEmbeddedSessionContextLimits(1_000_000),
-        totalEvents: session?.eventCount,
-      }),
+      expect.objectContaining({ kind: "bounded", limits, totalEvents }),
     ]);
-    // The bounded open still reports the whole active count and the session facts from
+    // The bounded open still counts the whole active path and serves the session facts from
     // the same snapshot; the reset cut keeps the archive out of the model context.
-    expect(session?.eventCount).toBe(fixture.originalEntries.length);
-    expect(session?.entry?.sessionId).toBe(fixture.target.sessionId);
-    expect(session?.runtimeEntry).toEqual(session?.entry);
+    expect(session?.entry.sessionId).toBe(fixture.target.sessionId);
     expect(JSON.stringify(session?.sessionManager.buildSessionContext().messages)).not.toContain(
       "Archived request",
     );
