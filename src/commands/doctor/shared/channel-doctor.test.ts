@@ -244,6 +244,8 @@ describe("channel doctor compatibility mutations", () => {
     });
 
     expect(result).toStrictEqual([]);
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("discord");
+    expect(mocks.getBundledChannelSetupPlugin).toHaveBeenCalledWith("discord");
     expect(mocks.getBundledChannelPlugin).toHaveBeenCalledWith("discord");
   });
 

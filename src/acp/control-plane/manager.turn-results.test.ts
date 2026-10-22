@@ -180,7 +180,10 @@ describe("AcpSessionManager turn results", () => {
         promptStarted: Promise.resolve(),
         result: Promise.resolve({ status: "failed", error: runtimeExit }),
       }));
-      await expect(state.run()).rejects.toMatchObject(runtimeExit);
+      await expect(state.run()).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "acpx exited with code 1",
+      });
       expect(state.ensureSession).toHaveBeenCalledOnce();
       expect(startTurn).toHaveBeenCalledOnce();
     });

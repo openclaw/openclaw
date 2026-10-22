@@ -191,6 +191,21 @@ const nativeContext = (cfg = configured, approvalKind: "exec" | "plugin" = "exec
 });
 
 describe("matrix approval capability", () => {
+  it("keeps plugin approval auth independent from exec approvers", async () => {
+    const cfg = config({ enabled: true, approvers: ["@exec:example.org"], target: "both" }, [
+      "@owner:example.org",
+    ]);
+    const authorize = (senderId: string, approvalKind: "plugin" | "exec") =>
+      capability.authorizeActorActionAsync?.({ ...context, cfg, senderId, approvalKind });
+
+    expect(await authorize("@owner:example.org", "plugin")).toEqual({ authorized: true });
+    expect(await authorize("@exec:example.org", "plugin")).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve plugin requests on Matrix.",
+    });
+    expect(await authorize("@exec:example.org", "exec")).toEqual({ authorized: true });
+  });
+
   it.each([undefined, "work"])("describes the Matrix setup path for account %s", (accountId) => {
     const text = capability.describeExecApprovalSetup?.({
       channel: "matrix",
