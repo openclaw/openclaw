@@ -5,6 +5,7 @@ import {
   parseRetryAfterErrorSeconds,
   parseRetryAfterErrorTiming,
   parseRetryAfterHeadersSeconds,
+  parseRetryAfterTextSeconds,
   resolveProviderErrorRetrySeconds,
   parseRetryAfterHttpDateMs as parseDate,
 } from "./retry-after.js";
@@ -131,9 +132,9 @@ describe("provider error retry authority", () => {
     for (const message of ["Please try again in 6s.", "Please retry in 32.5s.", "Retry-After: 2"]) {
       expect(resolveProviderErrorRetrySeconds({ ...exhausted, message })).toBeUndefined();
     }
-    expect(
-      resolveProviderErrorRetrySeconds({ ...exhausted, message: "Please try again later." }),
-    ).toBe(300);
+    for (const message of ["Please try again later.", "Please try again in 6 attempts."]) {
+      expect(resolveProviderErrorRetrySeconds({ ...exhausted, message })).toBe(300);
+    }
     expect(
       resolveProviderErrorRetrySeconds({
         ...exhausted,
@@ -147,7 +148,20 @@ describe("provider error retry authority", () => {
     expect(hasExplicitRetryText("try again in 6s")).toBe(true);
     expect(hasExplicitRetryText("Retry-After: Sun, 06 Nov 1994 08:49:37 GMT")).toBe(true);
     expect(hasExplicitRetryText("please try again in a moment")).toBe(false);
+    expect(hasExplicitRetryText("please try again in 6 attempts")).toBe(false);
     expect(hasExplicitRetryText(undefined)).toBe(false);
+  });
+
+  it("parses retry-text durations with the same grammar the failover path uses", () => {
+    expect(parseRetryAfterTextSeconds("6s")).toBe(6);
+    expect(parseRetryAfterTextSeconds("250ms")).toBe(0.25);
+    expect(parseRetryAfterTextSeconds("2 minutes")).toBe(120);
+    expect(parseRetryAfterTextSeconds("1.5 hours")).toBe(5400);
+    expect(parseRetryAfterTextSeconds("7")).toBe(7);
+    expect(parseRetryAfterTextSeconds("Sun, 06 Nov 1994 08:49:44 GMT", EXAMPLE_TIMESTAMP)).toBe(7);
+    for (const invalid of ["6 attempts", "a moment", "-1s", ""]) {
+      expect(parseRetryAfterTextSeconds(invalid)).toBeUndefined();
+    }
   });
 
   it("reads RetryInfo in any key order without invoking getters", () => {

@@ -239,14 +239,52 @@ export function parseRetryAfterErrorTiming(
 export const RETRY_AFTER_TEXT_RE =
   /\b(?:retry[- ]after\b\s*:?\s*(?:in\b\s*)?|(?:please\s+)?(?:try again|retry) in\s+)([^\r\n;]+)/i;
 
-/** Whether text carries a parseable explicit retry instruction (number or HTTP-date). */
+const RETRY_TEXT_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
+const MS_PER_SECOND = 1000;
+const RETRY_TEXT_UNIT_MS = new Map<string, number>(
+  (
+    [
+      ["milliseconds millisecond msecs msec ms", 1],
+      ["seconds second secs sec s", MS_PER_SECOND],
+      ["minutes minute mins min m", 60 * MS_PER_SECOND],
+      ["hours hour hrs hr h", 60 * 60 * MS_PER_SECOND],
+      ["days day d", 24 * 60 * 60 * MS_PER_SECOND],
+    ] as const
+  ).flatMap(([aliases, milliseconds]) =>
+    aliases.split(" ").map((alias) => [alias, milliseconds] as const),
+  ),
+);
+
+/** Seconds named by a captured retry-text value: a number with an optional time unit, or an HTTP-date. */
+export function parseRetryAfterTextSeconds(
+  valueText: string,
+  nowMs = Date.now(),
+): number | undefined {
+  const secondsMatch = RETRY_TEXT_NUMBER_RE.exec(valueText);
+  if (secondsMatch?.[1]) {
+    const value = /^infinity$/i.test(secondsMatch[1]) ? Infinity : Number(secondsMatch[1]);
+    if (Number.isNaN(value) || value < 0) {
+      return undefined;
+    }
+    const unitMilliseconds = RETRY_TEXT_UNIT_MS.get(secondsMatch[2]?.toLowerCase() ?? "s");
+    if (unitMilliseconds === undefined) {
+      return undefined;
+    }
+    return unitMilliseconds === 1
+      ? value / MS_PER_SECOND
+      : value * (unitMilliseconds / MS_PER_SECOND);
+  }
+  const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
+  return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / MS_PER_SECOND);
+}
+
+/** Whether text carries an explicit retry instruction that parseRetryAfterTextSeconds accepts. */
 export function hasExplicitRetryText(text: unknown, nowMs = Date.now()): boolean {
   if (typeof text !== "string" || !text) {
     return false;
   }
   for (const match of text.matchAll(new RegExp(RETRY_AFTER_TEXT_RE, "gi"))) {
-    const value = match[1]?.trim() ?? "";
-    if (/^\d/.test(value) || parseRetryAfterHttpDateMs(value, nowMs) !== undefined) {
+    if (parseRetryAfterTextSeconds(match[1]?.trim() ?? "", nowMs) !== undefined) {
       return true;
     }
   }

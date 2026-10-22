@@ -2,10 +2,9 @@ import {
   RETRY_AFTER_TEXT_RE,
   parseGoogleRetryDelaySeconds,
   parseRetryAfterErrorTiming,
-  parseRetryAfterHttpDateMs,
+  parseRetryAfterTextSeconds,
 } from "@openclaw/ai/internal/retry-after";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { durationUnitMs } from "../../infra/format-time/duration-units.js";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractErrorHttpStatus,
@@ -38,20 +37,6 @@ const SHORT_RATE_LIMIT_UNIT_RE =
 const SHORT_WINDOW_RATE_LIMIT_RE =
   /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
 const RETRY_AFTER_VALUE_RE = RETRY_AFTER_TEXT_RE;
-const RETRY_AFTER_NUMBER_RE = /^(\d+(?:\.\d+)?|Infinity)\s*([a-z]+)?\b/i;
-const RETRY_AFTER_UNIT_MS = new Map<string, number>(
-  (
-    [
-      ["milliseconds millisecond msecs msec ms", durationUnitMs.millisecond],
-      ["seconds second secs sec s", durationUnitMs.second],
-      ["minutes minute mins min m", durationUnitMs.minute],
-      ["hours hour hrs hr h", durationUnitMs.hour],
-      ["days day d", durationUnitMs.day],
-    ] as const
-  ).flatMap(([aliases, milliseconds]) =>
-    aliases.split(" ").map((alias) => [alias, milliseconds] as const),
-  ),
-);
 const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
 
 /** HTTP statuses the provider SDK transport permits retrying. */
@@ -99,30 +84,10 @@ function hasRateLimitRetryContext(signal: Pick<FailoverSignal, "message" | "stat
   );
 }
 
-function parseRetryAfterSeconds(valueText: string, nowMs: number): number | undefined {
-  const secondsMatch = RETRY_AFTER_NUMBER_RE.exec(valueText);
-  if (secondsMatch?.[1]) {
-    const value = /^infinity$/i.test(secondsMatch[1]) ? Infinity : Number(secondsMatch[1]);
-    if (Number.isNaN(value) || value < 0) {
-      return undefined;
-    }
-    const unit = secondsMatch[2]?.toLowerCase();
-    const unitMilliseconds = RETRY_AFTER_UNIT_MS.get(unit ?? "s");
-    if (unitMilliseconds === undefined) {
-      return undefined;
-    }
-    return unitMilliseconds === durationUnitMs.millisecond
-      ? value / durationUnitMs.second
-      : value * (unitMilliseconds / durationUnitMs.second);
-  }
-  const retryAtMs = parseRetryAfterHttpDateMs(valueText, nowMs);
-  return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
-}
-
 function proseRetrySeconds(message: string | undefined, nowMs: number): number | undefined {
   let floor: number | undefined;
   for (const match of message?.matchAll(new RegExp(RETRY_AFTER_VALUE_RE, "gi")) ?? []) {
-    const seconds = parseRetryAfterSeconds(match[1]?.trim() ?? "", nowMs);
+    const seconds = parseRetryAfterTextSeconds(match[1]?.trim() ?? "", nowMs);
     if (seconds !== undefined) {
       floor = Math.max(floor ?? 0, seconds);
     }
