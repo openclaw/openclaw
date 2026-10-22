@@ -58,6 +58,7 @@ const representativeCorpusIds = new Set([
   "bedrock-deprecated-temperature",
   "billing-context-reasoning-required",
   "billing-context-dashscope-range",
+  "billing-context-siliconflow-max-seq-len",
   "http-legacy-bad-request-normalized",
   "billing-image-dimension",
   "billing-image-size",

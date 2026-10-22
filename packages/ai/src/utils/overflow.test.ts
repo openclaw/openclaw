@@ -52,12 +52,18 @@ describe("provider overflow messages", () => {
     "Input validation error: `inputs` must have less than 32768 tokens. Given: 40000",
     "Trying to keep the first 15857 tokens when context the overflows. However, the model is loaded with context length of only 4096 tokens, which is not enough. Try to load the model with a larger context length, or provide a shorter input.",
     "400 <400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 202745]",
+    '400 {"code":20015,"message":"length of prompt_tokens (51353) must be less than max_seq_len (32768).","data":null}',
   ])("detects %s", (text) => {
     expect(isContextOverflow(errorMessage(text), 262_144)).toBe(true);
   });
 
   it("does not compact an output-only TGI validation error", () => {
     const text = "Input validation error: `max_new_tokens` must be <= 4096. Given: 8192";
+    expect(isContextOverflow(errorMessage(text))).toBe(false);
+  });
+  it("does not compact an output-only SiliconFlow parameter error", () => {
+    const text =
+      '400 {"code":20015,"message":"max_tokens must be less than or equal to 16384.","data":null}';
     expect(isContextOverflow(errorMessage(text))).toBe(false);
   });
   it("recognizes the provider input-length wording in the strict failover scope", () => {
