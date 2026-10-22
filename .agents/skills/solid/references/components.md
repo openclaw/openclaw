@@ -35,10 +35,12 @@ before changing property transport, content custody, connection, or context.
 
 ## Lifecycle and DOM ownership
 
-Keep synchronous subscriptions in the component or factory body when descendants
-can publish during setup, and pair teardown with `onCleanup`. Use `onSettled`
-when setup needs committed DOM, and return its cleanup. Ref callbacks are unowned;
-they capture nodes but cannot register cleanup.
+Use `onSettled` for component setup and return its cleanup. Reactive primitives
+may need synchronous lifetime registration before descendants can publish;
+`projectSource` owns that subscription and its `onCleanup` in
+`lib/reactive/projection.ts`. Keep that exception at the primitive rather than
+adding component-level cleanup. Ref callbacks are unowned; they capture nodes
+but cannot register cleanup.
 
 Keep xterm, noVNC, markdown reconcilers, and canvas DOM islands as ref-owned native
 nodes: Solid owns the host and cleanup, while the island owns its descendants.
