@@ -45,9 +45,7 @@ const realtimeProvider = (
 ): RealtimeVoiceProviderPlugin => ({
   ...providerFields(isConfiguredAsync, id),
   capabilities,
-  createBridge: () => {
-    throw new Error("catalog must not create a session");
-  },
+  createBridge: unexpectedSession,
 });
 
 function expectCatalog(result: unknown, kind: string, catalog: Record<string, unknown>) {
@@ -352,17 +350,11 @@ it.each(["speech", "realtime", "transcription"] as const)(
     for (const id of ["healthy", "broken"]) {
       const provider = providerFields(id === "broken" ? brokenReadiness : async () => true, id);
       if (kind === "speech") {
-        registry.providers.push({
-          ...provider,
-          synthesize: unexpectedSession,
-        });
+        registry.providers.push({ ...provider, synthesize: unexpectedSession });
       } else if (kind === "realtime") {
         registry.realtime.push(realtimeProvider(provider.isConfiguredAsync, id));
       } else {
-        registry.transcription.push({
-          ...provider,
-          createSession: unexpectedSession,
-        });
+        registry.transcription.push({ ...provider, createSession: unexpectedSession });
       }
     }
     const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
