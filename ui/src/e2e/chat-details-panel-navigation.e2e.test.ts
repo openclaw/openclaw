@@ -160,7 +160,7 @@ suite.define(() => {
                 detailsViewAllPanelsTruncated: nodes.length > 32,
                 detailsViewAllVisiblePanels: panels.length,
                 detailsViewAllDetailsVisible: [...document.querySelectorAll(".chat-details")].some(
-                  (details) => details.checkVisibility({ visibilityProperty: true }),
+                  (detailsPanel) => detailsPanel.checkVisibility({ visibilityProperty: true }),
                 ),
               };
               for (const slot of ["conversation", "dashboard", "workspace"]) {
