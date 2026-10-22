@@ -5,6 +5,10 @@ import {
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
@@ -30,13 +34,20 @@ export async function captureCronInferenceBinding(params: {
   if (!model) {
     throw new Error("Automation model could not be resolved.");
   }
-  // CLI backends own their login; a host profile cannot bind that account.
+  const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
+    cfg,
+    agentId,
+    provider: model.provider,
+    modelId: model.modelId,
+    authProfileId: model.profileId,
+  });
+  // Backends that never forward a stored profile own their login; nothing here can bind it.
   if (
-    resolveCliRuntimeExecutionProvider({
-      cfg,
+    cliExecutionProvider &&
+    !cliBackendAcceptsAuthProfileForwarding({
+      provider: cliExecutionProvider,
+      config: cfg,
       agentId,
-      provider: model.provider,
-      modelId: model.modelId,
     })
   ) {
     return undefined;
@@ -47,16 +58,48 @@ export async function captureCronInferenceBinding(params: {
   const creatorSession =
     creatorProvider && creatorProvider !== model.provider ? undefined : params.sessionEntry;
   const { agentDir } = model;
-  let selection = await resolveSessionAuthSelection({
-    cfg,
-    agentId,
-    agentDir,
-    provider: model.provider,
-    modelId: model.modelId,
-    configuredProfileId: model.profileId ?? creatorSession?.authProfileOverride,
-    sessionEntry: model.profileId ? undefined : creatorSession,
-    isNewSession: false,
-  });
+  let selection: Awaited<ReturnType<typeof resolveSessionAuthSelection>>;
+  if (cliExecutionProvider) {
+    // Record the stored account this backend would forward, chosen by the same selector
+    // interactive CLI turns use; a native CLI login leaves no host account to record.
+    const selectedProfileId = model.profileId ?? creatorSession?.authProfileOverride;
+    const profileId = await resolveCliExecutionAuthProfileId({
+      cliExecutionProvider,
+      authProfileProvider: model.provider,
+      config: cfg,
+      agentDir,
+      selected: selectedProfileId
+        ? {
+            authProfileId: selectedProfileId,
+            authProfileIdSource:
+              model.profileId ||
+              creatorSession?.authProfileOverrideSource === "user" ||
+              creatorSession?.authProfileOverrideSource === "user-link"
+                ? "user"
+                : "auto",
+          }
+        : undefined,
+    });
+    if (!profileId) {
+      return undefined;
+    }
+    selection = {
+      profileId,
+      source: model.profileId ? "user" : "auto",
+      routeRequirement: undefined,
+    };
+  } else {
+    selection = await resolveSessionAuthSelection({
+      cfg,
+      agentId,
+      agentDir,
+      provider: model.provider,
+      modelId: model.modelId,
+      configuredProfileId: model.profileId ?? creatorSession?.authProfileOverride,
+      sessionEntry: model.profileId ? undefined : creatorSession,
+      isNewSession: false,
+    });
+  }
   const requiredProfileId = cfg.cloudWorkers?.requiredProfile;
   const requiredProfile = requiredProfileId
     ? cfg.cloudWorkers?.profiles?.[requiredProfileId]
