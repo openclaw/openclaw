@@ -95,6 +95,10 @@ export const baseProps = () => ({
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
   onSave: vi.fn(),
+  presentationRetired: (() => {
+    const retired = new Promise<void>(() => {});
+    return () => retired;
+  })(),
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,

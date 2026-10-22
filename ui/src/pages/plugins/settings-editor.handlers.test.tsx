@@ -70,11 +70,8 @@ it("dispatches retained retry controls to the current settings operation", () =>
 it("shows a later write failure after a caught configuration read failure", async () => {
   const readRetry = vi.fn();
   const writeRetry = vi.fn();
-  const read = {
-    completion: createDeferredCore<Result<void, string>>(),
-    invalidated: createDeferredCore<Result<void, string>>(),
-  };
-  read.completion.resolve({ ok: false, error: "Schema unavailable" });
+  const read = createDeferredCore<Result<void, string>>();
+  read.resolve({ ok: false, error: "Schema unavailable" });
   let setError!: Setter<string | null>;
   const { container } = mountSolid(() => {
     const [error, updateError] = createSignal<string | null>("Schema unavailable");
@@ -88,7 +85,7 @@ it("shows a later write failure after a caught configuration read failure", asyn
           configValue: {},
           configSchema: { type: "object", properties: {} },
           configRead: undefined,
-          configSchemaRead: read,
+          configSchemaRead: read.promise,
           onConfigReadRetry: readRetry,
           onConfigWriteRetry: writeRetry,
         }}

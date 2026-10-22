@@ -29,6 +29,7 @@ function createCapability(
   const listeners = new Set<(value: NativeDeviceSettingsSnapshot) => void>();
   const capability = {
     snapshot,
+    initialSnapshot: Promise.resolve(snapshot),
     subscribe(listener: (value: NativeDeviceSettingsSnapshot) => void) {
       listeners.add(listener);
       return () => {

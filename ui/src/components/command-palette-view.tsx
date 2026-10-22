@@ -52,7 +52,7 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 import "./tooltip.ts";
 import { Kbd, KeyboardShortcut, ShortcutText } from "./solid/kbd.tsx";
 

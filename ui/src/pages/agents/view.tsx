@@ -1,6 +1,7 @@
 import { Show, Switch, Match, createMemo } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { ConfigError } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -221,10 +222,14 @@ export function Agents(props: AgentsProps) {
                 role="tabpanel"
                 aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
               >
-                <Show when={props.config.lastError}>
-                  <div class="callout danger" role="alert">
-                    {props.config.lastError}
-                  </div>
+                <Show when={!props.config.configSaving}>
+                  <ConfigError message={props.config.lastError}>
+                    {(message) => (
+                      <div class="callout danger" role="alert">
+                        {message}
+                      </div>
+                    )}
+                  </ConfigError>
                 </Show>
                 <Switch>
                   <Match when={props.readData().agentsPanel === "overview"}>

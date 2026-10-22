@@ -10,7 +10,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
-import { currentConfigRead, currentConfigSchemaRead } from "../../lib/config/config-state-model.ts";
+import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -138,7 +138,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     configBusy: configState().configLoading,
     configError: configState().lastError,
     configRead: currentConfigRead(configState()),
-    configSchemaRead: currentConfigSchemaRead(configState()),
+    configSchemaRead: page().context.runtimeConfig.schemaRead,
     canEditConfig: page().canEditConfig(),
     configValue: configState().configForm,
     configHints: configState().configUiHints,
@@ -403,6 +403,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
               registerIcon={page().icons.register}
               consent={consent()}
               inspection={page().consent.read().inspection}
+              inspectionRead={page().consent.read().inspectionRead}
               loading={page().consent.read().inspectionLoading}
               error={page().consent.read().inspectionError}
               iconUrl={icon().url}

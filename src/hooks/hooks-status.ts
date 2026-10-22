@@ -54,87 +54,6 @@ export type HookStatusReport = {
   hooks: HookStatusEntry[];
 };
 
-function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
-  const install = entry.metadata?.install ?? [];
-  return install.map((spec, index) => {
-    const id = (spec.id ?? `${spec.kind}-${index}`).trim();
-    const bins = spec.bins ?? [];
-    let label = (spec.label ?? "").trim();
-
-    if (!label) {
-      if (spec.kind === "bundled") {
-        label = "Bundled with OpenClaw";
-      } else if (spec.kind === "npm" && spec.package) {
-        label = `Install ${spec.package} (npm)`;
-      } else if (spec.kind === "git" && spec.repository) {
-        label = `Install from ${spec.repository}`;
-      } else {
-        label = "Run installer";
-      }
-    }
-
-    return { id, kind: spec.kind, label, bins };
-  });
-}
-
-function buildHookStatus(
-  entry: HookEntry,
-  config?: OpenClawConfig,
-  eligibility?: HookEligibilityContext,
-): HookStatusEntry {
-  const hookKey = resolveHookKey(entry.hook.name, entry);
-  const hookConfig = resolveHookConfig(config, hookKey);
-  const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const enableState = resolveHookEnableState({ entry, hookConfig });
-  const always = entry.metadata?.always === true;
-  const events = entry.metadata?.events ?? [];
-  const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
-  const isEnvSatisfied = (envName: string) => isHookEnvSatisfied(envName, hookConfig);
-  const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
-
-  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryRequirementsForCurrentPlatform({
-      always,
-      entry,
-      hasLocalBin: hasBinary,
-      remote: eligibility?.remote,
-      isEnvSatisfied,
-      isConfigSatisfied,
-    });
-
-  const enabledByConfig = enableState.enabled;
-  const hasEvents = events.length > 0;
-  const loadable = enabledByConfig && requirementsSatisfied && hasEvents;
-  const blockedReason =
-    enableState.reason ??
-    (!requirementsSatisfied ? "missing requirements" : hasEvents ? undefined : "no events defined");
-
-  return {
-    name: entry.hook.name,
-    description: entry.hook.description,
-    source: entry.hook.source,
-    pluginId: entry.hook.pluginId,
-    filePath: entry.hook.filePath,
-    baseDir: entry.hook.baseDir,
-    handlerPath: entry.hook.handlerPath,
-    hookKey,
-    emoji,
-    homepage,
-    events,
-    unknownEvents,
-    always,
-    enabledByConfig,
-    requirementsSatisfied,
-    loadable,
-    blockedReason,
-    managedByPlugin,
-    requirements: required,
-    missing,
-    configChecks,
-    install: normalizeInstallOptions(entry),
-  };
-}
-
 export function buildWorkspaceHookStatus(
   workspaceDir: string,
   opts?: {
@@ -152,6 +71,82 @@ export function buildWorkspaceHookStatus(
   return {
     workspaceDir,
     managedHooksDir,
-    hooks: hookEntries.map((entry) => buildHookStatus(entry, opts?.config, opts?.eligibility)),
+    hooks: hookEntries.map((entry) => {
+      const config = opts?.config;
+      const eligibility = opts?.eligibility;
+      const hookKey = resolveHookKey(entry.hook.name, entry);
+      const hookConfig = resolveHookConfig(config, hookKey);
+      const managedByPlugin = entry.hook.source === "openclaw-plugin";
+      const enableState = resolveHookEnableState({ entry, hookConfig });
+      const always = entry.metadata?.always === true;
+      const events = entry.metadata?.events ?? [];
+      const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
+      const isEnvSatisfied = (envName: string) => isHookEnvSatisfied(envName, hookConfig);
+      const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
+
+      const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+        evaluateEntryRequirementsForCurrentPlatform({
+          always,
+          entry,
+          hasLocalBin: hasBinary,
+          remote: eligibility?.remote,
+          isEnvSatisfied,
+          isConfigSatisfied,
+        });
+
+      const enabledByConfig = enableState.enabled;
+      const hasEvents = events.length > 0;
+      const loadable = enabledByConfig && requirementsSatisfied && hasEvents;
+      const blockedReason =
+        enableState.reason ??
+        (!requirementsSatisfied
+          ? "missing requirements"
+          : hasEvents
+            ? undefined
+            : "no events defined");
+
+      return {
+        name: entry.hook.name,
+        description: entry.hook.description,
+        source: entry.hook.source,
+        pluginId: entry.hook.pluginId,
+        filePath: entry.hook.filePath,
+        baseDir: entry.hook.baseDir,
+        handlerPath: entry.hook.handlerPath,
+        hookKey,
+        emoji,
+        homepage,
+        events,
+        unknownEvents,
+        always,
+        enabledByConfig,
+        requirementsSatisfied,
+        loadable,
+        blockedReason,
+        managedByPlugin,
+        requirements: required,
+        missing,
+        configChecks,
+        install: (entry.metadata?.install ?? []).map((spec, index) => {
+          const id = (spec.id ?? `${spec.kind}-${index}`).trim();
+          const bins = spec.bins ?? [];
+          let label = (spec.label ?? "").trim();
+
+          if (!label) {
+            if (spec.kind === "bundled") {
+              label = "Bundled with OpenClaw";
+            } else if (spec.kind === "npm" && spec.package) {
+              label = `Install ${spec.package} (npm)`;
+            } else if (spec.kind === "git" && spec.repository) {
+              label = `Install from ${spec.repository}`;
+            } else {
+              label = "Run installer";
+            }
+          }
+
+          return { id, kind: spec.kind, label, bins };
+        }),
+      };
+    }),
   };
 }

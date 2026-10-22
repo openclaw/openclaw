@@ -46,7 +46,7 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
-import { renderPluginLifecycle } from "./settings-lifecycle.tsx";
+import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
@@ -536,14 +536,14 @@ function PluginOverview(props: DetailProps): JSX.Element {
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
-            fallback={renderPluginLifecycle(
-              {
-                ...props,
-                settingsHref: props.settingsHref ?? "#configuration",
-                onSettings: () => props.onTabChange("configuration"),
-              },
-              plugin(),
-            )}
+            fallback={
+              <PluginLifecycle
+                {...props}
+                settingsHref={props.settingsHref ?? "#configuration"}
+                onSettings={() => props.onTabChange("configuration")}
+                plugin={plugin()}
+              />
+            }
           >
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}

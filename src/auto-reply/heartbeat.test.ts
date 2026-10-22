@@ -66,39 +66,25 @@ describe("isHeartbeatAcknowledgementText", () => {
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
-  it("returns false for missing scratch so the monitor can still run", () => {
-    expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
-  });
-
-  it("returns true for comments only", () => {
-    for (const content of [
-      "# Header\n# Another comment",
-      "## Subheader\n### Another",
-      "<!-- Template -->",
-      "<!--\nHeartbeat template.\nKeep quiet.\n-->",
-      `<!--
-tasks:
-  - name: inbox
-    interval: 30m
-    prompt: Check inbox
--->`,
-      "<!-- One --> <!-- Two -->",
-      "<!-- One -->\n# Header",
-    ]) {
-      expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
-    }
-    expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
-  });
-
-  it("returns false when fenced heartbeat content includes a real task", () => {
-    const content = `\`\`\`markdown
-# Keep this scratch empty when you want to skip.
-
-- Check email
-\`\`\`
-`;
+  it.each([
+    undefined,
+    null,
+    "Reminder <!-- not scaffolding -->",
+    "```markdown\n# Keep this scratch empty when you want to skip.\n\n- Check email\n```\n",
+  ])("keeps missing or substantive scratch: %j", (content) => {
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it.each([
+    "# Header\n# Another comment",
+    "## Subheader\n### Another",
+    "<!-- Template -->",
+    "<!--\nHeartbeat template.\nKeep quiet.\n-->",
+    "<!--\ntasks:\n  - name: inbox\n    interval: 30m\n    prompt: Check inbox\n-->",
+    "<!-- One --> <!-- Two -->",
+    "<!-- One -->\n# Header",
+  ])("ignores scaffolding: %j", (content) => {
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 });
 

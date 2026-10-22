@@ -85,28 +85,6 @@ export type ConfigRead = {
   invalidated: Deferred<Result<void, string>>;
 };
 const configReadsByState = new WeakMap<object, ConfigRead>();
-export type ConfigSchemaRead = Pick<ConfigRead, "completion" | "invalidated">;
-const configSchemaReadsByState = new WeakMap<object, ConfigSchemaRead>();
-
-function invalidateConfigSchemaRead(state: object): void {
-  const read = configSchemaReadsByState.get(state);
-  configSchemaReadsByState.delete(state);
-  read?.invalidated.resolve({ ok: false, error: "The schema refresh was superseded." });
-}
-
-export function currentConfigSchemaRead(state: RuntimeConfigState): ConfigSchemaRead | undefined {
-  return configSchemaReadsByState.get(state);
-}
-
-export function beginConfigSchemaRead(state: RuntimeConfigState): ConfigSchemaRead {
-  invalidateConfigSchemaRead(state);
-  const read = {
-    completion: createDeferredCore<Result<void, string>>(),
-    invalidated: createDeferredCore<Result<void, string>>(),
-  };
-  configSchemaReadsByState.set(state, read);
-  return read;
-}
 
 function invalidateConfigRead(state: object): void {
   const read = configReadsByState.get(state);
@@ -162,7 +140,6 @@ export function nextRequestVersion(state: RuntimeConfigState): number {
 
 export function clearConfigRequestVersions(state: RuntimeConfigState): void {
   invalidateConfigRead(state);
-  invalidateConfigSchemaRead(state);
   requestVersionsByState.delete(state);
 }
 
@@ -178,7 +155,6 @@ export function setConfigSnapshot(state: RuntimeConfigState, snapshot: ConfigSna
 export function invalidateConfigConnection(state: object): void {
   staleConfigSnapshots.add(state);
   invalidateConfigRead(state);
-  invalidateConfigSchemaRead(state);
   connectionEpochsByState.set(state, currentConfigConnectionEpoch(state) + 1);
 }
 

@@ -67,6 +67,19 @@ async function waitForImage(element: MermaidElement): Promise<string> {
   return imageSource(element)!;
 }
 
+function changeDiagram(element: MermaidElement, change: string, label: string) {
+  if (change === "source") {
+    element.source = source(label);
+  } else {
+    document.documentElement.dataset.themeMode = "dark";
+  }
+}
+
+const expectStatus = (element: MermaidElement, message: string) =>
+  waitForSolid(() =>
+    expect(element.querySelector('[role="status"]')?.textContent).toContain(message),
+  );
+
 async function pendingDiagram(label: string, copies = 1) {
   const pending = createDeferred<string>();
   renderSvg.mockReturnValueOnce(pending.promise);
@@ -167,9 +180,7 @@ it.each([
     element!.querySelector("img")?.dispatchEvent(new Event("error"));
   }
 
-  await waitForSolid(() =>
-    expect(element!.querySelector('[role="status"]')?.textContent).toContain(message),
-  );
+  await expectStatus(element, message);
   await expectCopyableSource(element, original, true);
   expect(element!.textContent).not.toContain("internal parser detail");
   if (failure === "image") {
@@ -202,11 +213,7 @@ it.each(["source", "theme"])("ignores a stale layout after a %s change", async (
   renderSvg.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
   const { element } = await mount("Old diagram");
   expect(renderSvg).toHaveBeenCalledTimes(1);
-  if (change === "source") {
-    element!.source = source("Current diagram");
-  } else {
-    document.documentElement.dataset.themeMode = "dark";
-  }
+  changeDiagram(element, change, "Current diagram");
   await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
   if (change === "theme") {
     expect(renderSvg.mock.calls[1]?.[1].darkMode).toBe(true);
@@ -235,11 +242,7 @@ it.each(["source", "theme"])(
     const pending = createDeferred<string>();
     renderSvg.mockReturnValueOnce(pending.promise);
 
-    if (change === "source") {
-      element.source = source("Replacement diagram");
-    } else {
-      document.documentElement.dataset.themeMode = "dark";
-    }
+    changeDiagram(element, change, "Replacement diagram");
     await waitForSolid(() => expect(renderSvg).toHaveBeenCalledTimes(2));
 
     if (change === "source") {
@@ -261,16 +264,8 @@ it.each(["source", "theme"])(
 it.each(["source", "theme"])("recovers from a layout failure after a %s change", async (change) => {
   renderSvg.mockRejectedValueOnce(new Error("Invalid initial diagram"));
   const { element } = await mount("Failed diagram");
-  await waitForSolid(() =>
-    expect(element.querySelector('[role="status"]')?.textContent).toContain("Check the source"),
-  );
-
-  if (change === "source") {
-    element.source = source("Corrected diagram");
-  } else {
-    document.documentElement.dataset.themeMode = "dark";
-  }
-
+  await expectStatus(element, "Check the source");
+  changeDiagram(element, change, "Corrected diagram");
   await waitForImage(element);
   expect(renderSvg).toHaveBeenCalledTimes(2);
   expect(element.querySelector('[role="status"]')).toBeNull();
@@ -280,11 +275,7 @@ it("retries a previously failed image after returning to its source", async () =
   const { original, element } = await mount("Retry image");
   await waitForImage(element);
   element.querySelector("img")!.dispatchEvent(new Event("error"));
-  await waitForSolid(() =>
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "The diagram image could not be displayed",
-    ),
-  );
+  await expectStatus(element, "The diagram image could not be displayed");
 
   element.source = source("Another diagram");
   await waitForImage(element);

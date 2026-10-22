@@ -431,30 +431,52 @@ describe("gateway-cli coverage", () => {
       name: "gateway diagnostics",
       args: ["diagnostics", "export"],
       timeoutMs: 3000,
+      json: true,
     },
     {
       name: "offline stability",
       args: ["--port", "19097", "stability", "--bundle", "latest", "--export"],
       timeoutMs: 10_000,
+      json: true,
     },
-  ])("writes $name export with a service-owned health snapshot", async ({ args, timeoutMs }) => {
-    callGateway.mockClear();
-    const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
-    const outputPath = path.join(tempDir, "diagnostics.zip");
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
-      async () => {
-        await runGatewayCommand([...args, "--output", outputPath, "--json"]);
-      },
-    );
+    {
+      name: "human gateway diagnostics",
+      args: ["diagnostics", "export"],
+      timeoutMs: 3000,
+      json: false,
+    },
+  ])(
+    "writes $name export with a service-owned health snapshot",
+    async ({ args, timeoutMs, json }) => {
+      callGateway.mockClear();
+      const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
+      const outputPath = path.join(tempDir, "diagnostics.zip");
+      await withEnvAsync(
+        { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
+        async () => {
+          await runGatewayCommand([...args, "--output", outputPath, ...(json ? ["--json"] : [])]);
+        },
+      );
 
-    expectGatewayCall({ method: "health", timeoutMs, localPortOverride: undefined });
-    expect(fs.existsSync(outputPath)).toBe(true);
-    const output = runtimeLogs.join("\n");
-    expect(output).toContain('"path"');
-    expect(output).toContain("diagnostics.zip");
-    expect(output).toContain('"payloadFree": true');
-  });
+      expectGatewayCall({ method: "health", timeoutMs, localPortOverride: undefined });
+      expect(fs.existsSync(outputPath)).toBe(true);
+      const output = runtimeLogs.join("\n");
+      expect(output).toContain("diagnostics.zip");
+      if (json) {
+        expect(output).toContain('"path"');
+        expect(output).toContain('"payloadFree": true');
+      } else {
+        expect(runtimeLogs).toEqual([
+          "Diagnostics export",
+          `Path: ${outputPath}`,
+          expect.stringMatching(/^Size: /),
+          expect.stringMatching(/^Files: \d+$/),
+          "Privacy: payload-free stability, sanitized logs/status/health/config",
+        ]);
+        expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("gateway diagnostics export redacts namespaced paths in the ZIP across repeated exports", async () => {
     const stateDir = tempDirs.make("openclaw-gateway-redaction-");

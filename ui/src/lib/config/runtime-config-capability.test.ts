@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
-import { currentConfigSchemaRead } from "./config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
@@ -29,17 +28,16 @@ describe("runtime config capability", () => {
       }),
     );
     const initialLoad = runtimeConfig.ensureSchemaLoaded();
-    const initial = currentConfigSchemaRead(state)!;
+    const initial = runtimeConfig.schemaRead!;
     first.reject(new Error("Schema unavailable"));
     await initialLoad;
-    expect(await initial.completion.promise).toEqual({ ok: false, error: "Schema unavailable" });
+    expect(await initial).toEqual({ ok: false, error: "Schema unavailable" });
 
     const retry = runtimeConfig.ensureSchemaLoaded();
-    const pending = currentConfigSchemaRead(state)!;
+    const pending = runtimeConfig.schemaRead!;
     expect(pending).not.toBe(initial);
     publish(false, client);
-    expect(await pending.invalidated.promise).toMatchObject({ ok: false });
-    expect(currentConfigSchemaRead(state)).toBeUndefined();
+    expect(runtimeConfig.schemaRead).toBeNull();
     second.resolve({ schema: { type: "object" }, uiHints: {}, version: "retired" });
     await retry;
     expect(state.configSchema).toBeNull();

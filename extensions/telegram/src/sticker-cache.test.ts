@@ -1,28 +1,16 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setTelegramRuntime } from "./runtime.js";
-import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { beforeEach, describe, expect, it } from "vitest";
+import { useTelegramKeyedState } from "./keyed-state.test-support.js";
 import * as stickerCache from "./sticker-cache-store.js";
-
-vi.mock("openclaw/plugin-sdk/state-paths", () => ({
-  resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
-}));
 
 describe("sticker-cache", () => {
   type StickerEntry = stickerCache.CachedSticker;
-  let store: PluginStateKeyedStore<StickerEntry>;
-  const openStore = () =>
-    createPluginStateKeyedStoreForTests<StickerEntry>("telegram", {
-      namespace: "telegram.sticker-cache",
-      maxEntries: 10_000,
-    });
+  const fixture = useTelegramKeyedState<StickerEntry>({
+    namespace: "telegram.sticker-cache",
+    maxEntries: 10_000,
+  });
   const sticker = (fileId: string, overrides: Partial<StickerEntry> = {}): StickerEntry => ({
     fileId,
     fileUniqueId: `${fileId}-unique`,
@@ -31,30 +19,9 @@ describe("sticker-cache", () => {
     ...overrides,
   });
 
-  function installStore(nextStore: PluginStateKeyedStore<StickerEntry>): void {
-    store = nextStore;
-    setTelegramRuntime({
-      state: {
-        openKeyedStore: (() => store) as TelegramRuntime["state"]["openKeyedStore"],
-      },
-      channel: {},
-    } as TelegramRuntime);
-  }
-
-  beforeEach(async () => {
-    resetPluginStateStoreForTests({ closeDatabase: false });
-    installStore(openStore());
-    await store.clear();
-  });
-
-  afterEach(() => {
-    clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
-  });
-
   it("returns the best-effort fallback when plugin-state register rejects", async () => {
-    installStore({
-      ...store,
+    fixture.install({
+      ...fixture.store,
       async register() {
         await Promise.resolve();
         throw new Error("register failed");
@@ -64,18 +31,22 @@ describe("sticker-cache", () => {
   });
 
   it("settles only after the backing write commits", async () => {
-    const backingStore = store;
-    await stickerCache.cacheSticker(
-      sticker("original-file", {
-        fileUniqueId: "delayed-unique",
-        description: "Original sticker",
-        setName: "OriginalSet",
-        cachedAt: "2026-01-26T11:00:00.000Z",
-      }),
-    );
+    const backingStore = fixture.store;
+    const original = sticker("original-file", {
+      fileUniqueId: "delayed-unique",
+      description: "Original sticker",
+      setName: "OriginalSet",
+      cachedAt: "2026-01-26T11:00:00.000Z",
+    });
+    const expected = sticker("delayed-file", {
+      fileUniqueId: "delayed-unique",
+      description: "A delayed sticker",
+      cachedAt: "2026-01-26T12:00:00.000Z",
+    });
+    await stickerCache.cacheSticker(original);
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
-    installStore({
+    fixture.install({
       ...backingStore,
       async register(key, value, options) {
         entered.resolve();
@@ -83,39 +54,24 @@ describe("sticker-cache", () => {
         await backingStore.register(key, value, options);
       },
     });
-    const replacement = sticker("delayed-file", {
-      fileUniqueId: "delayed-unique",
-      emoji: undefined,
-      setName: undefined,
-      receivedFrom: undefined,
-      description: "A delayed sticker",
-      cachedAt: "2026-01-26T12:00:00.000Z",
-    });
     let settled = false;
-    const pending = stickerCache.cacheSticker(replacement).then(() => {
-      settled = true;
-    });
+    const pending = stickerCache
+      .cacheSticker({ ...expected, emoji: undefined, setName: undefined, receivedFrom: undefined })
+      .then(() => {
+        settled = true;
+      });
     try {
       await entered.promise;
       await setImmediate();
       expect(settled).toBe(false);
-      expect(await stickerCache.getCachedSticker("delayed-unique")).toMatchObject({
-        fileId: "original-file",
-        description: "Original sticker",
-        setName: "OriginalSet",
-      });
+      expect(await stickerCache.getCachedSticker("delayed-unique")).toMatchObject(original);
     } finally {
       release.resolve();
       await pending;
     }
     resetPluginStateStoreForTests();
-    installStore(openStore());
-    expect(await stickerCache.getCachedSticker("delayed-unique")).toStrictEqual({
-      fileId: "delayed-file",
-      fileUniqueId: "delayed-unique",
-      description: "A delayed sticker",
-      cachedAt: "2026-01-26T12:00:00.000Z",
-    });
+    fixture.install(fixture.open());
+    expect(await stickerCache.getCachedSticker("delayed-unique")).toStrictEqual(expected);
   });
 
   describe("searchStickers", () => {

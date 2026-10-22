@@ -1,14 +1,18 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, expect, it, vi } from "vitest";
 import { runSearxngSearch } from "./searxng-client.js";
 
 installPinnedHostnameTestHooks();
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 const baseUrl = "http://127.0.0.1:8888";
 const query = "openclaw";
 const requestUrl = `${baseUrl}/search?q=${query}&format=json`;
-function searchConfig(endpoint: string, categories?: string, language?: string) {
+function searchConfig(endpoint: unknown, categories?: string, language?: string) {
   const webSearch = { baseUrl: endpoint, categories, language };
   return { plugins: { entries: { searxng: { config: { webSearch } } } } };
 }
@@ -39,6 +43,47 @@ it("builds the request URL from plugin config", async () => {
 
   expectRequests(fetch, `${requestUrl}&categories=general%2Cnews&language=en`);
 });
+
+it.each([
+  {
+    source: "allowed env ref",
+    endpoint: "http://localhost:8888/",
+    target: "http://localhost:8888",
+  },
+  {
+    source: "ambient env",
+    endpoint: "https://search.local/searxng///",
+    target: "https://search.local/searxng",
+  },
+])("normalizes the $source endpoint in the request", async ({ source, endpoint, target }) => {
+  vi.stubEnv("SEARXNG_BASE_URL", endpoint);
+  const fetch = mockFetch([]);
+  const config =
+    source === "allowed env ref"
+      ? searchConfig({ source: "env", provider: "default", id: "SEARXNG_BASE_URL" })
+      : {};
+  await search({ config });
+  expectRequests(fetch, `${target}/search?q=openclaw&format=json`);
+});
+
+it.each(["missing endpoint", "blocked explicit ref"])(
+  "rejects %s before requesting",
+  async (source) => {
+    vi.stubEnv("SEARXNG_BASE_URL", source === "missing endpoint" ? "" : "https://ambient.example/");
+    const config: OpenClawConfig =
+      source === "missing endpoint"
+        ? {}
+        : {
+            ...searchConfig({ source: "env", provider: "restricted", id: "SEARXNG_BASE_URL" }),
+            secrets: { providers: { restricted: { source: "env", allowlist: [] } } },
+          };
+    const fetch = mockFetch([]);
+    await expect(search({ config })).rejects.toThrow(
+      "SearXNG base URL is not configured. Set SEARXNG_BASE_URL or configure plugins.entries.searxng.config.webSearch.baseUrl.",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
 
 it("normalizes, filters, and caps provider result rows", async () => {
   mockFetch([
