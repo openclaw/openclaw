@@ -46,6 +46,41 @@ function managedRoom(fields: Partial<ClickClackChannel>) {
     ...fields,
   });
 }
+function recoveredRoom(h: Harness, id: string, route: string, name: string, externalRef?: string) {
+  const room = managedRoom({ id, route_id: route, name, external_ref: externalRef });
+  h.channels.mockResolvedValue([room]);
+  return room;
+}
+function legacyPatchResponse(h: Harness, fields: Partial<ClickClackChannel>, patchArchive = false) {
+  h.updateChannel.mockImplementationOnce(async (channelId, patch) =>
+    discussionChannel({
+      id: fields.id ?? channelId,
+      route_id: fields.route_id,
+      name: patch.name ?? fields.name,
+      external_managed: patch.external_managed ?? fields.external_managed,
+      external_ref: patch.external_ref ?? fields.external_ref,
+      external_url: patch.external_url ?? fields.external_url,
+      sidebar_section: patch.sidebar_section ?? fields.sidebar_section,
+      ...("archived" in fields
+        ? { archived: patchArchive ? (patch.archived ?? fields.archived) : fields.archived }
+        : {}),
+    }),
+  );
+}
+async function recoverLostResponse(
+  h: Harness,
+  fields: Partial<ClickClackChannel>,
+  error = "connection lost",
+) {
+  const general = (await h.channels())[0]!;
+  h.channels
+    .mockResolvedValueOnce([general])
+    .mockImplementationOnce(async () => [
+      general,
+      managedRoom({ ...fields, external_ref: h.createChannel.mock.calls[0]?.[1].external_ref }),
+    ]);
+  h.createChannel.mockRejectedValueOnce(new Error(error));
+}
 describe("ClickClack discussion service", () => {
   it("keeps accepted same-session operations in order while initial hydration settles", async () => {
     const h = createHarness({ label: "Hydration ordering" });
@@ -233,6 +268,9 @@ describe("ClickClack discussion service", () => {
       legacyCreateResponse(input),
     );
     await h.service.open(sessionKey);
+    h.updateChannel.mockClear();
+    await h.service.reconcile(sessionKey);
+    expect(h.updateChannel).not.toHaveBeenCalled();
     h.setSessionEntry({ label: "Confirmed Sibling" });
     await h.service.open("agent:main:confirmed-sibling");
     expect(h.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
@@ -245,18 +283,6 @@ describe("ClickClack discussion service", () => {
       display_title: "Needs Backfill",
     });
     expect(h.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
-  });
-
-  it("does not retry an unchanged title without server capability confirmation", async () => {
-    const h = createHarness({ label: "Legacy title" });
-    const sessionKey = "agent:main:legacy-title-no-retry";
-    h.createChannel.mockImplementationOnce(async (_workspaceId, input) =>
-      legacyCreateResponse(input),
-    );
-    await h.service.open(sessionKey);
-    h.updateChannel.mockClear();
-    await h.service.reconcile(sessionKey);
-    expect(h.updateChannel).not.toHaveBeenCalled();
   });
 
   it("pins the configured default for global keys and preserves qualified owners", async () => {
@@ -304,11 +330,16 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("does not create a channel for a missing session", async () => {
-    const h = createHarness(undefined);
-    expect(await h.service.open("agent:main:missing")).toEqual({ state: "available" });
-    expect(h.createChannel).not.toHaveBeenCalled();
-  });
+  it.each([undefined, { label: "Recovered Name", archivedAt: 123 }])(
+    "does not create or adopt a room for an unavailable session: %j",
+    async (entry) => {
+      const h = createHarness(entry);
+      expect(await h.service.open("agent:main:unavailable")).toEqual({ state: "available" });
+      expect(h.channels).not.toHaveBeenCalled();
+      expect(h.updateChannel).not.toHaveBeenCalled();
+      expect(h.createChannel).not.toHaveBeenCalled();
+    },
+  );
   it("does not create a channel without a concrete session incarnation", async () => {
     const h = createHarness({ sessionId: "", label: "Unmaterialized session" });
     await expect(h.service.open("agent:main:unmaterialized")).rejects.toThrow(
@@ -494,17 +525,11 @@ describe("ClickClack discussion service", () => {
         sidebar_section: "Projects",
       }),
     ]);
-    h.updateChannel.mockImplementationOnce(async (_channelId, patch) =>
-      discussionChannel({
-        id: "chn_recovered",
-        route_id: "recovered-route",
-        name: patch.name ?? "release-planning",
-        external_managed: patch.external_managed,
-        external_ref: patch.external_ref,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-      }),
-    );
+    legacyPatchResponse(h, {
+      id: "chn_recovered",
+      route_id: "recovered-route",
+      name: "release-planning",
+    });
     const opened = await h.service.open(sessionKey);
     expect(h.createChannel).not.toHaveBeenCalled();
     expectPatched(h, { external_ref: externalRef, external_managed: true }, "chn_recovered");
@@ -551,31 +576,20 @@ describe("ClickClack discussion service", () => {
   it("adopts a created channel when the create response is lost", async () => {
     const h = createHarness({ label: "Lost response" });
     const sessionKey = "agent:main:lost-response";
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels.mockResolvedValueOnce([general]).mockImplementationOnce(async () => {
-      const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-      return [
-        general,
-        managedRoom({
-          id: "chn_lost_response",
-          route_id: "lost-response-route",
-          name: "lost-response",
-          external_ref: externalRef,
-        }),
-      ];
+    await recoverLostResponse(h, {
+      id: "chn_lost_response",
+      route_id: "lost-response-route",
+      name: "lost-response",
     });
-    h.createChannel.mockRejectedValueOnce(new Error("connection lost"));
-    h.updateChannel.mockImplementationOnce(async (_channelId, patch) =>
-      discussionChannel({
+    legacyPatchResponse(
+      h,
+      managedRoom({
         id: "chn_lost_response",
         route_id: "lost-response-route",
-        name: patch.name ?? "lost-response",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? "",
-        external_url: patch.external_url ?? "",
-        sidebar_section: patch.sidebar_section ?? "Sessions",
-        archived: patch.archived ?? false,
+        name: "lost-response",
+        external_ref: "",
       }),
+      true,
     );
     await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expectPatched(h, { external_managed: true }, "chn_lost_response");
@@ -607,20 +621,15 @@ describe("ClickClack discussion service", () => {
   it("retains a recovered channel reservation when its adoption patch fails", async () => {
     const h = createHarness({ label: "Adoption failure" });
     const sessionKey = "agent:main:adoption-failure";
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels.mockResolvedValueOnce([general]).mockImplementationOnce(async () => {
-      const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
-      return [
-        general,
-        managedRoom({
-          id: "chn_adoption_failure",
-          route_id: "adoption-failure-route",
-          name: "adoption-failure",
-          external_ref: externalRef,
-        }),
-      ];
-    });
-    h.createChannel.mockRejectedValueOnce(new Error("connection reset"));
+    await recoverLostResponse(
+      h,
+      {
+        id: "chn_adoption_failure",
+        route_id: "adoption-failure-route",
+        name: "adoption-failure",
+      },
+      "connection reset",
+    );
     h.updateChannel.mockRejectedValueOnce(new Error("patch unavailable"));
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection reset");
     expect(h.generationStore.lookup(sessionKey)).toMatchObject({
@@ -680,34 +689,18 @@ describe("ClickClack discussion service", () => {
   it("adopts an ambiguous create after the session incarnation changes", async () => {
     const h = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
     const sessionKey = "agent:main:ambiguous-reset";
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    h.createChannel.mockRejectedValueOnce(new Error("connection lost"));
+    await interruptCreate(h);
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
     const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
     h.setSessionEntry({ sessionId: "new-session", label: "Ambiguous reset" });
-    h.channels.mockResolvedValue([
-      managedRoom({
-        id: "chn_ambiguous_old",
-        route_id: "ambiguous-old-route",
-        name: "ambiguous-reset",
-        external_ref: externalRef,
-      }),
-    ]);
-    h.updateChannel.mockImplementationOnce(async (channelId, patch) =>
-      discussionChannel({
-        id: channelId,
-        route_id: "ambiguous-old-route",
-        name: patch.name ?? "ambiguous-reset",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? externalRef,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-        archived: false,
-      }),
-    );
+    recoveredRoom(h, "chn_ambiguous_old", "ambiguous-old-route", "ambiguous-reset", externalRef);
+    legacyPatchResponse(h, {
+      route_id: "ambiguous-old-route",
+      name: "ambiguous-reset",
+      external_managed: true,
+      external_ref: externalRef,
+      archived: false,
+    });
     await h.service.open(sessionKey);
     expectPatched(h, { external_ref: externalRef }, "chn_ambiguous_old");
     expect(h.createChannel).toHaveBeenCalledTimes(1);
@@ -731,14 +724,13 @@ describe("ClickClack discussion service", () => {
       label: "Archived during create",
       archivedAt: 1,
     });
-    h.channels.mockResolvedValue([
-      managedRoom({
-        id: "chn_archived_ambiguous",
-        route_id: "archived-ambiguous-route",
-        name: "archived-during-create",
-        external_ref: externalRef,
-      }),
-    ]);
+    recoveredRoom(
+      h,
+      "chn_archived_ambiguous",
+      "archived-ambiguous-route",
+      "archived-during-create",
+      externalRef,
+    );
     await h.service.reconcileAll();
     expect(h.createChannel).toHaveBeenCalledTimes(1);
     expect(h.updateChannel).not.toHaveBeenCalled();
@@ -751,18 +743,13 @@ describe("ClickClack discussion service", () => {
       sessionId: "new-session",
       label: "Archived during create",
     });
-    h.updateChannel.mockImplementationOnce(async (channelId, patch) =>
-      discussionChannel({
-        id: channelId,
-        route_id: "archived-ambiguous-route",
-        name: patch.name ?? "archived-during-create",
-        external_managed: patch.external_managed ?? true,
-        external_ref: patch.external_ref ?? externalRef,
-        external_url: patch.external_url,
-        sidebar_section: patch.sidebar_section,
-        archived: false,
-      }),
-    );
+    legacyPatchResponse(h, {
+      route_id: "archived-ambiguous-route",
+      name: "archived-during-create",
+      external_managed: true,
+      external_ref: externalRef,
+      archived: false,
+    });
     await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expect(h.createChannel).toHaveBeenCalledTimes(1);
     expectPatched(h, { external_ref: externalRef }, "chn_archived_ambiguous");
@@ -782,14 +769,13 @@ describe("ClickClack discussion service", () => {
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
     const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
     h.config.channels!.clickclack!.discussions!.enabled = false;
-    h.channels.mockResolvedValue([
-      managedRoom({
-        id: "chn_disabled_pending",
-        route_id: "disabled-pending-route",
-        name: "disable-during-create",
-        external_ref: externalRef,
-      }),
-    ]);
+    recoveredRoom(
+      h,
+      "chn_disabled_pending",
+      "disabled-pending-route",
+      "disable-during-create",
+      externalRef,
+    );
     await h.service.reconcileAll();
     expect(h.updateChannel).not.toHaveBeenCalled();
     expect(h.generationStore.lookup(sessionKey)).toMatchObject({
@@ -808,11 +794,7 @@ describe("ClickClack discussion service", () => {
   it("does not recurse while replacing the account for an ambiguous open", async () => {
     const h = createHarness({ label: "Account replacement" });
     const sessionKey = "agent:main:account-replacement";
-    const general = await h.channels().then((channels) => channels[0]!);
-    h.channels
-      .mockResolvedValueOnce([general])
-      .mockRejectedValueOnce(new Error("relist unavailable"));
-    h.createChannel.mockRejectedValueOnce(new Error("connection lost"));
+    await interruptCreate(h);
     await expect(h.service.open(sessionKey)).rejects.toThrow("connection lost");
     const externalRef = h.createChannel.mock.calls[0]?.[1].external_ref;
     h.config.channels!.clickclack!.discussions!.enabled = false;
@@ -825,14 +807,7 @@ describe("ClickClack discussion service", () => {
         discussions: { enabled: true, workspace: "team" },
       },
     };
-    h.channels.mockResolvedValue([
-      managedRoom({
-        id: "chn_old_account",
-        route_id: "old-account-route",
-        name: "account-replacement",
-        external_ref: externalRef,
-      }),
-    ]);
+    recoveredRoom(h, "chn_old_account", "old-account-route", "account-replacement", externalRef);
     await expect(h.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
     expect(h.updateChannel).not.toHaveBeenCalled();
     expect(h.createChannel).toHaveBeenCalledTimes(2);
@@ -840,13 +815,5 @@ describe("ClickClack discussion service", () => {
       accountId: "replacement",
       serverBaseUrl: "https://replacement-clickclack.example",
     });
-  });
-
-  it("does not create or adopt a room for an archived main session", async () => {
-    const h = createHarness({ label: "Recovered Name", archivedAt: 123 });
-    const sessionKey = "agent:main:recover-stale";
-    await expect(h.service.open(sessionKey)).resolves.toEqual({ state: "available" });
-    expect(h.channels).not.toHaveBeenCalled();
-    expect(h.updateChannel).not.toHaveBeenCalled();
   });
 });
