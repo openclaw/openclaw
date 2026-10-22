@@ -494,24 +494,15 @@ describe("gateway sessions patch", () => {
   test("commits an icon or color change without ageing the session row", async () => {
     const store = mainStoreEntry({ sessionId: "sess-icon" });
 
-    const iconed = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, icon: "✅", expectedSessionId: "sess-icon" },
-      }),
-    );
+    const iconed = await patchOk({ store, icon: "✅", expectedSessionId: "sess-icon" });
     expect(iconed.icon).toBe("✅");
     expect(iconed.updatedAt).toBe(1);
 
-    const cleared = expectPatchOk(
-      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: null, color: null } }),
-    );
+    const cleared = await patchOk({ store, icon: null, color: null });
     expect(cleared.icon).toBeUndefined();
     expect(cleared.updatedAt).toBe(1);
 
-    const renamed = expectPatchOk(
-      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: "🐛", label: "Waiting" } }),
-    );
+    const renamed = await patchOk({ store, icon: "🐛", label: "Waiting" });
     expect(renamed.icon).toBe("🐛");
     expect(renamed.updatedAt).toBeGreaterThan(1);
   });
