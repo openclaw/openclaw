@@ -1,5 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import {
+  action,
+  createOptimistic,
   createMemo,
   createSignal,
   createStore,
@@ -30,6 +32,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
@@ -54,12 +57,14 @@ export function CloudWorkersPage() {
     editor: null,
     draft: createCloudWorkerDraft(),
   });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((value) => value + 1));
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
-  };
+  const configSave = new CloudWorkerConfigSave(() => saveProjection.publish());
+  const saveProjection = projectMutableSource(configSave, (owner) => owner.state);
+  const saveState = saveProjection.read;
+  let saveLifetime = Promise.withResolvers<void>();
+  function retireSavePresentation() {
+    saveLifetime.resolve();
+    saveLifetime = Promise.withResolvers<void>();
+  }
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const [catalog, setCatalog] = createSignal<Map<string, ProfileSummary>>();
   const [catalogLoad, setCatalogLoad] = createSignal<{ promise: Promise<void> } | null>(null);
@@ -67,6 +72,7 @@ export function CloudWorkersPage() {
   let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
   let catalogRequest: AbortController | undefined;
   function clearPresentation() {
+    retireSavePresentation();
     setView((state) => {
       state.editor = null;
       state.draft = createCloudWorkerDraft();
@@ -89,10 +95,37 @@ export function CloudWorkersPage() {
       refreshCatalog();
     },
     invalidateRequests: () => {
+      retireSavePresentation();
       catalogRequest?.abort();
       configSave.update({ busy: false });
     },
   });
+  const saveScope = createMemo(() => {
+    saveState();
+    return saveLifetime;
+  });
+  const savePresentation = createMemo(() => {
+    const retired = saveScope().promise;
+    const [saving, setSaving] = createOptimistic(false);
+    return { retired, saving, setSaving };
+  });
+  const saving = () => savePresentation().saving() || saveState().busy;
+  const presentSave = action(function* (
+    current: ReturnType<typeof savePresentation>,
+    pending: Promise<boolean>,
+  ) {
+    if (current.retired === saveLifetime.promise) {
+      current.setSaving(true);
+    }
+    yield Promise.race([pending, current.retired]);
+  });
+  async function saveConfig(...args: Parameters<CloudWorkerConfigSave["save"]>) {
+    const current = savePresentation();
+    const pending = configSave.save(...args);
+    // The plain owner admits the patch before Solid presents its progress.
+    await Promise.resolve();
+    return presentSave(current, pending);
+  }
   void context.runtimeConfig.ensureLoaded();
   function catalogReceipt() {
     const snapshot = context.gateway.snapshot;
@@ -158,8 +191,16 @@ export function CloudWorkersPage() {
   onSettled(() => {
     // Applied-config receipts abort the prior catalog request before refreshing profiles.
     const stop = configProjection.subscribe(refreshCatalog);
+    const stopRoute = context.router.subscribe(() => {
+      retireSavePresentation();
+      saveProjection.publish();
+    });
     refreshCatalog();
-    return stop;
+    return () => {
+      stop();
+      stopRoute();
+      saveLifetime.resolve();
+    };
   });
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
@@ -232,7 +273,7 @@ export function CloudWorkersPage() {
     }
     const profileId = editingId ?? draft.id;
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerUpsertPatch(base, draft, editingId),
       note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
       canDispatch: isCurrent,
@@ -275,7 +316,7 @@ export function CloudWorkersPage() {
       return;
     }
     const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await saveConfig(runtimeConfig, isCurrent, {
       build: (base) => buildCloudWorkerDeletePatch(base, profile.id),
       note: `cloud workers: delete ${profile.id}`,
       canDispatch: isCurrent,
@@ -359,7 +400,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm"
               type="button"
               aria-label={`${t("cloudWorkersPage.editAction")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => openEditor(profile)}
             >
               {t("cloudWorkersPage.editAction")}
@@ -368,7 +409,7 @@ export function CloudWorkersPage() {
               class="btn btn--sm danger"
               type="button"
               aria-label={`${t("common.delete")}: ${profile.id}`}
-              disabled={!canManage()}
+              disabled={saving() || !canManage()}
               onClick={() => void deleteProfile(profile)}
             >
               {t("common.delete")}
@@ -412,7 +453,7 @@ export function CloudWorkersPage() {
             autocomplete="off"
             spellcheck="false"
             value={view.draft[field]}
-            disabled={saveState().busy}
+            disabled={saving()}
             onInput={(event) => patchDraft({ [field]: event.currentTarget.value })}
           />
         }
@@ -455,7 +496,7 @@ export function CloudWorkersPage() {
                 class="settings-select"
                 aria-label={t("cloudWorkersPage.fields.operatingSystem")}
                 value={view.draft.target}
-                disabled={saveState().busy}
+                disabled={saving()}
                 onChange={(event) => {
                   const target = event.currentTarget.value;
                   if (!systems().find((system) => system.id === target)?.disabledReason) {
@@ -504,7 +545,7 @@ export function CloudWorkersPage() {
               autocomplete="off"
               spellcheck="false"
               value={view.draft.setup}
-              disabled={saveState().busy}
+              disabled={saving()}
               onInput={(event) => patchDraft({ setup: event.currentTarget.value })}
             />
           }
@@ -513,7 +554,7 @@ export function CloudWorkersPage() {
           title={t("cloudWorkersPage.fields.desktop")}
           description={t("cloudWorkersPage.fields.desktopHelp")}
           checked={view.draft.desktop}
-          disabled={saveState().busy}
+          disabled={saving()}
           onChange={(desktop) => patchDraft({ desktop })}
         />
         {renderDraftInput("binary", {
@@ -524,7 +565,7 @@ export function CloudWorkersPage() {
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
             value={view.draft.warmImage}
-            disabled={saveState().busy}
+            disabled={saving()}
             onChange={(value) => {
               if (value === "auto" || value === "on" || value === "off") {
                 patchDraft({ warmImage: value });
@@ -555,12 +596,12 @@ export function CloudWorkersPage() {
               <button
                 class="btn primary"
                 type="button"
-                disabled={!canManage()}
+                disabled={saving() || !canManage()}
                 onClick={() => void saveProfile({ ...view.draft })}
               >
-                {saveState().busy ? t("common.saving") : t("common.save")}
+                {saving() ? t("common.saving") : t("common.save")}
               </button>
-              <button class="btn" type="button" disabled={saveState().busy} onClick={closeEditor}>
+              <button class="btn" type="button" disabled={saving()} onClick={closeEditor}>
                 {t("common.cancel")}
               </button>
             </>
@@ -605,7 +646,7 @@ export function CloudWorkersPage() {
                 title={t("cloudWorkersPage.environments.machines")}
                 count={profiles().length}
                 actions={
-                  <Show when={canManage()}>
+                  <Show when={!saving() && canManage()}>
                     <button class="btn btn--sm primary" type="button" onClick={() => openEditor()}>
                       {t("cloudWorkersPage.addProfile")}
                     </button>

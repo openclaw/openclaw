@@ -121,6 +121,28 @@ afterEach(() => {
 });
 beforeEach(() => void probePortalReachable.mockReset().mockResolvedValue("reachable"));
 
+it("shows first-read failure and loading while retrying the admitted portal list", async () => {
+  const first = createDeferred<PortalListResult>();
+  const retry = createDeferred<PortalListResult>();
+  const source = createContext(["portal.list"], async () => retry.promise);
+  source.request.mockReturnValueOnce(first.promise);
+  const { page } = await mountPage(source.context, portal.id);
+  await waitForText(page, "Loading");
+  await updatePage(page, { presented: false });
+  await updatePage(page, { presented: true });
+  await waitForText(page, "Loading");
+  first.reject(new Error("Synthetic portal list unavailable"));
+  await waitForText(page, "Synthetic portal list unavailable");
+  const retryButton = page.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+  expect(retryButton.textContent).toBe("Retry");
+  retryButton.click();
+  await waitForSolid(() => expect(callsTo(source, "portal.list")).toHaveLength(2));
+  await waitForText(page, "Loading");
+  expect(page.textContent).not.toContain("Synthetic portal list unavailable");
+  retry.resolve(portalResponse());
+  await waitForFrame(page);
+});
+
 it.each(["catalogued", "uncatalogued", "unsupported"])(
   "waits for connected empty state (%s)",
   async (mode) => {

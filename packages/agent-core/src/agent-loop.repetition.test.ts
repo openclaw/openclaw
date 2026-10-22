@@ -4,6 +4,8 @@ import { runAgentLoop } from "./agent-loop.js";
 import {
   config,
   captureAgentLoop,
+  captureToolLoop,
+  startToolCalls,
   createTurnSequenceStream,
   makeAssistantMessage,
   makeCall,
@@ -167,17 +169,11 @@ describe("repetition stop at the stream owner", () => {
     const toolCall: AgentToolCall = { ...makeCall("write"), async: true };
     const message = makeAssistantMessage([{ type: "text", text: loop }, toolCall]);
     let requests = 0;
-    const result = await runAgentLoop(
-      [user()],
-      {
-        systemPrompt: "",
-        messages: [],
-        tools: [makeTool("write", executed)],
-      },
-      { ...config, repetitionGuard: () => true },
-      () => {},
-      undefined,
-      () => {
+    const { run } = captureToolLoop({
+      prompt: user(),
+      tools: [makeTool("write", executed)],
+      config: { repetitionGuard: () => true },
+      streamFn: () => {
         if (++requests > 1) {
           return reply(makeAssistantMessage([{ type: "text", text: "Unexpected retry." }]));
         }
@@ -186,7 +182,8 @@ describe("repetition stop at the stream owner", () => {
           { type: "toolcall_end", contentIndex: 1, toolCall, partial: message },
         ]);
       },
-    );
+    });
+    const result = await run;
     expect(executed).toEqual([]);
     expect(requests).toBe(1);
     expect(result.at(-1)).toMatchObject({
@@ -215,27 +212,23 @@ describe("repetition stop at the stream owner", () => {
         requestSignal?.addEventListener("abort", () => finish.resolve(), { once: true });
         return response;
       };
-      const run = runAgentLoop(
-        [user()],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [
-            {
-              ...makeTool("kept"),
-              execute: async (_id, _args, signal) => {
-                executed.push("kept");
-                started.resolve();
-                await finish.promise;
-                observed.toolAborted = signal?.aborted ?? false;
-                return { content: [{ type: "text", text: "Saved." }], details: {} };
-              },
+      const { run } = captureToolLoop({
+        prompt: user(),
+        tools: [
+          {
+            ...makeTool("kept"),
+            execute: async (_id, _args, signal) => {
+              executed.push("kept");
+              started.resolve();
+              await finish.promise;
+              observed.toolAborted = signal?.aborted ?? false;
+              return { content: [{ type: "text", text: "Saved." }], details: {} };
             },
-            makeTool("discarded", executed),
-          ],
-        },
-        { ...config, repetitionGuard: () => true },
-        (event) => {
+          },
+          makeTool("discarded", executed),
+        ],
+        config: { repetitionGuard: () => true },
+        onEvent: (event) => {
           if (
             event.type === "message_end" &&
             event.message.role === "assistant" &&
@@ -244,16 +237,9 @@ describe("repetition stop at the stream owner", () => {
             finish.resolve();
           }
         },
-        undefined,
         streamFn,
-      );
-      response.push({ type: "start", partial: makeAssistantMessage([]) });
-      response.push({
-        type: "toolcall_end",
-        contentIndex: 0,
-        toolCall: kept,
-        partial: makeAssistantMessage([kept]),
       });
+      startToolCalls(response, [kept]);
       await started.promise;
       const bad = makeAssistantMessage([kept, { type: "text", text: loop }, discarded]);
       if (source === "delta") {

@@ -33,6 +33,14 @@ export function createPortals(
 ) {
   let active = true;
   let presentationPending = false;
+  let presentationLifetime = Promise.withResolvers<void>();
+  let listLifetime = Promise.withResolvers<void>();
+  let presentationEpoch = 0;
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+    presentationEpoch += 1;
+  }
   const snapshotPresentation = (): PortalsPresentation => {
     const current = presentation();
     return {
@@ -49,6 +57,9 @@ export function createPortals(
     selectedPortalId: string | null;
     loading: boolean;
     loaded: boolean;
+    previewEpoch: number;
+    listReady: boolean;
+    listRead: { result: Promise<void> };
     error: string | null;
     closingPortalId: string | null;
     portalProbeState: PortalProbeState | null;
@@ -64,6 +75,9 @@ export function createPortals(
     selectedPortalId: null,
     loading: false,
     loaded: false,
+    previewEpoch: 1,
+    listReady: false,
+    listRead: { result: Promise.resolve() },
     error: null,
     closingPortalId: null,
     portalProbeState: null,
@@ -271,15 +285,21 @@ export function createPortals(
   function resetGatewayState() {
     retireGatewayRequests();
     resetPendingEnvironment();
+    state.previewEpoch += 1;
     state.portals = [];
     state.selectedPortalId = null;
     state.loaded = false;
+    state.listReady = false;
     state.error = null;
     portalProbeCache.clear();
     state.portalProbeState = null;
   }
 
   function retireGatewayRequests() {
+    retirePresentation();
+    listLifetime.resolve();
+    listLifetime = Promise.withResolvers<void>();
+    state.listRead = { result: Promise.resolve() };
     presentationRequest = null;
     environmentLoading = false;
     pollEnvironment(false);
@@ -366,7 +386,7 @@ export function createPortals(
     });
   }
 
-  async function loadPortals() {
+  function loadPortals(): Promise<void> {
     if (
       state.pendingEnvironmentId ||
       !state.canReadPortalState ||
@@ -374,36 +394,48 @@ export function createPortals(
       state.loading ||
       (presentation().embedded && !presentation().presented)
     ) {
-      return;
+      return Promise.resolve();
     }
     const scope = lifecycle.capture();
     if (!scope) {
-      return;
+      return Promise.resolve();
     }
     const isCurrent = () => lifecycle.isCurrent(scope);
     state.loading = true;
     state.error = null;
+    const pending = (async () => {
+      try {
+        const result = await scope.client.request<PortalListResult>("portal.list", {});
+        if (isCurrent()) {
+          state.listReady = true;
+          applyPortalSet(result.portals);
+        }
+      } catch (error) {
+        if (isCurrent() && state.portalListSupported) {
+          state.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
+          state.loaded = true;
+        }
+      } finally {
+        if (isCurrent()) {
+          state.loading = false;
+        }
+        notify();
+      }
+    })();
+    // Hidden panels keep their admitted read; only Gateway retirement releases its readiness.
+    state.listRead = { result: Promise.race([pending, listLifetime.promise]) };
     notify();
-    try {
-      const result = await scope.client.request<PortalListResult>("portal.list", {});
-      if (isCurrent()) {
-        applyPortalSet(result.portals);
-      }
-    } catch (error) {
-      if (isCurrent() && state.portalListSupported) {
-        state.error = t("portalsPage.loadFailed", { error: formatUiError(error) });
-        state.loaded = true;
-      }
-    } finally {
-      if (isCurrent()) {
-        state.loading = false;
-      }
-      notify();
-    }
+    return pending;
   }
 
   return {
     state: projection.read,
+    get presentationEpoch() {
+      return presentationEpoch;
+    },
+    get retired() {
+      return presentationLifetime.promise;
+    },
     presentation: () => {
       projection.revision();
       return presentation();
@@ -415,6 +447,15 @@ export function createPortals(
       reportPresentation();
     },
     presentationChanged() {
+      const incoming = snapshotPresentation();
+      if (
+        incoming.requestedPortalId !== previousPresentation.requestedPortalId ||
+        incoming.requestedEnvironmentId !== previousPresentation.requestedEnvironmentId ||
+        (!incoming.presented && previousPresentation.presented)
+      ) {
+        // Native target/visibility intent releases actions before Solid commits the new view.
+        retirePresentation();
+      }
       if (presentationPending) {
         return;
       }

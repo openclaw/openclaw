@@ -30,6 +30,7 @@ async function openMenu(page: Page) {
   await page.locator(".sidebar-identity-card").click();
   const menu = page.locator(".sidebar-identity-menu");
   await menu.waitFor({ state: "visible" });
+  await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
   return menu;
 }
 
@@ -42,6 +43,7 @@ async function expectUnclipped(item: Locator) {
         const bounds = menu.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
         return (
+          menu.getAttribute("data-phase") === "open" &&
           rect.top >= Math.max(bounds.top, 0) &&
           rect.bottom <= Math.min(bounds.bottom, innerHeight) &&
           rect.left >= 0 &&
@@ -120,6 +122,7 @@ suite.define(() => {
         await submenu.locator('[data-value="gateway:gateway-2"]').click();
         menu = await openMenu(page);
         await menu.locator('[data-value="command:gateways"]').click();
+        await expectUnclipped(submenu.locator('[data-value="gateway:gateway-3"]'));
         await submenu.locator('[data-value="gateway:gateway-3"]').click({ modifiers: ["Meta"] });
         // Failure phase: identity opening, gateway opening, or settings click.
         let phase = 1;
@@ -128,6 +131,7 @@ suite.define(() => {
           phase = 2;
           await menu.locator('[data-value="command:gateways"]').click();
           phase = 3;
+          await expectUnclipped(submenu.locator('[data-value="command:gateway-settings"]'));
           await submenu.locator('[data-value="command:gateway-settings"]').click();
         } catch (error) {
           recordControlUiE2eFailureFacts(page, { compactMenuPhase: phase });

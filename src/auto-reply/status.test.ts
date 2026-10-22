@@ -114,6 +114,7 @@ function makeFallbackContextStatusArgs({
 
 it("shows sanitized TTS provider details in the voice status line", async () => {
   await withTempHome(async () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(0);
     const normalized = normalizedStatus({
       config: {
         tts: {
@@ -130,7 +131,6 @@ it("shows sanitized TTS provider details in the voice status line", async () => 
         },
       } as unknown as OpenClawConfig,
       agent: {},
-      now: 0,
     });
 
     expect(normalized).toContain(

@@ -154,7 +154,8 @@ function registerFileTests(storage: "local" | "remote") {
       requestGeneration: 0,
       agents: { recordFile: () => null },
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileEditors: {},
       agentFileConflict: null,
       agentFileSaving: false,
@@ -200,7 +201,7 @@ function registerFileTests(storage: "local" | "remote") {
 
       expect(await saveDraft(editor)).toBe(false);
       expect(editor.agentFileConflict).toBe(memory);
-      expect(editor.agentFilesError).toContain("workspace changed");
+      expect((await editor.agentFileOutcome)?.error).toContain("workspace changed");
       expect(editor.agentFileEditors[memory]?.draft).toBe(edited);
       expect(retainAgentFileDrafts({ ...editor, agentFileActive: memory })).not.toBeNull();
       expect(
@@ -216,7 +217,7 @@ function registerFileTests(storage: "local" | "remote") {
         expect(readFile()).toBe(edited);
       }
       expect(editor.agentFileConflict).toBeNull();
-      expect(editor.agentFilesError).toBeNull();
+      expect((await editor.agentFileOutcome)?.error).toBeUndefined();
       expect(
         variant === "missing"
           ? fs.existsSync(path.join(originalStorage, memory))
@@ -237,7 +238,7 @@ function registerFileTests(storage: "local" | "remote") {
     });
     const editor = await loadEditor("unsaved new memory");
     expect(await saveDraft(editor)).toBe(false);
-    expect(editor.agentFilesError).toContain("Update its workspace provider");
+    expect((await editor.agentFileOutcome)?.error).toContain("Update its workspace provider");
     expect(editor.agentFileEditors[memory]?.draft).toBe("unsaved new memory");
     expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
 
