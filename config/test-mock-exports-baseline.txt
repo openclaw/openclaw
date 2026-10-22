@@ -3913,7 +3913,6 @@
 ["src/commands/configure.wizard.test-support.ts","../config/config.js","32ce3e238db7a31edcd20ae1e6d65213bf0888c443fbefcfc6efa83ce674bdde",1]
 ["src/commands/configure.wizard.test-support.ts","../flows/search-setup.js","ce56502fbe666f53b093bfca012b7de76774e5e5b801bfa230be71b3ba57a9e5",1]
 ["src/commands/configure.wizard.test-support.ts","../infra/windows-gateway-firewall-diagnostics.js","092d1d52e6fcf3e819ee4246735eb0071884e1a4878576ac28a916e3380aa260",1]
-["src/commands/configure.wizard.test-support.ts","../plugins/plugin-registry.js","4c1f5f8d8dc837b24b01680fc971539ae7ff27f0236c448cfbb001286c2962b3",1]
 ["src/commands/configure.wizard.test-support.ts","../wizard/clack-prompter.js","7fe32574fac464c1e224ff56c7e99212dab42aec293c44e83f844bb2b25f764a",1]
 ["src/commands/configure.wizard.test-support.ts","../wizard/setup.plugin-config.js","b4faec95785db0c4c7a98a717717a057f8fa190c33a5f2949afbd42562e53c16",1]
 ["src/commands/configure.wizard.test-support.ts","./configure.daemon.js","b7d60b2ad7110d8e436c6e37cfbfda22b85248209a737d7dc25230e568b3bc1c",1]
