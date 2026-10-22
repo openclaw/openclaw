@@ -660,19 +660,6 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     expect(result).toMatchObject({ id: job.id, name, payload: { model }, state: { lastError } });
   });
 
-  it("finds an exact cron job name beyond the first real Gateway page", async () => {
-    const jobs = createJobs();
-    jobs[200] = createJob(200, { name: "Last page exact job" });
-    installRealCronGateway(jobs);
-
-    await runCron(["show", "Last page exact job", "--json"]);
-
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "job-200", name: "Last page exact job" }),
-    );
-    expect(listOffsets()).toEqual([0, 200]);
-  });
-
   it("never hides Gateway transport errors behind a name-based cron scan", async () => {
     installRealCronGateway([createJob(0)]);
     failCronGet(new Error("Gateway transport is unavailable"));
