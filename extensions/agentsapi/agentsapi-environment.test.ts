@@ -12,7 +12,7 @@ import {
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
@@ -204,96 +204,84 @@ describe("Agents API attempt environment selection", () => {
     }
   });
 
-  it.each(["self_hosted"])(
-    "continues two %s sessions with the rotated key and original native IDs",
-    async (environment) => {
-      let createdCount = 0;
-      mocks.fetch.mockImplementation(async ({ url }) => {
-        const pathname = new URL(url).pathname;
-        const response = pathname.endsWith("/items")
-          ? Response.json({ data: [], has_more: false })
-          : Response.json({
-              id: pathname.endsWith("/agents/sessions")
-                ? `rotation-session-${++createdCount}`
-                : pathname.split("/").at(-1),
-            });
-        return { response, finalUrl: url, release: async () => {} };
-      });
-      const bindings: AgentsApiBinding[] = [];
-      for (const sessionId of ["local-first", "local-second"]) {
-        const created = await attempt({ environment, sessionId });
-        expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
-        bindings.push(created.bind.mock.calls[0]![0]);
-      }
-      mocks.fetch.mockClear();
-      for (const [index, binding] of bindings.entries()) {
-        const continued = await attempt({
-          environment,
-          binding,
-          sessionId: index === 0 ? "local-first" : "local-second",
-          resolvedApiKey: "fixture-rotated-api-key",
-        });
-        expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
-      }
-      expect(createdCount).toBe(2);
-      expect(
-        mocks.fetch.mock.calls.map(([request]) => ({
-          path: new URL(request.url).pathname,
-          auth: new Headers(request.init?.headers).get("authorization"),
-        })),
-      ).toEqual(
-        bindings.flatMap(({ sessionId }) =>
-          ["", "/events", "/items"].map((suffix) => ({
-            path: `/v1/agents/sessions/${sessionId}${suffix}`,
-            auth: "Bearer fixture-rotated-api-key",
-          })),
-        ),
-      );
-    },
-  );
-
-  it.each([403])(
-    "retains ordinary HTTP %s access errors and the existing binding",
-    async (status) => {
-      const created = await attempt({ environment: "openai_hosted" });
-      const binding = created.bind.mock.calls[0]![0];
-      mocks.fetch.mockClear();
-      mocks.fetch.mockImplementation(async ({ url }) => ({
-        response: Response.json(
-          { error: { message: "Fixture key cannot access session", type: "authentication_error" } },
-          { status },
-        ),
-        finalUrl: url,
-        release: async () => {},
-      }));
-      const denied = await attempt({
-        environment: "openai_hosted",
+  it("continues two self-hosted sessions with the rotated key and original native IDs", async () => {
+    const environment = "self_hosted";
+    let createdCount = 0;
+    mocks.fetch.mockImplementation(async ({ url }) => {
+      const pathname = new URL(url).pathname;
+      const response = pathname.endsWith("/items")
+        ? Response.json({ data: [], has_more: false })
+        : Response.json({
+            id: pathname.endsWith("/agents/sessions")
+              ? `rotation-session-${++createdCount}`
+              : pathname.split("/").at(-1),
+          });
+      return { response, finalUrl: url, release: async () => {} };
+    });
+    const bindings: AgentsApiBinding[] = [];
+    for (const sessionId of ["local-first", "local-second"]) {
+      const created = await attempt({ environment, sessionId });
+      expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+      bindings.push(created.bind.mock.calls[0]![0]);
+    }
+    mocks.fetch.mockClear();
+    for (const [index, binding] of bindings.entries()) {
+      const continued = await attempt({
+        environment,
         binding,
-        resolvedApiKey: "fixture-denied-api-key",
+        sessionId: index === 0 ? "local-first" : "local-second",
+        resolvedApiKey: "fixture-rotated-api-key",
       });
-      expect(denied.result).toMatchObject({
-        terminal: { kind: "failed", error: expect.objectContaining({ status }) },
-      });
-      expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
-        `/v1/agents/sessions/${binding.sessionId}`,
-      ]);
-      expect(denied.bind).not.toHaveBeenCalled();
-    },
-  );
+      expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+    }
+    expect(createdCount).toBe(2);
+    expect(
+      mocks.fetch.mock.calls.map(([request]) => ({
+        path: new URL(request.url).pathname,
+        auth: new Headers(request.init?.headers).get("authorization"),
+      })),
+    ).toEqual(
+      bindings.flatMap(({ sessionId }) =>
+        ["", "/events", "/items"].map((suffix) => ({
+          path: `/v1/agents/sessions/${sessionId}${suffix}`,
+          auth: "Bearer fixture-rotated-api-key",
+        })),
+      ),
+    );
+  });
+
+  it("retains ordinary HTTP 403 access errors and the existing binding", async () => {
+    const status = 403;
+    const binding = await hostedBinding();
+    mocks.fetch.mockClear();
+    mocks.fetch.mockImplementation(async ({ url }) =>
+      errorResponse(url, status, "authentication_error", "Fixture key cannot access session"),
+    );
+    const denied = await attempt({
+      environment: "openai_hosted",
+      binding,
+      resolvedApiKey: "fixture-denied-api-key",
+    });
+    expect(denied.result).toMatchObject({
+      terminal: { kind: "failed", error: expect.objectContaining({ status }) },
+    });
+    expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
+      `/v1/agents/sessions/${binding.sessionId}`,
+    ]);
+    expect(denied.bind).not.toHaveBeenCalled();
+  });
 
   it.each([
-    ...[{ operation: "input submission", suffix: "/events" }].map(({ operation, suffix }) => ({
-      operation,
-      suffix,
+    {
+      operation: "input submission",
       status: 404,
       type: "not_found_error",
       backendMessage: "No managed agent resource found: session-fixture",
       userMessage:
         "Agents API could not find the saved session or this API key cannot access it. Check that the key belongs to the session's project and has the required permissions, then retry.",
-    })),
+    },
     {
       operation: "input submission with the original-key requirement",
-      suffix: "/events",
       status: 403,
       type: "forbidden",
       backendMessage: "hosted session input requires the API key that created its CCA thread",
@@ -302,27 +290,19 @@ describe("Agents API attempt environment selection", () => {
     },
   ])(
     "reports inaccessible saved sessions during $operation as a terminal preflight",
-    async ({ suffix, status, type, backendMessage, userMessage }) => {
-      const created = await attempt({ environment: "openai_hosted" });
-      const binding = created.bind.mock.calls[0]![0];
+    async ({ status, type, backendMessage, userMessage }) => {
+      const binding = await hostedBinding();
       const fetch = mocks.fetch.getMockImplementation()!;
       mocks.fetch.mockImplementation(async (request) => {
-        if (new URL(request.url).pathname === `/v1/agents/sessions/${binding.sessionId}${suffix}`) {
-          return {
-            response: Response.json({ error: { message: backendMessage, type } }, { status }),
-            finalUrl: request.url,
-            release: async () => {},
-          };
+        if (new URL(request.url).pathname === `/v1/agents/sessions/${binding.sessionId}/events`) {
+          return errorResponse(request.url, status, type, backendMessage);
         }
         return fetch(request);
       });
 
       const { result } = await attempt({ environment: "openai_hosted", binding });
 
-      expect(result.terminal.kind).toBe("failed");
-      if (result.terminal.kind !== "failed") {
-        throw new Error("Expected the saved-session request to fail");
-      }
+      assert(result.terminal.kind === "failed", "Expected the saved-session request to fail");
       expect(result.terminal.error).toBeInstanceOf(AgentHarnessPreflightError);
       expect(result.terminal.error).toMatchObject({
         message: expect.stringContaining(backendMessage),
@@ -402,102 +382,91 @@ describe("Agents API attempt environment selection", () => {
     async ({ replacePrompt, images }) => {
       const fixture = await workspaceAttachmentFixture();
       let binding: AgentsApiBinding | undefined;
-      try {
-        for (const job of ["initial-import", "continued-import"]) {
-          const contents = [
-            Buffer.from(
-              `INFO import queued\nINFO import completed job_id=${job} rows_processed=42\n`,
-            ),
-            Buffer.from(`ERROR job_id=${job} record 9 has an invalid amount\n`),
-          ];
-          const media = await Promise.all(
-            contents.map(async (bytes, index) => {
-              const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
-              return {
-                path: saved.path,
-                url: `media://inbound/${saved.id}`,
-                fileName: `import-job-${index}.log`,
-                contentType: "text/plain",
-                sizeBytes: bytes.length,
-              };
-            }),
-          );
-          const originalMedia = structuredClone(media);
-          const prompt = `Check ${job} with grep.`;
-          const priorNote = await prepareAgentWorkspaceAttachments({
-            workspaceDir: fixture.gatewayRoot,
-            turn: { media, timeoutMs: 1_000 },
-            assertCurrent: () => {},
-          });
-          if (replacePrompt) {
-            mocks.resolvePrompt.mockReturnValue(prompt);
-          }
-          const submitted = await attempt({
-            environment: "self_hosted",
-            binding,
-            workspaceDir: fixture.gatewayRoot,
-            media,
-            prompt: priorNote ? `${prompt}\n\n${priorNote}` : prompt,
-            images,
-          });
-
-          expect(submitted.result.terminal).toEqual({ kind: "ok" });
-          const request = (await requestBody(1)) as {
-            events: Array<{ input: Array<{ content: Array<{ text: string }> }> }>;
-          };
-          const text = request.events[0]!.input[0]!.content[0]!.text;
-          const attachmentPaths = [...text.matchAll(/\[media attached: ([^\]]+)\]/gu)].map(
-            (match) => match[1]!,
-          );
-          expect(attachmentPaths).toHaveLength(2);
-          expect(text).toContain(`${prompt}\n\n[media attached: ${attachmentPaths[0]}]`);
-          for (const [index, attachmentPath] of attachmentPaths.entries()) {
-            expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
-            expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
-          }
-          if (images) {
-            expect(text).toContain("The Agents API harness does not support inline image inputs.");
-            expect(text).toContain(
-              "Original attachments are available at the prepared execution paths above.",
-            );
-            expect(text).toContain(
-              "inspect those files with available tools to try another approach",
-            );
-          }
-          expect(media).toEqual(originalMedia);
-          binding ??= submitted.bind.mock.calls[0]![0];
-          mocks.fetch.mockClear();
-        }
-      } finally {
-        fixture.release();
-      }
-    },
-  );
-
-  it.each(["stopped"])(
-    "keeps text-only transcript recorders usable with a %s workspace",
-    async () => {
-      const fixture = await workspaceAttachmentFixture();
-      const workspaceDir = fixture.gatewayRoot;
-      fixture.release();
-      const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
-      const recorder = createRecorder({
-        target: () => undefined,
-        resolveInput: async () => ({ text: "Text-only request" }),
-      });
-      try {
-        const { result } = await attempt({
-          environment: "self_hosted",
-          workspaceDir,
-          prompt: "Text-only request",
-          userTurnTranscriptRecorder: recorder,
+      for (const job of ["initial-import", "continued-import"]) {
+        const contents = [
+          Buffer.from(
+            `INFO import queued\nINFO import completed job_id=${job} rows_processed=42\n`,
+          ),
+          Buffer.from(`ERROR job_id=${job} record 9 has an invalid amount\n`),
+        ];
+        const media = await Promise.all(
+          contents.map(async (bytes, index) => {
+            const saved = await saveMediaBuffer(bytes, "text/plain", "inbound");
+            return {
+              path: saved.path,
+              url: `media://inbound/${saved.id}`,
+              fileName: `import-job-${index}.log`,
+              contentType: "text/plain",
+              sizeBytes: bytes.length,
+            };
+          }),
+        );
+        const originalMedia = structuredClone(media);
+        const prompt = `Check ${job} with grep.`;
+        const priorNote = await prepareAgentWorkspaceAttachments({
+          workspaceDir: fixture.gatewayRoot,
+          turn: { media, timeoutMs: 1_000 },
+          assertCurrent: () => {},
         });
-        expect(result.terminal).toEqual({ kind: "ok" });
-      } finally {
-        fixture.release();
+        if (replacePrompt) {
+          mocks.resolvePrompt.mockReturnValue(prompt);
+        }
+        const submitted = await attempt({
+          environment: "self_hosted",
+          binding,
+          workspaceDir: fixture.gatewayRoot,
+          media,
+          prompt: priorNote ? `${prompt}\n\n${priorNote}` : prompt,
+          images,
+        });
+
+        expect(submitted.result.terminal).toEqual({ kind: "ok" });
+        const request = (await requestBody(1)) as {
+          events: Array<{ input: Array<{ content: Array<{ text: string }> }> }>;
+        };
+        const text = request.events[0]!.input[0]!.content[0]!.text;
+        const attachmentPaths = [...text.matchAll(/\[media attached: ([^\]]+)\]/gu)].map(
+          (match) => match[1]!,
+        );
+        expect(attachmentPaths).toHaveLength(2);
+        expect(text).toContain(`${prompt}\n\n[media attached: ${attachmentPaths[0]}]`);
+        for (const [index, attachmentPath] of attachmentPaths.entries()) {
+          expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
+          expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
+        }
+        if (images) {
+          expect(text).toContain("The Agents API harness does not support inline image inputs.");
+          expect(text).toContain(
+            "Original attachments are available at the prepared execution paths above.",
+          );
+          expect(text).toContain(
+            "inspect those files with available tools to try another approach",
+          );
+        }
+        expect(media).toEqual(originalMedia);
+        binding ??= submitted.bind.mock.calls[0]![0];
+        mocks.fetch.mockClear();
       }
     },
   );
+
+  it("keeps text-only transcript recorders usable with a stopped workspace", async () => {
+    const fixture = await workspaceAttachmentFixture();
+    const workspaceDir = fixture.gatewayRoot;
+    fixture.release();
+    const createRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+    const recorder = createRecorder({
+      target: () => undefined,
+      resolveInput: async () => ({ text: "Text-only request" }),
+    });
+    const { result } = await attempt({
+      environment: "self_hosted",
+      workspaceDir,
+      prompt: "Text-only request",
+      userTurnTranscriptRecorder: recorder,
+    });
+    expect(result.terminal).toEqual({ kind: "ok" });
+  });
   it("explains the missing self-hosted attachment provider", async () => {
     const { result } = await attempt({
       environment: "self_hosted",
@@ -519,22 +488,18 @@ describe("Agents API attempt environment selection", () => {
     const fixture = await workspaceAttachmentFixture();
     const source = path.join(fixture.gatewayRoot, "private-project-file.txt");
     await fs.writeFile(source, "private project bytes");
-    try {
-      const { result } = await attempt({
-        environment: "self_hosted",
-        workspaceDir: fixture.gatewayRoot,
-        media: [{ path: source, fileName: "import-job.log" }],
-      });
+    const { result } = await attempt({
+      environment: "self_hosted",
+      workspaceDir: fixture.gatewayRoot,
+      media: [{ path: source, fileName: "import-job.log" }],
+    });
 
-      expect(result).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({ code: "path-not-allowed" }),
-        },
-      });
-    } finally {
-      fixture.release();
-    }
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({ code: "path-not-allowed" }),
+      },
+    });
   });
 });
 
@@ -632,7 +597,20 @@ async function workspaceAttachmentFixture() {
       }),
     }),
   });
+  onTestFinished(release);
   return { gatewayRoot, remoteRoot, release };
+}
+
+async function hostedBinding() {
+  return (await attempt({ environment: "openai_hosted" })).bind.mock.calls[0]![0];
+}
+
+function errorResponse(url: string, status: number, type: string, message: string) {
+  return {
+    response: Response.json({ error: { message, type } }, { status }),
+    finalUrl: url,
+    release: async () => {},
+  };
 }
 
 function savedBinding(environment: string | undefined) {

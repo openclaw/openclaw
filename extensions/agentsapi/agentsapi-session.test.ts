@@ -1,5 +1,6 @@
 import type { AgentSession, AgentSessionMessage } from "openai/resources/beta/agents/agents";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { AgentsApiClient, type AgentsApiEvent, type AgentsApiItem } from "./agentsapi-client.js";
@@ -442,14 +443,6 @@ function createSavedMessage(id: string, role: "user" | "assistant", text: string
     turn_id: "turn-fixture",
     type: "message",
   } satisfies AgentSessionMessage;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 function createEventStream() {

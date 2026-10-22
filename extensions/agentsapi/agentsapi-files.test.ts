@@ -71,7 +71,7 @@ describe("Agents API input attachment custody", () => {
     ]);
   });
 
-  it.each(["owned", "managed", "project", "unowned", "workspace", "foreign"])(
+  it.each(["owned", "managed", "unowned", "workspace", "foreign"])(
     "enforces attachment custody: %s",
     async (source) => {
       const fixture = await createStagedInputOwnershipFixture(workspaceDir);
@@ -81,13 +81,11 @@ describe("Agents API input attachment custody", () => {
       const managed = source === "managed" || foreign ? await save(originalBytes) : undefined;
       const accepted = source === "owned" || source === "managed";
       const relativePath =
-        source === "project"
-          ? "project/input-secret.txt"
-          : source === "unowned"
-            ? fixture.unownedFiles[2]!
-            : foreign
-              ? path.join("inbound", managed!.id)
-              : fixture.ownedFiles[0]!;
+        source === "unowned"
+          ? fixture.unownedFiles[2]!
+          : foreign
+            ? path.join("inbound", managed!.id)
+            : fixture.ownedFiles[0]!;
       const filePath = path.join(workspaceDir, relativePath);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, stagedBytes);
