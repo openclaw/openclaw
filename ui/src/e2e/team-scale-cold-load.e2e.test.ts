@@ -252,10 +252,7 @@ suite.define(() => {
           await document.fonts.ready;
           return [...document.fonts].map(({ family, status }) => ({ family, status }));
         });
-        expect(fontState).toContainEqual({
-          family: "TeamMetric",
-          status: "loaded",
-        });
+        expect(fontState).toContainEqual({ family: "TeamMetric", status: "loaded" });
         await page
           .frameLocator(".chat-tool-card__preview-frame")
           .last()

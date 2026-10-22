@@ -5,7 +5,6 @@ import {
   formatWithheldLspEnvHints,
   LSP_ENV_PASSTHROUGH_DOCS_URL,
   resolveLspServerEnv,
-  type WithheldLspEnvNames,
 } from "../agents/agent-bundle-lsp-env.js";
 import { resolveStdioMcpServerLaunchConfig } from "../agents/mcp-stdio.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
@@ -16,52 +15,6 @@ import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugi
 import { shouldManageGatewayService } from "./doctor-service-repair-policy.js";
 
 type LoadBundleLspConfig = typeof loadEnabledBundleLspConfig;
-
-function collectRunnableLspServers(params: {
-  cfg: OpenClawConfig;
-  workspaceDirs: readonly string[];
-  loadLspConfig: LoadBundleLspConfig;
-  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-}): Map<string, Array<Record<string, string> | undefined>> {
-  // Each workspace resolves its own servers at runtime, so one name can carry
-  // different launch envs; keep every one so none hides another's withheld names.
-  const servers = new Map<string, Array<Record<string, string> | undefined>>();
-  for (const workspaceDir of params.workspaceDirs) {
-    const load = () => params.loadLspConfig({ workspaceDir, cfg: params.cfg });
-    const loaded = params.runWithPluginMetadataSnapshot
-      ? params.runWithPluginMetadataSnapshot({ config: params.cfg, workspaceDir }, load)
-      : load();
-    for (const [name, raw] of Object.entries(loaded.config.lspServers)) {
-      const launch = resolveStdioMcpServerLaunchConfig(raw);
-      if (launch.ok) {
-        servers.set(name, [...(servers.get(name) ?? []), launch.config.env]);
-      }
-    }
-  }
-  return servers;
-}
-
-async function resolveGatewayEnvSources(params: {
-  env: NodeJS.ProcessEnv;
-  service: Pick<GatewayService, "readCommand">;
-}): Promise<NodeJS.ProcessEnv[]> {
-  const sources = [params.env];
-  // A non-default profile cannot tell which installed service is its Gateway.
-  if (!isDefaultInstallIdentity(params.env) || !(await shouldManageGatewayService(params.env))) {
-    return sources;
-  }
-  const command = await params.service.readCommand(params.env).catch(() => null);
-  if (command?.environment) {
-    sources.push(command.environment);
-  }
-  return sources;
-}
-
-function mergeWithheld(entries: WithheldLspEnvNames[]): WithheldLspEnvNames {
-  const configurable = new Set(entries.flatMap((entry) => entry.configurable));
-  const refused = new Set(entries.flatMap((entry) => entry.refused));
-  return { configurable: [...configurable].toSorted(), refused: [...refused].toSorted() };
-}
 
 /** Notes commonly needed, non-secret Gateway env names that configured bundle LSP servers lack. */
 export async function noteBundleLspEnvPassthrough(params: {
@@ -76,32 +29,53 @@ export async function noteBundleLspEnvPassthrough(params: {
   if (params.cfg.gateway?.mode === "remote") {
     return;
   }
-  const servers = collectRunnableLspServers({
-    cfg: params.cfg,
-    workspaceDirs: params.workspaceDirs,
-    loadLspConfig: params.loadLspConfig ?? loadEnabledBundleLspConfig,
-    runWithPluginMetadataSnapshot: params.runWithPluginMetadataSnapshot,
-  });
+  const { cfg, workspaceDirs } = params;
+  const loadLspConfig = params.loadLspConfig ?? loadEnabledBundleLspConfig;
+  const runWithPluginMetadataSnapshot = params.runWithPluginMetadataSnapshot;
+  // Each workspace resolves its own servers at runtime, so one name can carry
+  // different launch envs; keep every one so none hides another's withheld names.
+  const servers = new Map<string, Array<Record<string, string> | undefined>>();
+  for (const workspaceDir of workspaceDirs) {
+    const load = () => loadLspConfig({ workspaceDir, cfg });
+    const loaded = runWithPluginMetadataSnapshot
+      ? runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, load)
+      : load();
+    for (const [name, raw] of Object.entries(loaded.config.lspServers)) {
+      const launch = resolveStdioMcpServerLaunchConfig(raw);
+      if (launch.ok) {
+        servers.set(name, [...(servers.get(name) ?? []), launch.config.env]);
+      }
+    }
+  }
   if (servers.size === 0) {
     return;
   }
-  const sources = await resolveGatewayEnvSources({
-    env: params.env ?? process.env,
-    service: params.service ?? resolveGatewayService(),
-  });
+  const env = params.env ?? process.env;
+  const service = params.service ?? resolveGatewayService();
+  const sources = [env];
+  // A non-default profile cannot tell which installed service is its Gateway.
+  if (isDefaultInstallIdentity(env) && (await shouldManageGatewayService(env))) {
+    const command = await service.readCommand(env).catch(() => null);
+    if (command?.environment) {
+      sources.push(command.environment);
+    }
+  }
   const lines: string[] = [];
   for (const [name, serverEnvs] of [...servers].toSorted(([a], [b]) => a.localeCompare(b))) {
-    const withheld = mergeWithheld(
-      serverEnvs.flatMap((serverEnv) =>
-        sources.map((parentEnv) =>
-          collectWithheldLspEnvNames({
-            parentEnv,
-            childEnv: resolveLspServerEnv(serverEnv, parentEnv),
-          }),
-        ),
+    const withheldEntries = serverEnvs.flatMap((serverEnv) =>
+      sources.map((parentEnv) =>
+        collectWithheldLspEnvNames({
+          parentEnv,
+          childEnv: resolveLspServerEnv(serverEnv, parentEnv),
+        }),
       ),
     );
-    for (const hint of formatWithheldLspEnvHints(withheld)) {
+    const configurable = new Set(withheldEntries.flatMap((entry) => entry.configurable));
+    const refused = new Set(withheldEntries.flatMap((entry) => entry.refused));
+    for (const hint of formatWithheldLspEnvHints({
+      configurable: [...configurable].toSorted(),
+      refused: [...refused].toSorted(),
+    })) {
       lines.push(`- "${name}": ${hint}`);
     }
   }

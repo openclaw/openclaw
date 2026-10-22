@@ -67,7 +67,7 @@ function inventorySummary(
   return parts.join(" · ");
 }
 
-export function DeviceInventory(props: DevicesProps) {
+export function DeviceInventoryContent(props: DevicesProps & { pending: boolean }) {
   // Inventory reads replace their snapshots; config and approval drafts publish independently.
   const pending = createMemo(() => props.devicesList?.pending ?? []);
   const paired = createMemo(() => props.devicesList?.paired ?? []);
@@ -79,7 +79,8 @@ export function DeviceInventory(props: DevicesProps) {
   const gatewayPresence = createMemo(() => findGatewayPresence(presenceSnapshot()));
   const unpairedPresence = createMemo(() => listUnpairedPresence(presenceSnapshot(), groups()));
   const stale = createMemo(() => listStaleInventoryEntries(groups()));
-  const loading = () => props.loading || props.devicesLoading;
+  // Mutation owners can also start internal reloads after their write settles.
+  const loading = () => props.pending || props.loading || props.devicesLoading;
   const actions = (
     <>
       {stale().length > 0 ? (

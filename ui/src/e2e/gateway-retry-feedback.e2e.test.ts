@@ -125,15 +125,16 @@ suite.define(() => {
         await moving();
         await page.emulateMedia({ colorScheme: "light" });
         await aligned();
-        expect(
-          await status
-            .locator(".session-run-spinner")
-            .evaluate((element) => getComputedStyle(element).borderTopColor),
-        ).toBe(
-          await status
-            .locator(".gateway-status__label")
-            .evaluate((element) => getComputedStyle(element).color),
-        );
+        // Read both colors in one frame after the asynchronous system-theme update.
+        await expect
+          .poll(() =>
+            status.evaluate((element) => ({
+              spinner: getComputedStyle(element.querySelector(".session-run-spinner")!)
+                .borderTopColor,
+              label: getComputedStyle(element.querySelector(".gateway-status__label")!).color,
+            })),
+          )
+          .toEqual({ spinner: "rgb(146, 64, 14)", label: "rgb(146, 64, 14)" });
         await capture("reconnecting-light");
         await moving();
         await page.setViewportSize({ width: 390, height: 844 });

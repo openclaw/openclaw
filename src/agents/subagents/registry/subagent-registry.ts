@@ -703,6 +703,8 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
+export const listCollectorRunsForRequesterIncarnation =
+  publicApi.listCollectorRunsForRequesterIncarnation;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;

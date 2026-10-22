@@ -1282,12 +1282,16 @@ executing run ID and follow-up prompt, including browser chat. The completed
 original run keeps its own outcome. Human ownership and dashboard nesting do not
 turn a child into a main-session replay candidate. The subagent registry owns
 continuation in the same child session, using fresh agent admission and the
-original operator's current permissions. Its final result follows the normal
+original requester's current permissions. Operator recovery restores the exact
+session binding, including for session-scoped operators and collector tasks.
+Channel-origin children, including collectors, use the private requester claim saved with the interrupted child;
+this claim identifies the original sender and does not grant operator authority.
+Dashboard session keys do not change this ownership. Its final result follows the normal
 completion path even when the parent has already ended its own turn.
 If the retained child transcript is empty or missing, automatic recovery stays
 pending and logs a warning; restore that transcript before resuming recovery.
 Explicit Stop, cancellation, and replaced child sessions do not resume.
-Runs without verifiable session ownership or restorable operator authority settle
+Runs without verifiable session ownership or a restorable requester source settle
 through their normal interruption path for the parent to inspect.
 For native children with completion notifications disabled, recovery sends a
 private continuation to the original parent when its saved session identity still
@@ -1322,7 +1326,8 @@ is finished or a specific blocker requires user input or unavailable authority.
 Interrupted native children retain their session history even when configured
 with `cleanup: "delete"`, so the parent can inspect and continue the unfinished
 work. Successful runs keep their configured cleanup behavior; normal history
-retention still applies.
+retention still applies. Settled collector groups retain their normal archive
+deadline, including groups that could not resume after interruption.
 
 Startup retires superseded requester completion claims through the registry's
 cleanup owner before restoring the surviving claim.
@@ -1353,8 +1358,14 @@ On upgrade, unfinished runs with the typed Gateway-restart interruption resume
 through the same startup path. Already-settled interruption outcomes are not
 automatically replayed: the parent may have replaced that work. An operator can
 continue a retained interrupted child with `sessions.recover {"key":"<child-session-key>"}`.
-This uses the existing registry interruption record; it does not require a
-main-session restart tombstone. Historical failed runs without
+This requires the retained session and registry interruption record with current
+session-effects ownership; it does not require a main-session restart tombstone.
+It cannot recover a deleted session, an expired registry record, or revoked
+custody. For those cases, send a fresh request to the retained parent to reconcile
+the recorded results and finish or reassign the unfinished work. A fresh
+`chat.send` to a retained child can continue its history under the current caller's
+authority. Check for an already-running follow-up before sending either request.
+Historical failed runs without
 that ownership evidence remain failed: their error text alone cannot distinguish
 a restart from a genuine failure. Inspect those retained sessions before
 continuing them; recovery does not rewrite ambiguous history.
@@ -1509,7 +1520,9 @@ existing restart delivery and continuation behavior.
   including writer admission). Resume includes `registryActivationReserveMs`
   (controller reservations) and `registryActivationSessionReadMs` (unfinished
   child session reads). `registryActivationYieldMs` totals cooperative event-loop
-  waits across binding and resume. These are elapsed, overlapping totals, not
+  waits across binding and resume. Binding and authority restoration sum work
+  across concurrent requester groups, so either can exceed activation wall time.
+  These are elapsed, overlapping totals, not
   CPU time or a separate measurement of database queue time. Inventory hydration
   precedes activation; `registryLoadMs` measures loading the activation module.
   `registryActivationRuns` counts the captured inventory,

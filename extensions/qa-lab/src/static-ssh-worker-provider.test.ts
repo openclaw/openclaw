@@ -96,18 +96,15 @@ describe("QA Lab static-SSH worker provider", () => {
   });
 
   it("reports only its deterministic lease ids as active", async () => {
-    await expect(
-      provider.inspect({ leaseId: "static-ssh:operation-123", profile: PROFILE }),
-    ).resolves.toStrictEqual({
-      status: "active",
-      sharedHost: true,
-    });
-    await expect(
-      provider.inspect({ leaseId: "static-ssh:", profile: PROFILE }),
-    ).resolves.toStrictEqual({ status: "unknown" });
-    await expect(
-      provider.inspect({ leaseId: "other:operation-123", profile: PROFILE }),
-    ).resolves.toStrictEqual({ status: "unknown" });
+    for (const [leaseId, expected] of [
+      ["static-ssh:operation-123", { status: "active", sharedHost: true }],
+      ["static-ssh:", { status: "unknown" }],
+      ["other:operation-123", { status: "unknown" }],
+    ] as const) {
+      await expect(provider.inspect({ leaseId, profile: PROFILE })).resolves.toStrictEqual(
+        expected,
+      );
+    }
   });
 
   it("destroys logical leases idempotently", async () => {

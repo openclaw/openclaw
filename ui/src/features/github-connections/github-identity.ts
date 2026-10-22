@@ -24,8 +24,6 @@ import {
   type SharedRequestOwner,
 } from "./github-identity-shared.ts";
 
-export type GitHubIdentity = ReturnType<typeof createGitHubIdentity>;
-
 export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   let status: ToolsGitHubStatusResult | null = null;
   let personal: PersonalGitHubStatus | null = null;

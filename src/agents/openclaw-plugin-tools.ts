@@ -352,6 +352,8 @@ function* resolveOpenClawPluginToolSteps(
       preparedModelRuntime,
       config: availabilityConfig,
       agentId: pluginToolInputs.context.agentId,
+      sessionKey: pluginToolInputs.context.sessionKey,
+      sessionId: pluginToolInputs.context.sessionId,
     }),
     context: {
       ...pluginToolInputs.context,
