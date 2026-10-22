@@ -11,7 +11,6 @@ import {
   codexModel,
   completedTurnResult,
   createClientFactory,
-  inProgressTurnResult,
 } from "./src/app-server/bounded-turn.test-harness.js";
 import type { CodexAppServerClientFactory } from "./src/app-server/shared-client.js";
 
@@ -31,15 +30,11 @@ const summarySchema = {
 };
 
 function expectBoundedThread(
-  requests: Array<{ method: string; params?: unknown }>,
+  requests: ReturnType<typeof createClientFactory>["request"]["mock"]["calls"],
   developerInstructions: string,
 ) {
-  expect(requests.map(({ method }) => method)).toEqual([
-    "model/list",
-    "thread/start",
-    "turn/start",
-  ]);
-  expect(requests[1]?.params).toEqual({
+  expect(requests.map(([method]) => method)).toEqual(["model/list", "thread/start", "turn/start"]);
+  expect(requests[1]?.[1]).toEqual({
     model: "gpt-5.4",
     modelProvider: "openai",
     cwd: "/tmp/openclaw-agent",
@@ -122,75 +117,24 @@ function structuredRequest(
 }
 
 function createFakeClient(
-  options: {
-    inputModalities?: string[];
-    completeWithItems?: boolean;
-    deferTurnCompletion?: boolean;
-    approvalRequestMethod?: string;
-    responseText?: string;
-    onTurnStart?: () => void;
-  } = {},
+  options: Parameters<typeof createClientFactory>[0] = {},
   pluginConfig?: Parameters<typeof buildCodexMediaUnderstandingProvider>[0],
 ) {
-  const model = { ...codexModel(), inputModalities: options.inputModalities ?? ["text", "image"] };
   const fake = createClientFactory({
-    models: [model],
-    assistantDelta: options.responseText ?? "A red square.",
+    models: [{ ...codexModel(), inputModalities: ["text", "image"] }],
+    assistantDelta: "A red square.",
     terminalItems: [],
-    completeTurn: !options.deferTurnCompletion,
+    ...options,
   });
-  const requests: Array<{ method: string; params?: unknown }> = [];
-  const approvalResponses: unknown[] = [];
-  const request = fake.request.getMockImplementation()!;
-  const terminal = () => ({
-    turn: {
-      ...completedTurnResult().turn,
-      items: [
-        { id: "msg-1", type: "agentMessage", text: options.responseText ?? "A blue circle." },
-      ],
-    },
-  });
-  fake.request.mockImplementation(async (method, params, requestOptions) => {
-    requests.push({ method, params });
-    if (method === "turn/start") {
-      options.onTurnStart?.();
-      if (options.completeWithItems) {
-        return terminal();
-      }
-      if (options.approvalRequestMethod) {
-        // Binding turn/start releases the queued approval; complete only after its reply.
-        void fake
-          .handleServerRequest({
-            id: "approval-1",
-            method: options.approvalRequestMethod,
-            params: turnIdentity,
-          })
-          .then(async (response) => {
-            approvalResponses.push(response);
-            await fake.notify({
-              method: "turn/completed",
-              params: { ...turnIdentity, ...terminal() },
-            });
-          });
-        return inProgressTurnResult();
-      }
-    }
-    return request(method, params, requestOptions);
-  });
-  const closeAndWait = vi.fn();
   const clientFactory = sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(
     async (params) => {
       const client = await fake.factory(params);
-      const close = client.closeAndWait.bind(client);
-      vi.spyOn(client, "closeAndWait").mockImplementation(async (...args) => {
-        closeAndWait(...args);
-        return close(...args);
-      });
+      vi.spyOn(client, "closeAndWait");
       return client;
     },
   );
   const provider = buildCodexMediaUnderstandingProvider(pluginConfig);
-  return { clientFactory, provider, requests, approvalResponses, closeAndWait };
+  return { ...fake, clientFactory, provider, requests: fake.request.mock.calls };
 }
 
 describe("codex media understanding provider", () => {
@@ -255,7 +199,7 @@ describe("codex media understanding provider", () => {
       requests,
       "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
     );
-    expect(requests[2]?.params).toEqual({
+    expect(requests[2]?.[1]).toEqual({
       threadId: turnIdentity.threadId,
       input: [{ type: "text", text: "Describe briefly.", text_elements: [] }, imageInput],
       approvalPolicy: "on-request",
@@ -270,8 +214,8 @@ describe("codex media understanding provider", () => {
     await provider.describeImage?.(imageRequest({ cfg, agentDir: " " }));
 
     expectStartup(cfg);
-    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
-    expect(requests[2]?.params).not.toHaveProperty("cwd");
+    expect(requests[1]?.[1]).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+    expect(requests[2]?.[1]).not.toHaveProperty("cwd");
   });
 
   it("preserves configured WebSocket transport for media turns", async () => {
@@ -285,16 +229,20 @@ describe("codex media understanding provider", () => {
     const factoryOptions = clientFactory.mock.calls[0]?.[0];
     expect(factoryOptions?.startOptions).toMatchObject(websocketConfig.appServer);
     expectStartup({}, "/tmp/openclaw-agent");
-    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
-    expect(requests[2]?.params).not.toHaveProperty("cwd");
+    expect(requests[1]?.[1]).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
+    expect(requests[2]?.[1]).not.toHaveProperty("cwd");
   });
 
   it("interrupts a configured app-server turn when the media request aborts", async () => {
     const controller = new AbortController();
     const { provider, requests } = createFakeClient(
       {
-        deferTurnCompletion: true,
-        onTurnStart: () => setTimeout(() => controller.abort(new Error("media cancelled")), 0),
+        completeTurn: false,
+        beforeRequest: async (method) => {
+          if (method === "turn/start") {
+            setTimeout(() => controller.abort(new Error("media cancelled")), 0);
+          }
+        },
       },
       { pluginConfig: websocketConfig },
     );
@@ -303,14 +251,14 @@ describe("codex media understanding provider", () => {
       provider.describeImage?.(imageRequest({ signal: controller.signal })),
     ).rejects.toThrow();
 
-    expect(requests).toContainEqual({
+    expect(requests.map(([method, params]) => ({ method, params }))).toContainEqual({
       method: "turn/interrupt",
       params: turnIdentity,
     });
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { provider, closeAndWait } = createFakeClient();
+    const { provider, clientFactory } = createFakeClient();
     const authStore = {
       version: 1,
       profiles: {
@@ -329,7 +277,7 @@ describe("codex media understanding provider", () => {
     expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileStore: authStore }),
     );
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect((await clientFactory.mock.results[0]?.value)?.closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {
@@ -345,17 +293,44 @@ describe("codex media understanding provider", () => {
   });
 
   it("declines approval requests during image understanding", async () => {
-    const { provider, approvalResponses } = createFakeClient({
-      approvalRequestMethod: "item/permissions/requestApproval",
+    const started = createDeferred<void>();
+    const { provider, handleServerRequest, notify } = createFakeClient({
+      completeTurn: false,
+      beforeRequest: async (method) => {
+        if (method === "turn/start") {
+          started.resolve();
+        }
+      },
     });
-
-    await provider.describeImage?.(imageRequest({ prompt: "Describe briefly." }));
-
-    expect(approvalResponses).toEqual([{ permissions: {}, scope: "turn" }]);
+    const result = provider.describeImage?.(imageRequest({ prompt: "Describe briefly." }));
+    await started.promise;
+    await expect(
+      handleServerRequest({
+        id: "approval-1",
+        method: "item/permissions/requestApproval",
+        params: turnIdentity,
+      }),
+    ).resolves.toEqual({ permissions: {}, scope: "turn" });
+    await notify({
+      method: "turn/completed",
+      params: { ...turnIdentity, ...completedTurnResult() },
+    });
+    await result;
   });
 
   it("extracts text from terminal turn items", async () => {
-    const { provider } = createFakeClient({ completeWithItems: true });
+    const { provider, request: rpc } = createFakeClient();
+    const send = rpc.getMockImplementation()!;
+    rpc.mockImplementation(async (method, params, options) =>
+      method === "turn/start"
+        ? {
+            turn: {
+              ...completedTurnResult().turn,
+              items: [{ id: "msg-1", type: "agentMessage", text: "A blue circle." }],
+            },
+          }
+        : send(method, params, options),
+    );
     const { buffer, fileName, mime, ...request } = imageRequest({ prompt: "Describe briefly." });
     const result = await provider.describeImages?.({
       ...request,
@@ -366,17 +341,17 @@ describe("codex media understanding provider", () => {
   });
 
   it("rejects text-only Codex app-server models before starting a turn", async () => {
-    const { provider, requests } = createFakeClient({ inputModalities: ["text"] });
+    const { provider, requests } = createFakeClient({ models: [codexModel()] });
 
     await expect(provider.describeImage?.(imageRequest())).rejects.toThrow(
       "Codex app-server model does not support images: gpt-5.4",
     );
-    expect(requests.map((entry) => entry.method)).toEqual(["model/list"]);
+    expect(requests.map(([method]) => method)).toEqual(["model/list"]);
   });
 
   it("runs structured extraction through the same bounded Codex app-server path", async () => {
     const { provider, requests } = createFakeClient({
-      responseText: '{"summary":"red square","tags":["shape"]}',
+      assistantDelta: '{"summary":"red square","tags":["shape"]}',
     });
 
     const result = await provider.extractStructured?.(
@@ -404,7 +379,7 @@ describe("codex media understanding provider", () => {
       requests,
       "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
     );
-    const turnParams = requests[2]?.params;
+    const turnParams = requests[2]?.[1];
     expect(turnParams).toEqual({
       threadId: turnIdentity.threadId,
       approvalPolicy: "on-request",
@@ -424,10 +399,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("rejects text-only structured extraction before starting a turn", async () => {
-    const { provider, requests } = createFakeClient({
-      inputModalities: ["text"],
-      responseText: '{"summary":"only text"}',
-    });
+    const { provider, requests } = createFakeClient({ models: [codexModel()] });
 
     await expect(
       provider.extractStructured?.(
@@ -449,7 +421,7 @@ describe("codex media understanding provider", () => {
   ] as const)(
     "rejects invalid structured response %s",
     async (responseText, message, jsonSchema) => {
-      const { provider } = createFakeClient({ responseText });
+      const { provider } = createFakeClient({ assistantDelta: responseText });
       await expect(provider.extractStructured?.(structuredRequest({ jsonSchema }))).rejects.toThrow(
         message,
       );

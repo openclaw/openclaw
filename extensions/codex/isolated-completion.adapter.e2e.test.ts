@@ -11,6 +11,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
+import { testCodexAppServerBindingStore } from "./src/app-server/session-binding.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 const repo = fileURLToPath(new URL("../../", import.meta.url));
@@ -82,22 +83,7 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
     const node = resolveNodeRuntimeExecutable();
     assert(node, "The Codex adapter fixture requires a Node runtime");
     const harness = createCodexAppServerAgentHarness({
-      bindingStore: {
-        read: unexpectedSessionBinding,
-        readAsync: unexpectedSessionBinding,
-        prepareRead: unexpectedSessionBinding,
-        readMany: unexpectedSessionBinding,
-        readNativeSubagentSubmissions: unexpectedSessionBinding,
-        hasOtherThreadOwner: unexpectedSessionBinding,
-        mutate: unexpectedSessionBinding,
-        prepareSessionGenerationReclaim: unexpectedSessionBinding,
-        adoptSessionGeneration: unexpectedSessionBinding,
-        resetSessionGeneration: unexpectedSessionBinding,
-        retireSessionGeneration: unexpectedSessionBinding,
-        withSessionDeletion: unexpectedSessionBinding,
-        withThreadArchiveFence: unexpectedSessionBinding,
-        withLease: unexpectedSessionBinding,
-      },
+      bindingStore: new Proxy(testCodexAppServerBindingStore, { get: unexpectedSessionBinding }),
       pluginConfig: {
         appServer: {
           command: node,

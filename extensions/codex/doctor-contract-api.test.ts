@@ -536,32 +536,29 @@ describe("codex doctor contract", () => {
     expect(await readJson(fixture.storePath)).not.toHaveProperty(`${sessionKey}.agentHarnessId`);
   });
 
-  it("archives zero-owner sidecars without changing cleared conversation state", async () => {
-    const fixture = await bindingFixture("orphan-cleared");
-    const existing: StoredCodexAppServerBinding = { version: 1, state: "cleared", retired: true };
-    const store = openBindingStore(fixture.env);
-    await store.register(fixture.conversationKey, existing);
-
-    await expect(fixture.migrate()).resolves.toEqual(migrated);
-    await expectArchived(fixture.sidecarPath);
-    await expect(store.lookup(fixture.conversationKey)).resolves.toEqual(existing);
-    await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
-    await expect(fixture.migrate()).resolves.toEqual(unchanged);
-  });
-
-  it("ignores metadata-only session rows when proving zero ownership", async () => {
-    const fixture = await bindingFixture("orphan-metadata-row", {
-      sessionIndex: {
-        "agent:main:metadata-only": {
-          label: "Waiting for first turn",
-          updatedAt: 1,
+  it.each([false, true])(
+    "archives metadata-only zero-owner sidecars (cleared state: %s)",
+    async (cleared) => {
+      const fixture = await bindingFixture("orphan-cleared", {
+        sessionIndex: {
+          "agent:main:metadata-only": { label: "Waiting for first turn", updatedAt: 1 },
         },
-      },
-    });
+      });
+      const existing: StoredCodexAppServerBinding = { version: 1, state: "cleared", retired: true };
+      const store = openBindingStore(fixture.env);
+      if (cleared) {
+        await store.register(fixture.conversationKey, existing);
+      }
 
-    await expect(fixture.migrate()).resolves.toEqual(migrated);
-    await expectArchived(fixture.sidecarPath);
-  });
+      await expect(fixture.migrate()).resolves.toEqual(migrated);
+      await expectArchived(fixture.sidecarPath);
+      if (cleared) {
+        await expect(store.lookup(fixture.conversationKey)).resolves.toEqual(existing);
+      }
+      await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toBeNull();
+      await expect(fixture.migrate()).resolves.toEqual(unchanged);
+    },
+  );
 
   it("retains a zero-owner sidecar when canonical plugin state is malformed", async () => {
     const fixture = await bindingFixture("orphan-invalid-state");

@@ -7,8 +7,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, assert, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -32,13 +31,7 @@ import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
-  CODEX_APP_SERVER_BINDING_NAMESPACE,
-  CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-} from "./src/app-server/session-binding-meta.js";
-import { createCodexSqliteTestBindingStateStore } from "./src/app-server/session-binding.sqlite.test-helpers.js";
-import {
   createCodexTestBindingStore,
-  createCodexAppServerBindingStore,
   sessionBindingIdentity,
   testCodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
@@ -76,17 +69,6 @@ function setBinding(
   binding: CodexAppServerThreadBinding = { threadId: "thread-1", cwd: "/repo" },
 ) {
   return store.mutate(identity, { kind: "set", binding });
-}
-
-function makeSqliteBindingStore(
-  env: Parameters<typeof createCodexSqliteTestBindingStateStore>[0]["env"],
-) {
-  return createCodexSqliteTestBindingStateStore({
-    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-    env,
-  });
 }
 
 const isolatedTask = {
@@ -368,38 +350,36 @@ describe("Codex agent harness reset()", () => {
   });
 
   it("withSessionDeletion rejects supervision before invoking the session transaction", async () => {
-    await withOpenClawTestState({ label: "codex-supervision-deletion" }, async (fixture) => {
-      const bindingStore = createCodexAppServerBindingStore(makeSqliteBindingStore(fixture.env));
-      const identity = sessionBindingIdentity({
-        ...resetSession,
-        sessionId: "supervised",
-      });
-      await setBinding(bindingStore, identity, {
-        threadId: "thread-supervised",
-        cwd: "/repo",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "thread-source",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        preserveNativeModel: true,
-        conversationSourceTransferComplete: true,
-      });
-      const harness = makeHarness({ bindingStore });
-      const run = vi.fn();
-      await expect(
-        harness.withSessionDeletion?.(
-          {
-            ...resetSession,
-            sessionId: "supervised",
-            assertCurrent() {},
-          },
-          run,
-        ),
-      ).rejects.toThrow("owned by supervision");
-      expect(run).not.toHaveBeenCalled();
-      expect(bindingStore.read(identity)).toMatchObject({
-        threadId: "thread-supervised",
-      });
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      ...resetSession,
+      sessionId: "supervised",
+    });
+    await setBinding(bindingStore, identity, {
+      threadId: "thread-supervised",
+      cwd: "/repo",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const harness = makeHarness({ bindingStore });
+    const run = vi.fn();
+    await expect(
+      harness.withSessionDeletion?.(
+        {
+          ...resetSession,
+          sessionId: "supervised",
+          assertCurrent() {},
+        },
+        run,
+      ),
+    ).rejects.toThrow("owned by supervision");
+    expect(run).not.toHaveBeenCalled();
+    expect(bindingStore.read(identity)).toMatchObject({
+      threadId: "thread-supervised",
     });
   });
 });
@@ -412,31 +392,14 @@ describe("Codex agent harness dispose()", () => {
       `openclaw.codexAppServerClientDisposer@${codexPluginPackage.version}`,
     );
     const bareSlot = Symbol.for("openclaw.codexAppServerClientDisposer");
-    const globalState = globalThis as Record<symbol, unknown>;
-    const previous = { versioned: globalState[versionedSlot], bare: globalState[bareSlot] };
     const versioned = vi.fn(async () => {});
     const bare = vi.fn(async () => {});
-    globalState[versionedSlot] = versioned;
-    globalState[bareSlot] = bare;
-    try {
-      const harness = makeHarness({
-        bindingStore: createCodexTestBindingStore(),
-      });
-      await harness.dispose?.();
-      expect(versioned).toHaveBeenCalledTimes(1);
-      expect(bare).not.toHaveBeenCalled();
-    } finally {
-      for (const [slot, value] of [
-        [versionedSlot, previous.versioned],
-        [bareSlot, previous.bare],
-      ] as const) {
-        if (value === undefined) {
-          delete globalState[slot];
-        } else {
-          globalState[slot] = value;
-        }
-      }
-    }
+    vi.stubGlobal(versionedSlot, versioned);
+    vi.stubGlobal(bareSlot, bare);
+    onTestFinished(() => vi.unstubAllGlobals());
+    await makeHarness({ bindingStore: createCodexTestBindingStore() }).dispose?.();
+    expect(versioned).toHaveBeenCalledTimes(1);
+    expect(bare).not.toHaveBeenCalled();
   });
 });
 
