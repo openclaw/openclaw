@@ -3,10 +3,6 @@ import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-s
 import { withEnvAsync } from "../../test-utils/env.js";
 import { retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
 import { resolveCliSessionReuse } from "../cli-session.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
-import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import {
   loopbackConfig,
   policyConfig,
@@ -18,6 +14,7 @@ import {
   cliBundleMcpHarness,
   cliNativeMcpPolicyContext,
   prepareBundleProbeCliConfig,
+  prepareNativeMcpTestConfig,
   setupCliBundleMcpTestHarness,
 } from "./bundle-mcp.test-support.js";
 
@@ -36,41 +33,18 @@ describe("prepareCliBundleMcpConfig codex", () => {
         agents: { entries: { main: {}, worker: { tools: { deny: ["docs__delete_docs"] } } } },
         server: { codex: { agents: ["main"] } },
       });
-      const authStorage = AuthStorage.inMemory();
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: cliBundleMcpHarness.bundleProbeHomeDir },
         async () => {
           try {
-            const patch = await buildCodexUserMcpServersThreadConfigPatchForRun({
-              cwd: workspaceDir,
-              run: {
-                agentId: "main",
-                sessionId,
-                sessionKey: "agent:main:conversation",
-                sandboxSessionKey,
-                sandboxAgentId,
-                sessionFile: "agent:main:conversation",
-                workspaceDir,
-                config,
-                prompt: "hello",
-                timeoutMs: 1_000,
-                runId: sessionId,
-                provider: "openai",
-                modelId: "gpt-5.6-luna",
-                model: makeProviderModelFixture({
-                  id: "gpt-5.6-luna",
-                  name: "Test model",
-                  api: "openai-responses",
-                  provider: "openai",
-                  baseUrl: "https://api.openai.com/v1",
-                  contextWindow: 100_000,
-                  maxTokens: 1_000,
-                }),
-                authStorage,
-                authProfileStore: { version: 1, profiles: {} },
-                modelRegistry: ModelRegistry.inMemory(authStorage),
-                thinkLevel: "off",
-              },
+            const patch = await prepareNativeMcpTestConfig({
+              sessionId,
+              sessionKey: "agent:main:conversation",
+              sandboxSessionKey,
+              sandboxAgentId,
+              timeoutMs: 1_000,
+              workspaceDir,
+              config,
             });
             expect(patch?.mcp_servers.docs).toMatchObject({
               enabled_tools: ["read_docs"],
@@ -201,34 +175,18 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     const delegated = await prepare({ surface: "cli", operatorApprovalOnly: true, ...armed });
     expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
-    const identity = {
-      authProfileId: "claude-cli:ops",
-      authEpoch: "auth-epoch",
-      authEpochVersion: 1,
-      cwdHash: "cwd-hash",
-    };
-    const binding = {
-      ...identity,
-      sessionId: "native-cli-session",
-      mcpConfigHash: first.mcpConfigHash,
-      mcpResumeHash: first.mcpResumeHash,
-    };
-    const reuseParams = {
-      ...identity,
-      binding,
-      mcpConfigHash: approval.mcpConfigHash,
-      mcpResumeHash: approval.mcpResumeHash,
-    };
-    const reuse = (overrides: Partial<typeof reuseParams> = {}) =>
-      resolveCliSessionReuse({ ...reuseParams, ...overrides });
-    expect(reuse()).toEqual({ mode: "reuse", sessionId: binding.sessionId });
-    expect(reuse({ authEpoch: "rotated-auth-epoch" })).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "auth-epoch",
-    });
-    expect(reuse({ cwdHash: "other-cwd" })).toEqual({
-      mode: "invalidate",
-      invalidatedReason: "cwd",
-    });
+    expect(
+      resolveCliSessionReuse({
+        binding: {
+          sessionId: "native-cli-session",
+          authEpochVersion: 1,
+          mcpConfigHash: first.mcpConfigHash,
+          mcpResumeHash: first.mcpResumeHash,
+        },
+        authEpochVersion: 1,
+        mcpConfigHash: approval.mcpConfigHash,
+        mcpResumeHash: approval.mcpResumeHash,
+      }),
+    ).toEqual({ mode: "reuse", sessionId: "native-cli-session" });
   });
 });

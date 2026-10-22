@@ -83,6 +83,8 @@ describe("config env vars", () => {
                 .split(/\s+/)
                 .map((name) => [name, "/tmp/blocked"]),
             ),
+            OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS: "0",
+            OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "0",
             OPENCLAW_NIX_MODE: "1",
             VALID: "literal",
           },
