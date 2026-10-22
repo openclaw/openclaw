@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
@@ -31,8 +29,6 @@ export type CliCompactionTestDeps = {
 };
 type CliCompactionParams = Parameters<typeof runCliTurnCompactionLifecycle>[0];
 type CompactParams = Parameters<ContextEngine["compact"]>[0];
-type CompactResult = Awaited<ReturnType<ContextEngine["compact"]>>;
-type SessionCoordinates = { sessionKey: string; sessionId: string; storePath: string };
 
 export const resolveContextEngineFromRegistry = contextEngineRegistry.resolveContextEngine;
 export const resolveCliBackendConfig = cliBackends.resolveCliBackendConfig;
@@ -161,24 +157,6 @@ export async function prepareCompactionScenario(params: {
   const sessionId = `session-${params.suffix}`;
   const transcriptFile = path.join(params.tmpDir, `${params.suffix}.jsonl`);
   const storePath = path.join(params.tmpDir, `${params.suffix}.sqlite`);
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: sessionId,
-    timestamp: new Date(0).toISOString(),
-    cwd: path.dirname(transcriptFile),
-  };
-  const messages = [
-    { role: "user", content: "old ask", timestamp: 1 },
-    { role: "assistant", content: [{ type: "text", text: "old answer" }], timestamp: 2 },
-  ].map((message) => ({ type: "message", message }));
-  await fs.mkdir(path.dirname(transcriptFile), { recursive: true });
-  await fs.writeFile(
-    transcriptFile,
-    [header, ...messages].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
-    "utf-8",
-  );
-
   const sessionEntry = {
     sessionId,
     updatedAt: Date.now(),
@@ -238,27 +216,4 @@ export async function prepareCompactionScenario(params: {
     ...session,
     transcriptFile,
   };
-}
-
-export async function prepareContextSuccessorScenario(params: {
-  result: (target: SessionCoordinates) => CompactResult | Promise<CompactResult>;
-  suffix: string;
-  tmpDir: string;
-}) {
-  const suffix = `cli-successor-${params.suffix}`;
-  return prepareCompactionScenario({
-    suffix,
-    tmpDir: params.tmpDir,
-    contextEngine: () => ({
-      ...buildContextEngine({ compactCalls: [] }),
-      async compact() {
-        return params.result({
-          sessionId: `session-${suffix}`,
-          sessionKey: `agent:main:${suffix}`,
-          storePath: path.join(params.tmpDir, `${suffix}.sqlite`),
-        });
-      },
-    }),
-    recordCliCompactionInStore: vi.fn(async (input) => input.sessionStore[input.sessionKey]),
-  });
 }

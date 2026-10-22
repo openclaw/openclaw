@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -481,18 +480,18 @@ it("touches the current attachment with one guarded write and no preliminary row
       attachmentIntent("touch-environment", "touch-session", "touch-provision"),
     ),
   );
-  const sql = observeMainThreadSql();
+  const statements: string[] = [];
+  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
   try {
     sql.calibrate();
     for (const at of [2_000, 2_000]) {
       nowMs = at;
       sql.clear();
+      statements.length = 0;
       write(() => kernel.touchSessionAttachment(attachment));
-      const attachmentStatements = sql.calls
-        .flatMap((call) => call.mock.contexts)
-        .filter((context): context is StatementSync => context instanceof StatementSync)
-        .map((statement) => statement.sourceSQL)
-        .filter((statement) => statement.includes('"worker_environment_session_attachments"'));
+      const attachmentStatements = statements.filter((statement) =>
+        statement.includes('"worker_environment_session_attachments"'),
+      );
       expect(attachmentStatements).toEqual([expect.stringMatching(/^update /i)]);
       expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
         ...attachment,

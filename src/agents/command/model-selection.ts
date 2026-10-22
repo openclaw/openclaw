@@ -107,7 +107,7 @@ export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
   opts: AgentCommandOpts;
   sessionEntry?: SessionEntry;
-  sessionStore?: Record<string, SessionEntry>;
+  sessionStore: Record<string, SessionEntry>;
   sessionKey?: string;
   sessionId: string;
   storePath: string;
@@ -180,7 +180,6 @@ export async function resolveEmbeddedModelSelection(params: {
     (!hasExplicitRunOverride || !operatorAuthority?.modelPolicy) &&
     !isModelSelectionLocked(sessionEntry) &&
     sessionEntry &&
-    params.sessionStore &&
     params.sessionKey &&
     hasStoredOverride &&
     !isValidAgentHarnessSessionStoreEntry(params.sessionKey, sessionEntry) &&
@@ -496,11 +495,7 @@ export async function resolveEmbeddedModelSelection(params: {
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
         };
-      } else if (
-        params.sessionStore &&
-        params.sessionKey &&
-        !params.suppressVisibleSessionEffects
-      ) {
+      } else if (params.sessionKey && !params.suppressVisibleSessionEffects) {
         const authEntry = { ...entry };
         sessionEntryForAttempt = authEntry;
         if (sessionEntry === entry) {
@@ -592,12 +587,7 @@ export async function resolveEmbeddedModelSelection(params: {
       );
     }
   }
-  if (
-    params.thinkOverride &&
-    params.sessionStore &&
-    params.sessionKey &&
-    !params.suppressVisibleSessionEffects
-  ) {
+  if (params.thinkOverride && params.sessionKey && !params.suppressVisibleSessionEffects) {
     const now = Date.now();
     const entry = params.sessionStore[params.sessionKey] ??
       sessionEntry ?? { sessionId: params.sessionId, updatedAt: now, sessionStartedAt: now };
@@ -629,7 +619,7 @@ export async function resolveEmbeddedModelSelection(params: {
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
   const sessionFile = params.sessionKey ?? params.sessionId;
   if (params.sessionKey && !params.suppressVisibleSessionEffects) {
-    sessionEntry ??= params.sessionStore?.[params.sessionKey];
+    sessionEntry ??= params.sessionStore[params.sessionKey];
   }
 
   return {

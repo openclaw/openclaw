@@ -7,7 +7,6 @@ import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
@@ -317,7 +316,7 @@ export async function executeFollowupTurn(params: {
   let pendingWorkDrain: Promise<void> | undefined;
   const drainPendingWork = () => {
     pendingWorkDrain ??= (async () => {
-      await drainPendingToolTasks({ tasks: pendingWorkTasks, onTimeout: logVerbose });
+      await drainPendingToolTasks({ tasks: pendingWorkTasks });
       // This terminal owner gets one bounded wait. Retire the accounting handoff
       // so timed-out tool delivery cannot start a second idle window.
       pendingToolTasks.clear();

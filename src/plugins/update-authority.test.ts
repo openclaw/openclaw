@@ -144,6 +144,7 @@ describe("plugin update authority", () => {
         ok: true,
         metadata: { name: pluginId, version: "1.0.0", resolvedSpec: `${pluginId}@1.0.0` },
       });
+      const npmInstall = vi.spyOn(installer, "installPluginFromNpmSpec");
       for (const revoke of [true, false]) {
         await withUpdater(state, true, async (fence) => {
           let unlinked = false;
@@ -166,7 +167,10 @@ describe("plugin update authority", () => {
               expect(unlinked).toBe(true);
               await expect(fs.lstat(peerLink)).rejects.toHaveProperty("code", "ENOENT");
             } else {
-              expect((await operation).outcomes).toMatchObject([{ status: "unchanged" }]);
+              expect(await operation).toMatchObject({
+                changed: true,
+                outcomes: [{ status: "unchanged" }],
+              });
               expect(
                 await auditDeclaredOpenClawHostDependency({ packageDir, packageName: pluginId }),
               ).toBeNull();
@@ -178,6 +182,7 @@ describe("plugin update authority", () => {
           }
         });
       }
+      expect(npmInstall).not.toHaveBeenCalled();
     });
   });
 });

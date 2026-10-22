@@ -638,6 +638,7 @@ describe("workspace file tabs", () => {
           label: "Parts tray",
           content: {
             kind: "mcp-app",
+            observeRetirement: () => () => {},
             title: "Parts tray",
             launch: {
               owner: createGatewayBrowserClientFixture(),

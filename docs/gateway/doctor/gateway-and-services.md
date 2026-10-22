@@ -74,6 +74,10 @@ restoration failure; slow startup does not undo a completed repair.
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
 
+    Config repairs retain the source of unchanged credentials: environment-backed
+    values are not reported as plaintext. Literal values, including escaped
+    environment templates, still produce plaintext warnings.
+
     Missing multi-agent DM routing ownership is reported as a finding. It does
     not stop the remaining channel security checks or pending state migrations.
     Configure the reported account binding before expecting that route to work.

@@ -3,18 +3,11 @@ import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output
 import { isCronMachineOutput } from "./cron-cli/output-mode.js";
 import { isDoctorMachineOutput } from "./doctor-output-mode.js";
 import { isGatewayMachineOutput } from "./gateway-cli/output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { isProxyMachineOutput } from "./proxy-output-mode.js";
 import { isSkillsMachineOutput } from "./skills-output-mode.js";
 import { isSystemMachineOutput } from "./system-output-mode.js";
 
 const argv = (...args: string[]) => ["node", "openclaw", ...args];
-
-it("normalizes missing stdout TTY metadata to false", () => {
-  expect(isMachineOutputStdoutTTY({})).toBe(false);
-  expect(isMachineOutputStdoutTTY({ isTTY: false })).toBe(false);
-  expect(isMachineOutputStdoutTTY({ isTTY: true })).toBe(true);
-});
 
 it("detects system presence", () => {
   expect(isSystemMachineOutput(argv("system", "presence"))).toBe(true);

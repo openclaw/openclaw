@@ -30,7 +30,7 @@ import {
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 
 vi.mock("../cli/plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: vi.fn(),
@@ -126,10 +126,7 @@ it.each(["configured-owner", "profile"] as const)(
         await closeOpenClawStateDatabaseAsync();
         // Keep the initial liveness control outside the maintenance admission budget.
         authorityWorkerLaunches.clear();
-        const maintenance = await beginDoctorMaintenance({
-          root: null,
-          options: { repair: true, nonInteractive: true },
-          runtime: { log() {}, error() {}, exit() {} },
+        const maintenance = await beginDoctorRepair({
           assertCurrent,
           beforeStateMutation: () => expectNoSidecars(databasePath),
         });
