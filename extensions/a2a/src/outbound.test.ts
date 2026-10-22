@@ -142,6 +142,68 @@ describe("A2A outbound channel delivery", () => {
     expect(result.messageId).toBe(request.params.message.messageId);
   });
 
+  it("reads a direct message reply that creates no task", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        jsonrpc: "2.0",
+        result: {
+          message: { messageId: "msg-direct", contextId: "ctx-direct", role: "ROLE_AGENT" },
+        },
+      }),
+    );
+
+    // §7.1: SendMessage succeeds with either branch of the oneof, and a peer that
+    // answers directly has no task to correlate against.
+    const result = await send();
+    expect(result).toMatchObject({ messageId: "msg-direct", contextId: "ctx-direct" });
+    expect(result).not.toHaveProperty("taskId");
+    expect(result).not.toHaveProperty("state");
+  });
+
+  it("reports the peer task state so interrupted tasks are distinguishable", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        jsonrpc: "2.0",
+        result: {
+          task: {
+            id: "task-7",
+            contextId: "ctx-7",
+            status: { state: "TASK_STATE_INPUT_REQUIRED" },
+          },
+        },
+      }),
+    );
+
+    // An accepted-but-unfinished task must not look like a completed fire-and-forget send.
+    await expect(send()).resolves.toMatchObject({
+      messageId: "task-7",
+      taskId: "task-7",
+      contextId: "ctx-7",
+      state: "TASK_STATE_INPUT_REQUIRED",
+    });
+  });
+
+  it("prefers the stable ErrorInfo reason when the peer rejects the send", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        jsonrpc: "2.0",
+        error: {
+          code: -32002,
+          message: "cannot cancel now",
+          data: [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              reason: "TASK_NOT_CANCELABLE",
+              domain: "a2a-protocol.org",
+            },
+          ],
+        },
+      }),
+    );
+
+    await expect(send()).rejects.toThrow(/cannot cancel now \[TASK_NOT_CANCELABLE\]/);
+  });
+
   it("rejects missing outbound peer URLs before making an HTTP request", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     const cfg = createA2aOutboundConfig({ token: "inbound-token" });

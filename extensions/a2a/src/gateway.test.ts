@@ -13,8 +13,15 @@ describe("A2A gateway account lifecycle", () => {
     const fixture = createA2aGatewayFixture();
     const lifecycle = a2aChannelPlugin.gateway!.startAccount!(fixture.ctx);
 
+    // Discovery (canonical + legacy alias), the JSON-RPC endpoint, and the
+    // authenticated extended card route.
     expect(fixture.registry.httpRoutes).toEqual(
-      ["/.well-known/agent-card.json", "/.well-known/agent.json", "/a2a/v1"].map((path) =>
+      [
+        "/.well-known/agent-card.json",
+        "/.well-known/agent.json",
+        "/a2a/v1",
+        "/a2a/v1/extendedAgentCard",
+      ].map((path) =>
         expect.objectContaining({ path, auth: "plugin", match: "exact", pluginId: "a2a" }),
       ),
     );

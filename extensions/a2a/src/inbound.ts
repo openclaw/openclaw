@@ -2,6 +2,8 @@ import { createChannelInboundEnvelopeBuilderAsync } from "openclaw/plugin-sdk/ch
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+import { A2A_TASK_STATES, isInterruptedTaskState, isTerminalTaskState } from "./a2a-model.js";
+import { extractInterruptDirective } from "./reply-directives.js";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
@@ -109,9 +111,21 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
     ctxPayload,
     delivery: {
       deliver: async (payload, info) => {
-        if (info.kind === "final") {
-          params.store.complete(params.taskId, payload.text);
+        if (info.kind !== "final") {
+          return;
         }
+        // An agent may pause the task for the peer instead of finishing it by
+        // replying with `[[input-required]] <question>` (or `[[auth-required]]`).
+        const interrupt = extractInterruptDirective(payload.text);
+        if (interrupt) {
+          if (interrupt.state === A2A_TASK_STATES.AUTH_REQUIRED) {
+            params.store.requireAuth(params.taskId, interrupt.reason);
+          } else {
+            params.store.requireInput(params.taskId, interrupt.reason);
+          }
+          return;
+        }
+        params.store.complete(params.taskId, payload.text);
       },
       onError: (error) => {
         params.store.fail(params.taskId, error);
@@ -134,6 +148,16 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
   } else if (!dispatch.dispatched) {
     params.store.fail(params.taskId, "A2A channel accepted the turn without dispatching it");
   } else if (!dispatch.dispatchResult.deferredToActiveRun) {
-    params.store.complete(params.taskId, undefined);
+    // Only a run that produced no final payload at all falls through here. A
+    // directive-paused task is interrupted (not terminal) and must keep waiting
+    // for the peer's follow-up instead of being silently completed.
+    const task = params.store.get(params.taskId);
+    if (
+      task &&
+      !isTerminalTaskState(task.status.state) &&
+      !isInterruptedTaskState(task.status.state)
+    ) {
+      params.store.complete(params.taskId, undefined);
+    }
   }
 }

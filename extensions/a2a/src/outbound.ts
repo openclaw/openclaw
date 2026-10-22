@@ -6,25 +6,52 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
+import { A2A_PROTOCOL_VERSION, A2A_VERSION_HEADER } from "./a2a-model.js";
 import { resolveA2aChannelAccount } from "./accounts.js";
 
 const A2A_OUTBOUND_TIMEOUT_MS = 30_000;
+
+/**
+ * `SendMessage` succeeds with either a `Message` or a `Task` (§7.1 oneof).
+ *
+ * The two are not interchangeable: a peer that answers directly creates no task
+ * at all, so the correlation handle has to come from whichever branch it chose.
+ */
+const A2aOutboundMessageSchema = z.object({
+  messageId: z.string().optional(),
+  contextId: z.string().optional(),
+  taskId: z.string().optional(),
+});
+
+const A2aOutboundTaskSchema = z.object({
+  id: z.string().optional(),
+  contextId: z.string().optional(),
+  status: z
+    .object({
+      state: z.string().optional(),
+    })
+    .optional(),
+});
+
+const A2aOutboundErrorInfoSchema = z.object({
+  "@type": z.string().optional(),
+  reason: z.string().optional(),
+});
 
 const A2aOutboundResponseSchema = z.object({
   error: z
     .object({
       code: z.number(),
       message: z.string(),
+      data: z.array(A2aOutboundErrorInfoSchema).optional(),
     })
     .optional(),
   result: z
     .object({
-      task: z
-        .object({
-          id: z.string().optional(),
-        })
-        .optional(),
+      task: A2aOutboundTaskSchema.optional(),
+      message: A2aOutboundMessageSchema.optional(),
     })
+    .passthrough()
     .optional(),
 });
 
@@ -36,9 +63,23 @@ type A2aOutboundSendParams = {
   assertDirectAdapterHandoff?: () => void;
 };
 
+export type A2aOutboundSendResult = {
+  to: string;
+  /** Correlation handle: the peer's task id when it made one, else its message id. */
+  messageId: string;
+  taskId?: string;
+  contextId?: string;
+  /**
+   * Task state the peer reported. `input-required` and `auth-required` mean the
+   * turn was accepted but is NOT finished (§6.3), which matters because a
+   * fire-and-forget send would otherwise look identical to a completed one.
+   */
+  state?: string;
+};
+
 export async function sendA2aChannelText(
   params: A2aOutboundSendParams,
-): Promise<{ to: string; messageId: string }> {
+): Promise<A2aOutboundSendResult> {
   const account = resolveA2aChannelAccount({
     cfg: params.cfg,
     accountId: params.accountId,
@@ -60,6 +101,8 @@ export async function sendA2aChannelText(
   const requestId = randomUUID();
   const headers: Record<string, string> = {
     "content-type": "application/json",
+    // Declare the protocol version so a 1.0 peer does not fall back to 0.3.
+    [A2A_VERSION_HEADER]: A2A_PROTOCOL_VERSION,
   };
   if (peer.outboundToken) {
     headers.authorization = `Bearer ${peer.outboundToken}`;
@@ -121,8 +164,12 @@ export async function sendA2aChannelText(
           request.method = "message/send";
           continue;
         }
+        // Prefer the stable ErrorInfo reason over the human-readable message so
+        // callers can branch on e.g. TASK_NOT_CANCELABLE without string matching.
+        const reason = parsed.data.error.data?.find((entry) => entry.reason)?.reason;
         throw new Error(
-          `outbound A2A request to peer ${peerName} failed: ${parsed.data.error.message}`,
+          `outbound A2A request to peer ${peerName} failed: ${parsed.data.error.message}` +
+            (reason ? ` [${reason}]` : ""),
         );
       }
 
@@ -130,7 +177,23 @@ export async function sendA2aChannelText(
         throw new Error(`peer ${peerName} returned an A2A response without a result`);
       }
 
-      return { to: params.to, messageId: parsed.data.result.task?.id ?? messageId };
+      const task = parsed.data.result.task;
+      const message = parsed.data.result.message;
+
+      return {
+        to: params.to,
+        // A compliant peer returns one branch of the oneof, but a success with no
+        // handle still means the message was accepted. Falling back to the id we
+        // generated beats throwing, which would misreport a delivered message as
+        // failed and invite a duplicate send. A wholly absent `result` is the
+        // genuine failure, and that is rejected above.
+        messageId: task?.id ?? message?.messageId ?? messageId,
+        ...(task?.id ? { taskId: task.id } : {}),
+        ...((task?.contextId ?? message?.contextId)
+          ? { contextId: task?.contextId ?? message?.contextId }
+          : {}),
+        ...(task?.status?.state ? { state: task.status.state } : {}),
+      };
     } finally {
       // Each attempt owns its guard lease, including before the compatibility retry.
       await release();

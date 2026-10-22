@@ -159,7 +159,8 @@ async function startHttpHarness(options?: {
     baseUrl,
     taskStore,
     handler,
-    get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
+    request: dispatchRequest,
+    get: (endpoint: string, token?: string) => dispatchRequest({ method: "GET", endpoint, token }),
     post: (body: unknown, token: string | null = "alpha-secret") =>
       dispatchRequest({
         method: "POST",
@@ -258,7 +259,9 @@ describe("A2A HTTP agent discovery", () => {
         ],
         version: VERSION,
         capabilities: {
-          streaming: false,
+          // Streaming is core in 1.0 and on by default; push notifications and
+          // the extended card are opt-in and stay absent until enabled.
+          streaming: true,
           pushNotifications: false,
         },
         defaultInputModes: ["text/plain"],
@@ -280,6 +283,11 @@ describe("A2A HTTP agent discovery", () => {
       expect(card).not.toHaveProperty("protocolVersion");
       expect(card).not.toHaveProperty("url");
       expect(card).not.toHaveProperty("preferredTransport");
+      // Bearer auth is advertised so peers can discover how to authenticate.
+      expect(card).toMatchObject({
+        securitySchemes: { bearer: { httpAuthSecurityScheme: { scheme: "Bearer" } } },
+        securityRequirements: [{ schemes: { bearer: { list: [] } } }],
+      });
     }
   });
 
@@ -524,17 +532,19 @@ describe("A2A JSON-RPC protocol boundary", () => {
   });
 
   it.each([
-    ["CreateTaskPushNotificationConfig", -32003],
-    ["SetTaskPushNotificationConfig", -32003],
-    ["GetTaskPushNotificationConfig", -32003],
-    ["ListTaskPushNotificationConfig", -32003],
-    ["ListTaskPushNotificationConfigs", -32003],
-    ["DeleteTaskPushNotificationConfig", -32003],
-    ["SendStreamingMessage", -32004],
-    ["SubscribeToTask", -32004],
-    ["GetExtendedAgentCard", -32004],
-    ["UnknownTaskPushNotificationConfig", -32601],
-  ])("rejects %s with capability-specific error %s", async (method, code) => {
+    ["CreateTaskPushNotificationConfig", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    ["SetTaskPushNotificationConfig", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    ["GetTaskPushNotificationConfig", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    ["ListTaskPushNotificationConfig", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    ["ListTaskPushNotificationConfigs", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    ["DeleteTaskPushNotificationConfig", -32003, "PUSH_NOTIFICATION_NOT_SUPPORTED"],
+    // §3.3.4: an undeclared extended-card capability is UnsupportedOperation;
+    // -32007 is reserved for "declared but never configured".
+    ["GetExtendedAgentCard", -32004, "UNSUPPORTED_OPERATION"],
+    // Reserved JSON-RPC codes carry no A2A ErrorInfo detail.
+    ["SubscribeToTask", -32602, undefined],
+    ["UnknownTaskPushNotificationConfig", -32601, undefined],
+  ])("rejects %s with error %s", async (method, code, reason) => {
     const onDispatch = vi.fn(async () => {});
     const harness = await startHttpHarness({ onDispatch });
     const createTask = vi.spyOn(harness.taskStore, "create");
@@ -544,10 +554,37 @@ describe("A2A JSON-RPC protocol boundary", () => {
     await expect(response.json()).resolves.toEqual({
       jsonrpc: "2.0",
       id: "capability",
-      error: { code, message: expect.any(String) },
+      error: {
+        code,
+        message: expect.any(String),
+        // A2A errors carry a google.rpc.ErrorInfo so peers branch on the reason
+        // instead of parsing the message.
+        ...(reason
+          ? {
+              data: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                  reason,
+                  domain: "a2a-protocol.org",
+                },
+              ],
+            }
+          : {}),
+      },
     });
     expect(onDispatch).not.toHaveBeenCalled();
     expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("rejects streaming methods inside a batch, which cannot carry an SSE stream", async () => {
+    const harness = await startHttpHarness();
+    const response = await harness.post([
+      { jsonrpc: "2.0", id: "stream", method: "SendStreamingMessage", params: {} },
+    ]);
+
+    await expect(response.json()).resolves.toEqual([
+      { jsonrpc: "2.0", id: "stream", error: { code: -32602, message: expect.any(String) } },
+    ]);
   });
 
   it("executes batch notifications without returning notification response entries", async () => {
@@ -594,8 +631,8 @@ describe("A2A JSON-RPC protocol boundary", () => {
     });
   });
 
-  it.each(["tasks/cancel"])(
-    "refuses %s instead of reporting a terminal state it cannot enforce",
+  it.each(["CancelTask", "tasks/cancel"])(
+    "cancels the task through %s and reports the terminal state",
     async (method) => {
       const harness = await startHttpHarness({ onDispatch: async () => {} });
       const createdResponse = await harness.post(sendRequest({ returnImmediately: true }));
@@ -608,9 +645,10 @@ describe("A2A JSON-RPC protocol boundary", () => {
         params: { id: created.result.task.id },
       });
 
-      // A dispatched agent run has no plugin-facing abort seam, so acknowledging
-      // cancellation would report a terminal state while the run kept going.
-      await expect(response.json()).resolves.toMatchObject(rpcError(-32004));
+      await expect(response.json()).resolves.toMatchObject({
+        id: "cancel",
+        result: { id: created.result.task.id, status: { state: "TASK_STATE_CANCELED" } },
+      });
       const after = await harness.post({
         jsonrpc: "2.0",
         id: "after",
@@ -618,10 +656,38 @@ describe("A2A JSON-RPC protocol boundary", () => {
         params: { id: created.result.task.id },
       });
       await expect(after.json()).resolves.toMatchObject({
-        result: { status: { state: "TASK_STATE_WORKING" } },
+        result: { status: { state: "TASK_STATE_CANCELED" } },
       });
+      // A canceled task is terminal, so a late agent reply cannot overwrite it.
+      harness.taskStore.complete(created.result.task.id, "late reply");
+      await expect(
+        (
+          await harness.post({
+            jsonrpc: "2.0",
+            id: "late",
+            method: "GetTask",
+            params: { id: created.result.task.id },
+          })
+        ).json(),
+      ).resolves.toMatchObject({ result: { status: { state: "TASK_STATE_CANCELED" } } });
     },
   );
+
+  it("refuses to cancel a task that already reached a terminal state", async () => {
+    const harness = await startHttpHarness();
+    const createdResponse = await harness.post(sendRequest({ returnImmediately: true }));
+    const created = (await createdResponse.json()) as { result: { task: { id: string } } };
+    harness.taskStore.complete(created.result.task.id, "done");
+
+    const response = await harness.post({
+      jsonrpc: "2.0",
+      id: "cancel",
+      method: "CancelTask",
+      params: { id: created.result.task.id },
+    });
+
+    await expect(response.json()).resolves.toMatchObject(rpcError(-32002));
+  });
 
   it("transitions the task to FAILED when inbound dispatch throws", async () => {
     const harness = await startHttpHarness({
@@ -759,6 +825,66 @@ describe("A2A HTTP authentication with unresolved token references", () => {
       );
       // Only the resolved peer reached the agent; the forged request created no task.
       expect(dispatched).toEqual(["kept"]);
+    });
+  });
+});
+
+describe("A2A REST binding", () => {
+  it("creates and lists push notification configs for a task", async () => {
+    const harness = await startHttpHarness({
+      a2aConfig: {
+        rest: { enabled: true },
+        capabilities: { pushNotifications: true },
+      },
+    });
+    const sent = await harness.post(sendRequest({ returnImmediately: true }));
+    const taskId = ((await sent.json()) as { result: { task: { id: string } } }).result.task.id;
+
+    const created = await harness.request({
+      method: "POST",
+      endpoint: `/a2a/v1/rest/tasks/${taskId}/pushNotificationConfigs`,
+      body: JSON.stringify({ url: "https://hooks.example.test/notify" }),
+      token: "alpha-secret",
+    });
+    expect(created.status).toBe(200);
+
+    const listed = await harness.get(
+      `/a2a/v1/rest/tasks/${taskId}/pushNotificationConfigs`,
+      "alpha-secret",
+    );
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toMatchObject({
+      configs: [{ taskId, url: "https://hooks.example.test/notify" }],
+    });
+  });
+
+  it("shares the per-peer rate limit with the JSON-RPC endpoint", async () => {
+    const harness = await startHttpHarness({
+      a2aConfig: { rest: { enabled: true }, rateLimitPerMinute: 1 },
+    });
+
+    const first = await harness.get("/a2a/v1/rest/tasks", "alpha-secret");
+    expect(first.status).toBe(200);
+
+    const second = await harness.get("/a2a/v1/rest/tasks", "alpha-secret");
+    expect(second.status).toBe(429);
+    await expect(second.json()).resolves.toMatchObject({
+      error: { code: 429, status: "RESOURCE_EXHAUSTED" },
+    });
+  });
+
+  it("classifies a malformed REST body as INVALID_ARGUMENT, not an internal error", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rest: { enabled: true } } });
+
+    const reply = await harness.request({
+      method: "POST",
+      endpoint: "/a2a/v1/rest/message:send",
+      body: '{"unterminated": ',
+      token: "alpha-secret",
+    });
+    expect(reply.status).toBe(400);
+    await expect(reply.json()).resolves.toMatchObject({
+      error: { status: "INVALID_ARGUMENT" },
     });
   });
 });
