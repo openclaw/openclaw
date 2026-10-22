@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
@@ -9,11 +8,12 @@ import { expect, it, vi } from "vitest";
 import type { StoredBinding } from "./agentsapi-binding-record.js";
 import {
   createAttempt,
-  externalSessionFixture,
+  createBindingStore as migrationStore,
   mockClient,
   registerHarness,
   reopenState,
 } from "./agentsapi-harness.persistence.test-helpers.js";
+import { withNativeFixture } from "./agentsapi-persistence-fixture.test-support.js";
 import { createHostedSession } from "./agentsapi.test-support.js";
 
 const legacy = {
@@ -24,15 +24,6 @@ const legacySession = () => ({ ...createHostedSession(), id: legacy.sessionId })
 
 function guardedResponse(finalUrl: string, response: Response) {
   return { finalUrl, response, release: async () => {} };
-}
-
-function migrationStore<T = StoredBinding>(env: NodeJS.ProcessEnv) {
-  return createPluginStateKeyedStoreForTests<T>("agentsapi", {
-    namespace: "agentsapi-sessions",
-    maxEntries: 100_000,
-    overflowPolicy: "reject-new",
-    env,
-  });
 }
 
 function pluginConfig(config: Record<string, unknown>): OpenClawConfig {
@@ -254,18 +245,16 @@ export function registerMigrationTests(
   it.each(["reset", "delete", "context rollback"] as const)(
     "settles unmigratable legacy work before %s with current agent authentication",
     (operation) =>
-      withOpenClawTestState({ label: "agentsapi-upgrade-cleanup" }, async (state) => {
-        const { params, ...fixture } = await externalSessionFixture(state);
-        const store = migrationStore(state.env);
+      withNativeFixture(async (fixture) => {
+        const { params, target } = fixture;
+        const store = fixture.openStore<StoredBinding>();
         await store.register(params.sessionId, legacy);
-        await reopenState();
+        await fixture.restart();
         fixture.session.mockResolvedValue({
           ...fixture.nativeSession,
           id: legacy.sessionId,
           status: "in_progress",
         });
-        const harness = fixture.createHarness();
-        const target = { ...params.sessionTarget, assertCurrent: () => {} };
         const successor = {
           sessionId: "successor-local-session",
           previousSessionId: params.sessionId,
@@ -275,26 +264,24 @@ export function registerMigrationTests(
         }
         const cleanup = () =>
           operation === "reset"
-            ? harness.reset({ ...target, reason: "reset" })
+            ? fixture.harness.reset({ ...target, reason: "reset" })
             : operation === "delete"
-              ? harness.withSessionDeletion(target, async (settle) => settle())
-              : harness.withSessionContextReset({ ...target, ...successor }, (settle) =>
+              ? fixture.harness.withSessionDeletion(target, async (settle) => settle())
+              : fixture.harness.withSessionContextReset({ ...target, ...successor }, (settle) =>
                   settle("rollback"),
                 );
-        try {
-          fixture.cancel.mockRejectedValueOnce(new Error("fixture settlement unavailable"));
-          await expect(cleanup()).rejects.toThrow("fixture settlement unavailable");
-          expect(await store.lookup(params.sessionId)).toEqual(legacy);
-          await cleanup();
-          expect((await store.lookup(params.sessionId)) ?? {}).toEqual(
-            operation === "context rollback" ? legacy : {},
-          );
-          const cancelledIds = fixture.cancel.mock.calls.map(([id]) => id);
-          expect(cancelledIds).toEqual([legacy.sessionId, legacy.sessionId]);
-          expectNoCalls(fixture.create);
-        } finally {
-          await harness.dispose();
-        }
+        fixture.cancel.mockRejectedValueOnce(new Error("fixture settlement unavailable"));
+        await expect(cleanup()).rejects.toThrow("fixture settlement unavailable");
+        expect(await store.lookup(params.sessionId)).toEqual(legacy);
+        await cleanup();
+        expect((await store.lookup(params.sessionId)) ?? {}).toEqual(
+          operation === "context rollback" ? legacy : {},
+        );
+        expect(fixture.cancel.mock.calls.map(([id]) => id)).toEqual([
+          legacy.sessionId,
+          legacy.sessionId,
+        ]);
+        expectNoCalls(fixture.create);
       }),
   );
 }
