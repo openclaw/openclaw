@@ -220,7 +220,7 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     );
     expect(settings).toEqual([
       {
-        synchronous_commit: defaults.rows[0].synchronous_commit,
+        synchronous_commit: defaults.rows[0]?.synchronous_commit,
         lock_timeout: "321ms",
         statement_timeout: "654ms",
         search_path: quoted,
