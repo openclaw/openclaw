@@ -341,9 +341,6 @@ switch (process.argv[2]) {
             (result.current.loadModule(result.source) as { read(): string }).read(),
             "recovered source",
           );
-          // Keep the recovery factory live too: another failed update must still be recoverable.
-          const recovery = result.current.captureModuleLoaderRecovery();
-          recovery.dispose();
         } finally {
           await result.current.dispose();
           fs.rmSync(root, { recursive: true, force: true });

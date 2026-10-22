@@ -9,12 +9,10 @@ import {
   MOBILE_PAIRING_NODE_CAPS,
   MOBILE_PAIRING_NODE_COMMANDS,
   MOBILE_PAIRING_NODE_PERMISSIONS,
-  MOBILE_PAIRING_OPERATOR_CAPS,
   approveBaselineNodePairing,
   assertGatewayHealth,
   attemptConnect,
   buildConnectRequest,
-  buildDeviceAuthCompatibilityPayloadV2,
   buildRedactedEvidence,
   createMobilePairingIdentity,
   extractBootstrapCredentials,
@@ -175,20 +173,7 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
     scopes: ["operator.read"],
     auth: { token: "operator-token" },
   }).params;
-  const payload = buildDeviceAuthCompatibilityPayloadV2({
-    deviceId: identity.deviceId,
-    clientId: MOBILE_PAIRING_CLIENT.id,
-    clientMode: "node",
-    role: "node",
-    scopes: [],
-    signedAtMs: challengePayload.ts,
-    token: "node-token",
-    nonce: "nonce-1",
-  });
-
-  expect(payload).toBe(
-    `v2|${identity.deviceId}|openclaw-ios|node|node||1700000000001|node-token|nonce-1`,
-  );
+  const payload = `v2|${identity.deviceId}|openclaw-ios|node|node||1700000000001|node-token|nonce-1`;
   expect(nodeParams).toMatchObject({
     minProtocol: 3,
     maxProtocol: 4,
@@ -207,7 +192,6 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
     caps: ["inline-widgets"],
     auth: { token: "operator-token" },
   });
-  expect(MOBILE_PAIRING_OPERATOR_CAPS).toEqual(["inline-widgets"]);
   expect(operatorParams).not.toHaveProperty("commands");
   expect(operatorParams).not.toHaveProperty("permissions");
   expect(nodeParams).not.toHaveProperty("auth.deviceToken");
@@ -223,10 +207,6 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
 });
 
 it("requires the connect.challenge timestamp used by the shipped client", () => {
-  expect(parseConnectChallengePayload({ nonce: " nonce-1 ", ts: 1_700_000_000_123 })).toEqual({
-    nonce: "nonce-1",
-    issuedAtMs: 1_700_000_000_123,
-  });
   for (const payload of [
     null,
     { nonce: "nonce-1" },

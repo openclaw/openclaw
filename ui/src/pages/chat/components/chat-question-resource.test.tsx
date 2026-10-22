@@ -226,12 +226,31 @@ it("retires pending previews on disabled and request changes while retaining con
   button.click();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   setRequestId("replacement-request");
-  await waitForSolid(() => expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true));
-  second.resolve({ preview: { contents: [{ text: "Retired request preview" }] } });
+  await waitForSolid(() => {
+    expect(request.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
+    expect(button.disabled).toBe(false);
+  });
   expect(view.getByRole("button", { name: "Preview resource: Bracket" })).toBe(button);
   button.click();
-  await waitForSolid(() => expect(view.getByText("Current preview")).toBeTruthy());
+  await waitForSolid(() => {
+    expect(view.getByText("Current preview")).toBeTruthy();
+    expect(button.disabled).toBe(false);
+  });
+  second.resolve({ preview: { contents: [{ text: "Retired request preview" }] } });
+  await second.promise;
   expect(view.queryByText("Retired disabled preview")).toBeNull();
   expect(view.queryByText("Retired request preview")).toBeNull();
   expect(request.mock.calls[2]?.[1]).toMatchObject({ requestId: "replacement-request" });
+  request.mockRejectedValueOnce(new Error("Resource preview failed"));
+  button.click();
+  await waitForSolid(() => {
+    expect(view.getByRole("alert").textContent).toBe("Resource preview failed");
+    expect(button.disabled).toBe(false);
+  });
+  expect(view.getByText("Current preview")).toBeTruthy();
+  button.click();
+  await waitForSolid(() => {
+    expect(view.queryByRole("alert")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(5);
+  });
 });

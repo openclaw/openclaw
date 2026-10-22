@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
@@ -27,46 +27,7 @@ function mountPanel() {
     openFile: null,
     revealFile: null,
   });
-  const view = mountSolid(() =>
-    createComponent(SessionDiffPanel, {
-      get mobile() {
-        return props().mobile;
-      },
-      get active() {
-        return props().active;
-      },
-      get scopeRequest() {
-        return props().scopeRequest;
-      },
-      get onResult() {
-        return props().onResult;
-      },
-      get openFileView() {
-        return props().openFileView;
-      },
-      get onOpenMobilePage() {
-        return props().onOpenMobilePage;
-      },
-      get owner() {
-        return props().owner;
-      },
-      get execNode() {
-        return props().execNode;
-      },
-      get loader() {
-        return props().loader;
-      },
-      get loadFileText() {
-        return props().loadFileText;
-      },
-      get openFile() {
-        return props().openFile;
-      },
-      get revealFile() {
-        return props().revealFile;
-      },
-    }),
-  );
+  const view = mountSolid(() => createComponent(SessionDiffPanel, merge(props)));
   return {
     panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
     unmount: view.unmount,
@@ -162,6 +123,44 @@ afterEach(async () => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("names untracked repository directories in the review and file tree", async () => {
+    setNativeGatewayTestState(null);
+    setupDesktopResizeObserver();
+    const { panel, update } = mountPanel();
+    update({
+      mobile: false,
+      loader: async () => ({
+        ...result("main"),
+        files: ["nested-repo/", "packages/child/"].map((path) => ({
+          path,
+          status: "added" as const,
+          untracked: true,
+          additions: 0,
+          deletions: 0,
+          truncated: true,
+        })),
+      }),
+    });
+    await settlePanel(panel);
+    expect
+      .soft([...panel.querySelectorAll(".session-diff__filename")].map((el) => el.textContent))
+      .toEqual(["nested-repo", "child"]);
+    panel.querySelector<HTMLButtonElement>('button[aria-label="Changed files tree"]')!.click();
+    flush();
+    for (const [path, name] of [
+      ["nested-repo/", "nested-repo"],
+      ["packages/child/", "child"],
+    ] as const) {
+      const entry = panel.querySelector<HTMLButtonElement>(
+        `.session-diff__tree-row[title="${path}"]`,
+      )!;
+      expect.soft(entry.querySelector(".session-diff__filename-label")?.textContent).toBe(name);
+      entry.click();
+      flush();
+      expect(entry.getAttribute("aria-current")).toBe("true");
+    }
+  });
+
   it.each(["__proto__", "constructor"])(
     "retains %s disclosure on refresh and applies presentation entry resets",
     async (path) => {

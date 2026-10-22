@@ -30,6 +30,16 @@ export function DevicesView(props: DevicesProps) {
             )}
           </div>
         ) : undefined}
+        {props.devicesError ? (
+          <div class="callout danger" role="alert">
+            {props.devicesError}
+          </div>
+        ) : undefined}
+        {props.lastError ? (
+          <div class="callout danger" role="alert">
+            {props.lastError}
+          </div>
+        ) : undefined}
         <DeviceInventory {...props} /> <ExecApprovals {...approvalsState()} />
         <Bindings {...bindingState()} />
       </>

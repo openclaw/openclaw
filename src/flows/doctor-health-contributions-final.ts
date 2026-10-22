@@ -11,6 +11,7 @@ import {
 } from "./doctor-health-contribution-runners.config.js";
 import {
   runBrowserHealth,
+  runBundleLspEnvHealth,
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
@@ -194,6 +195,10 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:web-fetch-proxy", "Web fetch proxy", {
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
+    }),
+    createDoctorHealthContribution("doctor:bundle-lsp-env", "Bundle LSP environment", {
+      updateWork: { kind: "inspection", scope: "agent" },
+      run: runBundleLspEnvHealth,
     }),
     createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
       updateWork: { kind: "standalone" },

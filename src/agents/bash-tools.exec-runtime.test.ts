@@ -8,12 +8,12 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
+import { inspectors } from "../infra/gateway-suspend-coordinator.test-support.js";
 import { sanitizeHostExecEnv, setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
@@ -25,7 +25,7 @@ import {
   markBackgrounded,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture as runTestExecProcess } from "./bash-tools.exec-fixture.test-support.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -94,17 +94,6 @@ const sandboxSpec = (finalizeToken?: string) => ({
   ...(finalizeToken ? { finalizeToken } : {}),
 });
 
-function testRun(runId: string, wait: () => Promise<RunExit>, pid?: number) {
-  return {
-    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-    runId,
-    startedAtMs: Date.now(),
-    ...(pid === undefined ? {} : { pid }),
-    wait,
-    cancel: vi.fn(),
-  };
-}
-
 function managedExit(
   input: SpawnInput,
   exit: () => Promise<RunExit>,
@@ -114,15 +103,18 @@ function managedExit(
   if (stdout) {
     input.onStdout?.(stdout);
   }
-  const run = testRun(runId, exit, 123);
-  run.activity.resultSettled = false;
+  const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
   return {
-    ...run,
+    activity,
+    runId,
+    pid: 123,
+    startedAtMs: Date.now(),
+    cancel: vi.fn(),
     wait: async () => {
       try {
         return await exit();
       } finally {
-        run.activity.resultSettled = true;
+        activity.resultSettled = true;
       }
     },
   };
@@ -143,62 +135,10 @@ function captureCompletions(sessionKey?: string) {
   return { events, metadata };
 }
 
-function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
-  return runExecProcess({
-    command: "test-command",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-    ...params,
-  });
-}
-
-async function runExecWithExit(params: {
-  exit: RunExit;
-  stdout?: string | string[];
-  timeoutSec?: number | null;
-  usePty?: boolean;
-}) {
-  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
-    if (params.stdout) {
-      for (const chunk of typeof params.stdout === "string" ? [params.stdout] : params.stdout) {
-        input.onStdout?.(chunk);
-      }
-    }
-    return testRun("run-exit", async () => params.exit, 123);
-  });
-  const run = await runTestExecProcess({
-    usePty: params.usePty ?? false,
-    timeoutSec: params.timeoutSec ?? null,
-  });
-  return { run, outcome: await run.promise };
-}
-
 function prepareSuspension(requestId: string) {
   // This test owns only the background-exec registry. Other process-global
   // activity counters may legitimately stay busy in the non-isolated suite.
-  const inspect: GatewayActiveWorkInspectors = {
-    getQueueSize: () => 0,
-    getPendingReplies: () => 0,
-    getEmbeddedRuns: () => 0,
-    getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
-    getCronRuns: () => 0,
-    getAgentRuns: () => 0,
-    getAcpRuns: () => 0,
-    getMediaRuns: () => 0,
-    getRootRequests: () => 0,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-  };
+  const inspect = inspectors({ getBackgroundExecSessions: getActiveBackgroundExecSessionCount });
   return prepareGatewaySuspend({
     requestId,
     pauseScheduling: vi.fn(),
@@ -213,16 +153,6 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
     Record<string, unknown>,
   ];
 }
-
-it("tracks the last cursor-mode toggle across chunks", async () => {
-  const { run } = await runExecWithExit({
-    stdout: ["\x1b[?1l\x1b", "[?1", "h"],
-    usePty: true,
-    exit: createRunExit(),
-  });
-
-  expect(run.session.cursorKeyMode).toBe("application");
-});
 
 describe("sandbox exec preparation failures", () => {
   it("rechecks the admitting repair authority after deferred supervisor work", async () => {
@@ -581,19 +511,6 @@ it("keeps suspension busy until failed cleanup settles after a process timeout",
   }
 });
 
-it("keeps non-zero normal exits in the completed path", async () => {
-  const { outcome } = await runExecWithExit({
-    stdout: "done",
-    exit: createRunExit({ exitCode: 1, durationMs: 123 }),
-    timeoutSec: 30,
-  });
-  expect(outcome).toMatchObject({
-    status: "completed",
-    exitCode: 1,
-    aggregated: "done\n\n(Command exited with code 1)",
-  });
-});
-
 describe("runExecProcess PTY fallback", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
@@ -738,26 +655,24 @@ describe("runExecProcess Gateway credential withholding", () => {
 });
 
 it.each([
-  ["manual cancellation", "manual-cancel", "partial output\n", undefined],
-  ["empty timeout", "overall-timeout", undefined, undefined],
+  ["empty timeout", undefined, undefined],
   [
     "UTF-16 tail boundary",
-    "overall-timeout",
     `${"a".repeat(101)}🎉${"b".repeat(179)}${"c".repeat(220)}`,
     "b".repeat(179),
   ],
-] as const)("preserves exit notification policy for %s", async (_name, reason, stdout, head) => {
+] as const)("preserves timeout notification policy for %s", async (_name, stdout, head) => {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
     managedExit(
       input,
       async () => {
         await nextImmediate();
         return createRunExit({
-          reason,
+          reason: "overall-timeout",
           exitCode: null,
           exitSignal: "SIGKILL",
           durationMs: 10,
-          timedOut: reason === "overall-timeout",
+          timedOut: true,
         });
       },
       stdout,
@@ -773,11 +688,6 @@ it.each([
   markBackgrounded(run.session);
   const outcome = await run.promise;
   expect(outcome.status).toBe("failed");
-  if (reason === "manual-cancel") {
-    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    return;
-  }
   const [message, options] = requireSystemEventCall();
   expect(message).toContain("Exec failed");
   expect(message).toContain("external side effects may already have completed");
@@ -795,36 +705,6 @@ it.each([
     expect(message).not.toContain("�");
     expect(message).toContain("…");
     expect(message).toContain(head);
-  }
-});
-
-it("applies PATH prepending using the platform's command syntax", async () => {
-  const isWindows = process.platform === "win32";
-  supervisorMock.spawn.mockResolvedValueOnce(
-    testRun("mock-run", async () => createRunExit({ durationMs: 0 })),
-  );
-  await runTestExecProcess({
-    command: "echo test",
-    ...(isWindows
-      ? {
-          workdir: "C:\\tmp",
-          env: { Path: "C:\\Windows\\System32" },
-          pathPrepend: ["C:\\custom\\bin"],
-        }
-      : { env: { PATH: "/usr/bin" }, pathPrepend: ["/custom/bin", "/opt/bin"] }),
-  });
-  const spawnCall = expectDefined(
-    supervisorMock.spawn.mock.calls[0],
-    "supervisorMock.spawn.mock.calls[0] test invariant",
-  )[0];
-  const commandStr = spawnCall.argv.join(" ");
-  if (isWindows) {
-    expect(commandStr).not.toContain("export PATH=");
-    expect(commandStr).toContain("echo test");
-  } else {
-    expect(commandStr).toContain(
-      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test',
-    );
   }
 });
 

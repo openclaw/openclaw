@@ -58,11 +58,16 @@ export async function prepareSessionFileWorkspace(
       { entryIds: [message.entryId] },
     );
     const anchor = anchors[0];
+    // Rewrites re-append messages under new ids; a reloaded conversation links the current ids.
     if (!anchor) {
       throw new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.FORBIDDEN, "The file message is not in this conversation."),
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "This message is no longer in the conversation; reload the conversation to open its files.",
+        ),
       );
     }
+    // Transcript writers keep the boundary current; a stale one means it could not be kept.
     if (
       prior.sessionId === entry.sessionId &&
       prior.through.maxSeq !== null &&
@@ -71,7 +76,7 @@ export async function prepareSessionFileWorkspace(
       throw new SessionMutationAuthorizationChangedError(
         errorShape(
           ErrorCodes.FORBIDDEN,
-          "The file message source changed; reload the conversation.",
+          "This message's file links are no longer available; open the file from this conversation's file list.",
         ),
       );
     }

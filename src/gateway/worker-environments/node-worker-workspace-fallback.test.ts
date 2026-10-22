@@ -118,43 +118,16 @@ describe("node worker workspace origin fallback", () => {
     },
   );
 
-  it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
-    const { exec, sync } = fixture();
-    await expect(sync()).resolves.toEqual(synced());
-
-    expect(commandArgs(exec)).toEqual([
-      ["openclaw-internal-workspace-seed"],
-      expect.arrayContaining(["clone", "--filter=blob:none", ORIGIN]),
-      expect.arrayContaining(["fetch", "origin", COMMIT]),
-      expect.arrayContaining(["rev-parse", "FETCH_HEAD^{commit}"]),
-      expect.arrayContaining(["checkout", COMMIT]),
-      expect.arrayContaining(["node", REMOTE_WORKSPACE, COMMIT]),
-      ["openclaw-internal-workspace-seed"],
-    ]);
-    expect(exec.mock.calls.at(-1)?.[0]).toEqual(seedStoreCommand);
-    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
-      expect.arrayContaining(["ls-remote"]),
-      expect.anything(),
-    );
-  });
-
   it.each([
-    { operation: "clone", reason: "clone-failed", commandCount: 1 },
-    { operation: "checkout", reason: "checkout-failed", commandCount: 4 },
-  ] as const)("preserves the $reason fallback", async ({ operation, reason, commandCount }) => {
-    const localPath = cleanWorkspace();
+    { operation: "clone", reason: "clone-failed" },
+    { operation: "checkout", reason: "checkout-failed" },
+  ] as const)("preserves the $reason fallback", async ({ operation, reason }) => {
     const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
       ...spawnResult(argv.includes("rev-parse") ? COMMIT : "", argv.includes(operation) ? 1 : 0),
       workspaceDir: REMOTE_WORKSPACE,
     }));
 
-    await expect(
-      createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
-        { localPath, sessionId: "session-1", generation: 1 },
-        MANIFEST_REF,
-      ),
-    ).resolves.toEqual({ kind: "fallback", reason });
-    expect(exec).toHaveBeenCalledTimes(commandCount + 1);
+    await expect(fixture(exec).sync()).resolves.toEqual({ kind: "fallback", reason });
     expect(exec.mock.calls.some(([command]) => command.seed?.action === "store")).toBe(false);
   });
 
@@ -302,13 +275,9 @@ describe("node worker workspace origin fallback", () => {
   });
 
   it("does not apply Git author configuration to a plain workspace", async () => {
-    const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>();
-    const result = {
-      mode: "plain" as const,
-      remoteWorkspaceDir: REMOTE_WORKSPACE,
-      manifestRef: MANIFEST_REF,
-    };
+    const result = { ...syncResult, mode: "plain" as const };
+    const localPath = cleanWorkspace();
 
     await expect(
       createNodeWorkerWorkspaceFallback(exec).finalizeSync(

@@ -8,6 +8,8 @@ title: "General troubleshooting"
 
 Triage front door. 2 minutes to a diagnosis, then jump to the deep page.
 
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). See [Get support](/help/support) for safe diagnostics and separate bug and security reporting routes.
+
 ## First 60 seconds
 
 Run this ladder in order:

@@ -12,12 +12,13 @@ import * as transcriptAnchors from "../../config/sessions/session-transcript-anc
 import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import {
-  bootstrapHarnessContextEngine,
-  finalizeHarnessContextEngineTurn,
-} from "./context-engine-lifecycle.js";
+import { bootstrapHarnessContextEngine } from "./context-engine-lifecycle.js";
 import { createContextEngine as createEngine } from "./context-engine-lifecycle.test-support.js";
-import { appendTurnMessage } from "./context-engine-turn.test-support.js";
+import {
+  appendTurnMessage,
+  createTurnTarget,
+  finalizeTurn,
+} from "./context-engine-turn.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-terminal-");
 
@@ -38,29 +39,12 @@ function readMessageContent(message: AgentMessage): unknown {
   return "content" in message ? message.content : undefined;
 }
 
-type FinalizeParams = Parameters<typeof finalizeHarnessContextEngineTurn>[0];
-function finalize(
-  params: Pick<FinalizeParams, "sessionFile" | "sessionIdUsed"> & Partial<FinalizeParams>,
-) {
-  return finalizeHarnessContextEngineTurn({
-    messagesSnapshot: [],
-    prePromptMessageCount: 0,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
-    warn: vi.fn(),
-    ...params,
-  });
-}
-
 describe("context engine transcript cursor contract", () => {
   it("records a reconstructed terminal anchor despite an intervening transcript append", async () => {
-    const target = {
-      agentId: "main",
-      sessionId: "terminal-append",
-      sessionKey: "agent:main:terminal-append",
-      storePath: path.join(sessionDirs.make(), "sessions.json"),
-    };
+    const target = createTurnTarget(
+      path.join(sessionDirs.make(), "sessions.json"),
+      "terminal-append",
+    );
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const user = await appendTurnMessage(target, "user", "request", 1_000);
     const terminal = await appendTurnMessage(target, "assistant", "reply", 2_000, user!.messageId);
@@ -75,7 +59,7 @@ describe("context engine transcript cursor contract", () => {
       });
     const record = vi.fn();
     try {
-      await finalize({
+      await finalizeTurn({
         contextEngine: createEngine(),
         sessionIdUsed: target.sessionId,
         sessionKey: target.sessionKey,
@@ -100,11 +84,8 @@ describe("context engine transcript cursor contract", () => {
   it("bootstraps, resumes appends, and rebuilds after replacement through the public SDK", async () => {
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const target = {
-      agentId: "main",
-      sessionId: "context-engine-cursor",
-      sessionKey: "agent:main:context-engine-cursor",
+      ...createTurnTarget(storePath, "context-engine-cursor"),
       sessionEntry: { sessionId: "context-engine-cursor", updatedAt: 10 },
-      storePath,
     };
     const projectedMessages: AgentMessage[] = [];
     let cursor: string | undefined;
@@ -163,7 +144,7 @@ describe("context engine transcript cursor contract", () => {
       warn: () => {},
     };
     const finish = (promptError = false) =>
-      finalize({
+      finalizeTurn({
         ...lifecycle,
         promptError,
         sessionIdUsed: target.sessionId,

@@ -173,7 +173,7 @@ export function formatDiscordVoiceParticipantStateLine(
 export function formatDiscordVoiceParticipantStateLines(
   roster: DiscordVoiceParticipantRoster,
 ): string[] {
-  const participants = roster.participants.slice(0, MAX_PARTICIPANTS);
+  const participants = roster.participants;
   const lines = participants.map(formatDiscordVoiceParticipantStateLine);
   if (roster.totalCount > participants.length) {
     lines.push(`- ${roster.totalCount - participants.length} more participant(s)`);
@@ -186,7 +186,7 @@ export async function resolveDiscordVoiceParticipantLines(params: {
   guildId: string;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<string[]> {
-  const participants = params.roster.participants.slice(0, MAX_PARTICIPANTS);
+  const participants = params.roster.participants;
   const lines = await Promise.all(
     participants.map(async ({ userId, state }) => {
       const label =
