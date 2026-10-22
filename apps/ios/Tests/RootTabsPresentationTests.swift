@@ -576,13 +576,15 @@ struct RootTabsPresentationTests {
         #expect(RootSidebar.sessionAccessibilityValue(isPinned: true, isUnread: true) == "Pinned, Unread")
     }
 
-    @Test(arguments: ["recent", "agent:main:later", "later"])
-    func `iOS sidebar groups awake sessions without restoring a snoozed selection`(currentSessionKey: String) {
+    @Test(arguments: ["recent", "agent:main:later", "later", "agent:main:archived", "archived"])
+    func `iOS sidebar groups active sessions without restoring hidden selections`(currentSessionKey: String) {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
         let sections = RootSidebarModel.sections(
             sessions: [
                 Self.sessionEntry(key: "pinned", pinned: true),
                 Self.sessionEntry(key: "recent"),
+                Self.sessionEntry(key: "agent:main:archived", archived: true, pinned: true),
+                Self.sessionEntry(key: "archived-unpinned", archived: true),
                 Self.sessionEntry(
                     key: "agent:main:later",
                     snoozedUntil: now.addingTimeInterval(3600).timeIntervalSince1970 * 1000),
@@ -600,6 +602,22 @@ struct RootTabsPresentationTests {
         #expect(layout.pinnedNodes.map(\.session.key) == ["pinned"])
         #expect(layout.sections.map(\.id) == ["recent"])
         #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
+    }
+
+    @Test(arguments: [false, true])
+    func `complete active roster does not invent a missing selected row`(rosterIsComplete: Bool) {
+        let sections = RootSidebarModel.sections(
+            sessions: [Self.sessionEntry(key: "agent:main:recent")],
+            query: "",
+            currentSessionKey: "agent:main:removed",
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: [],
+            rosterIsComplete: rosterIsComplete)
+        let keys = Set(sections.flatMap(\.nodes).map(\.session.key))
+        #expect(keys == (rosterIsComplete
+                ? ["agent:main:recent"]
+                : ["agent:main:recent", "agent:main:removed"]))
     }
 
     @Test func `sidebar agent badges use canonical identity fallback`() {
