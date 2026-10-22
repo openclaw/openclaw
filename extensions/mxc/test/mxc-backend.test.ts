@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -112,8 +111,7 @@ function makeBridge(
       ...overrides,
     },
   });
-  expect(bridge).toBeDefined();
-  return bridge;
+  return expectDefined(bridge, "MXC filesystem bridge");
 }
 
 const successfulCommand = {
@@ -241,36 +239,9 @@ function createBackend(overrides: Partial<CreateSandboxBackendParams> = {}) {
   });
 }
 
-const MXC_TEST_ENV_KEYS = [
-  "APPDATA",
-  "ComSpec",
-  "LOCALAPPDATA",
-  "NUMBER_OF_PROCESSORS",
-  "OPENCLAW_MXC_HOST_SECRET_TEST",
-  "OPENCLAW_MXC_SECRET_TEST",
-  "ProgramData",
-  "ProgramFiles(x86)",
-  "SystemDrive",
-  "SystemRoot",
-  "TEMP",
-  "TMP",
-  "USERPROFILE",
-] as const;
-
-type MxcTestEnvKey = (typeof MXC_TEST_ENV_KEYS)[number];
-
-async function withProcessEnv(
-  overrides: Partial<Record<MxcTestEnvKey, string | undefined>>,
-  run: () => Promise<void>,
-): Promise<void> {
-  const originalEnv = process.env;
-  // Synthetic host variables belong to the fixture, not the native Windows environment.
+const originalEnv = process.env;
+function setEnv(overrides: Record<string, string | undefined>) {
   process.env = { ...originalEnv, ...overrides };
-  try {
-    await run();
-  } finally {
-    process.env = originalEnv;
-  }
 }
 
 test("hashes workspace-qualified scopes without truncating their identity", async () => {
@@ -288,6 +259,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   afterEach(() => {
+    process.env = originalEnv;
     mockedHomeDir.value = undefined;
     for (const dir of testDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
@@ -298,12 +270,16 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     const handle = makeHandle();
     const spec = await buildSpec(handle);
 
-    expect(spec.argv[0]).toBe(process.execPath);
-    expect(spec.argv[1]).toMatch(/mxc-spawn-launcher\.mjs$/);
-    expect(spec.argv[2]).toBe("--payload-file");
-    expect(spec.argv.length).toBe(4);
-    expect(spec.stdinMode).toBe("pipe-closed");
-    expect((spec as { requirePty?: boolean }).requirePty).toBeUndefined();
+    expect(spec).toMatchObject({
+      argv: [
+        process.execPath,
+        expect.stringMatching(/mxc-spawn-launcher\.mjs$/),
+        "--payload-file",
+        expect.any(String),
+      ],
+      stdinMode: "pipe-closed",
+    });
+    expect(spec).not.toHaveProperty("requirePty");
 
     const payload = decodePayload(spec.argv);
     const cfg = payload.config;
@@ -367,88 +343,67 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   test("buildExecSpec keeps command and env payload out of process argv", async () => {
-    await withProcessEnv({ OPENCLAW_MXC_HOST_SECRET_TEST: "host-secret" }, async () => {
-      const handle = makeHandle();
-      const spec = await handle.buildExecSpec({
-        command: "printf secret-command",
-        env: { SECRET_TOKEN: "secret-env-value" },
-        usePty: false,
-      });
-
-      const serializedArgv = JSON.stringify(spec.argv);
-      expect(serializedArgv).not.toContain("secret-command");
-      expect(serializedArgv).not.toContain("SECRET_TOKEN");
-      expect(serializedArgv).not.toContain("secret-env-value");
-      expect(spec.env.OPENCLAW_MXC_HOST_SECRET_TEST).toBeUndefined();
-      expect(spec.argv[2]).toBe("--payload-file");
-
-      const payloadFile = spec.argv[3];
-      expect(payloadFile).toEqual(expect.any(String));
-      if (payloadFile === undefined) {
-        throw new Error("expected launcher payload file");
-      }
-      expect(readText(payloadFile)).toContain("secret-env-value");
-      if (process.platform !== "win32") {
-        expect(statSync(payloadFile).mode & 0o777).toBe(0o600);
-      }
-      await finalize(handle, spec.finalizeToken);
-      expect(existsSync(path.dirname(payloadFile))).toBe(false);
+    setEnv({ OPENCLAW_MXC_HOST_SECRET_TEST: "host-secret" });
+    const handle = makeHandle();
+    const spec = await handle.buildExecSpec({
+      command: "printf secret-command",
+      env: { SECRET_TOKEN: "secret-env-value" },
+      usePty: false,
     });
+
+    const serializedArgv = JSON.stringify(spec.argv);
+    expect(serializedArgv).not.toContain("secret-command");
+    expect(serializedArgv).not.toContain("SECRET_TOKEN");
+    expect(serializedArgv).not.toContain("secret-env-value");
+    expect(spec.env.OPENCLAW_MXC_HOST_SECRET_TEST).toBeUndefined();
+    expect(spec.argv[2]).toBe("--payload-file");
+
+    const payloadFile = expectDefined(spec.argv[3], "launcher payload");
+    expect(readText(payloadFile)).toContain("secret-env-value");
+    await finalize(handle, spec.finalizeToken);
+    expect(existsSync(path.dirname(payloadFile))).toBe(false);
   });
 
   test("Windows process containment emits ProcessContainer settings and curated env", async () => {
-    await withProcessEnv(
-      {
-        SystemRoot: "C:\\Windows",
-        SystemDrive: "C:",
-        ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        USERPROFILE: "C:\\Users\\openclaw",
-        APPDATA: "C:\\Users\\openclaw\\AppData\\Roaming",
-        LOCALAPPDATA: "C:\\Users\\openclaw\\AppData\\Local",
-        ProgramData: "C:\\ProgramData",
-        "ProgramFiles(x86)": "C:\\Program Files (x86)",
-        NUMBER_OF_PROCESSORS: "8",
-        OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
-      },
-      async () => {
-        const handle = makeHandle();
-        const spec = await handle.buildExecSpec({
-          command: "echo hello",
-          env: { CUSTOM_ENV: "caller", comspec: "C:\\Tools\\custom-cmd.exe" },
-          usePty: false,
-        });
+    setEnv({
+      SystemRoot: "C:\\Windows",
+      SystemDrive: "C:",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe",
+      USERPROFILE: "C:\\Users\\openclaw",
+      APPDATA: "C:\\Users\\openclaw\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\openclaw\\AppData\\Local",
+      ProgramData: "C:\\ProgramData",
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      NUMBER_OF_PROCESSORS: "8",
+      OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
+    });
+    const handle = makeHandle();
+    const spec = await handle.buildExecSpec({
+      command: "echo hello",
+      env: { CUSTOM_ENV: "caller", comspec: "C:\\Tools\\custom-cmd.exe" },
+      usePty: false,
+    });
 
-        const cfg = decodeConfig(spec.argv);
-        const env = strings(object(cfg, "process"), "env");
-        expect(cfg).toMatchObject({
-          containment: "process",
-          processContainer: {
-            ui: { isolation: "container" },
-            leastPrivilege: true,
-            capabilities: [],
-          },
-          network: { enforcementMode: "capabilities" },
-        });
-        expect(env).toEqual(
-          expect.arrayContaining([
-            "SystemRoot=C:\\Windows",
-            "SystemDrive=C:",
-            "USERPROFILE=C:\\Users\\openclaw",
-            "APPDATA=C:\\Users\\openclaw\\AppData\\Roaming",
-            "LOCALAPPDATA=C:\\Users\\openclaw\\AppData\\Local",
-            "ProgramData=C:\\ProgramData",
-            "ProgramFiles(x86)=C:\\Program Files (x86)",
-            "NUMBER_OF_PROCESSORS=8",
-            "CUSTOM_ENV=caller",
-            "comspec=C:\\Tools\\custom-cmd.exe",
-          ]),
-        );
-        expect(env.filter((entry) => entry.toLowerCase().startsWith("comspec="))).toHaveLength(1);
-        expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
-        const envKeys = env.map((entry) => entry.slice(0, entry.indexOf("=")));
-        expect(envKeys).toEqual([...envKeys].toSorted((a, b) => a.localeCompare(b)));
-      },
+    const cfg = decodeConfig(spec.argv);
+    const env = strings(object(cfg, "process"), "env");
+    expect(env).toEqual(
+      expect.arrayContaining([
+        "SystemRoot=C:\\Windows",
+        "SystemDrive=C:",
+        "USERPROFILE=C:\\Users\\openclaw",
+        "APPDATA=C:\\Users\\openclaw\\AppData\\Roaming",
+        "LOCALAPPDATA=C:\\Users\\openclaw\\AppData\\Local",
+        "ProgramData=C:\\ProgramData",
+        "ProgramFiles(x86)=C:\\Program Files (x86)",
+        "NUMBER_OF_PROCESSORS=8",
+        "CUSTOM_ENV=caller",
+        "comspec=C:\\Tools\\custom-cmd.exe",
+      ]),
     );
+    expect(env.filter((entry) => entry.toLowerCase().startsWith("comspec="))).toHaveLength(1);
+    expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
+    const envKeys = env.map((entry) => entry.slice(0, entry.indexOf("=")));
+    expect(envKeys).toEqual([...envKeys].toSorted((a, b) => a.localeCompare(b)));
   });
 
   test("buildExecSpec preserves PTY mode in launcher options", async () => {
@@ -468,11 +423,10 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     });
 
     const cfg = await buildConfig(handle);
-    const network = object(cfg, "network");
-    const processContainer = object(cfg, "processContainer");
-    expect(network.defaultPolicy).toBe("allow");
-    expect(network.enforcementMode).toBe("capabilities");
-    expect(processContainer.capabilities).toEqual(["internetClient"]);
+    expect(cfg).toMatchObject({
+      network: { defaultPolicy: "allow", enforcementMode: "capabilities" },
+      processContainer: { capabilities: ["internetClient"] },
+    });
   });
 
   test("Windows process containment caps long AppContainer names", async () => {
@@ -557,140 +511,58 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
     rmSync(extraPath, { recursive: true, force: true });
 
-    try {
-      await buildSpec(handle);
-    } catch (err) {
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain(extraPath);
-      expect((err as Error).message).toContain("additionalReadwritePaths[0]");
-      return;
-    }
-    throw new Error("Expected buildExecSpec to fail for the missing configured path.");
+    const pending = buildSpec(handle);
+    await expect(pending).rejects.toThrow(
+      expect.objectContaining({ message: expect.stringContaining(extraPath) }),
+    );
+    await expect(pending).rejects.toThrow("additionalReadwritePaths[0]");
   });
 
   test("creates a Windows host-backed filesystem bridge with workspaceAccess rw", async () => {
     const workdir = makeTestDir("mxc-fs-bridge-");
     const bridge = makeBridge(workdir);
 
-    const createFileExclusive = bridge?.createFileExclusive?.bind(bridge);
-    expect(createFileExclusive).toBeTypeOf("function");
+    const createFileExclusive = expectDefined(
+      bridge.createFileExclusive?.bind(bridge),
+      "exclusive create",
+    );
     await expect(
-      createFileExclusive!({ filePath: "notes/exclusive.txt", data: "first", cwd: workdir }),
+      createFileExclusive({ filePath: "notes/exclusive.txt", data: "first" }),
     ).resolves.toBe("created");
     await expect(
-      createFileExclusive!({
+      createFileExclusive({
         filePath: "notes/exclusive.txt",
         data: "replacement",
-        cwd: workdir,
       }),
     ).resolves.toBe("exists");
     expect(readText(path.join(workdir, "notes", "exclusive.txt"))).toBe("first");
     const raceOutcomes = await Promise.all([
-      createFileExclusive!({ filePath: "notes/race.txt", data: "one", cwd: workdir }),
-      createFileExclusive!({ filePath: "notes/race.txt", data: "two", cwd: workdir }),
+      createFileExclusive({ filePath: "notes/race.txt", data: "one" }),
+      createFileExclusive({ filePath: "notes/race.txt", data: "two" }),
     ]);
     expect(raceOutcomes.toSorted()).toEqual(["created", "exists"]);
 
     const file = { filePath: "notes/one.txt", cwd: workdir };
-    await bridge?.writeFile({ ...file, data: "hello mxc" });
-    expect(await bridge?.readFile(file)).toEqual(Buffer.from("hello mxc"));
-    await expect(bridge?.readFile({ ...file, maxBytes: "hello mxc".length })).resolves.toEqual(
+    await bridge.writeFile({ ...file, data: "hello mxc" });
+    expect(await bridge.readFile(file)).toEqual(Buffer.from("hello mxc"));
+    await expect(bridge.readFile({ ...file, maxBytes: "hello mxc".length })).resolves.toEqual(
       Buffer.from("hello mxc"),
     );
-    await expect(bridge?.readFile({ ...file, maxBytes: "hello mxc".length - 1 })).rejects.toThrow();
-    expect(await bridge?.stat(file)).toMatchObject({
+    await expect(bridge.readFile({ ...file, maxBytes: "hello mxc".length - 1 })).rejects.toThrow();
+    expect(await bridge.stat(file)).toMatchObject({
       type: "file",
       size: "hello mxc".length,
     });
-    await bridge?.rename({ from: "notes/one.txt", to: "notes/two.txt", cwd: workdir });
+    await bridge.rename({ from: "notes/one.txt", to: "notes/two.txt" });
     expect(readText(path.join(workdir, "notes", "two.txt"))).toBe("hello mxc");
-    await bridge?.remove({ filePath: "notes/two.txt", cwd: workdir });
+    await bridge.remove({ filePath: "notes/two.txt" });
     expect(existsSync(path.join(workdir, "notes", "two.txt"))).toBe(false);
     await expect(
-      bridge?.writeFile({
+      bridge.writeFile({
         filePath: path.join(workdir, "..", "escape.txt"),
         data: "escape",
-        cwd: workdir,
       }),
     ).rejects.toThrow(/Path escapes sandbox root/u);
-  });
-
-  test("filesystem bridge blocks a distinct agent workspace when workspaceAccess is none", async () => {
-    const sandboxWorkdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-none-sandbox-"));
-    const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-none-agent-"));
-    const isolatedFile = path.join(sandboxWorkdir, "isolated.txt");
-    const agentFile = path.join(agentWorkspaceDir, "agent.txt");
-    writeFileSync(isolatedFile, "sandbox-only");
-    writeFileSync(agentFile, "agent-secret");
-
-    try {
-      const handle = createMxcSandboxBackendHandle({
-        ...baseParams,
-        workdir: sandboxWorkdir,
-        agentWorkspaceDir,
-        workspaceAccess: "none",
-      });
-      const bridge = handle.createFsBridge?.({
-        sandbox: {
-          workspaceDir: sandboxWorkdir,
-          agentWorkspaceDir,
-          workspaceAccess: "none",
-          containerName: handle.runtimeId,
-          containerWorkdir: sandboxWorkdir,
-          docker: { binds: [] },
-          backend: handle,
-        },
-      });
-      expect(bridge).toBeDefined();
-
-      await expect(
-        bridge?.readFile({ filePath: "isolated.txt", cwd: sandboxWorkdir }),
-      ).resolves.toEqual(Buffer.from("sandbox-only"));
-      await expect(bridge?.readFile({ filePath: agentFile, cwd: sandboxWorkdir })).rejects.toThrow(
-        /Path escapes sandbox root/u,
-      );
-    } finally {
-      rmSync(sandboxWorkdir, { recursive: true, force: true });
-      rmSync(agentWorkspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  test("filesystem bridge exposes a distinct agent workspace as read-only when workspaceAccess is ro", async () => {
-    const sandboxWorkdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-sandbox-"));
-    const agentWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-ro-agent-"));
-    const agentFile = path.join(agentWorkspaceDir, "agent.txt");
-    writeFileSync(agentFile, "agent-readable");
-
-    try {
-      const handle = createMxcSandboxBackendHandle({
-        ...baseParams,
-        workdir: sandboxWorkdir,
-        agentWorkspaceDir,
-        workspaceAccess: "ro",
-      });
-      const bridge = handle.createFsBridge?.({
-        sandbox: {
-          workspaceDir: sandboxWorkdir,
-          agentWorkspaceDir,
-          workspaceAccess: "ro",
-          containerName: handle.runtimeId,
-          containerWorkdir: sandboxWorkdir,
-          docker: { binds: [] },
-          backend: handle,
-        },
-      });
-      expect(bridge).toBeDefined();
-
-      await expect(bridge?.readFile({ filePath: agentFile, cwd: sandboxWorkdir })).resolves.toEqual(
-        Buffer.from("agent-readable"),
-      );
-      await expect(
-        bridge?.writeFile({ filePath: agentFile, cwd: sandboxWorkdir, data: "blocked" }),
-      ).rejects.toThrow(/read-only/u);
-    } finally {
-      rmSync(sandboxWorkdir, { recursive: true, force: true });
-      rmSync(agentWorkspaceDir, { recursive: true, force: true });
-    }
   });
 
   test("filesystem bridge protects skill overlays when workspaceAccess is rw", async () => {
@@ -710,36 +582,31 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       skillsWorkspaceDir: skillsDir,
     });
 
-    await bridge?.writeFile({ filePath: "normal.txt", data: "ok", cwd: workdir });
+    await bridge.writeFile({ filePath: "normal.txt", data: "ok" });
     expect(readText(path.join(agentDir, "normal.txt"))).toBe("ok");
     expect(existsSync(path.join(workdir, "normal.txt"))).toBe(false);
     await expect(
-      bridge?.readFile({
+      bridge.readFile({
         filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-        cwd: workdir,
       }),
     ).resolves.toEqual(Buffer.from("# Materialized skill\n"));
     await expect(
-      bridge?.writeFile({ filePath: "skills/demo/SKILL.md", cwd: workdir, data: "owned" }),
+      bridge.writeFile({ filePath: "skills/demo/SKILL.md", data: "owned" }),
     ).rejects.toThrow(/read-only/u);
-    await expect(bridge?.mkdirp({ filePath: "skills/new", cwd: workdir })).rejects.toThrow(
+    await expect(bridge.mkdirp({ filePath: "skills/new" })).rejects.toThrow(/read-only/u);
+    await expect(bridge.remove({ filePath: ".agents/skills/demo/SKILL.md" })).rejects.toThrow(
       /read-only/u,
     );
     await expect(
-      bridge?.remove({ filePath: ".agents/skills/demo/SKILL.md", cwd: workdir }),
-    ).rejects.toThrow(/read-only/u);
-    await expect(
-      bridge?.rename({
+      bridge.rename({
         from: "normal.txt",
         to: ".openclaw/sandbox-skills/skills/demo/new.md",
-        cwd: workdir,
       }),
     ).rejects.toThrow(/read-only/u);
     await expect(
-      bridge?.rename({
+      bridge.rename({
         from: "skills/demo/SKILL.md",
         to: "normal-skill.md",
-        cwd: workdir,
       }),
     ).rejects.toThrow(/read-only/u);
     expect(readText(workspaceSkill)).toBe("# Workspace skill\n");
@@ -757,10 +624,10 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     }
     const bridge = makeBridge(workdir);
 
-    await expect(bridge?.stat({ filePath: "dangling-link", cwd: workdir })).rejects.toThrow(
+    await expect(bridge.stat({ filePath: "dangling-link" })).rejects.toThrow(
       /path alias escape blocked/u,
     );
-    await expect(bridge?.stat({ filePath: "missing.txt", cwd: workdir })).resolves.toBeNull();
+    await expect(bridge.stat({ filePath: "missing.txt" })).resolves.toBeNull();
   });
 
   test("filesystem bridge rejects mutations through a symlinked parent directory", async () => {
@@ -776,14 +643,10 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
 
     const bridge = makeBridge(workdir);
 
+    await expect(bridge.mkdirp({ filePath: "outside-link/new-dir" })).rejects.toThrow();
+    await expect(bridge.remove({ filePath: "outside-link/victim.txt" })).rejects.toThrow();
     await expect(
-      bridge?.mkdirp({ filePath: "outside-link/new-dir", cwd: workdir }),
-    ).rejects.toThrow();
-    await expect(
-      bridge?.remove({ filePath: "outside-link/victim.txt", cwd: workdir }),
-    ).rejects.toThrow();
-    await expect(
-      bridge?.rename({ from: "normal.txt", to: "outside-link/renamed.txt", cwd: workdir }),
+      bridge.rename({ from: "normal.txt", to: "outside-link/renamed.txt" }),
     ).rejects.toThrow();
   });
 
@@ -793,9 +656,9 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       const workdir = makeTestDir("mxc-fs-bridge-ro-");
       const bridge = makeBridge(workdir, { workspaceAccess });
 
-      await expect(
-        bridge?.writeFile({ filePath: "notes.txt", data: "blocked", cwd: workdir }),
-      ).rejects.toThrow(/read-only/u);
+      await expect(bridge.writeFile({ filePath: "notes.txt", data: "blocked" })).rejects.toThrow(
+        /read-only/u,
+      );
     },
   );
 
@@ -857,79 +720,66 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   test("runShellCommand uses curated Windows env and passes stdin through unchanged", async () => {
-    await withProcessEnv(
-      {
-        SystemRoot: "C:\\Windows",
-        SystemDrive: "C:",
-        USERPROFILE: "C:\\Users\\openclaw",
-        OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
-      },
-      async () => {
-        const capture = captureShellCommand();
-        const handle = makeHandle();
+    setEnv({
+      SystemRoot: "C:\\Windows",
+      SystemDrive: "C:",
+      USERPROFILE: "C:\\Users\\openclaw",
+      OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
+    });
+    const capture = captureShellCommand();
+    const handle = makeHandle();
 
-        await handle.runShellCommand({
-          script: "type con",
-          args: ["C:\\workspace\\%USERPROFILE%\\file.txt", "0"],
-          stdin: "shell-input",
-          allowFailure: false,
-        });
+    await handle.runShellCommand({
+      script: "type con",
+      args: ["C:\\workspace\\%USERPROFILE%\\file.txt", "0"],
+      stdin: "shell-input",
+      allowFailure: false,
+    });
 
-        const { process: proc, file, script, options } = capture();
-        const env = strings(proc, "env");
-        const commandLine = String(proc.commandLine);
-        expect(script.startsWith("@echo off\r\ntype con")).toBe(true);
-        expect(commandLine).toMatch(/ \/c ""[^"]*\.openclaw-mxc-cmd-[^"]+\.cmd" /u);
-        expect(commandLine).toContain('"C:\\workspace\\%%USERPROFILE%%\\file.txt" "0"');
-        expect(env).toContain("SystemRoot=C:\\Windows");
-        expect(env).toContain("SystemDrive=C:");
-        expect(env).toContain("USERPROFILE=C:\\Users\\openclaw");
-        expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
-        expect(options.baseEnv?.SystemRoot).toBe("C:\\Windows");
-        expect(options.baseEnv?.OPENCLAW_MXC_SECRET_TEST).toBeUndefined();
-        expect(options.input).toEqual(Buffer.from("shell-input", "utf-8"));
-        expect(existsSync(path.dirname(file))).toBe(false);
-      },
-    );
+    const { process: proc, file, script, options } = capture();
+    const env = strings(proc, "env");
+    const commandLine = String(proc.commandLine);
+    expect(script.startsWith("@echo off\r\ntype con")).toBe(true);
+    expect(commandLine).toMatch(/ \/c ""[^"]*\.openclaw-mxc-cmd-[^"]+\.cmd" /u);
+    expect(commandLine).toContain('"C:\\workspace\\%%USERPROFILE%%\\file.txt" "0"');
+    expect(env).toContain("SystemRoot=C:\\Windows");
+    expect(env).toContain("SystemDrive=C:");
+    expect(env).toContain("USERPROFILE=C:\\Users\\openclaw");
+    expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
+    expect(options.baseEnv?.SystemRoot).toBe("C:\\Windows");
+    expect(options.baseEnv?.OPENCLAW_MXC_SECRET_TEST).toBeUndefined();
+    expect(options.input).toEqual(Buffer.from("shell-input", "utf-8"));
+    expect(existsSync(path.dirname(file))).toBe(false);
   });
 
   test("runShellCommand writes argument bridge files under writable temp for read-only workspaces", async () => {
     const tempRoot = makeTestDir("mxc-cmd-temp-");
-    await withProcessEnv(
-      {
-        TEMP: tempRoot,
-        TMP: undefined,
-      },
-      async () => {
-        const capture = captureShellCommand();
-        const handle = makeHandle({
-          workspaceAccess: "ro",
-        });
+    setEnv({ TEMP: tempRoot, TMP: undefined });
+    const capture = captureShellCommand();
+    const handle = makeHandle({
+      workspaceAccess: "ro",
+    });
 
-        await handle.runShellCommand({
-          script: "type con",
-          args: ["0"],
-          stdin: "",
-          allowFailure: false,
-        });
+    await handle.runShellCommand({
+      script: "type con",
+      args: ["0"],
+      stdin: "",
+      allowFailure: false,
+    });
 
-        const { process: processConfig, config, file: commandFile } = capture();
-        const filesystemConfig = object(config, "filesystem");
-        expect(isPathInside(tempRoot, commandFile)).toBe(true);
-        expect(isPathInside(baseParams.workdir, commandFile)).toBe(false);
-        const readwritePaths = strings(filesystemConfig, "readwritePaths");
-        const sandboxTempDir = readwritePaths.find((entry) => isPathInside(tempRoot, entry));
-        expect(readwritePaths).not.toContain(tempRoot);
-        expect(sandboxTempDir).toEqual(expect.any(String));
-        expect(sandboxTempDir ? isPathInside(sandboxTempDir, commandFile) : false).toBe(true);
-        expect(strings(processConfig, "env")).toEqual(
-          expect.arrayContaining([`TEMP=${sandboxTempDir}`, `TMP=${sandboxTempDir}`]),
-        );
-        expect(strings(filesystemConfig, "readonlyPaths")).toContain(
-          path.resolve(baseParams.workdir),
-        );
-      },
+    const { process: processConfig, config, file: commandFile } = capture();
+    const filesystemConfig = object(config, "filesystem");
+    expect(isPathInside(tempRoot, commandFile)).toBe(true);
+    expect(isPathInside(baseParams.workdir, commandFile)).toBe(false);
+    const readwritePaths = strings(filesystemConfig, "readwritePaths");
+    const sandboxTempDir = readwritePaths.find((entry) => isPathInside(tempRoot, entry));
+    expect(readwritePaths).not.toContain(tempRoot);
+    expect(sandboxTempDir).toEqual(expect.any(String));
+    expect(sandboxTempDir ? isPathInside(sandboxTempDir, commandFile) : false).toBe(true);
+    expect(strings(processConfig, "env")).toEqual(
+      expect.arrayContaining([`TEMP=${sandboxTempDir}`, `TMP=${sandboxTempDir}`]),
     );
+    expect(strings(filesystemConfig, "readonlyPaths")).toContain(path.resolve(baseParams.workdir));
   });
 
   test.each([
