@@ -7,43 +7,25 @@ import {
   type GatewayProtocolRequestTiming,
 } from "./protocol-client.js";
 import {
-  createProtocolHarness,
+  startProtocolHarness,
+  lastFrame as latestFrame,
+  respond,
+  type Connection as RequestConnection,
+  type Frame as RequestFrame,
   receive,
   stopProtocolClients,
 } from "./protocol-client.test-support.js";
 import { isGatewayProtocolResponseError } from "./protocol-request.js";
-
-type RequestConnection = ReturnType<typeof createProtocolHarness>["connections"][number];
-type RequestFrame = RequestConnection["frames"][number];
 
 function createRequestHarness(
   options?: Partial<GatewayProtocolClientOptions<Record<string, never>>> & {
     send?: (frame: RequestFrame) => void;
   },
 ) {
-  const { client, connections } = createProtocolHarness(
+  return startProtocolHarness(
     { ...options, resolveClose: () => ({ retry: false, notify: false }) },
     { send: options?.send },
   );
-  client.start();
-  const connection = connections[0];
-  assert(connection);
-  return { client, connections, connection };
-}
-
-function latestFrame(connection: RequestConnection): RequestFrame {
-  const frame = connection.frames.at(-1);
-  assert(frame);
-  return frame;
-}
-
-function respond(connection: RequestConnection, id: string, payload: unknown, ok = true): void {
-  receive(connection, {
-    type: "res",
-    id,
-    ok,
-    ...(ok ? { payload } : { error: payload }),
-  });
 }
 
 function refuse(
