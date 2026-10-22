@@ -1,12 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { buildAgentMainSessionKey } from "@openclaw/session-url-contract";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { moveArrayEntry } from "../array-order.ts";
 import { pathDisplayName } from "../path-display.ts";
 import { resolveSessionDisplayKind } from "../session-display.ts";
 import { foldWorktreeCheckoutPath, sessionActorGroupId } from "./catalog-project-grouping.ts";
 import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
-import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
+import { isSubagentSessionKey, parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
 export const SESSION_GROUP_MODES = [
   "none",
@@ -51,6 +52,26 @@ export type SidebarSessionSection<Row> = {
   work?: boolean;
   rows: Row[];
 };
+
+/** Group moves persist independence even when an archived parent hides a child's nesting. */
+export function needsSessionGroupPromotion(
+  row: Pick<GatewaySessionRow, "key" | "sidebarRoot" | "parentSessionKey" | "spawnedBy"> & {
+    isChild?: boolean;
+  },
+): boolean {
+  if (isSubagentSessionKey(row.key) || row.sidebarRoot) {
+    return false;
+  }
+  if (row.isChild === true || normalizeOptionalString(row.spawnedBy)) {
+    return true;
+  }
+  const parentSessionKey = normalizeOptionalString(row.parentSessionKey);
+  if (!parentSessionKey) {
+    return false;
+  }
+  const agentId = parseAgentSessionKey(row.key)?.agentId;
+  return !agentId || parentSessionKey !== buildAgentMainSessionKey({ agentId });
+}
 
 export function collectKnownSessionGroups(
   catalog: readonly string[],

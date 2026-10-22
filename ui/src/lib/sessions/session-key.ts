@@ -74,7 +74,7 @@ export function resolveUiSessionNavigationParentKey(
 // Mirrors the Gateway policy in src/config/sessions/session-pin-policy.ts.
 // Durable dashboard sessions auto-parent to the agent main root for flow-up
 // notices and sidebar threads; that lineage does not make them nested children.
-export function isPinnableUiSessionRow(row: {
+export function isSidebarRootUiSessionRow(row: {
   key: string;
   parentSessionKey?: string | null;
   spawnedBy?: string | null;
@@ -98,6 +98,15 @@ export function isPinnableUiSessionRow(row: {
     return false;
   }
   return parentSessionKey === buildAgentMainSessionKey({ agentId: parsed.agentId });
+}
+
+export function isPinnableUiSessionRow(
+  row: Parameters<typeof isSidebarRootUiSessionRow>[0] & { boardFace?: "chat" | "dashboard" },
+): boolean {
+  return (
+    isSidebarRootUiSessionRow(row) ||
+    (row.boardFace === "dashboard" && !isSubagentSessionKey(row.key))
+  );
 }
 
 export function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | null): string {

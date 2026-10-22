@@ -400,6 +400,13 @@ describe("gateway sessions patch", () => {
       childPinError,
     ],
     ["agent:main:subagent:child", { pinnedAt: 10 }, true, childPinError],
+    ["agent:main:dashboard:child", { boardFace: "dashboard", spawnedBy: MAIN_SESSION_KEY }, true],
+    [
+      "agent:main:dashboard:child",
+      { boardFace: "dashboard", parentSessionKey: "agent:main:dashboard:parent" },
+      true,
+    ],
+    ["agent:main:subagent:child", { boardFace: "dashboard" }, true, childPinError],
     ["agent:main:dashboard:root", { spawnedBy: "  ", parentSessionKey: "  " }, true],
     ["agent:main:dashboard:work", { parentSessionKey: MAIN_SESSION_KEY }, true],
   ])("validates pin eligibility on %s with %j", async (key, fields, existing, error) => {

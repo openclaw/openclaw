@@ -260,8 +260,16 @@ describe("sessions page lifecycle", () => {
     }
   });
 
-  it("pins from the page menu without changing shared pin metadata", async () => {
-    const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer" });
+  it.each([
+    {},
+    {
+      key: "agent:main:dashboard:child",
+      boardFace: "dashboard" as const,
+      parentSessionKey: "agent:main:parent",
+      spawnedBy: "agent:main:parent",
+    },
+  ])("pins from the page menu without changing shared pin metadata: %j", async (identity) => {
+    const row = sessionRow("personal-pin", { pinned: true, sharingRole: "viewer", ...identity });
     const sessions = createSessions();
     const context = createContext(createGateway().gateway, sessions);
     const page = await createRenderedPage(context, sessionsResult([row], 1));
@@ -706,7 +714,10 @@ describe("sessions page new group", () => {
   const row = { key, sessionId, kind: "direct" as const, archived: false };
   const identity = { agentId: undefined, expectedSessionId: sessionId };
   const assignment = [key, { category: group }, identity];
-  async function mount(groupsPut: () => Promise<SessionGroupMutationResult>) {
+  async function mount(
+    groupsPut: () => Promise<SessionGroupMutationResult>,
+    extra: Partial<GatewaySessionRow> = {},
+  ) {
     const sessions = createSessions({
       groupsPut: vi.fn(groupsPut),
       patch: vi.fn(async () => ({ ok: true as const, key, path: "", entry: { sessionId } })),
@@ -720,7 +731,7 @@ describe("sessions page new group", () => {
     });
     const page = await createRenderedPage(
       createContext(connection.gateway, sessions),
-      sessionsResult([row], 1),
+      sessionsResult([{ ...row, ...extra }], 1),
     );
     const messages: Array<string | null | undefined> = [];
     vi.mocked(showInputDialog).mockImplementation(async (options) => {
@@ -794,6 +805,27 @@ describe("sessions page new group", () => {
     );
     expect(messages).toEqual([failure]);
   });
+
+  it.each(["uncategorized drop", "new group"])(
+    "promotes a pinnable dashboard child during %s",
+    async (action) => {
+      const { page, sessions } = await mount(async () => "completed", {
+        boardFace: "dashboard",
+        parentSessionKey: "agent:main:parent",
+        spawnedBy: "agent:main:parent",
+      });
+      if (action === "uncategorized drop") {
+        await page.onAssignCategory(key, null);
+      } else {
+        await page.requestNewCategory(key);
+      }
+      expect(sessions.patch).toHaveBeenCalledExactlyOnceWith(
+        key,
+        { category: action === "uncategorized drop" ? null : group, sidebarRoot: true },
+        identity,
+      );
+    },
+  );
 
   it("creates an empty group without assigning a row", async () => {
     const { page, sessions, messages } = await mount(async () => "completed");

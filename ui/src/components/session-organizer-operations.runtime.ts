@@ -7,6 +7,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
+import { needsSessionGroupPromotion } from "../lib/sessions/grouping.ts";
 import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
   formatPreservedWorktreeConfirmation,
@@ -198,16 +199,6 @@ async function acknowledgeUnreadHiddenRuns(
   );
 }
 
-// A child may temporarily render as a root while its parent is archived.
-// Pinnability retains the durable lineage; hidden workers are never promoted.
-function needsGroupPromotion(session: SessionActionRow): boolean {
-  return (
-    !isSubagentSessionKey(session.key) &&
-    !session.sidebarRoot &&
-    (session.isChild === true || session.pinnable === false)
-  );
-}
-
 async function moveSessionRowsToCategory(
   deps: SessionActionHost,
   rows: readonly SidebarRecentSession[],
@@ -217,9 +208,9 @@ async function moveSessionRowsToCategory(
   const successful: SessionActionRow[] = [];
   // Keep caller order and batch together only rows needing the same placement.
   for (let start = 0; start < rows.length;) {
-    const promote = needsGroupPromotion(rows[start]!);
+    const promote = needsSessionGroupPromotion(rows[start]!);
     let end = start + 1;
-    while (end < rows.length && needsGroupPromotion(rows[end]!) === promote) {
+    while (end < rows.length && needsSessionGroupPromotion(rows[end]!) === promote) {
       end += 1;
     }
     const result = await patchSessionRows(
@@ -255,7 +246,7 @@ export async function runBatchSessionAction(
       await moveSessionRowsToCategory(
         deps,
         rows.filter(
-          (row) => (row.category ?? null) !== action.category || needsGroupPromotion(row),
+          (row) => (row.category ?? null) !== action.category || needsSessionGroupPromotion(row),
         ),
         action.category,
         scope,
@@ -388,7 +379,10 @@ export async function createSessionGroup(
       return patchSession(
         deps,
         sessions[0]!,
-        { category: name, ...(needsGroupPromotion(sessions[0]!) ? { sidebarRoot: true } : {}) },
+        {
+          category: name,
+          ...(needsSessionGroupPromotion(sessions[0]!) ? { sidebarRoot: true } : {}),
+        },
         scope,
       );
     }
@@ -432,14 +426,18 @@ export async function assignSessionCategory(
   if (
     (currentSession.category ?? null) === category &&
     patch.pinned === undefined &&
-    !needsGroupPromotion(currentSession)
+    !needsSessionGroupPromotion(currentSession)
   ) {
     return "completed";
   }
   return patchSession(
     deps,
     currentSession,
-    { category, ...patch, ...(needsGroupPromotion(currentSession) ? { sidebarRoot: true } : {}) },
+    {
+      category,
+      ...patch,
+      ...(needsSessionGroupPromotion(currentSession) ? { sidebarRoot: true } : {}),
+    },
     scope,
   );
 }

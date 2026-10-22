@@ -510,11 +510,13 @@ removed. Pinned root sessions, active or admitted work, model-locked sessions, a
 durable external conversation pointers are protected; the unarchived total can
 therefore remain above the cap when protected rows alone exceed it.
 
-Root sessions and sessions auto-parented to the agent's Home root can be pinned;
-genuine child sessions and subagent runs reject pin requests. Persistent child
-sessions retain their sidebar nesting; subagent runs appear in transcript activity
-and session transcripts. Existing child pins disappear and no longer protect the session
-from maintenance.
+Root sessions, dashboard sessions, and sessions auto-parented to the agent's Home
+root can be pinned. Persistent children explicitly moved to the top level also
+remain eligible; other nested children and subagent runs reject pin requests.
+Pinning a dashboard child adds a personal rail shortcut without changing its
+execution lineage. Once the preference is saved to the Gateway, any profile's
+personal reference protects the session from automatic maintenance until the last
+reference is removed. Existing eligible shared pins remain independently protective.
 
 Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is

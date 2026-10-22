@@ -42,8 +42,12 @@ describe("snooze", () => {
     return () => clock.mockRestore();
   });
 
-  test("preserves the pin and original stamp until a different wake time is chosen", async () => {
-    const value = fixture({ pinnedAt: 10, parentSessionKey: MAIN_SESSION_KEY });
+  test.each<Entry>([
+    {},
+    { parentSessionKey: MAIN_SESSION_KEY },
+    { boardFace: "dashboard", spawnedBy: MAIN_SESSION_KEY, sidebarRoot: true },
+  ])("preserves the pin and original stamp for eligible root %j", async (lineage) => {
+    const value = fixture({ pinnedAt: 10, ...lineage });
     for (const [clock, snoozedUntil, snoozedAt] of [
       [now, wakeAt, now],
       [now + 100, wakeAt, now],
@@ -64,6 +68,8 @@ describe("snooze", () => {
     [key, { archivedAt: 10 }, {}, archivedError],
     [key, {}, { archived: true }, archivedError],
     [key, { spawnedBy: MAIN_SESSION_KEY }, {}, childError],
+    [key, { boardFace: "dashboard", spawnedBy: MAIN_SESSION_KEY }, {}, childError],
+    ["agent:main:subagent:hidden", { boardFace: "dashboard", sidebarRoot: true }, {}, childError],
     ["unknown", {}, {}, "Cannot snooze the unknown session sentinel."],
     ["global", {}, {}, "Cannot snooze an agent's main session."],
     [MAIN_SESSION_KEY, {}, {}, "Cannot snooze an agent's main session."],
@@ -87,6 +93,11 @@ describe("snooze", () => {
       { snoozedUntil: wakeAt, snoozedAt: now },
     ],
     [{ pinned: true, snoozedUntil: wakeAt }, {}, { pinnedAt: now }],
+    [
+      { sidebarRoot: false },
+      { ...snoozed, boardFace: "dashboard", spawnedBy: MAIN_SESSION_KEY, sidebarRoot: true },
+      { pinnedAt: 10 },
+    ],
   ])("applies visibility patch %j consistently", async (patch, entry, expected, repeats = 1) => {
     const value = fixture(entry);
     for (let attempt = 0; attempt < repeats; attempt++) {

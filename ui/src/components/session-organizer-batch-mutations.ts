@@ -32,12 +32,13 @@ export type SessionActionRow = Pick<
   | "active"
   | "category"
   | "sharingRole"
+  | "parentSessionKey"
+  | "spawnedBy"
 > & {
   gatewayHasActiveRun?: boolean;
   hasActiveRun?: boolean;
   hasActiveSubagentRun?: boolean;
   isChild?: boolean;
-  pinnable?: boolean;
   sidebarRoot?: boolean;
   hasArchiveDescendants?: boolean;
   archiveGuard?: Pick<

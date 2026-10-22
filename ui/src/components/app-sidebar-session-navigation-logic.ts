@@ -295,6 +295,7 @@ export function buildSidebarSessionNavigationState(input: {
             row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : input.resolveAttention(row),
           agentStatusNote,
           observerDigest: row.observerDigest,
+          parentSessionKey: row.parentSessionKey,
           spawnedBy: row.spawnedBy,
           forkSource: row.forkSource,
           status: row.status,

@@ -182,11 +182,20 @@ export class SessionMenuActions {
       case "copy-session-id":
         return batch || !session.sessionId;
       case "toggle-pin":
-        return batch || session.pinnable === false || session.isChild === true || session.archived;
+        return (
+          batch ||
+          session.pinnable === false ||
+          (session.isChild === true && session.pinnable !== true) ||
+          session.archived
+        );
       case "snooze":
       case "wake":
         return (
-          !state.snoozeAllowed || this.actionExtraDisabled("toggle-pin") || !state.archiveAllowed
+          !state.snoozeAllowed ||
+          batch ||
+          session.isChild === true ||
+          session.archived ||
+          !state.archiveAllowed
         );
       case "toggle-involving-me":
         return (

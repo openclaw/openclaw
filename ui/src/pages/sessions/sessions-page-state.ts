@@ -34,6 +34,7 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
+import { needsSessionGroupPromotion } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   filterSessionRows,
@@ -48,7 +49,6 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import {
-  isPinnableUiSessionRow,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiSessionRowAgentId,
@@ -855,7 +855,7 @@ export function createSessionsPage(
     }
     // Dropping a row onto its own section is a no-op; skip the patch round-trip.
     const current = session.category?.trim() || null;
-    const promote = !isSubagentSessionKey(session.key) && !isPinnableUiSessionRow(session);
+    const promote = needsSessionGroupPromotion(session);
     if (current === category && !promote) {
       return undefined;
     }
@@ -921,9 +921,7 @@ export function createSessionsPage(
       session.key,
       {
         category: name,
-        ...(!isSubagentSessionKey(session.key) && !isPinnableUiSessionRow(session)
-          ? { sidebarRoot: true }
-          : {}),
+        ...(needsSessionGroupPromotion(session) ? { sidebarRoot: true } : {}),
       },
       scope,
       session.sessionId,

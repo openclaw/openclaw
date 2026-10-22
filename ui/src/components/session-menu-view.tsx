@@ -326,7 +326,9 @@ export function useSessionMenuEntries(
     return [];
   }
   const primary = (): MenuEntry[] => [
-    ...(!batch() && state.session.pinnable !== false && !state.session.isChild
+    ...(!batch() &&
+    state.session.pinnable !== false &&
+    (!state.session.isChild || state.session.pinnable === true)
       ? [
           item({
             kind: "toggle-pin",

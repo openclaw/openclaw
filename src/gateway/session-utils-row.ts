@@ -29,7 +29,10 @@ import {
   sessionCreatorProfileId,
   MAX_SESSION_PARTICIPANTS,
 } from "../config/sessions/session-entry-provenance.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import {
+  isPinnableSessionEntry,
+  isSidebarRootSessionEntry,
+} from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildProjectedAgentRunIndex,
@@ -421,9 +424,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  // Snooze shares the pin root-session rule.
-  const pinnable = isPinnableSessionEntry(key, entry);
-  const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
+  const pinnedAt = isPinnableSessionEntry(key, entry) ? entry?.pinnedAt : undefined;
+  const snoozable = isSidebarRootSessionEntry(key, entry);
 
   const row: GatewaySessionRow = {
     key,
@@ -493,8 +495,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     pinned: pinnedAt !== undefined,
     sidebarRoot: entry?.sidebarRoot === true,
     pinnedAt,
-    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
-    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
+    snoozedUntil: snoozable ? entry?.snoozedUntil : undefined,
+    snoozedAt: snoozable ? entry?.snoozedAt : undefined,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,

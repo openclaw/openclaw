@@ -1,5 +1,8 @@
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
-import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
+import {
+  isPinnableSessionEntry,
+  isSidebarRootSessionEntry,
+} from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
@@ -49,6 +52,9 @@ export function applySessionPatchLifecycleFlags(params: {
   const pinnable = isPinnableSessionEntry(storeKey, next);
   if (!pinnable) {
     delete next.pinnedAt;
+  }
+  const snoozable = isSidebarRootSessionEntry(storeKey, next);
+  if (!snoozable) {
     delete next.snoozedUntil;
     delete next.snoozedAt;
   }
@@ -61,7 +67,7 @@ export function applySessionPatchLifecycleFlags(params: {
       if (next.archivedAt !== undefined) {
         return invalid("cannot snooze an archived session; restore it first").error;
       }
-      if (!pinnable) {
+      if (!snoozable) {
         return invalid("cannot snooze a child session; snooze its parent session instead").error;
       }
       if (!(snoozedUntil > now)) {

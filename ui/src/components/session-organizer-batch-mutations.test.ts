@@ -50,9 +50,26 @@ describe("patchSessionRows", () => {
       const h = createHarness();
       const rows = [
         makeRow(0, { pinnable: true, isChild: false }),
-        makeRow(1, { pinnable: false, isChild: false }),
-        makeRow(2, { key: "agent:main:subagent:hidden", pinnable: false, isChild: false }),
-        makeRow(3, { pinnable: true, sidebarRoot: true, isChild: false }),
+        makeRow(1, {
+          boardFace: "dashboard",
+          parentSessionKey: "agent:main:parent",
+          pinnable: true,
+          isChild: false,
+        }),
+        makeRow(2, {
+          key: "agent:main:subagent:hidden",
+          parentSessionKey: "agent:main:parent",
+          pinnable: false,
+          isChild: false,
+        }),
+        makeRow(3, {
+          parentSessionKey: "agent:main:parent",
+          pinnable: true,
+          sidebarRoot: true,
+          isChild: false,
+        }),
+        makeRow(4, { parentSessionKey: "agent:main:main", pinnable: true, isChild: false }),
+        makeRow(5, { spawnedBy: "agent:main:main", pinnable: true, isChild: false }),
       ];
       if (action === "create") {
         h.host.knownSessionGroups = () => ["Projects"];
@@ -65,7 +82,8 @@ describe("patchSessionRows", () => {
       expect(h.request.mock.calls.map(([, params]) => params)).toEqual([
         { targets: [sessionTarget(rows[0]!)], patch: { category: "Projects" } },
         { targets: [sessionTarget(rows[1]!)], patch: { category: "Projects", sidebarRoot: true } },
-        { targets: rows.slice(2).map(sessionTarget), patch: { category: "Projects" } },
+        { targets: rows.slice(2, 5).map(sessionTarget), patch: { category: "Projects" } },
+        { targets: [sessionTarget(rows[5]!)], patch: { category: "Projects", sidebarRoot: true } },
       ]);
       expect(h.publishSessionMutationError).not.toHaveBeenCalled();
     },

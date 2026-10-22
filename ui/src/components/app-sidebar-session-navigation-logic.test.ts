@@ -742,3 +742,23 @@ it("keeps a prepared worktree session in Coding before canonical metadata arrive
   expect(navigation.visibleSessionRows).toHaveLength(1);
   expect(navigation.toSidebarSession(navigation.visibleSessionRows[0]!).workSession).toBe(true);
 });
+
+it("resolves a saved personal dashboard-child pin without importing shared pins", () => {
+  const child = projectSidebarSession({
+    key: "agent:main:dashboard:child",
+    kind: "direct",
+    boardFace: "dashboard",
+    parentSessionKey: "agent:main:dashboard:parent",
+    spawnedBy: "agent:main:dashboard:parent",
+    pinned: true,
+  });
+  const input = { rows: [child], pluginNavigation: [], pluginTabs: undefined };
+  expect(buildReconciledSidebarZone({ ...input, sidebarEntries: [] }).entries).toEqual([]);
+  const serialized = `session:${child.key}`;
+  const saved = buildReconciledSidebarZone({ ...input, sidebarEntries: [serialized] });
+  expect(saved.entries).toEqual([{ type: "session", key: child.key }]);
+  expect(saved.sessionRows.get(child.key)).toBe(child);
+  expect(
+    buildReconciledSidebarZone({ ...input, sidebarEntries: saved.sidebarEntries }).entries,
+  ).toEqual(saved.entries);
+});

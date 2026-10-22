@@ -56,6 +56,8 @@ function headerSessionActionRow(
     archived: row.archived === true,
     category: row.category,
     sidebarRoot: row.sidebarRoot,
+    parentSessionKey: row.parentSessionKey,
+    spawnedBy: row.spawnedBy,
     isChild:
       !isSubagentSessionKey(row.key) && Boolean(resolveSidebarSessionParentKey(row, new Set())),
     active: true,

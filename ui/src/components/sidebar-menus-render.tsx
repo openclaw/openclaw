@@ -22,6 +22,7 @@ import { categoryClearReturnsToGroups } from "../lib/sessions/grouping.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
+  isSidebarRootUiSessionRow,
   resolveUiConfiguredMainKey,
   parseAgentSessionKey,
   scopedSessionArtifactKey,
@@ -556,7 +557,7 @@ export function renderSidebarSessionMenuForMenus(
       splitAllowed={canSplitSessionView()}
       forkDisabled={host.sessionData.sessionsLoading || session().modelSelectionLocked}
       forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
-      snoozeAllowed={true}
+      snoozeAllowed={isSidebarRootUiSessionRow(session())}
       archiveAllowed={archiveAllowed()}
       deleteAllowed={deleteAllowed()}
       cloudWorkerStopAllowed={cloudWorkerStopAllowed()}

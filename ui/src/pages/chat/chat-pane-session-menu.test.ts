@@ -200,9 +200,17 @@ describe("chat pane session menu boundary", () => {
     }
   });
 
-  it("pins a readable conversation in personal navigation without a session mutation", async () => {
+  it.each([
+    { key: "agent:main:current" },
+    {
+      key: "agent:main:dashboard:child",
+      boardFace: "dashboard" as const,
+      parentSessionKey: "agent:main:parent",
+      spawnedBy: "agent:main:parent",
+    },
+  ])("pins readable $key in personal navigation without a session mutation", async (identity) => {
     const row: GatewaySessionRow = {
-      key: "agent:main:current",
+      ...identity,
       sessionId: "current-session",
       kind: "direct",
       sharingRole: "viewer",

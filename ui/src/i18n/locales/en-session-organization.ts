@@ -234,7 +234,8 @@ const enSessionOrganization = {
     customIconHintNoShortcut: "Paste an emoji or SVG.",
     removeIcon: "Remove icon",
     pinSession: en.sessionsView.pinSession,
-    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
+    pinRootSessionsOnly:
+      "Only sidebar roots and dashboard sessions can be pinned; pin the parent session instead.",
     unpinSession: en.sessionsView.unpinSession,
     markUnread: "Mark as unread",
     markRead: "Mark as read",

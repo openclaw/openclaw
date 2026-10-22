@@ -15,7 +15,7 @@ import { createModalDialogTestFixture, submitInputDialog } from "../test-helpers
 import "../test-helpers/app-sidebar-suite.ts";
 import "./app-sidebar.tsx";
 
-async function mountFamily() {
+async function mountFamily(boardFace: GatewaySessionRow["boardFace"] = undefined) {
   const row = (id: string, updatedAt: number, extra: Partial<GatewaySessionRow>) => ({
     key: `agent:main:${id}`,
     sessionId: `${id}-id`,
@@ -31,6 +31,7 @@ async function mountFamily() {
     }),
     child: row("child", 2, {
       label: "Surviving child",
+      boardFace,
       parentSessionKey: "agent:main:parent",
       spawnedBy: "agent:main:parent",
     }),
@@ -89,14 +90,19 @@ function expectHistoryIdentity({
   });
 }
 
-it.each(["existing group", "new group"])(
-  "keeps an archived parent's child independent after moving to a %s",
-  async (action) => {
-    const { sidebar, sessions, family, patches } = await mountFamily();
+it.each([
+  { action: "existing group", boardFace: undefined },
+  { action: "new group", boardFace: undefined },
+  { action: "existing group", boardFace: "dashboard" as const },
+  { action: "new group", boardFace: "dashboard" as const },
+])(
+  "keeps an archived parent's $boardFace child independent after moving to a $action",
+  async ({ action, boardFace }) => {
+    const { sidebar, sessions, family, patches } = await mountFamily(boardFace);
     const modal = createModalDialogTestFixture();
     try {
       const row = sidebar.findSidebarSessionByKey(family.child.key)!;
-      expect(row).toMatchObject({ isChild: false, pinnable: false });
+      expect(row).toMatchObject({ isChild: false, pinnable: boardFace === "dashboard" });
       if (action === "existing group") {
         await sidebar.sessionOrganizer.assignSessionCategory(row, "Projects");
       } else {

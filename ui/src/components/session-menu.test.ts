@@ -933,15 +933,16 @@ describe("sidebar snooze menu", () => {
     expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
   });
 
-  it.each([{ archived: true }, { isChild: true }, { pinnable: false }])(
-    "omits ineligible snoozes: %j",
-    async (session) => {
-      const { menu, onAction } = await actionMenu({ snoozeAllowed: true, session });
-      expect(menuItemLabels(menu)).not.toContain("Snooze");
-      expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
-      expect(menu.querySelector('button[value^="snooze:"]')).toBeNull();
-      expect(menu.querySelector('button[value="wake"]')).toBeNull();
-      expect(onAction).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { session: { archived: true } },
+    { session: { isChild: true } },
+    { snoozeAllowed: false },
+  ])("omits ineligible snoozes: %j", async (options) => {
+    const { menu, onAction } = await actionMenu({ snoozeAllowed: true, ...options });
+    expect(menuItemLabels(menu)).not.toContain("Snooze");
+    expect(menuItemLabels(menu).some((label) => label.startsWith("Wake session"))).toBe(false);
+    expect(menu.querySelector('button[value^="snooze:"]')).toBeNull();
+    expect(menu.querySelector('button[value="wake"]')).toBeNull();
+    expect(onAction).not.toHaveBeenCalled();
+  });
 });

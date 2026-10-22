@@ -188,6 +188,7 @@ export type SidebarRecentSession = Readonly<{
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
+  parentSessionKey?: string;
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;

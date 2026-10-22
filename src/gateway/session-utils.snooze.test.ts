@@ -19,8 +19,8 @@ describe("session list snooze projection", () => {
   afterEach(clearRuntimeConfigSnapshot);
   afterAll(closeSessionSqliteDatabasesForTest);
 
-  test.each([
-    ["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }],
+  test.each<[string, Partial<SessionEntry>, boolean]>([
+    ["agent:main:dashboard:pinned", { parentSessionKey: "agent:main:main" }, true],
     [
       "agent:main:dashboard:promoted",
       {
@@ -28,10 +28,20 @@ describe("session list snooze projection", () => {
         spawnedBy: "agent:main:dashboard:parent",
         sidebarRoot: true,
       },
+      true,
     ],
-  ] as const)(
+    [
+      "agent:main:dashboard:child",
+      {
+        boardFace: "dashboard",
+        parentSessionKey: "agent:main:dashboard:parent",
+        spawnedBy: "agent:main:dashboard:parent",
+      },
+      false,
+    ],
+  ])(
     "session lists separate archived rows and sort pinned %s first",
-    async (pinnedKey, lineage) => {
+    async (pinnedKey, lineage, snoozable) => {
       const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
       setRuntimeConfigSnapshot(cfg);
       const store: Record<string, SessionEntry> = {
@@ -58,10 +68,17 @@ describe("session list snooze projection", () => {
         ...lineage,
         pinned: true,
         pinnedAt: 40,
-        snoozedUntil: 1_800_000_000_000,
-        snoozedAt: 40,
         archived: false,
       });
+      if (snoozable) {
+        expect(active.sessions[0]).toMatchObject({
+          snoozedUntil: 1_800_000_000_000,
+          snoozedAt: 40,
+        });
+      } else {
+        expect(active.sessions[0]?.snoozedUntil).toBeUndefined();
+        expect(active.sessions[0]?.snoozedAt).toBeUndefined();
+      }
 
       const archived = await listSessionFixture({
         cfg,
