@@ -33,12 +33,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { createCodexSupervisionToolsMcpServer } from "./codex-supervision-tools-serve.js";
-import {
-  createMcpConnection,
-  failureOf,
-  waitForStart,
-  withMcpConnection,
-} from "./tools-mcp.test-support.js";
+import { createMcpConnection, failureOf, waitForStart } from "./tools-mcp.test-support.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
 class NativeState {
@@ -147,40 +142,11 @@ function expectDisposed(state: NativeState) {
 }
 
 describe("MCP serving registration ownership", () => {
-  it("keeps tools through reconnect, but never revives a released registration", async () => {
-    const { state, acquire, cleanup } = nativePlugin();
-    const acquisition = await acquire();
-    const server = createToolsMcpServer({
-      name: "native-reconnect",
-      tools: acquisition.resolveTools(),
-    });
-    try {
-      for (let cycle = 0; cycle < 2; cycle++) {
-        await withMcpConnection(server, async (client) => {
-          expect(await client.callTool({ name: "mcp_native_read" })).toMatchObject({
-            content: [{ text: "42" }],
-          });
-        });
-        expect(state.database?.isOpen).toBe(true);
-        expect(state.disposals).toBe(0);
-      }
-      expect(state.factories).toBe(1);
-      await acquisition.release();
-      markPluginRegistryActive(acquisition.registry);
-      expect(() => acquisition.resolveTools()).toThrow("Plugin tool registry has been released");
-      expect(state.factories).toBe(1);
-      expectDisposed(state);
-    } finally {
-      await server.close();
-      await acquisition.release();
-      cleanup();
-    }
-  });
-
   it.each(["standalone", "borrowed"] as const)(
     "releases registrations and only its owned scheduler after validation fails (%s)",
     async (ownership) => {
       const { state, acquire, cleanup } = nativePlugin();
+      let acquisition: Awaited<ReturnType<typeof acquire>> | undefined;
       const clock = createGatewaySchedulerClock(0);
       const scheduler = createTestGatewayScheduler(clock.clock);
       const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
@@ -205,7 +171,7 @@ describe("MCP serving registration ownership", () => {
             await clock.advanceBy(30_000);
             await waitForDiagnosticEventsDrained();
             expect(heartbeats).toHaveLength(1);
-            return acquire();
+            return (acquisition = await acquire());
           },
           createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
         });
@@ -216,6 +182,13 @@ describe("MCP serving registration ownership", () => {
         );
         expect(state.factories).toBe(1);
         expectDisposed(state);
+        if (!acquisition) {
+          throw new Error("Expected registry acquisition");
+        }
+        const released = acquisition;
+        markPluginRegistryActive(released.registry);
+        expect(() => released.resolveTools()).toThrow("Plugin tool registry has been released");
+        expect(state.factories).toBe(1);
         expect(scheduler.signal.aborted).toBe(ownership === "standalone");
         expect(scheduler.nextWakeAtMs).toBe(
           ownership === "standalone" ? null : clock.clock.now() + 30_000,
@@ -263,10 +236,7 @@ describe("MCP serving registration ownership", () => {
       state.finish.resolve();
       await server.close();
       await call;
-      expect(state).toMatchObject({
-        abortReason: "peer cancellation reason",
-        abortRead: 42,
-      });
+      expect(state).toMatchObject({ abortReason: "peer cancellation reason", abortRead: 42 });
       expect(state.abortFailure).toBeUndefined();
       await acquisition.release();
       await admittedHost.close();

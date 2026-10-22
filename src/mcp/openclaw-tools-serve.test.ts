@@ -84,24 +84,22 @@ describe("OpenClaw tools MCP server", () => {
     }
   });
 
-  it("gates cron trigger surfaces by the host config", async () => {
-    const jobKeys = async (config: unknown) => {
-      vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, "agent:worker:main");
-      const [tool] = await resolveOpenClawToolsForMcp({
-        config: config as never,
-      });
-      if (!tool) {
-        throw new Error("expected the automations tool to be resolved");
-      }
-      const parameters = tool.parameters as unknown as {
-        properties: { job: { properties: Record<string, unknown> } };
-      };
-      return Object.keys(parameters.properties.job.properties);
-    };
-
-    expect(await jobKeys({ cron: { triggers: { enabled: false } } })).not.toContain("trigger");
-    expect(await jobKeys({ cron: {} })).toContain("trigger");
-    expect(await jobKeys({ cron: { triggers: { enabled: true } } })).toContain("trigger");
+  it.each([
+    { cron: { triggers: { enabled: false } }, enabled: false },
+    { cron: {}, enabled: true },
+    { cron: { triggers: { enabled: true } }, enabled: true },
+  ])("gates cron trigger surfaces ($enabled)", async ({ cron, enabled }) => {
+    vi.stubEnv(OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV, "agent:worker:main");
+    const [tool] = await resolveOpenClawToolsForMcp({ config: { cron } });
+    if (!tool) {
+      throw new Error("expected the automations tool to be resolved");
+    }
+    const schema = expect(tool.parameters);
+    if (enabled) {
+      schema.toHaveProperty("properties.job.properties.trigger");
+    } else {
+      schema.not.toHaveProperty("properties.job.properties.trigger");
+    }
   });
 
   it("requires the managed bridge to pass a real agent session key", async () => {
