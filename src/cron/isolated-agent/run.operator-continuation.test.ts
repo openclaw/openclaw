@@ -65,6 +65,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
+import type { CronEvent } from "../service.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
@@ -130,6 +131,7 @@ afterEach(() => {
 // Exercise custody transfer through durable reload, scheduled admission and the real action owner.
 it.each([
   "operator",
+  "self removal",
   "paused force run",
   "restart",
   "restart with prior operator source",
@@ -256,7 +258,10 @@ it.each([
                     payload: {
                       kind: "agentTurn",
                       message: "Inspect and land the reviewed PR",
-                      toolsAllow: ["github_publish"],
+                      toolsAllow:
+                        scenario === "self removal"
+                          ? ["github_publish", AUTOMATIONS_TOOL_NAME]
+                          : ["github_publish"],
                     },
                     delivery: { mode: "none" },
                     deleteAfterRun: false,
@@ -484,6 +489,8 @@ it.each([
             abortSignal: params.abortSignal,
             runtimeToolAllowlist: params.toolsAllow,
             scheduledToolPolicy: params.scheduledToolPolicy,
+            trigger: params.trigger,
+            jobId: params.jobId,
           }),
           params.toolsAllow,
           { toolMeta: getPluginToolMeta },
@@ -508,11 +515,20 @@ it.each([
             }
           }
         }
+        if (scenario === "self removal") {
+          const automations = expectDefined(
+            tools.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME),
+            "scheduled self-cleanup tool",
+          );
+          await automations.execute("self-cleanup", { action: "remove", jobId: job.id });
+          expect(params.abortSignal?.aborted).toBe(false);
+        }
         return { payloads: [{ text: "Continuation complete" }], meta: { agentMeta: {} } };
       },
     );
   });
   const finished = createDeferredCore();
+  let finishedEvent: CronEvent | undefined;
   const { cron: execution, state: schedulerState } = createOperatorContinuationService({
     config,
     stateDir,
@@ -521,6 +537,7 @@ it.each([
     runIsolated: runCronIsolatedAgentTurn,
     onEvent: (event) => {
       if (event.action === "finished" && event.jobId === job.id) {
+        finishedEvent = event;
         finished.resolve();
       }
     },
@@ -586,6 +603,22 @@ it.each([
     }
     await finished.promise;
     await execution.waitForIdle();
+    if (scenario === "self removal") {
+      expect(finishedEvent, finishedEvent?.error).toMatchObject({
+        status: "ok",
+        completionStatus: "succeeded",
+        summary: "Continuation complete",
+      });
+      expect(execution.getJob(job.id)).toBeUndefined();
+      expect(rejected).toBeUndefined();
+      expect(merged).toBe(true);
+      const completed = expectDefined(
+        accessor.loadSessionEntry(recovery.target),
+        "completed session",
+      );
+      expect(completed.status).not.toBe("killed");
+      return;
+    }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
     if (restarting) {
       await shutdownReleased;

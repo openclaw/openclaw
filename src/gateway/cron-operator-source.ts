@@ -37,9 +37,13 @@ export async function restoreCronOperatorSource(params: {
     params.signal?.throwIfAborted();
     // Admission may force-run an already paused job; later disable/remove edits
     // revoke this exact occurrence through its existing cancellation owner.
-    assertOccurrence();
+    const selfRemoved = assertOccurrence();
     fence.assertCurrent();
-    const current: CronStoredJob | undefined = context.cron.getJob(params.job.id);
+    // Self-cleanup retires the definition, not the exact admitted continuation.
+    // Its captured source still checks live session, profile and Gateway authority.
+    const current: CronStoredJob | undefined = selfRemoved
+      ? params.job
+      : context.cron.getJob(params.job.id);
     const policy = current?.scheduledToolPolicy;
     if (
       context.resolveGatewayContext?.() !== context ||

@@ -19,7 +19,11 @@ type CronActiveJobState = {
   selfRemovalOwners: WeakMap<() => void, () => CronActiveJobMarker | undefined>;
   admittedJobRuns: WeakMap<
     CronActiveJobMarker,
-    { context: AdmittedRunContext; assertActive: SessionSourceAssertion; signal: AbortSignal }
+    {
+      context: AdmittedRunContext;
+      assertActive: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
+      signal: AbortSignal;
+    }
   >;
   generation: number;
   nextToken: number;
@@ -111,8 +115,8 @@ export function captureCronJobMessageSourceAuthority(params: {
   return captureCronJobMessageAuthority(params, true);
 }
 
-/** Source restoration precedes run admission, but still belongs to one live occurrence. */
-export function captureCronJobSourceAuthority(jobId: string): (() => void) | undefined {
+/** Source restoration belongs to one occurrence; returns whether it has removed itself. */
+export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | undefined {
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker?.standingGrantAuthority;
   if (!marker || !owner) {
@@ -122,12 +126,13 @@ export function captureCronJobSourceAuthority(jobId: string): (() => void) | und
     if (
       getCurrentCronActiveJobMarker(jobId) !== marker ||
       marker.messageSourceAuthorityRevoked ||
-      marker.jobRemoved ||
+      (marker.jobRemoved && !isCronSelfRemovalCurrent(marker)) ||
       marker.cancellation?.kind === "requested"
     ) {
       throw new Error("Cron occurrence source authority is no longer active");
     }
     owner.assertCurrent();
+    return marker.jobRemoved === true;
   };
 }
 
@@ -177,8 +182,7 @@ export function bindCronSelfRemovalCommitGuard(
   const { admittedJobRuns, selfRemovalOwners } = getCronActiveJobState();
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker && admittedJobRuns.get(marker);
-  const assertOwner = () => {
-    assertCallerActive();
+  const assertBinding = () => {
     if (
       !marker ||
       !owner ||
@@ -191,16 +195,26 @@ export function bindCronSelfRemovalCommitGuard(
         "Cron self-removal requires the exact live run; the job was not removed.",
       );
     }
-    owner.assertActive();
-    return marker;
+    owner.assertActive.assertScopeCurrent();
+    return owner;
   };
+  let validated = false;
   const selfRemovalGuard = () => {
+    validated = false;
     commitGuard();
-    assertOwner();
+    assertCallerActive();
+    assertBinding().assertActive();
+    validated = true;
   };
   selfRemovalOwners.set(selfRemovalGuard, () => {
     try {
-      return assertOwner();
+      // Deletion has already retired the source row. Rechecking that row here
+      // would misclassify its own admitted remover as an operator cancellation.
+      if (!validated) {
+        return undefined;
+      }
+      assertBinding();
+      return marker;
     } catch {
       return undefined;
     }
