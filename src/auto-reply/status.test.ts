@@ -180,35 +180,39 @@ it("shows trace lines only when trace is enabled", () => {
   expect(visible).toContain("trace");
 });
 
-it("uses the channel override model context window instead of stale persisted context", () => {
-  const normalized = normalizedStatus({
-    ...modelArgs("minimax-portal", "MiniMax-M2.7"),
-    config: {
-      ...providerModels(
-        ["minimax-portal", "MiniMax-M2.7", { contextWindow: 200_000 }],
-        ["anthropic", "claude-opus-4-6", { contextWindow: 1_048_576 }],
-      ),
-      channels: {
-        modelByChannel: {
-          discord: {
-            "123": "minimax-portal/MiniMax-M2.7",
+it.each([undefined, "MiniMax-M2.7"])(
+  "uses the channel override model context window with explicit override=%s",
+  (modelOverride) => {
+    const normalized = normalizedStatus({
+      ...modelArgs("minimax-portal", "MiniMax-M2.7"),
+      config: {
+        ...providerModels(
+          ["minimax-portal", "MiniMax-M2.7", { contextWindow: 200_000 }],
+          ["anthropic", "claude-opus-4-6", { contextWindow: 1_048_576 }],
+        ),
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
           },
         },
+      } as unknown as OpenClawConfig,
+      sessionEntry: {
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+        groupId: "123",
+        ...freshUsage(49_000),
+        contextTokens: 1_048_576,
+        modelOverride,
       },
-    } as unknown as OpenClawConfig,
-    sessionEntry: {
-      delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
-      groupId: "123",
-      ...freshUsage(49_000),
-      contextTokens: 1_048_576,
-    },
-  });
+    });
 
-  expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
-  expect(normalized).toContain("channel override");
-  expect(normalized).toContain("Context: 49k/200k");
-  expect(normalized).not.toContain("Context: 49k/1.0m");
-});
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized.includes("channel override")).toBe(modelOverride === undefined);
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
+  },
+);
 
 it.each<[FallbackContextStatusOverrides, string, string?]>([
   [{ sessionContextTokens: 1_048_576 }, "49k/200k"],
