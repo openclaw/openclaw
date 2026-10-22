@@ -22,6 +22,26 @@ export function invalidateLoggingConfigCache(): void {
   cachedLoggingConfig = undefined;
 }
 
+function resolveLoggingConfigSelector(): string {
+  const env = process.env;
+  return [
+    env.OPENCLAW_CONFIG_PATH,
+    env.OPENCLAW_STATE_DIR,
+    env.OPENCLAW_HOME,
+    env.OPENCLAW_PROFILE,
+    env.HOME,
+    env.USERPROFILE,
+    env.HOMEDRIVE,
+    env.HOMEPATH,
+    env.PREFIX,
+    env.ANDROID_DATA,
+    env.OPENCLAW_TEST_FAST,
+    tryProcessCwd() ?? "",
+  ]
+    .map((value) => value ?? "")
+    .join("\0");
+}
+
 function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig | undefined {
   if (!isObjectRecord(logging)) {
     return undefined;
@@ -65,23 +85,7 @@ export function readLoggingConfig(): LoggingConfig | undefined {
     if (loggingState.appliedConfig !== APPLIED_LOGGING_CONFIG_UNOWNED) {
       return loggingState.appliedConfig;
     }
-    const env = process.env;
-    const selector = [
-      env.OPENCLAW_CONFIG_PATH,
-      env.OPENCLAW_STATE_DIR,
-      env.OPENCLAW_HOME,
-      env.OPENCLAW_PROFILE,
-      env.HOME,
-      env.USERPROFILE,
-      env.HOMEDRIVE,
-      env.HOMEPATH,
-      env.PREFIX,
-      env.ANDROID_DATA,
-      env.OPENCLAW_TEST_FAST,
-      tryProcessCwd() ?? "",
-    ]
-      .map((value) => value ?? "")
-      .join("\0");
+    const selector = resolveLoggingConfigSelector();
     if (cachedLoggingConfig?.selector === selector) {
       return cachedLoggingConfig.logging;
     }
