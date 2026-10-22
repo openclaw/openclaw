@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
@@ -27,6 +28,23 @@ const externalReply = (error: Error) =>
   buildExternalRunFailureReply({ message: error.message, error });
 const knownReply = (err: unknown, sessionCtx: TemplateContext = directContext) =>
   buildKnownAgentRunFailureReplyPayload({ err, sessionCtx, resolvedVerboseLevel: "off" });
+
+it("uses storage recovery guidance instead of re-authentication for a personal store failure", () => {
+  const error = new OAuthRefreshFailureError({
+    provider: "openai",
+    message: "Failed to update the personal model account store",
+    reason: null,
+    storageFailure: true,
+  });
+
+  const reply = externalReply(error);
+  expect(reply).toEqual({
+    text: "⚠️ OpenClaw couldn't access the personal model account store. Check available disk space and folder permissions on the computer running OpenClaw, then try again.",
+    isGenericRunnerFailure: false,
+  });
+  expect(reply.text).not.toContain("Model login");
+  expect(reply.text).not.toContain("Re-auth");
+});
 
 it("shows unshrinkable request guidance without verbose diagnostics", () => {
   const reason =

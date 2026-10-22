@@ -30,6 +30,7 @@ type OAuthRefreshFailure = {
   profileId?: string;
   reason: OAuthRefreshFailureReason | null;
   status?: number;
+  storageFailure?: boolean;
   summary?: string;
 };
 
@@ -479,6 +480,7 @@ export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFail
         ...(profileId ? { profileId } : {}),
         reason: candidate.reason,
         ...(candidate.status ? { status: candidate.status } : {}),
+        ...(candidate.storageFailure ? { storageFailure: true } : {}),
         ...(candidate.summary ? { summary: candidate.summary } : {}),
       };
     }

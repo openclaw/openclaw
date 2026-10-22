@@ -299,6 +299,12 @@ export function buildExternalRunFailureReply(
   }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
+  if (oauthRefreshFailure?.storageFailure) {
+    return {
+      text: "⚠️ OpenClaw couldn't access the personal model account store. Check available disk space and folder permissions on the computer running OpenClaw, then try again.",
+      isGenericRunnerFailure: false,
+    };
+  }
   const providerLoginRecovery = buildProviderLoginRecovery({
     provider: oauthRefreshFailure
       ? (oauthRefreshFailure.provider ?? undefined)

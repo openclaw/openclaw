@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { FailoverError } from "../failover-error.js";
 import { createOAuthRefreshCredential as credential } from "./credential-fixtures.test-support.js";
 import {
+  appendOAuthRefreshCleanupErrors,
   buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -11,6 +12,7 @@ import {
   OAuthManagerRefreshError,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
+import { findPersonalAuthProfileStoreFailure } from "./personal-store-error.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type Profiles = AuthProfileStore["profiles"];
@@ -176,6 +178,21 @@ const failover = (options: Partial<ConstructorParameters<typeof FailoverError>[1
   });
 
 const typedIdentity = { provider: typedFailure.provider, profileId: typedFailure.profileId };
+
+it("ignores cleanup storage failures when the primary refresh failure is a provider rejection", () => {
+  const providerFailure = typed({ reason: "invalid_grant" });
+  const cleanupFailure = Object.assign(new Error("database or disk is full"), {
+    code: "SQLITE_FULL",
+  });
+  const combined = appendOAuthRefreshCleanupErrors(providerFailure, [cleanupFailure]);
+
+  expect(findPersonalAuthProfileStoreFailure(combined)).toBeUndefined();
+  expect(classifyOAuthRefreshFailureError(combined)).toMatchObject({
+    reason: "invalid_grant",
+    provider: "openai",
+  });
+});
+
 it.each(
   Object.entries({
     "typed metadata": [typed(diagnostics), { ...typedIdentity, ...diagnostics }],
