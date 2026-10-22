@@ -37,15 +37,6 @@ import * as mcp from "./mcp-http.test-support.js";
 // Guidance past the old 1,200-character metadata cap must still reach Claude.
 const PROBE_INSTRUCTIONS = "Probe usage guidance. ".repeat(80) + "PROBE_TAIL: one word per call.";
 
-type McpResponse = {
-  result?: {
-    instructions?: string;
-    tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
-    content?: Array<{ type: string; text?: string }>;
-    isError?: boolean;
-  };
-};
-
 type ProbeMessage = {
   id?: number | string;
   method?: string;
@@ -355,7 +346,7 @@ async function prepareTurn(
       : {}),
   });
   contexts.push(context);
-  const { token, rpc } = await mcp.connectPreparedCliTurn<McpResponse>(context, signal);
+  const { token, rpc } = await mcp.connectPreparedCliTurn(context, signal);
   const call = async (tool: string, args: Record<string, unknown>) => {
     const response = await rpc("tools/call", { name: tool, arguments: args });
     expect(response.status).toBe(200);

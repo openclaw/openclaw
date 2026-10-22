@@ -74,7 +74,7 @@ describe("worker provider registry", () => {
     ["provisionBeforeInstallation", "sometimes", "must be a boolean"],
   ])("rejects an invalid %s declaration", (field, value, error) => {
     const provider = createWorkerProvider("static-ssh");
-    Reflect.set(provider, String(field), value);
+    Reflect.set(provider, field, value);
     expectRejected(provider, `worker provider registration ${field} ${error}`);
   });
 

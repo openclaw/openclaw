@@ -34,7 +34,7 @@ async function writeFile(file: string, contents: string) {
 }
 
 async function writePackage(dir: string, manifest: Record<string, unknown>, mainContent?: string) {
-  await writeJson(path.join(dir, "package.json"), manifest);
+  writeJson(path.join(dir, "package.json"), manifest);
   const main = typeof manifest.main === "string" ? manifest.main : "index.js";
   if (mainContent !== undefined) {
     await writeFile(path.join(dir, main), mainContent);
@@ -67,7 +67,7 @@ async function writeBundle(
     cursor: ".cursor-plugin",
     claude: ".claude-plugin",
   }[format];
-  await writeJson(
+  writeJson(
     path.join(dir, manifestDir, "plugin.json"),
     manifest ?? {
       ...(format === "agent"
@@ -103,7 +103,7 @@ async function writeHostDependency(dir: string, dependencyField: string, native 
     },
     "export default {};",
   );
-  await writeJson(path.join(dir, "node_modules/openclaw/package.json"), {
+  writeJson(path.join(dir, "node_modules/openclaw/package.json"), {
     name: "openclaw",
     version: "2026.7.1-beta.2",
   });
@@ -194,7 +194,7 @@ it.each([
     const dir = path.join(tmpRoot, `${bundleFormat}-bundle`);
     await writeBundle(dir, bundleFormat, undefined, metadataKind === "marker");
     if (metadataKind === "marketplace") {
-      await writeJson(path.join(dir, "package.json"), null);
+      writeJson(path.join(dir, "package.json"), null);
     }
     const result = await checkRecord(`${bundleFormat}-bundle`, { ...record, installPath: dir });
     expect(result).toEqual({ checked: [`${bundleFormat}-bundle`], failures: [] });

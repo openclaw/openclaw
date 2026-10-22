@@ -22,6 +22,7 @@ export type MockGatewayScopedTools = {
 
 export type McpToolResultPayload = {
   result?: {
+    instructions?: string;
     tools?: Array<{ name: string; inputSchema?: Record<string, unknown> }>;
     content?: Array<Record<string, unknown>>;
     isError?: boolean;
@@ -41,10 +42,7 @@ export function setMinimalCliPrepareDeps(
   });
 }
 
-export async function connectPreparedCliTurn<T = McpToolResultPayload>(
-  context: PreparedCliRunContext,
-  signal: AbortSignal,
-) {
+export async function connectPreparedCliTurn(context: PreparedCliRunContext, signal: AbortSignal) {
   const { createCliRunCurrentAssertion } = await import("../agents/cli-runner/execution-target.js");
   const runtime = getActiveMcpLoopbackRuntime();
   const token = context.preparedBackend.env?.OPENCLAW_MCP_TOKEN;
@@ -66,7 +64,7 @@ export async function connectPreparedCliTurn<T = McpToolResultPayload>(
         headers: jsonHeaders({ "x-openclaw-cli-capture-key": captureKey }),
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }),
       });
-      return { status: response.status, body: (await response.json()) as T };
+      return { status: response.status, body: await readMcpPayload(response) };
     },
   };
 }
