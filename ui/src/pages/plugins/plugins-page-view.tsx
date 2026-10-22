@@ -250,12 +250,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <div
-            id={PLUGINS_HUB_PANEL_ID}
-            role="tabpanel"
-            tabindex="0"
-            aria-labelledby="plugins-tab-plugins"
-          >
+          <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />
