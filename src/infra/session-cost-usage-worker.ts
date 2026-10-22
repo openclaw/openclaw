@@ -56,6 +56,7 @@ import type {
   UsageCostWorkerDatabase,
   UsageCostWorkerHostEffects,
   UsageCostWorkerInput,
+  UsageCostPendingFile,
   UsageCostWorkerReply,
   UsageCostWorkerResult,
 } from "./session-cost-usage-worker.types.js";
@@ -529,6 +530,7 @@ export async function executeUsageCostWorker(
   let pendingTransfers: ArrayBuffer[] = [];
   let pendingBytes = 0;
   let flushAt = performance.now() + 1_000;
+  const failedFiles: UsageCostPendingFile[] = [];
   const flush = async () => {
     if (pending.length === 0) {
       return;
@@ -591,20 +593,31 @@ export async function executeUsageCostWorker(
         }
       }
     }
-    const entry =
-      previous &&
-      !envelope?.projection &&
-      isUsageCostRollupFresh({ checkpoint: previous.checkpoint, file })
-        ? { ...previous, version: USAGE_COST_ROLLUP_VERSION }
-        : await scanUsageCostRollupInWorker({
-            file,
-            previous,
-            pricingFingerprint: operation.pricingFingerprint,
-            resolveCosts,
-            readGeneration,
-            readRows,
-            checkProgress: control.throwIfCancelled,
-          });
+    let entry: UsageCostRollupEntry;
+    try {
+      entry =
+        previous &&
+        !envelope?.projection &&
+        isUsageCostRollupFresh({ checkpoint: previous.checkpoint, file })
+          ? { ...previous, version: USAGE_COST_ROLLUP_VERSION }
+          : await scanUsageCostRollupInWorker({
+              file,
+              previous,
+              pricingFingerprint: operation.pricingFingerprint,
+              resolveCosts,
+              readGeneration,
+              readRows,
+              checkProgress: control.throwIfCancelled,
+            });
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      control.throwIfCancelled();
+      failedFiles.push({ sessionFile: file.sourcePath, rollupId: file.filePath });
+      completedFiles++;
+      continue;
+    }
     const { valueJson, blob, partitions } = partitionUsageCostRollup(entry);
     const replacePartitions = previous === undefined || !envelope?.projection;
     const previousPartitions = new Map(
@@ -659,7 +672,7 @@ export async function executeUsageCostWorker(
   // Refresh completion (including a yielded batch) promises committed totals.
   await flush();
   if (stale.length === completedFiles) {
-    return { kind: "refresh", changed };
+    return { kind: "refresh", changed, ...(failedFiles.length ? { failedFiles } : {}) };
   }
   const remaining = stale.slice(completedFiles).map(({ file }) => file);
   const remainingPaths = new Set(remaining.map((file) => file.filePath));
@@ -674,6 +687,7 @@ export async function executeUsageCostWorker(
       sessionFile: file.sourcePath,
       rollupId: file.filePath,
     })),
+    ...(failedFiles.length ? { failedFiles } : {}),
   };
 }
 

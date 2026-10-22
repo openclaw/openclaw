@@ -427,6 +427,27 @@ async function runPreparedUsageCostWorker(
         },
       );
       assertCurrent();
+      if (result.kind === "refresh" && result.failedFiles?.length) {
+        const failedAt = Date.now();
+        for (const file of result.failedFiles) {
+          uncommittedSessionFiles.delete(file.rollupId);
+          await failures.register(
+            failureKey(file.rollupId),
+            {
+              agentId: location.agentId,
+              sessionFile: file.sessionFile,
+              failedAt,
+              reason:
+                "Usage refresh skipped a malformed transcript event; cached totals may be incomplete.",
+            },
+            { assertCurrent },
+          );
+        }
+        logger.warn("Skipped usage transcript refreshes after malformed JSON", {
+          count: result.failedFiles.length,
+          sessionFiles: result.failedFiles.map((file) => file.sessionFile),
+        });
+      }
       return result;
     } catch (error) {
       let failure = restoreWorkerFailure(error, hostErrors);

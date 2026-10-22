@@ -15,6 +15,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "../gateway/server-worker-placement-session-evidence.js";
 import { createWorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -691,6 +696,77 @@ it("records failed rollups and clears health after retry", async ({ onTestFinish
     expect(note.mock.calls.filter(([, title]) => title === "Usage cost cache")).toEqual([]);
   });
   // A cache-miss worker retains no database; runtime shutdown owns its retirement.
+  await closeStateDatabaseForTest();
+});
+
+it("isolates a malformed transcript event to its session", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
+    const scope = (sessionId: string) => ({
+      agentId,
+      sessionId,
+      sessionKey: `agent:${agentId}:${sessionId}`,
+      storePath,
+    });
+    const appendUsage = async (sessionId: string) => {
+      const target = scope(sessionId);
+      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1_000 });
+      await appendTranscriptMessage(target, {
+        message: { role: "user", content: "hello" },
+        now: 1_000,
+      });
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "assistant",
+          content: "answer",
+          provider: "test",
+          model: "test",
+          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+        },
+        now: 2_000,
+      });
+    };
+    await appendUsage("corrupt-session");
+    await appendUsage("healthy-session");
+    const database = openOpenClawAgentDatabase({ agentId });
+    const latest = database.db
+      .prepare("SELECT seq FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1")
+      .get("corrupt-session") as { seq: number } | undefined;
+    if (!latest) {
+      throw new Error("Expected corrupt session transcript");
+    }
+    database.db
+      .prepare(
+        "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
+      )
+      .run('{"type":"message",', "corrupt-session", latest.seq);
+
+    const corruptFile = formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: "corrupt-session",
+      storePath,
+    });
+    const healthyFile = formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: "healthy-session",
+      storePath,
+    });
+    expect(
+      await refreshCostUsageCacheForAgent({
+        config,
+        agentId,
+        sessionFiles: [corruptFile, healthyFile],
+      }),
+    ).toBe("refreshed");
+    const rollups = readSessionCostUsageRollupRows(agentId);
+    expect(rollups).toHaveLength(1);
+    expect(rollups[0]?.key).toContain("sqlite:main:healthy-session:");
+    const failures = await openUsageCostRefreshFailures(state.env).entries();
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.value).toMatchObject({ agentId });
+    expect(failures[0]?.value.sessionFile).toContain("sqlite:main:corrupt-session:");
+  });
   await closeStateDatabaseForTest();
 });
 

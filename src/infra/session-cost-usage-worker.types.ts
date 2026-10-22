@@ -100,7 +100,12 @@ export type UsageCostWorkerResult =
       invalidRows: SessionCostUsageRollupRow[];
       remainingReportBytes?: number;
     }
-  | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
+  | {
+      kind: "refresh";
+      changed: boolean;
+      remainingFiles?: UsageCostPendingFile[];
+      failedFiles?: UsageCostPendingFile[];
+    };
 
 export type UsageCostWorkerFailure = {
   message: string;
