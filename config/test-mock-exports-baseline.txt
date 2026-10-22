@@ -1031,8 +1031,6 @@
 ["extensions/sms/src/webhook.boundary.test.ts","./ingress-spool.js","7e7460e4714bbb0662cd946689fc2f40625e612bf7fd37872156580dd407f63d",1]
 ["extensions/sms/src/webhook.test.ts","./credential-availability.js","7d6a5d1bbf68e76d3fe4f05ae69b1a5fa06ec0cca6397d216822d43e0704fd33",1]
 ["extensions/synology-chat/src/channel.test-mocks.ts","./runtime.js","89b914e9fd202727c9c0af1e82616d30ee2cde436ffd2d6fad3970bb40a0d0c4",1]
-["extensions/synology-chat/src/channel.test.ts","./outbound-media.js","840426ca019c6efbe23fa188e863ab30b65fd8017a2f64c852a6dcfde8dcdc05",1]
-["extensions/synology-chat/src/channel.test.ts","./webhook-handler.js","4c398a8c6daa35e9b3e2d686e2af3c2ec8500aad82a3573858ec00536b5fb31f",1]
 ["extensions/synology-chat/src/client.loopback.test.ts","./outbound-media.js","4ff9c528e87ac14a69c8cf6447f2e7a359f887c1f4a55ded623e56e94f19a203",1]
 ["extensions/synology-chat/src/client.test.ts","openclaw/plugin-sdk/ssrf-runtime","188ca6e58f3d8c8508e503ab99d1202ed4484273521030c4c980fd08a7d09870",1]
 ["extensions/synology-chat/src/outbound-media.test.ts","openclaw/plugin-sdk/web-media","a2862c74bffa52e38f56429bd7f76ce19e17fd7ee0d3500ab6d236d98ba77e14",1]
