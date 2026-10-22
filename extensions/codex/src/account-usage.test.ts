@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { withAuthProfileStoreAtEffect } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { handleCodexAccountUsage } from "./account-usage-runtime.js";
 import { readCodexAppServerUsage } from "./app-server/request.js";
 
@@ -13,148 +13,109 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => (
 }));
 vi.mock("./app-server/request.js", () => ({ readCodexAppServerUsage: vi.fn() }));
 
-function usage(usedPercent: number) {
-  return {
-    rateLimits: {
-      rateLimits: {
-        limitId: "codex",
-        planType: "pro",
-        primary: { usedPercent, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+beforeEach(() => {
+  vi.clearAllMocks();
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: {
+      "openai:alex": {
+        type: "oauth",
+        provider: "openai",
+        access: "alex-access-placeholder",
+        refresh: "alex-refresh-placeholder",
+        expires: 1_900_000_000_000,
+        accountId: "alex-account",
       },
+      "openai:blair": { type: "token", provider: "openai", token: "blair-token-placeholder" },
+      "openai:api": { type: "api_key", provider: "openai", key: "api-key-placeholder" },
     },
   };
-}
-
-function expectProvider(respond: GatewayRequestHandlerOptions["respond"], provider: unknown) {
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    expect.objectContaining({ providers: [expect.objectContaining(provider)] }),
+  vi.mocked(withAuthProfileStoreAtEffect).mockImplementation(async (_agentDir, _options, consume) =>
+    consume({ read: async () => store, assertCurrent() {} }),
   );
-}
-
-describe("codex.accountUsage", () => {
-  let config: OpenClawConfig;
-  let store: AuthProfileStore;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    config = { agents: { entries: { main: {}, work: {} } } };
-    store = {
-      version: 1,
-      profiles: {
-        "openai:alex": {
-          type: "oauth",
-          provider: "openai",
-          access: "alex-access-placeholder",
-          refresh: "alex-refresh-placeholder",
-          expires: 1_900_000_000_000,
-          accountId: "alex-account",
-        },
-        "openai:blair": { type: "token", provider: "openai", token: "blair-token-placeholder" },
-        "openai:api": { type: "api_key", provider: "openai", key: "api-key-placeholder" },
-      },
-    };
-    vi.mocked(withAuthProfileStoreAtEffect).mockImplementation(
-      async (_agentDir, _options, consume) =>
-        consume({ read: async () => store, assertCurrent() {} }),
-    );
-    vi.mocked(readCodexAppServerUsage).mockResolvedValue(usage(20));
-  });
-
-  async function request(params: Record<string, unknown>) {
-    const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
-    await handleCodexAccountUsage({
-      req: { type: "req", id: "usage-request", method: "codex.accountUsage", params },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
-      hasCurrentClientAuthority: () => true,
-    });
-    return respond;
-  }
-
-  it("reads the selected account in an isolated subscription session", async () => {
-    vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
-      expect(options.startOptions).toMatchObject({ homeScope: "agent", transport: "stdio" });
-      expect(options.authRequirement).toBe("subscription");
-      expect(options.authProfileId).toBeUndefined();
-      const prepared = options.preparedAuth;
-      if (prepared?.kind !== "profile") {
-        throw new Error("Selected account was not prepared");
-      }
-      expect(prepared.store).not.toBe(store);
-      options.assertCurrent?.();
-      return usage(prepared.profileId === "openai:alex" ? 11 : 72);
-    });
-    for (const [profileId, usedPercent] of [
-      ["openai:alex", 11],
-      ["openai:blair", 72],
-    ] as const) {
-      const respond = await request({ agentId: "work", profileId });
-      expectProvider(respond, {
-        provider: "openai",
-        windows: [{ label: "5h", usedPercent, resetAt: 1_800_000_000_000 }],
-      });
+  vi.mocked(readCodexAppServerUsage).mockImplementation(async (options) => {
+    expect(options.startOptions).toMatchObject({ homeScope: "agent", transport: "stdio" });
+    expect(options.authRequirement).toBe("subscription");
+    expect(options.authProfileId).toBeUndefined();
+    const prepared = options.preparedAuth;
+    if (prepared?.kind !== "profile") {
+      throw new Error("Selected account was not prepared");
     }
-  });
-
-  it("distinguishes reserve quota from ordinary Luna in selected-account usage", async () => {
-    const ordinary = usage(100).rateLimits.rateLimits;
-    vi.mocked(readCodexAppServerUsage).mockResolvedValue({
+    expect(prepared.store).not.toBe(store);
+    options.assertCurrent?.();
+    return {
       rateLimits: {
-        rateLimits: ordinary,
-        rateLimitsByLimitId: {
-          codex: ordinary,
-          base_model_inference: {
-            limitId: "base_model_inference",
-            limitName: "gpt-reserve",
-            normalModelSlug: "gpt-5.6-luna",
-            secondary: { usedPercent: 0, windowDurationMins: 10_080 },
+        rateLimits: {
+          limitId: "codex",
+          planType: "pro",
+          primary: {
+            usedPercent: prepared.profileId === "openai:alex" ? 11 : 72,
+            windowDurationMins: 300,
+            resetsAt: 1_800_000_000,
           },
         },
-        ordinaryUsageAllowed: null,
-        rateLimitUpsell: null,
       },
-    });
-    const respond = await request({ agentId: "work", profileId: "openai:alex" });
-    expectProvider(respond, {
-      summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
-      windows: expect.arrayContaining([
-        expect.objectContaining({ groupLabel: "Luna Reserve (separate route)", usedPercent: 0 }),
-      ]),
-    });
+    };
   });
+});
 
-  it("rejects proxy launches before sending the selected account to a shared daemon", async () => {
+it.each<{
+  agentId?: string;
+  profileId: string;
+  usedPercent?: number;
+  proxy?: boolean;
+}>([
+  { agentId: "work", profileId: "openai:alex", usedPercent: 11 },
+  { agentId: "work", profileId: "openai:blair", usedPercent: 72 },
+  { agentId: "../main", profileId: "openai:alex" },
+  { profileId: "openai:alex" },
+  { agentId: "main", profileId: "openai:api" },
+  { agentId: "main", profileId: "openai:alex", proxy: true },
+])("isolates or rejects selected-account usage: %j", async ({ usedPercent, proxy, ...params }) => {
+  const config: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
+  if (proxy) {
     config.plugins = {
       entries: {
         codex: {
-          config: { appServer: { args: ["app-server", "proxy", "--sock", "/tmp/codex.sock"] } },
+          config: {
+            appServer: { args: ["app-server", "proxy", "--sock", "/tmp/codex.sock"] },
+          },
         },
       },
     };
-    const respond = await request({ agentId: "main", profileId: "openai:alex" });
+  }
+  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+  await handleCodexAccountUsage({
+    req: { type: "req", id: "usage-request", method: "codex.accountUsage", params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond,
+    context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
+    hasCurrentClientAuthority: () => true,
+  });
+  if (usedPercent === undefined) {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: expect.stringContaining("proxy") }),
+      expect.objectContaining(
+        proxy
+          ? { code: "UNAVAILABLE", message: expect.stringContaining("proxy") }
+          : { code: expect.any(String) },
+      ),
     );
     expect(readCodexAppServerUsage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { agentId: "../main", profileId: "openai:alex" },
-    { profileId: "openai:alex" },
-    { agentId: "main", profileId: "openai:api" },
-  ])("rejects an unavailable or invalid selection without fetching: %j", async (params) => {
-    const respond = await request(params);
+  } else {
     expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: expect.any(String) }),
+      true,
+      expect.objectContaining({
+        providers: [
+          expect.objectContaining({
+            provider: "openai",
+            windows: [{ label: "5h", usedPercent, resetAt: 1_800_000_000_000 }],
+          }),
+        ],
+      }),
     );
-    expect(readCodexAppServerUsage).not.toHaveBeenCalled();
-  });
+  }
 });

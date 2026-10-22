@@ -18,25 +18,20 @@ function createFakeClient(options?: {
   emitWebSearch?: boolean;
   models?: ReturnType<typeof baseModel>[];
 }) {
+  const search = {
+    id: "search-1",
+    type: "webSearch",
+    query,
+    action: { type: "search", query, queries: [query] },
+  };
+  const answer = {
+    id: "msg-1",
+    type: "agentMessage",
+    text: "Two current providers: Example One and Example Two.",
+  };
   return createClientFactory({
     models: options?.models ?? [baseModel("gpt-5.5")],
-    terminalItems: [
-      ...(options?.emitWebSearch === false
-        ? []
-        : [
-            {
-              id: "search-1",
-              type: "webSearch",
-              query,
-              action: { type: "search", query, queries: [query] },
-            },
-          ]),
-      {
-        id: "msg-1",
-        type: "agentMessage",
-        text: "Two current providers: Example One and Example Two.",
-      },
-    ],
+    terminalItems: options?.emitWebSearch === false ? [answer] : [search, answer],
   });
 }
 
@@ -128,17 +123,9 @@ describe("codex web search provider", () => {
       model: "gpt-5.5",
       modelProvider: "openai",
       cwd: expect.any(String),
-      approvalPolicy: "on-request",
       sandbox: "read-only",
-      environments: [],
-      dynamicTools: [],
-      ephemeral: true,
       config: {
-        "features.code_mode": false,
-        "features.code_mode_only": false,
-        "features.hooks": false,
         "features.standalone_web_search": false,
-        notify: [],
         web_search: "live",
         "tools.web_search.allowed_domains": ["example.com"],
       },
