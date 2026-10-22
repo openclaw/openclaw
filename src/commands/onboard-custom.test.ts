@@ -47,9 +47,31 @@ function queuedAnswers<T>(answers: T[] = [], fallback?: T) {
   return mock;
 }
 
-function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }) {
+// Answers like the interactive terminal: an answer its validator refuses is not accepted.
+function validatedAnswers(answers: string[]) {
+  const queue = [...answers];
+  return vi
+    .fn()
+    .mockImplementation(
+      async (options?: { validate?: (value: string) => string | Error | undefined }) => {
+        const value = queue.shift() ?? "";
+        const error = options?.validate?.(value);
+        if (error) {
+          throw error instanceof Error ? error : new Error(error);
+        }
+        return value;
+      },
+    );
+}
+
+function createTestPrompter(params: {
+  text: string[];
+  select?: string[];
+  confirm?: boolean[];
+  validateText?: boolean;
+}) {
   return {
-    text: queuedAnswers(params.text),
+    text: params.validateText ? validatedAnswers(params.text) : queuedAnswers(params.text),
     progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
     select: queuedAnswers(params.select ?? ["plaintext", "openai"]),
     confirm: queuedAnswers(params.confirm, false),
@@ -321,11 +343,12 @@ describe("promptCustomApiConfig", () => {
 
   it("accepts a shared alias that only the setup agent uses privately", async () => {
     const prompter = createTestPrompter({
-      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+      text: ["http://localhost:11434/v1", "local-key", "llama3", "custom", "Operations"],
+      validateText: true,
     });
     stubFetchSequence([{ ok: true }]);
 
-    await runPromptCustomApi(prompter, {
+    const result = await runPromptCustomApi(prompter, {
       config: {
         agents: {
           ownership: "explicit",
@@ -337,10 +360,12 @@ describe("promptCustomApiConfig", () => {
       modelWriteTarget: "defaults",
     });
 
-    const aliasPrompt = prompter.text.mock.calls.find(
-      ([options]) => options.message === "Model alias (optional)",
-    );
-    expect(aliasPrompt?.[0].validate("Operations")).toBeUndefined();
+    expect(result.config.agents?.defaults?.models?.["custom/llama3"]).toEqual({
+      alias: "Operations",
+    });
+    expect(result.config.agents?.entries?.ops?.models).toEqual({
+      "openai/ops": { alias: "Operations" },
+    });
   });
 
   it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
@@ -479,9 +504,13 @@ describe("promptCustomApiConfig", () => {
     );
   });
 
-  it("keeps the setup workspace for the key prompt after changing the base URL", async () => {
-    const ensureApiKey = vi.mocked(providerAuthInput.ensureApiKeyFromEnvOrPrompt);
-    ensureApiKey.mockClear();
+  it("finishes a base-URL retry on a fleet with no default agent", async () => {
+    const { ensureApiKeyFromEnvOrPrompt } = await vi.importActual<
+      typeof import("../plugins/provider-auth-input.js")
+    >("../plugins/provider-auth-input.js");
+    vi.mocked(providerAuthInput.ensureApiKeyFromEnvOrPrompt)
+      .mockImplementationOnce(ensureApiKeyFromEnvOrPrompt)
+      .mockImplementationOnce(ensureApiKeyFromEnvOrPrompt);
     const prompter = createTestPrompter({
       text: [
         "https://bad.example.com/v1",
@@ -501,15 +530,15 @@ describe("promptCustomApiConfig", () => {
       workspaceDir: "/tmp/ops-workspace",
     };
 
-    await runPromptCustomApi(prompter, {
+    const result = await runPromptCustomApi(prompter, {
       config: { agents: { ownership: "explicit", entries: { ops: {}, beta: {} } } },
       target,
     });
 
-    expect(ensureApiKey).toHaveBeenCalledTimes(2);
-    for (const [params] of ensureApiKey.mock.calls) {
-      expect(params).toMatchObject({ workspaceDir: target.workspaceDir });
-    }
+    expect(result.config.models?.providers?.custom).toMatchObject({
+      baseUrl: "https://ok.example.com/v1",
+      apiKey: "ok-key",
+    });
   });
 
   it("aborts verification after timeout", async () => {

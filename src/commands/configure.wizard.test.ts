@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +13,26 @@ import {
   wizardTestMocks as mocks,
 } from "./configure.wizard.test-support.js";
 
+const modelSetup = vi.hoisted(() => ({
+  authChoice: vi.fn(),
+  defaultModel: vi.fn(),
+  allowlist: vi.fn(),
+}));
+
+// mock-isolation: The operator's auth choice comes from the test, not an interactive picker.
+vi.mock("./auth-choice-prompt.js", () => ({ promptAuthChoiceGrouped: modelSetup.authChoice }));
+
+// mock-isolation: The operator's model choice comes from the test without loading catalogs.
+vi.mock("../flows/model-picker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/model-picker.js")>()),
+  promptDefaultModel: modelSetup.defaultModel,
+  promptModelAllowlist: modelSetup.allowlist,
+}));
+
 const { configureCommandFromSectionsArg } = await import("./configure.commands.js");
+const actualGatewayAuth = await vi.importActual<typeof import("./configure.gateway-auth.js")>(
+  "./configure.gateway-auth.js",
+);
 
 const written = () => mocks.writeConfigFile.mock.calls.at(-1)![0];
 const configureWeb = () => runConfigureWizard({ sections: ["web"] });
@@ -233,78 +253,83 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it("asks an explicit fleet before writing a shared model setup", async () => {
-    const config: OpenClawConfig = {
+  describe("explicit fleet model setup", () => {
+    const picked = "anthropic/claude-sonnet-4-6";
+    const scopeQuestion = "Where should this model setup apply?";
+    const systemFleet: OpenClawConfig = {
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "alpha" } },
         entries: { alpha: {}, beta: {} },
       },
     };
-    setupBaseWizardState(config);
-    queueWizardPrompts({ select: ["defaults"], confirm: [] });
-    await runConfigureWizard({ sections: ["model"] });
-    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "alpha" });
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "defaults" });
-    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
-      "Where should this model setup apply?",
-    ]);
-    expect(mocks.clackSelect.mock.calls[0]?.[0].initialValue).toBe("agent");
-  });
+    const savedAgents = () =>
+      committedConfigFiles.read("/tmp/openclaw.json").snapshot.config.agents;
 
-  it("names the setup agent when a fleet without a system agent picks shared defaults", async () => {
-    setupBaseWizardState({
-      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
-    });
-    queueWizardPrompts({ select: ["defaults", "beta"], confirm: [] });
-    await runConfigureWizard({ sections: ["model"] });
-    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "beta" });
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "defaults" });
-    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
-      "Where should this model setup apply?",
-      "Which agent do you want to configure?",
-    ]);
-  });
+    // The operator answers scripted questions, takes the highlighted default elsewhere, skips
+    // provider auth, and picks one model; configure's real model setup writes the result.
+    afterEach(() => cliBackendsTesting.resetDepsForTest());
 
-  it("writes model policy to the agent an explicit fleet chooses", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "alpha" } },
-        entries: { alpha: {}, beta: {} },
-      },
-    };
-    setupBaseWizardState(config);
-    queueWizardPrompts({ select: ["agent", "beta"], confirm: [] });
-    await runConfigureWizard({ sections: ["model"] });
-    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "beta" });
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toEqual({ modelWriteTarget: "agent" });
-    expect(mocks.clackSelect.mock.calls.map(([params]) => params.message)).toEqual([
-      "Where should this model setup apply?",
-      "Which agent should receive this model policy?",
-    ]);
-    expect(mocks.clackSelect.mock.calls[1]?.[0]).toMatchObject({
-      initialValue: "alpha",
-      options: [
-        { value: "alpha", label: "alpha (system agent)" },
-        { value: "beta", label: "beta" },
-      ],
-    });
-  });
+    function operatorAnswers(answers: Record<string, string>) {
+      const screen: string[] = [];
+      // The model setup exposes no CLI backends; policy checks need no plugin discovery.
+      cliBackendsTesting.setDepsForTest({
+        resolveRuntimeCliBackends: () => [],
+        resolvePluginSetupRegistry: () => ({
+          providers: [],
+          cliBackends: [],
+          configMigrations: [],
+          autoEnableProbes: [],
+          diagnostics: [],
+        }),
+      });
+      mocks.promptAuthConfig.mockImplementation(actualGatewayAuth.promptAuthConfig);
+      modelSetup.authChoice.mockResolvedValue("skip");
+      modelSetup.defaultModel.mockResolvedValue({ model: picked });
+      modelSetup.allowlist.mockResolvedValue({});
+      mocks.clackSelect.mockImplementation(
+        async ({ message, initialValue }: { message: string; initialValue?: string }) => {
+          screen.push(`${message} [${initialValue ?? ""}]`);
+          return answers[message] ?? initialValue;
+        },
+      );
+      return screen;
+    }
 
-  it("keeps a single-agent model setup on that agent", async () => {
-    setupBaseWizardState({
-      agents: { ownership: "explicit", entries: { alpha: {} } },
+    it("writes shared defaults while One agent stays highlighted", async () => {
+      setupBaseWizardState(systemFleet);
+      const screen = operatorAnswers({ [scopeQuestion]: "defaults" });
+      await runConfigureWizard({ sections: ["model"] });
+      expect(screen).toEqual([`${scopeQuestion} [agent]`]);
+      expect(savedAgents()?.defaults?.model).toEqual({ primary: picked });
+      expect(savedAgents()?.entries).toEqual({ alpha: {}, beta: {} });
     });
-    queueWizardPrompts({ select: [], confirm: [] });
-    await runConfigureWizard({ sections: ["model"] });
-    expect(mocks.promptAuthConfig).toHaveBeenCalledOnce();
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[3]).toMatchObject({ agentId: "alpha" });
-    expect(mocks.promptAuthConfig.mock.calls[0]?.[4]).toBeUndefined();
-    expect(mocks.clackSelect).not.toHaveBeenCalled();
+
+    it("names a setup agent before writing shared defaults on a fleet without a system agent", async () => {
+      setupBaseWizardState({ agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } });
+      const screen = operatorAnswers({
+        [scopeQuestion]: "defaults",
+        "Which agent do you want to configure?": "beta",
+      });
+      await runConfigureWizard({ sections: ["model"] });
+      expect(screen).toEqual([
+        `${scopeQuestion} [agent]`,
+        "Which agent do you want to configure? []",
+      ]);
+      expect(savedAgents()?.defaults?.model).toEqual({ primary: picked });
+      expect(savedAgents()?.entries).toEqual({ alpha: {}, beta: {} });
+    });
+
+    it("writes model policy to the agent the operator picks, with the system agent highlighted", async () => {
+      setupBaseWizardState(systemFleet);
+      const agentQuestion = "Which agent should receive this model policy?";
+      const screen = operatorAnswers({ [agentQuestion]: "beta" });
+      await runConfigureWizard({ sections: ["model"] });
+      expect(screen).toEqual([`${scopeQuestion} [agent]`, `${agentQuestion} [alpha]`]);
+      expect(savedAgents()?.entries?.beta?.model).toEqual({ primary: picked });
+      expect(savedAgents()?.entries?.alpha).toEqual({});
+      expect(savedAgents()?.defaults?.model).toBeUndefined();
+    });
   });
 
   it("does not persist an unprovisionable workspace", async () => {

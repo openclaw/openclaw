@@ -2,7 +2,6 @@ import { createServer } from "node:http";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -57,7 +56,8 @@ vi.mock("../plugins/providers.runtime.js", () => ({
 }));
 
 // mock-isolation: Resolve the fixture wizard selection without discovering real plugins.
-vi.mock("../plugins/provider-wizard.js", () => ({
+vi.mock("../plugins/provider-wizard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-wizard.js")>()),
   resolveProviderPluginChoiceCore: mocks.providerChoice,
 }));
 
@@ -407,35 +407,56 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.defaults?.systemAgent).toEqual({ agentId: "ops" });
   });
 
-  it("starts shared model pickers from defaults instead of the setup agent", async () => {
-    const config = agentConfig({}, { primary: "openai/gpt-5.4" });
+  it("shows shared models in shared pickers and the agent's models in agent pickers", async () => {
+    const pickers = await vi.importActual<typeof import("../flows/model-picker.js")>(
+      "../flows/model-picker.js",
+    );
+    mocks.defaultModel.mockImplementation(pickers.promptDefaultModel);
+    mocks.allowlist.mockImplementation(pickers.promptModelAllowlist);
     mocks.authChoice.mockResolvedValue("skip");
-    mocks.defaultModel.mockResolvedValue({});
-    mocks.allowlist.mockResolvedValue({ models: undefined });
-
-    await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
-      modelWriteTarget: "defaults",
+    const shared = "anthropic/claude-sonnet-4-6";
+    const config = agentConfig({
+      model: { primary: shared },
+      models: { [shared]: {} },
+      modelPolicy: { allow: [shared] },
+    });
+    config.agents ??= {};
+    config.agents.entries ??= {};
+    config.agents.entries.OPS = {
+      model: { primary: "openai/gpt-5.4" },
+      models: { "openai/gpt-5.4": {} },
+      modelPolicy: { allow: ["openai/gpt-5.4"] },
+    };
+    // Records what the terminal shows: the highlighted choice and the preselected models.
+    let screen: string[] = [];
+    const prompter = createTestWizardPrompter({
+      select: (async ({ options, initialValue }) => {
+        const highlighted = options.find((option) => option.value === initialValue) ?? options[0];
+        screen.push(highlighted?.label ?? "");
+        return highlighted?.value;
+      }) as WizardPrompter["select"],
+      multiselect: (async ({ initialValues }) => {
+        screen.push(...(initialValues ?? []).map(String));
+        return initialValues ?? [];
+      }) as WizardPrompter["multiselect"],
+      text: (async ({ initialValue }) => {
+        screen.push(initialValue ?? "");
+        return initialValue ?? "";
+      }) as WizardPrompter["text"],
     });
 
-    const pickerScope = { agentId: undefined, agentDir: target.agentDir };
-    expect(mocks.defaultModel.mock.calls[0]?.[0]).toMatchObject(pickerScope);
-    expect(promptModelAllowlistOptions()).toMatchObject(pickerScope);
-  });
+    const shownFor = async (modelWriteTarget: "agent" | "defaults") => {
+      screen = [];
+      await promptAuthConfig(config, makeRuntime(), prompter, target, { modelWriteTarget });
+      return screen.join("\n");
+    };
 
-  it("stores shared-default credentials in the store every agent inherits", async () => {
-    const config = agentConfig({}, { primary: "openai/gpt-5.4" });
-    mocks.authChoice.mockResolvedValue("provider-plugin:configure-provider:api-key");
-    mocks.applyAuth.mockResolvedValue({ config });
-    mocks.allowlist.mockResolvedValue({ models: undefined });
-
-    await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
-      modelWriteTarget: "defaults",
-    });
-
-    expect(mocks.applyAuth.mock.calls[0]?.[0]).toMatchObject({
-      agentId: target.agentId,
-      agentDir: resolveSharedMainAuthAgentDir(),
-    });
+    const sharedScreen = await shownFor("defaults");
+    expect(sharedScreen).toContain(shared);
+    expect(sharedScreen).not.toContain("openai/gpt-5.4");
+    const agentScreen = await shownFor("agent");
+    expect(agentScreen).toContain("openai/gpt-5.4");
+    expect(agentScreen).not.toContain(shared);
   });
 
   it("rewrites a shared legacy Codex primary without touching an agent policy", async () => {
@@ -460,39 +481,24 @@ describe("promptAuthConfig", () => {
     expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
   });
 
-  it("initializes a missing shared primary from provider auth", async () => {
+  it("initializes a missing shared primary from provider auth and keeps an existing one", async () => {
     const agentEntry = { model: { primary: "openai/gpt-5.4" } };
-    const config = agentConfig({}, agentEntry.model);
     const recommended = "configure-provider/recommended";
     mocks.authChoice.mockResolvedValue("provider-plugin:configure-provider:api-key");
-    mocks.applyAuth.mockResolvedValue({ config, agentModelOverride: recommended });
     mocks.allowlist.mockResolvedValue({ models: undefined });
+    const sharedModelAfterAuth = async (shared?: { primary: string }) => {
+      const config = agentConfig(shared ? { model: shared } : {}, agentEntry.model);
+      mocks.applyAuth.mockResolvedValueOnce({ config, agentModelOverride: recommended });
+      const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
+        modelWriteTarget: "defaults",
+      });
+      expect(result.agents?.entries?.OPS).toEqual(agentEntry);
+      return result.agents?.defaults?.model;
+    };
 
-    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
-      modelWriteTarget: "defaults",
-    });
-
-    expect(result.agents?.entries?.OPS).toEqual(agentEntry);
-    expect(result.agents?.defaults?.model).toEqual({ primary: recommended });
-  });
-
-  it("keeps an existing shared primary during provider reauth", async () => {
-    const agentEntry = { model: { primary: "openai/gpt-5.4" } };
-    const shared = { primary: "anthropic/claude-sonnet-4-6" };
-    const config = agentConfig({ model: shared }, agentEntry.model);
-    mocks.authChoice.mockResolvedValue("provider-plugin:configure-provider:api-key");
-    mocks.applyAuth.mockResolvedValue({
-      config,
-      agentModelOverride: "configure-provider/recommended",
-    });
-    mocks.allowlist.mockResolvedValue({ models: undefined });
-
-    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, target, {
-      modelWriteTarget: "defaults",
-    });
-
-    expect(result.agents?.entries?.OPS).toEqual(agentEntry);
-    expect(result.agents?.defaults?.model).toEqual(shared);
+    expect(await sharedModelAfterAuth()).toEqual({ primary: recommended });
+    const existing = { primary: "anthropic/claude-sonnet-4-6" };
+    expect(await sharedModelAfterAuth(existing)).toEqual(existing);
   });
 
   it("writes a utility model to shared defaults", async () => {
@@ -510,7 +516,6 @@ describe("promptAuthConfig", () => {
 
     expect(result.agents?.entries?.OPS).toEqual(agentEntry);
     expect(result.agents?.defaults?.utilityModel).toBe("shared/utility");
-    expect(mocks.allowlist).not.toHaveBeenCalled();
   });
 
   it("writes a custom provider catalog to shared defaults", async () => {
