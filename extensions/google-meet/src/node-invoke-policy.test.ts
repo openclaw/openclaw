@@ -35,6 +35,8 @@ describe("Google Meet node invoke policy", () => {
       joinTimeoutMs: 45_000,
       audioInputCommand: ["trusted-capture", "--raw"],
       audioOutputCommand: ["trusted-play", "--raw"],
+      audioBridgeCommand: ["trusted-bridge", "start"],
+      audioBridgeHealthCommand: ["trusted-bridge", "status"],
     };
     const { result, invokeNode } = invoke(
       {
@@ -51,8 +53,7 @@ describe("Google Meet node invoke policy", () => {
 
     await expect(result).resolves.toEqual({ ok: true, payload: { ok: true } });
 
-    expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
+    expect(invokeNode).toHaveBeenCalledExactlyOnceWith({
       params: {
         ...start,
         ...trusted,
@@ -63,31 +64,10 @@ describe("Google Meet node invoke policy", () => {
     });
   });
 
-  it("uses trusted configured external bridge commands for start", async () => {
-    const { result, invokeNode } = invoke(
-      { ...start, ...untrustedCommands },
-      {
-        chrome: {
-          audioBridgeHealthCommand: ["trusted-bridge", "status"],
-          audioBridgeCommand: ["trusted-bridge", "start"],
-        },
-      },
-    );
-
-    await result;
-
-    const call = invokeNode.mock.calls[0]?.[0];
-    expect(call?.params).toMatchObject({
-      action: "start",
-      audioBridgeHealthCommand: ["trusted-bridge", "status"],
-      audioBridgeCommand: ["trusted-bridge", "start"],
-    });
-  });
-
   it("keeps direct setup diagnostics but strips extra fields", async () => {
     const { result, invokeNode } = invoke({
       action: "setup",
-      audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+      ...untrustedCommands,
     });
 
     await result;

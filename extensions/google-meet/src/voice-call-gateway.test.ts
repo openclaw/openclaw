@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { setImmediate } from "node:timers/promises";
 import { getMeetingVoiceCallGatewayCall } from "openclaw/plugin-sdk/meeting-runtime";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
@@ -7,6 +8,7 @@ import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-cal
 type GatewayRuntime = typeof import("openclaw/plugin-sdk/gateway-runtime");
 type GatewayClientOptions = ConstructorParameters<GatewayRuntime["GatewayClient"]>[0];
 type GatewayClientInstance = InstanceType<GatewayRuntime["GatewayClient"]>;
+const ready = { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 1 };
 
 const mocks = vi.hoisted(() => ({
   runtimeRequest: vi.fn(),
@@ -76,13 +78,7 @@ beforeEach(() => {
   mocks.request.mockReset().mockResolvedValue({ success: true });
   mocks.runtimeRequest.mockReset().mockResolvedValue({ callId: "call-1" });
   mocks.stopAndWait.mockReset().mockResolvedValue(undefined);
-  mocks.startClient.mockReset().mockResolvedValue({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
+  mocks.startClient.mockReset().mockResolvedValue(ready);
   mocks.autoHello = true;
   mocks.clientOptions = undefined;
   mocks.actualGatewayClient = undefined;
@@ -144,9 +140,7 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
     await rejected;
     expect(mocks.actualClients).toHaveLength(1);
 
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     const referencedRetry = setTimeoutSpy.mock.calls.some(([, delay], index) => {
       const timer = setTimeoutSpy.mock.results[index]?.value as NodeJS.Timeout | undefined;
       return (
@@ -185,14 +179,7 @@ it.each([
   [
     "readiness",
     "gateway event loop readiness timeout",
-    () =>
-      mocks.startClient.mockResolvedValueOnce({
-        ready: false,
-        aborted: false,
-        elapsedMs: 0,
-        maxDriftMs: 0,
-        checks: 1,
-      }),
+    () => mocks.startClient.mockResolvedValueOnce({ ...ready, ready: false }),
     () => {},
   ],
   [
@@ -226,15 +213,7 @@ it.each([
 );
 
 it("starts Twilio Meet calls with pre-connect DTMF, then speaks the intro without TwiML fallback", async () => {
-  const config = resolveGoogleMeetConfig({
-    voiceCall: {
-      gatewayUrl: "ws://127.0.0.1:18789",
-      dtmfDelayMs: 1,
-      postDtmfSpeechDelayMs: 2,
-    },
-    realtime: { introMessage: "Say exactly: I'm here and listening." },
-  });
-
+  const config = voiceConfig({ postDtmfSpeechDelayMs: 2 });
   mocks.request
     .mockResolvedValueOnce({ callId: "call-1" })
     .mockResolvedValueOnce({ success: true });

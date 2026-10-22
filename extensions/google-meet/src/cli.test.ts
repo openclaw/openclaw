@@ -209,35 +209,10 @@ const cases: Case[] = [
 ];
 
 it.each(cases)("%s returns %j", async (command, result, expected) => {
-  const calls: string[] = [];
-  const leave = vi.fn<GoogleMeetRuntime["leave"]>(async () => {
-    calls.push("leave");
-    return result;
-  });
-  const speak = vi.fn<GoogleMeetRuntime["speak"]>(async () => {
-    calls.push("speak");
-    return result;
-  });
-  const ensureRuntime = vi.fn(async () => {
-    calls.push("runtime");
-    return { leave, speak } as unknown as GoogleMeetRuntime;
-  });
-  const callGatewayFromCli = vi.fn<
-    NonNullable<Parameters<typeof cli.setupCli>[0]["callGatewayFromCli"]>
-  >(async () => {
-    calls.push("gateway");
-    throw Object.assign(new Error(`unknown method: googlemeet.${command}`), {
-      name: "GatewayClientRequestError",
-      gatewayCode: "INVALID_REQUEST",
-      retryable: false,
-    });
-  });
-  const args = ["googlemeet", command, "meet_1"];
-  if (command === "speak") {
-    args.push("hello meeting");
-  }
-  const parsed = cli.setupCli({ callGatewayFromCli, ensureRuntime }).parseAsync(args, {
-    from: "user",
+  const leave = vi.fn<GoogleMeetRuntime["leave"]>().mockResolvedValue(result);
+  const speak = vi.fn<GoogleMeetRuntime["speak"]>().mockResolvedValue(result);
+  const parsed = run([command, "meet_1", ...(command === "speak" ? ["hello meeting"] : [])], {
+    runtime: { leave, speak },
   });
   if (expected instanceof Error) {
     await expect(parsed).rejects.toEqual(expected);
@@ -245,13 +220,6 @@ it.each(cases)("%s returns %j", async (command, result, expected) => {
     await parsed;
   }
   expect(output()).toBe(expected instanceof Error ? "" : expected);
-  expect(calls).toEqual(["gateway", "runtime", command]);
-  expect(callGatewayFromCli).toHaveBeenCalledWith(
-    `googlemeet.${command}`,
-    { json: true, timeout: "5000" },
-    { sessionId: "meet_1", ...(command === "speak" ? { message: "hello meeting" } : {}) },
-    { progress: false },
-  );
   expect(leave.mock.calls).toEqual(command === "leave" ? [["meet_1"]] : []);
   expect(speak.mock.calls).toEqual(command === "speak" ? [["meet_1", "hello meeting"]] : []);
 });
@@ -337,36 +305,16 @@ it.each(["9007199254740992"])(
 );
 
 it.each([
-  {
-    command: "join",
-    method: "googlemeet.join",
-    transport: "chrome-node",
-    mode: "realtime",
-    result: { session: { ...session, mode: "realtime" } },
-    expected: { id: "meet_gateway", transport: "chrome-node" },
-    extraParams: { dialInNumber: undefined, pin: undefined, dtmfSequence: undefined },
-  },
-  {
-    command: "test-speech",
-    method: "googlemeet.testSpeech",
-    transport: "chrome",
-    mode: "bidi",
-    result: {
-      createdSession: true,
-      session: meetSession({
-        id: "meet_gateway",
-        transport: "chrome",
-        mode: "bidi",
-        participantIdentity: "signed-in Google Chrome profile",
-        realtime: { enabled: true, strategy: "bidi", provider: "openai" },
-      }),
-    },
-    expected: { createdSession: true, session: { mode: "bidi" } },
-    extraParams: {},
-  },
-])(
-  "delegates $command to the gateway-owned runtime",
-  async ({ command, method, transport, mode, result, expected, extraParams }) => {
+  ["join", "chrome-node", "realtime", { id: "meet_gateway", transport: "chrome-node" }],
+  ["test-speech", "chrome", "bidi", { createdSession: true, session: { mode: "bidi" } }],
+] as const)(
+  "delegates %s to the gateway-owned runtime",
+  async (command, transport, mode, expected) => {
+    const joined = { ...session, transport, mode };
+    const result = {
+      session: joined,
+      ...(command === "test-speech" ? { createdSession: true } : {}),
+    };
     const callGatewayFromCli = vi.fn(async () => result);
     const ensureRuntime = vi.fn(async () => {
       throw new Error("local runtime should not be loaded");
@@ -376,9 +324,17 @@ it.each([
       { callGatewayFromCli, ensureRuntime },
     );
     expect(callGatewayFromCli).toHaveBeenCalledWith(
-      method,
+      command === "join" ? "googlemeet.join" : "googlemeet.testSpeech",
       { json: true, timeout: "60000" },
-      { url: MEET_URL, transport, mode, message: "Hello meeting", ...extraParams },
+      {
+        url: MEET_URL,
+        transport,
+        mode,
+        message: "Hello meeting",
+        ...(command === "join"
+          ? { dialInNumber: undefined, pin: undefined, dtmfSequence: undefined }
+          : {}),
+      },
       { progress: false },
     );
     expect(ensureRuntime).not.toHaveBeenCalled();

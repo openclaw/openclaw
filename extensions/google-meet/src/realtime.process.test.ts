@@ -4,16 +4,17 @@ import { on, once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import {
   createLocalMeetingRealtimeAudioTransport,
   startMeetingAgentRealtimeEngine,
   startMeetingRealtimeEngine,
-  type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveGoogleMeetConfig } from "./config.js";
+import { createTestMeetRealtimeAudioTransport } from "./test-support/fixtures.test-helpers.js";
 
 const tempDirs: string[] = [];
 const spawnedChildren: ChildProcess[] = [];
@@ -46,16 +47,6 @@ function expectSignals(child: ChildProcess, signals: NodeJS.Signals[]) {
     expect(vi.mocked(child).kill.mock.calls.filter(([sent]) => sent === signal)).toHaveLength(1);
   }
 }
-
-const mockTransport = () =>
-  ({
-    onFatal: vi.fn(),
-    startInput: vi.fn(),
-    stop: vi.fn(async () => {}),
-    writeOutput: vi.fn(async () => {}),
-    clearOutput: vi.fn(async () => {}),
-    dispose: vi.fn(async () => {}),
-  }) satisfies MeetingRealtimeAudioTransport;
 
 const mockTranscriptionSession = (connected = false) => ({
   connect: vi.fn(async () => {}),
@@ -99,7 +90,7 @@ function voiceFixture(
     realtime: { strategy: "bidi", provider: "openai", ...realtime },
   });
   const bridge = mockVoiceBridge();
-  const transport = mockTransport();
+  const { transport } = createTestMeetRealtimeAudioTransport();
   const provider = {
     id: config.realtime.provider,
     label: "Test voice provider",
@@ -254,9 +245,7 @@ it("contains a forced local command-pair stdout stream error through bridge stop
   vi.spyOn(outputProcess, "kill");
 
   inputProcess.stdout?.destroy(new Error("EPIPE from real bridge input stdout"));
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await setImmediate();
   inputProcess.stderr?.destroy(new Error("duplicate stderr EPIPE"));
 
   await Promise.all([inputClosed, outputClosed]);
@@ -325,7 +314,9 @@ it("retries only the unsettled transport teardown phase", async () => {
   const stopError = new Error("transport stop failed");
   const fixture = voiceFixture();
   fixture.bridge.close.mockImplementation(fixture.close);
-  fixture.transport.stop.mockRejectedValueOnce(stopError).mockResolvedValueOnce(undefined);
+  vi.mocked(fixture.transport.stop)
+    .mockRejectedValueOnce(stopError)
+    .mockResolvedValueOnce(undefined);
   const handle = await fixture.start({ meetingSessionId: "meet-stop-retry" });
   await expect(handle.stop()).rejects.toBe(stopError);
   await expect(handle.stop()).resolves.toBeUndefined();

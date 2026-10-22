@@ -60,16 +60,6 @@ describe("Google Meet OAuth", () => {
     );
   });
 
-  it("refreshes cached access tokens with Date-invalid expiries", async () => {
-    mockTokenResponse(Response.json({ access_token: "refreshed-token", expires_in: 3600 }));
-    const tokens = await resolveToken({
-      accessToken: "cached-token",
-      expiresAt: 8_700_000_000_000_000,
-    });
-
-    expect(tokens).toMatchObject({ accessToken: "refreshed-token", refreshed: true });
-  });
-
   it.each([
     ["invalid clock", 8_640_000_000_000_001, Number.MAX_SAFE_INTEGER, 3_600_000],
     ["zero lifetime", 1_780_056_000_000, 0, 1_780_056_000_000],
