@@ -11,7 +11,7 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
-import { settleRoster } from "./roster.test-support.ts";
+import { patchRows, settleRoster } from "./roster.test-support.ts";
 
 type NativeGatewaysSnapshot = {
   gateways: Array<Pick<NativeGateway, "id" | "name" | "isPrimary" | "health">>;
@@ -85,12 +85,7 @@ describe("AppSidebar gateway footer subtitle", () => {
       const publishRow = (key: string, patch: Partial<(typeof current.sessions)[number]>) => {
         const latest = sessions.sessions.state.result!;
         sessions.publish({
-          result: {
-            ...latest,
-            sessions: latest.sessions.map((row) =>
-              row.key === key ? Object.assign({}, row, patch) : row,
-            ),
-          },
+          result: { ...latest, sessions: patchRows(latest.sessions, key, patch) },
         });
       };
       publishRow(otherKey, { label: "Quiet latest title" });
@@ -167,24 +162,20 @@ describe("AppSidebar gateway footer subtitle", () => {
   );
 
   it("shows nonhealthy state as the avatar dot and leaves announcing to the shell", async () => {
-    const label = "Suspended";
     setNativeGatewayTestState(twoGateways);
     const { sidebar, q } = await mountFooter();
     sidebar.connectionStatus = "suspended";
     await sidebar.updateComplete;
 
-    const footer = q(".sidebar-footer-bar");
-    const card = footer?.querySelector(".sidebar-identity-card");
+    const card = q(".sidebar-identity-card");
     // The shell owns the written label; the footer keeps the dot and accessible name.
-    expect(footer?.querySelector(".gateway-status__label")).toBeNull();
+    expect(q(".sidebar-footer-bar .gateway-status__label")).toBeNull();
     expect(card?.getAttribute("data-connection-status")).toBe("suspended");
     expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
-    expect(card?.getAttribute("aria-label")).toBe(`Identity and app menu for Owner: ${label}`);
-    expect(footer?.querySelector(":scope > [role=status]")).toBeNull();
-    expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
-    expect(footer?.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
-      "Local Gateway",
-    );
+    expect(card?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Suspended");
+    expect(q(".sidebar-footer-bar > [role=status]")).toBeNull();
+    expect(q(".sidebar-identity-card__name")?.textContent).toBe("Owner");
+    expect(q(".sidebar-identity-card__gateway")?.textContent).toContain("Local Gateway");
   });
 
   it("returns to the healthy dot and gateway identity after reconnect", async () => {
