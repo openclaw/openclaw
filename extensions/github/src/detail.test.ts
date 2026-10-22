@@ -574,23 +574,8 @@ describe("GitHub detail public read boundary", () => {
     });
   });
 
-  it("preserves complete nonempty comments and renamed file patches", async () => {
-    const comment = commentItem({ user: null });
-    const fetchMock = publicFetch(
-      item({ comments: 1, changed_files: 1 }),
-      json([comment]),
-      json([file({ status: "renamed", previous_filename: "old.ts" })]),
-    );
-    const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
-    expect(detail).toMatchObject({
-      partial: false,
-      comments: [{ author: "ghost", body: comment.body, bodyTruncated: false }],
-      files: [{ previousPath: "old.ts", patch: file().patch, patchTruncated: false }],
-    });
-  });
-
-  it("merges discussion and review replies chronologically with exact diff and original-line context", async () => {
-    const discussion = commentItem({ id: 3, created_at: "2026-09-13T12:01:00Z" });
+  it("renders complete discussion, review context and renamed files", async () => {
+    const discussion = commentItem({ id: 3, created_at: "2026-09-13T12:01:00Z", user: null });
     const diffHunk = "@@ -12,3 +12,3 @@\n-old\n+new";
     const review = commentItem({
       html_url: "https://github.com/octocat/repo/pull/1#discussion_r1",
@@ -613,15 +598,17 @@ describe("GitHub detail public read boundary", () => {
       diff_hunk: diffHunk,
     });
     const fetchMock = publicFetch(
-      item({ comments: 1, review_comments: 2 }),
+      item({ comments: 1, review_comments: 2, changed_files: 1 }),
       json([discussion]),
       json([review, reply]),
+      json([file({ status: "renamed", previous_filename: "old.ts" })]),
     );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       partial: false,
       commentsTotal: 3,
       commentsTruncated: false,
+      files: [{ previousPath: "old.ts", patch: file().patch, patchTruncated: false }],
       comments: [
         {
           id: "discussion_r1",
@@ -635,7 +622,13 @@ describe("GitHub detail public read boundary", () => {
             diffTruncated: false,
           },
         },
-        { id: "issuecomment-1", url: discussion.html_url, body: discussion.body },
+        {
+          id: "issuecomment-1",
+          url: discussion.html_url,
+          body: discussion.body,
+          author: "ghost",
+          bodyTruncated: false,
+        },
         {
           id: "discussion_r2",
           label: "Review comment",

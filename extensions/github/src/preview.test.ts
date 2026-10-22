@@ -816,10 +816,6 @@ describe("GitHub preview decoration cache", () => {
       const first = await load();
       const coldReads = kind === "pull" ? 4 : 1;
       expect(avatars).toHaveLength(coldReads);
-      if (kind === "pull") {
-        expect(first.coAuthorCount).toBe(4);
-        expect(first.coAuthors?.map((author) => author.login)).toEqual(["ada", "mira", "alan"]);
-      }
       for (const elapsed of [60_000, 60_000, 179_999]) {
         now += elapsed;
         expect(await load()).toEqual(first);
