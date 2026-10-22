@@ -49,7 +49,7 @@ it("opens Files through the current callback when Outputs refreshes before the v
   expect(navigate).toHaveBeenCalledOnce();
   navigate.mockClear();
   const refreshed = vi.fn();
-  const refresh = createDeferred<void>();
+  const refresh = createDeferred();
   try {
     element.props = {
       ...value,
@@ -57,7 +57,7 @@ it("opens Files through the current callback when Outputs refreshes before the v
         ...value.outputs!,
         artifactRead: {
           readResult: refresh.promise,
-          items: value.outputs!.artifacts!,
+          items: [...value.outputs!.artifacts!],
           resolved: true,
           loaded: false,
           loading: true,
