@@ -27,7 +27,7 @@ import {
   createStateTestDirectory,
   cleanupStateTestDirectory,
 } from "./state.test-support.js";
-import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
+import { ReefInboxConnection, ReefRelayError, ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
 
@@ -626,23 +626,24 @@ describe("Reef channel lifecycle", () => {
       const lifecycle = run({
         reconcile: async () => {
           reconciles += 1;
-          if (phase === "startup" || reconciles > 1) {
+          if (phase === "startup") {
+            throw new ReefRelayError(429, "rate_limited");
+          }
+          if (reconciles > 1) {
             throw new Error("rate_limited");
           }
         },
-        shouldContinueAfterStartupReconcileError: phase === "startup" ? () => true : undefined,
         onReady: async () => {
           reconcilesAtActivation = reconciles;
           errorsAtActivation = errors.length;
         },
-        reconcileIntervalMs: 5,
       });
       await inbox.started;
       if (phase === "startup") {
         // Retrying startup must not amplify relay rate limiting via account restarts.
         expect([reconcilesAtActivation, errorsAtActivation]).toEqual([1, 1]);
       } else {
-        await vi.advanceTimersByTimeAsync(10);
+        await vi.advanceTimersByTimeAsync(60_000);
         expect([reconciles, errors.length]).toEqual([3, 2]);
       }
       expect(inbox.seen).toHaveLength(1);
@@ -666,7 +667,6 @@ describe("Reef channel lifecycle", () => {
       onReady: async () => {
         order.push("ready");
       },
-      reconcileIntervalMs: 5_000,
     });
     await inbox.started;
     expect(order).toEqual(["reconcile", "ready", "inbox"]);
@@ -771,7 +771,6 @@ describe("Reef channel lifecycle", () => {
       startInbox: failedInbox.run,
       reconcile,
       onReconcileError: vi.fn(),
-      reconcileIntervalMs: 5,
     });
     let settled = false;
     const outcome = lifecycle.then(
@@ -785,7 +784,7 @@ describe("Reef channel lifecycle", () => {
     );
     try {
       await failedInbox.started;
-      await vi.advanceTimersByTimeAsync(5);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(reconcile).toHaveBeenCalledTimes(2);
       failedInbox.finish.reject(error);
       await vi.advanceTimersByTimeAsync(0);
@@ -805,7 +804,7 @@ describe("Reef channel lifecycle", () => {
   });
   it("settles immediately when the parent signal is already aborted", async () => {
     parent.beginClose();
-    await run({ reconcileIntervalMs: 5 });
+    await run({});
     expect(inbox.seen).toHaveLength(0);
   });
 });
