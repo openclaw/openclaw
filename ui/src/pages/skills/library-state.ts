@@ -265,9 +265,13 @@ export function createSkillLibrary(
     const pending = settle(work, connection);
     if (view) {
       try {
-        await new Promise<void>((resolve) => {
-          onSettled(resolve);
-        });
+        // An owned caller may be disposed before its settle callback fires.
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            onSettled(resolve);
+          }),
+          retired,
+        ]);
         await presentMutation(view, pending, retired, expected);
       } catch (error) {
         if (isCurrent(view, retired)) {

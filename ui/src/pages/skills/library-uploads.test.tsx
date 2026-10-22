@@ -231,6 +231,24 @@ it("keeps removal confirmation outside mutation presentation", async () => {
   expect(request).toHaveBeenCalledTimes(1);
 });
 
+it("settles an admitted save when its caller retires before the first presentation settle", async () => {
+  const { library, request, read } = await openSkill();
+  const pending = createDeferred<SkillsLibraryReceipt>();
+  request.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(libraryList(false));
+  const operation = createRoot((dispose) => {
+    const saving = library.save();
+    library.retire();
+    dispose();
+    return saving;
+  });
+  const completed = vi.fn();
+  void operation.then(completed);
+  pending.resolve(savedReceipt(read));
+  await waitForFast(() => expect(completed).toHaveBeenCalledTimes(1));
+  expect(library.state.busy).toBe(false);
+  expect(library.state.draft?.entry?.revision).toBe("b".repeat(64));
+});
+
 it("releases retired saving presentation and preserves a same-key successor draft", async () => {
   const { library, request, connection, read } = await openSkill();
   const pending = createDeferred<SkillsLibraryReceipt>();
