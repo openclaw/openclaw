@@ -18,10 +18,7 @@ import {
   observeSlackScenarioMessages,
   waitForSlackNoReply,
 } from "./slack-live.message-observations.js";
-import {
-  buildSlackApprovalCheckpointMessage,
-  runSlackTableInvalidBlocksFallbackScenario,
-} from "./slack-live.observations.js";
+import { runSlackTableInvalidBlocksFallbackScenario } from "./slack-live.observations.js";
 import { findScenario } from "./slack-live.scenario.test-helpers.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
@@ -696,36 +693,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(stopGateway.mock.invocationCallOrder[0]).toBeGreaterThan(
       call.mock.invocationCallOrder[1]!,
     );
-  });
-
-  it("builds approval checkpoint message evidence from Slack blocks", () => {
-    expect(
-      buildSlackApprovalCheckpointMessage({
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Plugin approval required" },
-          },
-          {
-            type: "actions",
-            elements: [
-              {
-                type: "button",
-                text: { type: "plain_text", text: "Allow Once" },
-                value:
-                  'openclaw:approval:v1:{"approvalId":"plugin:abc","approvalKind":"plugin","decision":"allow-once"}',
-              },
-            ],
-          },
-        ],
-        text: "Plugin approval required",
-      }),
-    ).toEqual({
-      actionLabels: ["Allow Once"],
-      blockText: ["Plugin approval required", "Allow Once"],
-      hasNativeActions: true,
-      text: "Plugin approval required",
-    });
   });
 
   it("ignores unrelated SUT replies but rejects the scenario marker during mention-gating", async () => {

@@ -3,6 +3,7 @@ import { writeSlackApprovalCheckpoint } from "./slack-live.approval-checkpoint.j
 import { runSlackApprovalScenario, waitForSlackApprovalMessage } from "./slack-live.approvals.js";
 import { runSlackCodexApprovalScenario } from "./slack-live.codex-approval-runner.js";
 import type { SlackMessage, SlackQaFetchFunction } from "./slack-live.contracts.js";
+import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.js";
 import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 vi.mock("./slack-live.approval-checkpoint.js", () => ({
@@ -58,6 +59,23 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("builds approval checkpoint message evidence from Slack blocks", () => {
+  const text = "Plugin approval required";
+  expect(
+    buildSlackApprovalCheckpointMessage(
+      message({
+        text,
+        blocks: [{ type: "section", text: { type: "mrkdwn", text } }, ...buttons],
+      }),
+    ),
+  ).toEqual({
+    actionLabels: ["Allow once"],
+    blockText: [text, "Allow once"],
+    hasNativeActions: true,
+    text,
+  });
 });
 
 it.each(["ok", "failed", "missing-command-result"] as const)(
