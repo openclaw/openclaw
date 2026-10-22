@@ -2480,6 +2480,51 @@ describe("FRV watch", () => {
     ]);
     expect(getJobLog).toHaveBeenCalledExactlyOnceWith(5, expect.anything());
   });
+
+  it("labels carried-forward failures and does not replay them after a rerun", async () => {
+    const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+    const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let attempt = 1;
+    const messages: string[] = [];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
+      getParentJobs: async () => [
+        { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (_runId: string, requestedAttempt: number) => [
+        {
+          ...job("carried failure", "failure"),
+          id: requestedAttempt === 1 ? 900 : 901,
+          run_attempt: 1,
+        },
+      ],
+    };
+    const poll = (watchStatePath = statePath) =>
+      watchRelease("77", client, {
+        emit: (event: { message: string }) => messages.push(event.message),
+        once: true,
+        statePath: watchStatePath,
+      });
+
+    await poll();
+    expect(messages.splice(0)).toContain(
+      'normalCi job "carried failure" failure (attempt 1; runner none)',
+    );
+    attempt = 2;
+    await poll();
+    expect(messages.splice(0)).not.toContainEqual(expect.stringContaining('job "carried failure"'));
+
+    await poll(resumedStatePath);
+    expect(messages).toContain(
+      'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
+    );
+  });
   it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
     const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
     const ci = child("normalCi", "101");
