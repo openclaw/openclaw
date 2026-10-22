@@ -322,7 +322,9 @@ suite.define(() => {
                 hidden: menu?.hasAttribute("hidden") ?? false,
                 path: location.pathname,
               });
-              if (events.length > 16) events.shift();
+              if (events.length > 16) {
+                events.shift();
+              }
             });
           },
           true,
