@@ -1,7 +1,6 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import { t } from "../../../i18n/index.ts";
 import { downloadBlobFile } from "../../../lib/download.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { createDetailOperationPresentation } from "./chat-detail-panel-operation-lifetime.ts";
 import type {
   AttachmentSidebarRuntime,
@@ -15,7 +14,10 @@ export function createAttachmentDownload(
 ) {
   let request: { controller: AbortController } | null = null;
   const presentation = createDetailOperationPresentation();
-  const [error, setError] = createSignal<string | null>(null, { ownedWrite: true });
+  const [completion, setCompletion] = createSignal<Promise<void> | undefined>(undefined, {
+    ownedWrite: true,
+  });
+  const outcome = createMemo(() => completion()?.then(() => null) ?? null);
   const retire = () => {
     request?.controller.abort();
     presentation.retire();
@@ -27,12 +29,13 @@ export function createAttachmentDownload(
     get pending() {
       return presentation.pending();
     },
-    get error() {
-      return error();
+    get completion() {
+      return completion();
     },
+    outcome,
     cancel() {
       retire();
-      setError(null);
+      setCompletion(undefined);
     },
     onDownload: async () => {
       const attachment = content();
@@ -43,7 +46,6 @@ export function createAttachmentDownload(
       const currentRequest = { controller: new AbortController() };
       const { connectionEpoch, sessionKey, agentId } = runtime();
       request = currentRequest;
-      setError(null);
       const current = () => {
         const scope = runtime();
         return (
@@ -68,7 +70,7 @@ export function createAttachmentDownload(
           downloadBlobFile(attachment.title, blob);
         } catch (cause) {
           if (current()) {
-            setError(formatUiError(cause));
+            throw cause;
           }
         } finally {
           if (request === currentRequest) {
@@ -76,8 +78,13 @@ export function createAttachmentDownload(
           }
         }
       };
-      const completion = download();
-      return presentation.observe(completion, () => request === currentRequest);
+      const pending = download();
+      void setCompletion(pending);
+      // The error slot may be retired before it observes this completion.
+      void pending.catch(() => {});
+      await presentation.observe(pending, () => request === currentRequest).catch(() => {});
     },
   };
 }
+
+export type AttachmentDownload = ReturnType<typeof createAttachmentDownload>;

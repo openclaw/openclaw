@@ -1123,14 +1123,34 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   background: var(--secondary);
 }
 
-.btn svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
+.btn svg,
+.compaction-indicator svg,
+.chat-scroll-to-bottom svg,
+.btn--icon svg,
+.agent-select__chevron svg,
+.agent-select__avatar--icon svg,
+.session-row-badge svg,
+.session-action svg,
+.chat-queue__leading svg,
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg,
+.chat-queue__action svg,
+.chat-queue__retry svg,
+.plugins-tile--fallback svg,
+.settings-secret__toggle svg {
   fill: none;
-  stroke-width: 1.5px;
+  stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.btn svg,
+.compaction-indicator svg,
+.chat-scroll-to-bottom svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.5px;
   flex-shrink: 0;
 }
 
@@ -1412,11 +1432,7 @@ openclaw-toast-host[data-toast-placement="shell"]
   display: block;
   width: 18px;
   height: 18px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 openclaw-link-reader-hovercard-provider,
@@ -1939,7 +1955,8 @@ select.input {
   }
 }
 
-.field select {
+.field select,
+select.settings-select:not([multiple]) {
   appearance: none;
   padding-right: 36px;
   background-image: var(--select-chevron);
@@ -1951,7 +1968,8 @@ select.input {
 }
 
 @media (forced-colors: active) {
-  .field select {
+  .field select,
+  select.settings-select:not([multiple]) {
     appearance: auto;
     padding-inline-end: 10px;
     background-image: none;
@@ -2798,6 +2816,27 @@ select.input {
   color: var(--text);
 }
 
+/* Row detail buttons stay chromeless and share the same focus ring. */
+.channels-item__detail,
+.plugins-item__detail-button,
+.session-bar-selection {
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.channels-item__detail:focus-visible,
+.plugins-item__detail-button:focus-visible,
+.session-bar-selection:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .data-table-sort-button {
   padding: 0;
   border: 0;
@@ -3608,11 +3647,7 @@ td.data-table-key-col {
 .agent-select__avatar--icon svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-select--compact .agent-select__trigger,
@@ -4556,11 +4591,7 @@ td.data-table-key-col {
 .session-row-badge svg {
   width: 12px;
   height: 12px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-row-actions {
@@ -4569,7 +4600,13 @@ td.data-table-key-col {
   gap: 1px;
 }
 
-.session-action {
+/* Shared icon-button box; each surface retains positioning, paint, and state. */
+.session-action,
+.settings-secret__toggle,
+.chat-queue__remove,
+.chat-queue__more,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4578,8 +4615,11 @@ td.data-table-key-col {
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
+}
+
+.session-action {
+  background: transparent;
   opacity: 0;
   pointer-events: none;
   transition:
@@ -4590,11 +4630,7 @@ td.data-table-key-col {
 .session-action svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-action--touch-menu {

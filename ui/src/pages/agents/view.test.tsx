@@ -350,6 +350,7 @@ describe("renderAgents", () => {
               cronScopedNextWakeAtMs: null,
               cronLoading: cronState.cronLoading,
               cronError: cronState.cronError,
+              cronNotice: cronState.cronNotice,
             },
           }),
         },

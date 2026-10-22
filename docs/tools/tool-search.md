@@ -219,6 +219,12 @@ before execution and validates final `details` after normal tool hooks before
 returning the catalog call. MCP and client-owned schemas remain deferred to
 their owning execution boundary.
 
+Host-owned execution refusals do not have to match the target's success schema.
+Turn-authority gates preserve their refusal text without running the target;
+Code Mode also includes that guidance in the returned value's `message` field.
+This exemption uses private runtime provenance, not tool-authored `gated` or
+`status` fields.
+
 If `dispatch_action` names a direct-only tool declared for the current turn, it returns
 guidance to call that tool directly by its declared name and parameters. It does
 not dispatch direct-only tools through the catalog or suggest searching for them.

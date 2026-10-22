@@ -109,6 +109,8 @@ export async function withNextcloudTalkOutboundFixture(
       let data: unknown;
       if (recorded.url.pathname === "/cloud/ocs/v1.php/cloud/user") {
         data = { id: "canonical-user" };
+      } else if (recorded.url.pathname === "/cloud/ocs/v2.php/cloud/capabilities") {
+        data = { capabilities: { spreed: { features: ["media-caption"] } } };
       } else if (recorded.method === "MKCOL") {
         response.writeHead(201);
         response.end();

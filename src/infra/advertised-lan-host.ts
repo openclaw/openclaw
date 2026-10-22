@@ -110,9 +110,18 @@ function parseLinuxDefaultRouteHints(stdout: string): string[] {
   return hints;
 }
 
-async function resolveDefaultRouteHints(
-  runCommandWithTimeout: AdvertisedLanHostCommandRunner,
-): Promise<string[]> {
+export async function resolveAdvertisedLanHostCore(
+  options: ResolveAdvertisedLanHostOptions = {},
+): Promise<string | null> {
+  const candidates = listExternalInterfaceAddresses(
+    safeNetworkInterfaces(options.networkInterfaces),
+    "IPv4",
+  ).filter((entry) => isRfc1918Ipv4Address(entry.address));
+  if (candidates.length <= 1) {
+    return candidates[0]?.address ?? null;
+  }
+
+  const runCommandWithTimeout = options.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
   let argv: string[];
   let parse: typeof parseWindowsDefaultRouteHints;
   if (process.platform === "win32") {
@@ -132,7 +141,7 @@ async function resolveDefaultRouteHints(
     argv = ["ip", "-4", "route", "show", "default"];
     parse = parseLinuxDefaultRouteHints;
   } else {
-    return [];
+    return candidates[0]?.address ?? null;
   }
 
   let stdout: string;
@@ -142,29 +151,13 @@ async function resolveDefaultRouteHints(
       maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
     });
     if (result.code !== 0) {
-      return [];
+      return candidates[0]?.address ?? null;
     }
     stdout = result.stdout;
   } catch {
-    return [];
-  }
-  return stdout ? parse(stdout) : [];
-}
-
-export async function resolveAdvertisedLanHostCore(
-  options: ResolveAdvertisedLanHostOptions = {},
-): Promise<string | null> {
-  const candidates = listExternalInterfaceAddresses(
-    safeNetworkInterfaces(options.networkInterfaces),
-    "IPv4",
-  ).filter((entry) => isRfc1918Ipv4Address(entry.address));
-  if (candidates.length <= 1) {
     return candidates[0]?.address ?? null;
   }
-
-  const routeHints = await resolveDefaultRouteHints(
-    options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
-  );
+  const routeHints = stdout ? parse(stdout) : [];
   for (const hint of routeHints) {
     const hintedName = normalizeInterfaceName(hint);
     if (!hintedName) {
