@@ -8,36 +8,30 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import {
-  readBrowserInspectedNode,
-  type BrowserInspectedNode,
-  type BrowserPanelTab,
-} from "./browser-client.ts";
+import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
 import { createBrowserPanelNativePresentation } from "./browser-panel-native-presentation.ts";
 import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import {
   browserPanelNormalizedPoint,
   browserPanelRemotePoint,
   loadBrowserPanelImage,
-  type BrowserPanelView,
 } from "./browser-panel-surface.ts";
 
-type BrowserPanelNativeState = {
-  tabs: BrowserPanelTab[];
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  mode: "interact" | "annotate" | "inspect";
-  loading: boolean;
-  errorText: string | null;
-  pendingNewTab: boolean;
-  urlDraft: string;
-  inspected: BrowserInspectedNode | null;
-  inspectPointer: { x: number; y: number } | null;
-};
-
-interface BrowserPanelNativeHost extends BrowserPanelNativeState {
+interface BrowserPanelNativeHost extends BrowserPanelStateWriter<
+  | "tabs"
+  | "activeTargetId"
+  | "view"
+  | "mode"
+  | "loading"
+  | "errorText"
+  | "pendingNewTab"
+  | "urlDraft"
+  | "inspected"
+  | "inspectPointer"
+> {
   readonly host: Pick<
     BrowserPanelHost,
     | "isConnected"
@@ -51,13 +45,9 @@ interface BrowserPanelNativeHost extends BrowserPanelNativeState {
   readonly addressInput?: HTMLInputElement;
   readonly pendingInput: Pick<BrowserPanelPendingInput, "queueInspection">;
   readonly input: Pick<BrowserPanelInputOwner, "paintOverlay" | "elements">;
-  setState<Key extends keyof BrowserPanelNativeState>(
-    key: Key,
-    value: BrowserPanelNativeState[Key],
-  ): void;
   selectTab(targetId: string): Promise<void>;
   syncUrlDraft(url: string): void;
-  reportError(error: unknown): void;
+  reportError(error: unknown, retry?: () => Promise<unknown>): void;
   exitCaptureModes(): void;
 }
 
@@ -270,7 +260,7 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       if (!reply?.ok || !reply.tabId) {
         native.cancelPendingActivation();
         if (reply && !reply.ok) {
-          controller.reportError(reply.error);
+          controller.reportError(reply.error, () => native.open(url, newTab, focusAfterOpen));
         }
         return null;
       }

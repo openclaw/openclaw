@@ -96,9 +96,6 @@ export function createLazyPromise<T>(
 }
 
 /** Convenience wrapper for dynamic-import-shaped loaders. */
-export function createLazyImportLoader<T>(
-  load: () => Promise<T>,
-  options?: LazyPromiseLoaderOptions,
-): LazyPromiseLoader<T> {
-  return createLazyPromiseLoader(load, options);
+export function createLazyImportLoader<T>(load: () => Promise<T>): LazyPromiseLoader<T> {
+  return createLazyPromiseLoader(load);
 }

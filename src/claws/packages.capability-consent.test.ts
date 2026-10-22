@@ -54,7 +54,7 @@ const baseDeps = {
       key: "test-package",
       owner: "test-owner",
     },
-    heartbeat: vi.fn(),
+    assertCurrent: vi.fn(),
     release: vi.fn(),
   })),
 };

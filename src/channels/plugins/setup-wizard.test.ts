@@ -23,6 +23,29 @@ type ChannelConfig = AccountConfig & {
   accounts?: Record<string, AccountConfig>;
 };
 
+const mainCredentials = { botId: "test-main-bot-id", secret: "test-secret" };
+const alertCredentials = { botId: "test-alerts-bot-id", secret: "example-secret" };
+
+function newAccountPrompter() {
+  return createQueuedWizardPrompter({
+    selectValues: ["__new__"],
+    textValues: ["alerts", alertCredentials.botId, alertCredentials.secret],
+  });
+}
+
+function expectPromotion(
+  result: { cfg: OpenClawConfig },
+  queued: ReturnType<typeof createQueuedWizardPrompter>,
+  accounts: ChannelConfig["accounts"],
+) {
+  const channel = getChannelConfig(result.cfg);
+  expect(channel).not.toHaveProperty("botId");
+  expect(channel).not.toHaveProperty("secret");
+  expect(channel.accounts).toEqual(accounts);
+  expect(queued.confirm).not.toHaveBeenCalled();
+  return channel;
+}
+
 function getChannelConfig(cfg: OpenClawConfig): ChannelConfig {
   return ((cfg.channels as Record<string, unknown> | undefined)?.demo ?? {}) as ChannelConfig;
 }
@@ -44,31 +67,19 @@ function resolveLegacyAccount(cfg: OpenClawConfig): AccountConfig {
 
 function setLegacyAccount(cfg: OpenClawConfig, patch: AccountConfig): OpenClawConfig {
   const channel = getChannelConfig(cfg);
-  if (!channel.accounts) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        demo: { ...channel, ...patch },
-      },
-    } as OpenClawConfig;
-  }
   const accountId = resolveDefaultAccountId(cfg);
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      demo: {
+  const updated = channel.accounts
+    ? {
         ...channel,
         accounts: {
           ...channel.accounts,
-          [accountId]: {
-            ...channel.accounts[accountId],
-            ...patch,
-          },
+          [accountId]: { ...channel.accounts[accountId], ...patch },
         },
-      },
-    },
+      }
+    : { ...channel, ...patch };
+  return {
+    ...cfg,
+    channels: { ...cfg.channels, demo: updated },
   } as OpenClawConfig;
 }
 
@@ -95,6 +106,30 @@ function createLegacyPlugin(): ChannelSetupPlugin {
   };
 }
 
+function credential(
+  inputKey: "token" | "privateKey",
+  field: "botId" | "secret",
+  credentialLabel: string,
+): ChannelSetupWizard["credentials"][number] {
+  return {
+    inputKey,
+    providerHint: "Demo",
+    credentialLabel,
+    envPrompt: `Use ${credentialLabel} from environment?`,
+    keepPrompt: `${credentialLabel} already configured. Keep it?`,
+    inputPrompt: credentialLabel,
+    inspect: ({ cfg }) => {
+      const value = resolveLegacyAccount(cfg)[field];
+      return {
+        accountConfigured: Boolean(value),
+        hasConfiguredValue: Boolean(value),
+        resolvedValue: value,
+      };
+    },
+    applySet: ({ cfg, resolvedValue }) => setLegacyAccount(cfg, { [field]: resolvedValue }),
+  };
+}
+
 function createLegacyWizard(): ChannelSetupWizard {
   return {
     channel: "demo",
@@ -104,49 +139,26 @@ function createLegacyWizard(): ChannelSetupWizard {
       resolveConfigured: ({ cfg }) => Boolean(resolveLegacyAccount(cfg).botId),
     },
     credentials: [
-      {
-        inputKey: "token",
-        providerHint: "Demo",
-        credentialLabel: "Bot ID",
-        envPrompt: "Use Bot ID from environment?",
-        keepPrompt: "Bot ID already configured. Keep it?",
-        inputPrompt: "Bot ID",
-        inspect: ({ cfg }) => {
-          const botId = resolveLegacyAccount(cfg).botId;
-          return {
-            accountConfigured: Boolean(botId),
-            hasConfiguredValue: Boolean(botId),
-            resolvedValue: botId,
-          };
-        },
-        applySet: ({ cfg, resolvedValue }) => setLegacyAccount(cfg, { botId: resolvedValue }),
-      },
-      {
-        inputKey: "privateKey",
-        providerHint: "Demo",
-        credentialLabel: "Token",
-        envPrompt: "Use token from environment?",
-        keepPrompt: "Token already configured. Keep it?",
-        inputPrompt: "Token",
-        inspect: ({ cfg }) => {
-          const secret = resolveLegacyAccount(cfg).secret;
-          return {
-            accountConfigured: Boolean(secret),
-            hasConfiguredValue: Boolean(secret),
-            resolvedValue: secret,
-          };
-        },
-        applySet: ({ cfg, resolvedValue: secret }) => setLegacyAccount(cfg, { secret }),
-      },
+      credential("token", "botId", "Bot ID"),
+      credential("privateKey", "secret", "Token"),
     ],
   };
 }
 
-function createConfigure() {
-  return buildChannelSetupWizardAdapterFromSetupWizard({
-    plugin: createLegacyPlugin(),
-    wizard: createLegacyWizard(),
-  }).configure;
+function configure(
+  channel: ChannelConfig,
+  queued: ReturnType<typeof createQueuedWizardPrompter>,
+  setup = { plugin: createLegacyPlugin(), wizard: createLegacyWizard() },
+  accountOverrides?: Record<string, string>,
+) {
+  return runSetupWizardConfigure({
+    configure: buildChannelSetupWizardAdapterFromSetupWizard(setup).configure,
+    cfg: { channels: { demo: channel } } as OpenClawConfig,
+    prompter: queued.prompter,
+    shouldPromptAccountIds: !accountOverrides,
+    accountOverrides,
+    options: { secretInputMode: "plaintext" as const },
+  });
 }
 
 describe("channel setup wizard account scoping", () => {
@@ -190,13 +202,7 @@ describe("channel setup wizard account scoping", () => {
       selectValues: ["__new__"],
       textValues: ["ada", "ada-bot"],
     });
-    const result = await runSetupWizardConfigure({
-      configure: buildChannelSetupWizardAdapterFromSetupWizard({ plugin, wizard }).configure,
-      cfg: { channels: { demo: root } } as OpenClawConfig,
-      prompter: queued.prompter,
-      shouldPromptAccountIds: true,
-      options: { secretInputMode: "plaintext" as const },
-    });
+    const result = await configure(root, queued, { plugin, wizard });
     expect(result.accountId).toBe("ada");
     expect(result.cfg.channels?.demo).toEqual({
       ...root,
@@ -206,68 +212,44 @@ describe("channel setup wizard account scoping", () => {
   });
 
   it("promotes mixed root credentials before adding another named account", async () => {
-    const queued = createQueuedWizardPrompter({
-      selectValues: ["__new__"],
-      textValues: ["alerts", "test-alerts-bot-id", "example-secret"],
-    });
+    const queued = newAccountPrompter();
 
-    const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: {
-            defaultAccount: "main",
-            botId: "test-main-bot-id",
-            secret: "test-secret",
-            accounts: { main: { marker: { keep: "mixed-shape" } } },
-          },
-        },
-      } as OpenClawConfig,
-      prompter: queued.prompter,
-      shouldPromptAccountIds: true,
-      options: { secretInputMode: "plaintext" as const },
-    });
-
-    const channel = getChannelConfig(result.cfg);
-    expect(channel).not.toHaveProperty("botId");
-    expect(channel).not.toHaveProperty("secret");
-    expect(channel.defaultAccount).toBe("main");
-    expect(channel.accounts).toEqual({
-      main: {
-        marker: { keep: "mixed-shape" },
-        botId: "test-main-bot-id",
-        secret: "test-secret",
+    const result = await configure(
+      {
+        defaultAccount: "main",
+        ...mainCredentials,
+        accounts: { main: { marker: { keep: "mixed-shape" } } },
       },
-      alerts: { botId: "test-alerts-bot-id", secret: "example-secret" },
+      queued,
+    );
+
+    const channel = expectPromotion(result, queued, {
+      main: { ...mainCredentials, marker: { keep: "mixed-shape" } },
+      alerts: alertCredentials,
     });
-    expect(queued.confirm).not.toHaveBeenCalled();
+    expect(channel.defaultAccount).toBe("main");
   });
 
   it("scopes a named default account when another account is the channel default", async () => {
-    const main = { botId: "test-main-bot-id", secret: "test-secret" };
+    const main = { ...mainCredentials };
     const before = JSON.stringify(main);
     const queued = createQueuedWizardPrompter({
       confirmValues: [false, false],
       textValues: ["test-new-bot-id", "mock-secret"],
     });
 
-    const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: {
-            defaultAccount: "main",
-            accounts: {
-              default: { botId: "test-old-bot-id", secret: "fixture-secret" },
-              main,
-            },
-          },
+    const result = await configure(
+      {
+        defaultAccount: "main",
+        accounts: {
+          default: { botId: "test-old-bot-id", secret: "fixture-secret" },
+          main,
         },
-      } as OpenClawConfig,
-      prompter: queued.prompter,
-      accountOverrides: { demo: DEFAULT_ACCOUNT_ID },
-      options: { secretInputMode: "plaintext" as const },
-    });
+      },
+      queued,
+      undefined,
+      { demo: DEFAULT_ACCOUNT_ID },
+    );
 
     const channel = getChannelConfig(result.cfg);
     expect(channel.defaultAccount).toBe("main");
@@ -280,35 +262,14 @@ describe("channel setup wizard account scoping", () => {
   });
 
   it("promotes root credentials before adding the first named account", async () => {
-    const queued = createQueuedWizardPrompter({
-      selectValues: ["__new__"],
-      textValues: ["alerts", "test-alerts-bot-id", "example-secret"],
-    });
+    const queued = newAccountPrompter();
 
-    const result = await runSetupWizardConfigure({
-      configure: createConfigure(),
-      cfg: {
-        channels: {
-          demo: {
-            enabled: true,
-            botId: "test-main-bot-id",
-            secret: "test-secret",
-          },
-        },
-      } as OpenClawConfig,
-      prompter: queued.prompter,
-      shouldPromptAccountIds: true,
-      options: { secretInputMode: "plaintext" as const },
-    });
+    const result = await configure({ enabled: true, ...mainCredentials }, queued);
 
-    const channel = getChannelConfig(result.cfg);
-    expect(channel).not.toHaveProperty("botId");
-    expect(channel).not.toHaveProperty("secret");
+    const channel = expectPromotion(result, queued, {
+      default: mainCredentials,
+      alerts: alertCredentials,
+    });
     expect(channel).not.toHaveProperty("defaultAccount");
-    expect(channel.accounts).toEqual({
-      default: { botId: "test-main-bot-id", secret: "test-secret" },
-      alerts: { botId: "test-alerts-bot-id", secret: "example-secret" },
-    });
-    expect(queued.confirm).not.toHaveBeenCalled();
   });
 });

@@ -357,10 +357,10 @@ export class SpawnBrokerHost {
     });
     this.process = child;
     const exitError = observeBrokerChildDiagnostics(child);
-    let closingAtExit = false;
-    // Classify at native exit; the last stderr bytes can arrive after close() starts.
+    let closingAtFailure = false;
+    // A crash can disconnect IPC before close() joins the later native exit.
     const brokerCompletion = (this.brokerClosed = waitForBrokerChildCompletion(child).then(() => {
-      if (closingAtExit && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
+      if (closingAtFailure && child.pid && (child.exitCode !== 0 || child.signalCode !== null)) {
         this.cleanupErrors.push(
           new SpawnBrokerError("Spawn broker shutdown failed", { cause: exitError() }),
         );
@@ -387,6 +387,7 @@ export class SpawnBrokerHost {
       }
       const cause =
         classifyChildRuntimeFailure({ error: nativeCause, started: ready }) ?? nativeCause;
+      closingAtFailure = this.closing;
       ended = true;
       clearTimeout(startupTimer);
       this.markNativeReady = undefined;
@@ -484,7 +485,9 @@ export class SpawnBrokerHost {
     this.markNativeReady = markReady;
     child.once("error", fail);
     child.once("exit", () => {
-      closingAtExit = this.closing;
+      if (!ended) {
+        closingAtFailure = this.closing;
+      }
       brokerExited.resolve();
       if (ready) {
         fail(exitError());

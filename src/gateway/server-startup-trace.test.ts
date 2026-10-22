@@ -117,7 +117,7 @@ describe("gateway startup trace", () => {
         const messages = info.mock.calls.map(([message]) => message);
         const summary = messages.filter((message) => message.includes("readersMs="));
         expect(summary).toEqual([
-          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 deliveryMs=1600.0 deliveryDiscoveryMs=10.0 deliveryEntriesMs=20.0 deliveryHistoryMs=30.0 deliveryReplayMs=40.0 deliveryNoticesMs=500.0 retryWaitMs=1000.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 registryActivationBindMs=10.0 registryActivationRequestersMs=5.0 registryActivationReserveMs=3.0 registryActivationResumeMs=20.0 registryActivationInterruptedMs=5.0 registryActivationAuthorityRestoreMs=6.0 registryActivationPublishMs=2.0 registryActivationSessionReadMs=7.0 registryActivationYieldMs=3.0 registryActivationRuns=6.0 registryActivationActiveRuns=2.0 registryActivationRecoveredRuns=1.0 registryActivationPublishedRuns=5.0 outcome=${fail ? "failure" : "success"}`,
+          `startup ${enabled === "1" ? "trace" : "phase"}: sidecars.subagent-recovery 1790.0ms total=1790.0ms ${enabled === "1" ? "eventLoopMax=0.0ms " : ""}readersMs=100.0 execMs=20.0 registryLoadMs=30.0 registryActivationMs=40.0 registryActivationBindMs=10.0 registryActivationRequestersMs=5.0 registryActivationReserveMs=3.0 registryActivationResumeMs=20.0 registryActivationAuthorityRestoreMs=6.0 registryActivationPublishMs=2.0 registryActivationSessionReadMs=7.0 registryActivationYieldMs=3.0 registryActivationRuns=6.0 registryActivationActiveRuns=2.0 registryActivationRecoveredRuns=1.0 registryActivationPublishedRuns=5.0 outcome=${fail ? "failure" : "success"}`,
         ]);
         if (enabled === "0") {
           expect(messages).toHaveLength(2);
@@ -127,7 +127,7 @@ describe("gateway startup trace", () => {
         info.mockClear();
         await trace.measure("sidecars.subagent-recovery", () => {});
         expect(info.mock.calls.at(-1)?.[0]).toContain(
-          "readersMs=0.0 deliveryMs=0.0 deliveryDiscoveryMs=0.0 deliveryEntriesMs=0.0 deliveryHistoryMs=0.0 deliveryReplayMs=0.0 deliveryNoticesMs=0.0 retryWaitMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 registryActivationBindMs=0.0 registryActivationRequestersMs=0.0 registryActivationReserveMs=0.0 registryActivationResumeMs=0.0 registryActivationInterruptedMs=0.0 registryActivationAuthorityRestoreMs=0.0 registryActivationPublishMs=0.0 registryActivationSessionReadMs=0.0 registryActivationYieldMs=0.0 registryActivationRuns=0.0 registryActivationActiveRuns=0.0 registryActivationRecoveredRuns=0.0 registryActivationPublishedRuns=0.0 outcome=success",
+          "readersMs=0.0 execMs=0.0 registryLoadMs=0.0 registryActivationMs=0.0 registryActivationBindMs=0.0 registryActivationRequestersMs=0.0 registryActivationReserveMs=0.0 registryActivationResumeMs=0.0 registryActivationAuthorityRestoreMs=0.0 registryActivationPublishMs=0.0 registryActivationSessionReadMs=0.0 registryActivationYieldMs=0.0 registryActivationRuns=0.0 registryActivationActiveRuns=0.0 registryActivationRecoveredRuns=0.0 registryActivationPublishedRuns=0.0 outcome=success",
         );
       } finally {
         trace.close();

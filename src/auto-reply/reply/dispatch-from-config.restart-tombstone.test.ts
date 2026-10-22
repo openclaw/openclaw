@@ -3,17 +3,11 @@ import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import {
-  areDiagnosticsEnabledForProcess,
-  setDiagnosticsEnabledForProcess,
-} from "../../infra/diagnostic-events.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import * as channels from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
   sessionStoreMocks,
@@ -51,8 +45,12 @@ describe("restart tombstone channel feedback", () => {
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "buzz", source: "test", plugin: createChannelTestPluginBase({ id: "buzz" }) },
+      channels.createTestRegistry([
+        {
+          pluginId: "buzz",
+          source: "test",
+          plugin: channels.createChannelTestPluginBase({ id: "buzz" }),
+        },
       ]),
     );
     mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
@@ -127,48 +125,45 @@ describe("restart tombstone channel feedback", () => {
     await dispatcher.waitForIdle();
   }
 
-  it.each(["message_tool"] as const)(
-    "delivers one room notice under %s and warns for every rejected inbound",
-    async (visibleReplies) => {
-      let elapsedMs = 0;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-      const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
-      setDiagnosticsEnabledForProcess(true);
-      onTestFinished(() => {
-        clock.mockRestore();
-        setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-      });
-      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-        elapsedMs += 1_500;
-        return sessionStoreMocks.currentEntry;
-      });
-      // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
-      const rejectionWarnings = () =>
-        warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
-      await rejectInbound({ visibleReplies });
-      expect(rejectionWarnings()).toHaveLength(1);
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: notice }),
-        expect.objectContaining({ kind: "final" }),
-      );
-      await rejectInbound({ visibleReplies });
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(rejectionWarnings()).toHaveLength(2);
-      for (const [line] of rejectionWarnings()) {
-        expect(line).toContain(sessionKey);
-        expect(line).toContain("automatic recovery exhausted");
-        expect(line).toContain("/reset");
-      }
-      expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
-        expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
-      );
-      expect(sessionStoreMocks.currentEntry).toMatchObject({
-        sessionId: "failed-session",
-        mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-      });
-    },
-  );
+  it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
+    let elapsedMs = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const diagnosticsWereEnabled = diagnostics.areDiagnosticsEnabledForProcess();
+    diagnostics.setDiagnosticsEnabledForProcess(true);
+    onTestFinished(() => {
+      clock.mockRestore();
+      diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    });
+    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+      elapsedMs += 1_500;
+      return sessionStoreMocks.currentEntry;
+    });
+    // Uncontended lifecycle effects stay quiet even when their own work is slow.
+    const rejectionWarnings = () =>
+      warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(rejectionWarnings()).toHaveLength(1);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: notice }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(rejectionWarnings()).toHaveLength(2);
+    for (const [line] of rejectionWarnings()) {
+      expect(line).toContain(sessionKey);
+      expect(line).toContain("automatic recovery exhausted");
+      expect(line).toContain("/reset");
+    }
+    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).not.toContainEqual(
+      expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
+    );
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "failed-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+  });
 
   it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
     await rejectInbound();
@@ -176,10 +171,8 @@ describe("restart tombstone channel feedback", () => {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
       sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        ...sessionStoreMocks.currentEntry!.mainRestartRecovery!,
         cycleId: "replacement-cycle",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
       };
     }
     await rejectInbound();
@@ -197,19 +190,6 @@ describe("restart tombstone channel feedback", () => {
     );
   });
 
-  it.each([{ label: "unauthorized inbound", context: { InboundAccessAuthorized: false } }])(
-    "does not notify for $label",
-    async ({ context }) => {
-      await rejectInbound({ context });
-      expect(deliver).not.toHaveBeenCalled();
-    },
-  );
-
-  it("honors explicit send-policy denial", async () => {
-    await rejectInbound({ sendPolicy: "deny" });
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
   it("warns about ambiguous routed delivery without repeating the notice", async () => {
     mocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: true, ambiguous: true });
     const context = { Provider: "slack", Surface: "slack" };
@@ -220,24 +200,26 @@ describe("restart tombstone channel feedback", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
   });
 
-  it("rechecks ACP privacy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      acpMocks.readAcpSessionEntry.mockReturnValue({
-        entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
-        acp: { backend: "acpx", mode: "persistent" },
+  it.each([
+    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
+    { label: "explicit send-policy denial", sendPolicy: "deny" as const },
+    { label: "ACP privacy after waiting for admission", acp: true },
+    { label: "send policy after waiting for admission", latePolicy: true },
+  ])("does not notify for $label", async ({ context, sendPolicy, acp, latePolicy }) => {
+    if (acp || latePolicy) {
+      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+        if (acp) {
+          acpMocks.readAcpSessionEntry.mockReturnValue({
+            entry: { sessionId: "failed-session", spawnedBy: "agent:main:parent" },
+            acp: { backend: "acpx", mode: "persistent" },
+          });
+        } else {
+          sessionStoreMocks.currentEntry!.sendPolicy = "deny";
+        }
+        return sessionStoreMocks.currentEntry;
       });
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
-    expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("rechecks send policy after waiting for admission", async () => {
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      sessionStoreMocks.currentEntry!.sendPolicy = "deny";
-      return sessionStoreMocks.currentEntry;
-    });
-    await rejectInbound();
+    }
+    await rejectInbound({ context, sendPolicy });
     expect(deliver).not.toHaveBeenCalled();
   });
 });

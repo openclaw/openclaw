@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetSessionControllerStorageForTest } from "../../sessions/session-controller-storage-reset.test-support.js";
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.sessionControllers");
 
 afterEach(() => {
+  resetSessionControllerStorageForTest();
   const store = globalThis as Record<PropertyKey, unknown>;
   delete store[REPLY_RUN_STATE_KEY];
   vi.resetModules();
@@ -20,11 +22,12 @@ describe("reply run registry retained singleton", () => {
     });
     operation.setPhase("running");
     bindSessionControllerSourceTurnId(operation, "reload-source");
-    let reloaded: typeof import("../../sessions/session-controller.js");
+    let reloadedQueries: typeof import("../../sessions/session-controller.queries.js");
     let reloadedEntry: { sourceTurnId?: string } | undefined;
     try {
       vi.resetModules();
-      reloaded = await import("../../sessions/session-controller.js");
+      const reloaded = await import("../../sessions/session-controller.js");
+      reloadedQueries = await import("../../sessions/session-controller.queries.js");
       const reloadedOperation = reloaded.getSessionControllerOperation(key);
       expect(reloadedOperation).toBe(operation);
       if (!reloadedOperation) {
@@ -36,7 +39,7 @@ describe("reply run registry retained singleton", () => {
     } finally {
       operation.complete();
     }
-    expect(reloaded.isSessionRunActiveForKey(key)).toBe(false);
+    expect(reloadedQueries.isSessionRunActiveForKey(key)).toBe(false);
     expect(reloadedEntry?.sourceTurnId).toBeUndefined();
   });
 

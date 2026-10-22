@@ -171,18 +171,19 @@ function pruneExecutionIdentityContextsAfterInsert(
   const expiredCount = Number(expired.numAffectedRows ?? 0n);
   const remainingPruneBudget = Math.max(0, limits.pruneBatchRows - expiredCount);
   if (remainingPruneBudget > 0) {
-    // Derive overflow from committed rows inside this transaction. A process-local
-    // count misses writes from the Gateway worker or a concurrent direct CLI.
-    const retainedIds = kysely
+    // The first overflow tuple bounds a range scan without materializing retained IDs.
+    const overflowBoundary = kysely
       .selectFrom("execution_identity_contexts")
-      .select("context_id")
+      .select(["created_at", "context_id"])
       .orderBy("created_at", "desc")
       .orderBy("context_id", "desc")
-      .limit(limits.maxRows);
+      .offset(limits.maxRows)
+      .limit(1)
+      .$asTuple("created_at", "context_id");
     const oldestOverflowIds = kysely
       .selectFrom("execution_identity_contexts")
       .select("context_id")
-      .where("context_id", "not in", retainedIds)
+      .where((eb) => eb(eb.refTuple("created_at", "context_id"), "<=", overflowBoundary))
       .orderBy("created_at", "asc")
       .orderBy("context_id", "asc")
       .limit(remainingPruneBudget);

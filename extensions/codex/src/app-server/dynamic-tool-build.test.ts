@@ -31,7 +31,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { createBridge } from "./dynamic-tools.test-support.js";
 import {
   createCodexTestHostCapabilities,
   setCodexTestToolFactory,
@@ -99,13 +99,6 @@ async function nativeSurface(
 
 function buildTools(options: Parameters<typeof buildDynamicToolsForTest>[2] = {}) {
   return buildDynamicToolsForTest(params, workspaceDir, options);
-}
-
-function createBridge(
-  tools: AnyAgentTool[],
-  options: Omit<Parameters<typeof createCodexDynamicToolBridge>[0], "tools" | "signal"> = {},
-) {
-  return createCodexDynamicToolBridge({ tools, signal: new AbortController().signal, ...options });
 }
 
 function mockTools(names: string[] = [], extra: AnyAgentTool[] = []) {
@@ -1118,7 +1111,6 @@ it("builds the durable registered-tool superset without loading a provider runti
     { name: "message", description: messageTool.description },
     { name: "heartbeat_respond", description: heartbeatTool.description },
   ]);
-  expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
 });
 
 it("enables gateway subagent binding for forced private QA Codex runs", async () => {

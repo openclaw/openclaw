@@ -2,11 +2,61 @@ import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
+import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { resolveFileRoot } from "./workspace-files.js";
+
+export type SessionFileReadPolicyTarget = {
+  agentId: string;
+  canonicalKey: string;
+  entry?: InternalSessionEntry;
+  unscopedHostRoot?: boolean;
+  /** The read serves files from before the conversation switched to its PR workspace. */
+  historical?: boolean;
+};
+
+/** Conversation visibility does not admit a caller to an unsandboxed host workspace. */
+export function assertSessionFileReadPolicy(
+  options: GatewayRequestHandlerOptions,
+  target: SessionFileReadPolicyTarget,
+) {
+  // Shared viewing, membership and admin scope never extend to the original files.
+  if (
+    target.historical &&
+    !(
+      target.entry &&
+      isSessionOwnRequester(
+        { cfg: options.context.getRuntimeConfig(), client: options.client },
+        { canonicalKey: target.canonicalKey, entry: target.entry },
+      )
+    )
+  ) {
+    throw new SessionMutationAuthorizationChangedError(
+      errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Only this conversation's owner can open its files from before the PR workspace.",
+      ),
+    );
+  }
+  if (!target.unscopedHostRoot) {
+    return;
+  }
+  readGatewayRequestMutationAuthority(options).assertCurrent();
+  const error = authorizeSessionAgentRun({
+    cfg: options.context.getRuntimeConfig(),
+    client: options.client,
+    target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
+  });
+  if (error) {
+    throw new SessionMutationAuthorizationChangedError(error);
+  }
+}
 
 /** Workspace authority excludes routine title, usage and activity metadata. */
 export function sessionFileWorkspaceMatches(
@@ -28,22 +78,29 @@ export function sessionFileWorkspaceMatches(
     "permissionMode",
     "sandbox",
     "sandboxMode",
+    "createdActor",
   ] as const;
   return (
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
-    previous?.worktree?.id === current?.worktree?.id
+    previous?.worktree?.id === current?.worktree?.id &&
+    isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
+    isDeepStrictEqual(
+      previous?.skillsSnapshot?.librarySelections,
+      current?.skillsSnapshot?.librarySelections,
+    )
   );
 }
 
 /** Host reads borrow the turn owner's prepared facts and the placement owner's live observation. */
 export function createSessionFileReadAuthority(
   options: GatewayRequestHandlerOptions,
-  source: {
-    agentId: string;
-    canonicalKey: string;
+  source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource"> & {
     entry?: InternalSessionEntry;
+    readEntry: () => InternalSessionEntry | undefined;
+    assertSourceCurrent: () => void;
     root?: string;
     fileRoot?: string;
+    fileWorkspace?: Awaited<ReturnType<typeof prepareSessionFileWorkspace>>;
   },
 ) {
   const { context } = options;
@@ -112,12 +169,27 @@ export function createSessionFileReadAuthority(
     }
   };
   return {
-    authorizeHostRead: () => (hostAdmission ??= prepareHostRead()),
+    authorizeHostRead: () =>
+      source.fileWorkspace?.historical
+        ? Promise.resolve(false)
+        : (hostAdmission ??= prepareHostRead()),
     withCurrent: withHostAuthority,
     // Downloads retain the exact session row separately; recheck host configuration
     // and the placement owner's current observation immediately before HTTP delivery.
     assertCurrent: () => {
+      source.assertSourceCurrent();
+      const current = source.readEntry();
+      if (current && source.fileWorkspace) {
+        source.fileWorkspace.assertCurrent(context.getRuntimeConfig(), current);
+        assertSessionFileReadPolicy(options, {
+          ...source,
+          entry: current,
+          unscopedHostRoot: source.fileWorkspace.unscopedHostRoot,
+          historical: source.fileWorkspace.historical,
+        });
+      }
       if (
+        !source.fileWorkspace &&
         source.entry &&
         !source.entry.repositoryWorkspaceId &&
         resolveSessionWorkspaceRoots(context.getRuntimeConfig(), agentId, source.entry).root !==

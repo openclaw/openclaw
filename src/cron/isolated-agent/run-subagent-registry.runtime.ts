@@ -10,6 +10,7 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "../../agents/subagents/registry/subagent-session-read-scope.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
 function withCronDescendantRuns<T>(
   sessionKey: string,
@@ -44,8 +45,11 @@ export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean
 }
 
 /** Retain live parent policy alongside the worker's durable deletion comparison. */
-export async function prepareCronDescendantDeletion(sessionKeys: readonly string[]) {
-  const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys);
+export async function prepareCronDescendantDeletion(
+  sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
+) {
+  const prepared = await prepareSubagentRunsSnapshotForSessions(subagentRuns, sessionKeys, context);
   return {
     hasUnsettled(sessionKey: string) {
       const current = prepared.consume((runs) =>

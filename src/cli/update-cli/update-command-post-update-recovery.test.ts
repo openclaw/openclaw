@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,7 +68,14 @@ const mocks = vi.hoisted(() => ({
   >(async () => undefined),
 }));
 
-vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.printResult,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.printResult(...args.slice(0, 3)),
+}));
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-verification.js")>()),
   verifyUpdatedGateway: mocks.verifyGateway,
@@ -120,12 +128,35 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
 
 import { UpdatePreMutationError } from "./shared.js";
 import { registerDoctorRestorationRollbackTests } from "./update-command-doctor-rollback.test-support.js";
+import {
+  finishParams,
+  updateResult,
+  updateStep,
+} from "./update-command-maintenance-fixtures.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { registerRestartFailureOwnershipTest } from "./update-command-restart-failure.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const tempDirs = useStateDatabaseTempDirs();
+const updateRun = (env: NodeJS.ProcessEnv) => ({
+  runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+  env,
+});
+const stateEnv = (prefix: string) => ({
+  ...process.env,
+  OPENCLAW_STATE_DIR: tempDirs.make(prefix),
+});
+async function installedRoot(prefix: string, version = "1.0.0") {
+  const root = tempDirs.make(prefix);
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version }));
+  return root;
+}
+function expectIdle(...calls: Array<(...args: never[]) => unknown>) {
+  for (const call of calls) {
+    expect(call).not.toHaveBeenCalled();
+  }
+}
 
 beforeEach(() => {
   mocks.verifyGateway.mockReset();
@@ -136,82 +167,68 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function failedResult(recovery: UpdateRunResult["recovery"]): UpdateRunResult {
-  return {
+function failedResult(recovery: UpdateRunResult["recovery"]) {
+  return updateResult({
     status: "error",
     mode: "git",
     reason: "doctor-failed",
     root: "/repo",
     recovery,
-    steps: [],
-    durationMs: 1,
-  };
+  });
 }
 
 async function finishFailedUpdate(
   result: UpdateRunResult,
-  options: {
-    failure?: { cause: unknown; detail: string };
+  options: Partial<Omit<FinishUpdateParams, "result" | "root" | "opts">> & {
     json?: boolean;
     stopped?: boolean;
-    mutationStarted?: boolean;
     run?: FinishUpdateParams["opts"]["run"];
     originalRoot?: string;
-    previousInstallRoot?: string;
-    packageTransaction?: FinishUpdateParams["packageTransaction"];
-    schemaVersions?: FinishUpdateParams["schemaVersions"];
-    configSnapshot?: FinishUpdateParams["configSnapshot"];
-    activationConfig?: { path: string; raw: string | null; hash: string };
-    previousVerified?: boolean;
     windowsTaskAutoStartRecovery?: NonNullable<
       FinishUpdateParams["preManagedServiceStop"]
     >["windowsTaskAutoStartRecovery"];
   } = {},
 ): Promise<UpdateCommandFailure> {
-  return await finishUpdate({
-    mutationStarted: options.mutationStarted ?? true,
-    result,
-    ...(options.failure ? { failure: options.failure } : {}),
-    root: options.originalRoot ?? result.root ?? "/repo",
-    previousInstallRoot: options.previousInstallRoot,
-    packageTransaction: options.packageTransaction,
-    schemaVersions: options.schemaVersions,
-    activationConfig: options.activationConfig,
-    previousVerified: options.previousVerified,
-    installKindChanged: false,
-    configSnapshot: options.configSnapshot ?? {
-      path: "/fixture/openclaw.json",
-      exists: false,
-      raw: null,
-      parsed: {},
-      sourceConfig: asResolvedSourceConfig({}),
-      resolved: asResolvedSourceConfig({}),
-      valid: true,
-      runtimeConfig: asRuntimeConfig({}),
-      config: asRuntimeConfig({}),
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    },
-    requestedChannel: null,
-    storedChannel: "stable",
-    channel: "stable",
-    downgradeRisk: false,
-    shouldRestart: true,
-    preUpdatePluginInstallRecords: {},
-    updateStepTimeoutMs: 1000,
-    opts: { json: options.json, run: options.run },
-    startedAt: Date.now(),
-    preManagedServiceStop: {
-      stopped: options.stopped ?? true,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      serviceEnv: options.run?.env ?? {},
-      windowsTaskAutoStartRecovery: options.windowsTaskAutoStartRecovery,
-    },
-    controlPlaneUpdateSentinelMeta: null,
-  }).then(
+  const {
+    json,
+    stopped = true,
+    run,
+    originalRoot,
+    windowsTaskAutoStartRecovery,
+    ...overrides
+  } = options;
+  return await finishUpdate(
+    finishParams({
+      ...overrides,
+      mutationStarted: options.mutationStarted ?? true,
+      result,
+      root: originalRoot ?? result.root ?? "/repo",
+      configSnapshot: options.configSnapshot ?? {
+        path: "/fixture/openclaw.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        sourceConfig: asResolvedSourceConfig({}),
+        resolved: asResolvedSourceConfig({}),
+        valid: true,
+        runtimeConfig: asRuntimeConfig({}),
+        config: asRuntimeConfig({}),
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      },
+      updateStepTimeoutMs: 1000,
+      opts: { json, run },
+      preManagedServiceStop: {
+        stopped,
+        inspected: true,
+        runtimeInspected: true,
+        running: true,
+        serviceEnv: run?.env ?? {},
+        windowsTaskAutoStartRecovery,
+      },
+    }),
+  ).then(
     () => {
       throw new Error("Expected failed update finalization to reject");
     },
@@ -226,23 +243,14 @@ async function finishFailedUpdate(
   );
 }
 
-async function finishSkippedUpdate(reason: string): Promise<UpdateCommandFailure> {
-  return await finishFailedUpdate(
-    {
-      status: "skipped",
-      mode: reason === "dirty" || reason === "no-upstream" ? "git" : "unknown",
-      reason,
-      steps: [],
-      durationMs: 1,
-    },
-    { stopped: false },
-  );
+function resetRuntimeMocks() {
+  vi.resetAllMocks();
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
 }
 
 describe("skipped update exit status", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+    resetRuntimeMocks();
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
@@ -251,7 +259,10 @@ describe("skipped update exit status", () => {
     ["dirty", 1],
     ["already-current", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
-    const failure = await finishSkippedUpdate(reason);
+    const failure = await finishFailedUpdate(
+      updateResult({ status: "skipped", mode: reason === "dirty" ? "git" : "unknown", reason }),
+      { stopped: false },
+    );
     expect(failure.exitCode).toBe(exitCode);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
@@ -267,24 +278,20 @@ describe("failed update recovery restart", () => {
     complete: async () => {},
     interrupted: () => false,
   };
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-  });
+  beforeEach(resetRuntimeMocks);
 
   it.each(["error", "skipped"] as const)(
     "records the %s outcome before recovery starts the Gateway",
     async (status) => {
       let now = 1_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: tempDirs.make("update-report-before-boot-"),
-      };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const env = stateEnv("update-report-before-boot-");
+      const run = updateRun(env);
       mocks.restart.mockImplementationOnce(async () => {
-        expect(mocks.writeSentinel.mock.lastCall?.[0].result).toMatchObject({ status });
-        expect(mocks.writeSentinel.mock.lastCall?.[0].result.durationMs).toBe(0);
+        expect(mocks.writeSentinel.mock.lastCall?.[0].result).toMatchObject({
+          status,
+          durationMs: 0,
+        });
         expect(mocks.printResult).not.toHaveBeenCalled();
         if (status === "error") {
           expect(getUpdateRun(run.runId, { env })?.origin.nextAction).toContain("triage");
@@ -310,10 +317,9 @@ describe("failed update recovery restart", () => {
     { mode: "git", status: "skipped", reason: "dirty", service: "failed" },
     { mode: "pnpm", status: "error", reason: "package-swap", service: "failed" },
   ] as const)(
-    "reports the terminal $service recovery for a $mode $status update",
+    "$mode $status reports terminal $service recovery",
     async ({ mode, status, reason, service }) => {
-      const root = tempDirs.make("update-terminal-installed-runtime-");
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
+      const root = await installedRoot("update-terminal-installed-runtime-");
       mocks.restart.mockResolvedValueOnce(service);
       mocks.verifyGateway.mockResolvedValueOnce({
         ok: service === "healthy",
@@ -328,13 +334,7 @@ describe("failed update recovery restart", () => {
           status,
           reason,
           steps: [
-            {
-              name: reason,
-              command: "update",
-              cwd: "/repo",
-              durationMs: 1,
-              exitCode: status === "skipped" ? null : 1,
-            },
+            updateStep(reason, { command: "update", exitCode: status === "skipped" ? null : 1 }),
           ],
         },
         { json: true },
@@ -358,14 +358,12 @@ describe("failed update recovery restart", () => {
     { mutationStarted: false, stopped: true, waitForStartup: true },
     { mutationStarted: true, stopped: false, waitForStartup: true },
   ])(
-    "retains recorded activation effects in recovery (mutation=$mutationStarted, stop=$stopped)",
+    "retains activation effects (mutation=$mutationStarted, stop=$stopped)",
     async ({ mutationStarted, stopped, waitForStartup }) => {
-      const root = tempDirs.make("update-recovery-startup-policy-");
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
+      const root = await installedRoot("update-recovery-startup-policy-");
       await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
       expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(mocks.restartCandidate).not.toHaveBeenCalled();
+      expectIdle(mocks.restart, mocks.restartCandidate);
     },
   );
 
@@ -381,24 +379,13 @@ describe("failed update recovery restart", () => {
       {
         ...failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
         reason: "update-failed",
-        steps: [
-          {
-            name: "update",
-            command: "openclaw update",
-            cwd: "/repo",
-            durationMs: 1,
-            exitCode: 1,
-            stderrTail: detail,
-          },
-        ],
+        steps: [updateStep("update", { command: "openclaw update", stderrTail: detail })],
       },
       { failure: { cause: original, detail } },
     );
     expect(failure.cause).toBe(original);
+    expect(failure).toMatchObject({ detail, exitCode: 1 });
     expect(original.cause).toBe(restoreError);
-    expect(failure.detail).toContain(restoreError.message);
-    expect(failure.detail).toBe(detail);
-    expect(failure.exitCode).toBe(1);
     expect(mocks.restart).not.toHaveBeenCalled();
   });
 
@@ -409,33 +396,20 @@ describe("failed update recovery restart", () => {
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
     },
   ] as const)(
-    "does not re-enable Windows autostart without verified safety ($status, $recovery)",
+    "requires verified safety for Windows autostart ($status, $recovery)",
     async ({ status, recovery }) => {
       const complete = vi.fn(async () => {});
       const restore = vi.fn();
       await finishFailedUpdate(
-        {
-          ...failedResult(recovery),
-          status,
-        },
-        {
-          windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
-            beginMutation: () => {},
-            assertRecoveryCurrent: () => {},
-            restore,
-            handoff: () => {},
-            complete,
-            interrupted: () => false,
-          },
-        },
+        { ...failedResult(recovery), status },
+        { windowsTaskAutoStartRecovery: { ...windowsTaskAutoStartRecovery, restore, complete } },
       );
       expect(restore).not.toHaveBeenCalled();
       expect(complete).toHaveBeenCalledWith(false);
     },
   );
 
-  it("does not restart when the mutation owner returned no recovery verdict", async () => {
+  it("requires a mutation-owner recovery verdict to restart", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     const failure = await finishFailedUpdate(failedResult(undefined), {
       json: true,
@@ -446,21 +420,14 @@ describe("failed update recovery restart", () => {
   });
 
   it.each([
-    { handoff: false, restoreFails: false, safe: false, stopped: true, expected: 1 },
-    { handoff: true, restoreFails: false, safe: false, stopped: true, expected: 79 },
-    {
-      handoff: true,
-      restoreFails: true,
-      safe: true,
-      stopped: true,
-      expected: 79,
-      mutationFailed: true,
-    },
-    { handoff: true, restoreFails: false, safe: true, stopped: true, expected: 1 },
-    { handoff: true, restoreFails: true, safe: true, stopped: false, expected: 79 },
-  ])(
-    "preserves the final restart verdict ($handoff, $restoreFails, $safe, $stopped)",
-    async ({ handoff, restoreFails, safe, stopped, expected, mutationFailed }) => {
+    [false, false, false, true, 1, false],
+    [true, false, false, true, 79, false],
+    [true, true, true, true, 79, true],
+    [true, false, true, true, 1, false],
+    [true, true, true, false, 79, false],
+  ] as const)(
+    "preserves restart verdict (handoff=%s, restoreFails=%s, safe=%s, stopped=%s)",
+    async (handoff, restoreFails, safe, stopped, expected, mutationFailed) => {
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", handoff ? "1" : undefined);
       const restoreError = new Error("restore failed");
       if (restoreFails) {
@@ -496,10 +463,10 @@ describe("failed update recovery restart", () => {
         expect(failure.detail).toContain(result.reason);
         if (original) {
           const combined = failure.cause;
-          expect(combined).toBeInstanceOf(AggregateError);
-          if (!(combined instanceof AggregateError)) {
-            throw new Error("Expected both original and restoration failures");
-          }
+          assert(
+            combined instanceof AggregateError,
+            "Expected both original and restoration failures",
+          );
           expect(combined.errors).toEqual([original, restoreError]);
           expect(combined.cause).toBe(restoreError);
           expect(failure.detail).toContain(original.message);
@@ -510,43 +477,35 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it.each([80])(
-    "does not activate when pre-restart convergence exits %s",
-    async (childExitCode) => {
-      mocks.restartCandidate.mockResolvedValueOnce("ok");
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
-      const detail = "Fresh Doctor could not persist the migrated config.";
-      mocks.freshProcess.mockResolvedValueOnce({
-        resumed: false,
-        exitCode: childExitCode,
-        error: detail,
-      });
-      const failure = await finishFailedUpdate(
-        { status: "ok", mode: "npm", root: "/repo", steps: [], durationMs: 1 },
-        { json: true, windowsTaskAutoStartRecovery },
-      );
-      expect(failure.exitCode).toBe(79);
-      expect(failure.detail).toBe(detail);
-      expect(failure.result).toMatchObject({
+  it("does not activate when pre-restart convergence exits 80", async () => {
+    mocks.restartCandidate.mockResolvedValueOnce("ok");
+    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
+    const detail = "Fresh Doctor could not persist the migrated config.";
+    mocks.freshProcess.mockResolvedValueOnce({ resumed: false, exitCode: 80, error: detail });
+    const failure = await finishFailedUpdate(updateResult({ root: "/repo" }), {
+      json: true,
+      windowsTaskAutoStartRecovery,
+    });
+    expect(failure).toMatchObject({
+      exitCode: 79,
+      detail,
+      result: {
         status: "error",
         reason: "post-core-update-failed",
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      });
-      expect(mocks.restartCandidate).not.toHaveBeenCalled();
-      expect(mocks.restoreWindowsAutoStart).not.toHaveBeenCalled();
-      expect(mocks.restart).not.toHaveBeenCalled();
-    },
-  );
+      },
+    });
+    expectIdle(mocks.restartCandidate, mocks.restoreWindowsAutoStart, mocks.restart);
+  });
 
   it.each([true, false])(
-    "persists the owned profile and observed service stop in recovery guidance (stopped=%s)",
+    "persists profile and observed service stop (stopped=%s)",
     async (stopped) => {
       const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: tempDirs.make("update-report-recovery-"),
+        ...stateEnv("update-report-recovery-"),
         OPENCLAW_PROFILE: "work",
       };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const run = updateRun(env);
       mocks.readRuntime.mockResolvedValue({ status: stopped ? "stopped" : "unknown" });
       await finishFailedUpdate(
         failedResult({ serviceRestartSafe: false, reason: "rollback-checkout-dirty" }),
@@ -556,9 +515,9 @@ describe("failed update recovery restart", () => {
       const nextAction = getUpdateRun(run.runId, { env })?.origin.nextAction;
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(nextAction).toContain("Run `openclaw --profile work triage`");
-      expect(nextAction).not.toMatch(/keep the gateway stopped/i);
       expect(nextAction).toContain("openclaw --profile work update repair");
       expect(nextAction).toContain("openclaw --profile work gateway status --deep");
+      expect(nextAction).not.toMatch(/keep the gateway stopped/i);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({ nextAction });
     },
   );
@@ -566,11 +525,8 @@ describe("failed update recovery restart", () => {
   it.each([7376, 7377])(
     "reports the latest running process after the activation stop (pid=%s)",
     async (pid) => {
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: tempDirs.make("update-running-unverified-"),
-      };
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const env = stateEnv("update-running-unverified-");
+      const run = updateRun(env);
       recordUpdateRunVerification(
         run.runId,
         { serviceRunning: true, pid: 7376, runningVersion: "2026.9.3" },
@@ -592,20 +548,18 @@ describe("failed update recovery restart", () => {
       );
 
       const recorded = getUpdateRun(run.runId, { env });
-      if (!recorded) {
-        throw new Error("Expected the failed update run to remain recorded");
-      }
+      assert(recorded, "Expected the failed update run to remain recorded");
       const version = pid === 7376 ? "2026.9.3" : undefined;
       expect(recorded.origin.nextAction).toContain(
         `The gateway is running${version ? ` ${version}` : ""} but did not pass verification`,
       );
       expect(recorded.origin.nextAction).toContain("gateway-probe-failed");
       expect(recorded.origin.nextAction).toContain("installed Gateway version could not be read");
-      expect(recorded.origin.nextAction).not.toContain("gateway stopped");
-      expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
       expect(recorded.origin.nextAction).toContain("update repair");
       expect(recorded.origin.nextAction).toContain("gateway status --deep");
+      expect(recorded.origin.nextAction).not.toContain("gateway stopped");
+      expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
@@ -624,14 +578,11 @@ describe("failed update recovery restart", () => {
 });
 
 describe("failed package update recovery safety", () => {
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-  });
+  beforeEach(resetRuntimeMocks);
 
   registerDoctorRestorationRollbackTests(mocks, (prefix) => tempDirs.make(prefix));
 
-  it("retains and reports the recovery backup after candidate publication and compensation fail", async () => {
+  it("retains recovery backup when publication and compensation fail", async () => {
     const base = tempDirs.make("update-older-target-backup-");
     const { params, packageRoot } = await createPackageSwapFixture(base);
     let retained: PackageUpdateTransaction | undefined;
@@ -655,36 +606,29 @@ describe("failed package update recovery safety", () => {
           retained = value;
         },
       });
-      if (!retained) {
-        throw new Error("The package owner did not retain its recovery transaction.");
-      }
+      assert(retained, "The package owner did not retain its recovery transaction.");
       expect((await retained.rollback(() => {})).exitCode).toBe(1);
       expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
     } finally {
       renameSpy.mockRestore();
     }
-    if (!retained) {
-      throw new Error("The package owner did not retain its recovery transaction.");
-    }
+    assert(retained, "The package owner did not retain its recovery transaction.");
     const transaction = retained;
-    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({ status: "failed", activePackageRoot: null });
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(base, "state") };
-    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-    expect(result.activePackageRoot).toBeNull();
+    const run = updateRun(env);
     await expect(fs.readFile(backupRuntime, "utf8")).resolves.toBe("export {};\n");
 
     const failure = await finishFailedUpdate(
-      {
+      updateResult({
         status: "error",
-        mode: "npm",
         reason: result.step.name,
         root: result.activePackageRoot ?? undefined,
         before: { version: "1.0.0" },
         steps: [result.step],
-        durationMs: 1,
         recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      },
+      }),
       {
         run,
         originalRoot: packageRoot,
@@ -698,17 +642,14 @@ describe("failed package update recovery safety", () => {
     expect(failure.result.root).toBeUndefined();
     expect(failure.result.recovery?.serviceRestartSafe).toBe(false);
     expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
-    expect(failure.result.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
-      ]),
+    expect(failure.result.steps).toContainEqual(
+      expect.objectContaining({ stderrTail: expect.stringContaining(transaction.backupRoot) }),
     );
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.restartCandidate).not.toHaveBeenCalled();
+    expectIdle(mocks.restart, mocks.restartCandidate);
   });
 
   it.each([false, true])(
-    "settles the first broken update after Doctor rewrites config (operator edit=%s)",
+    "settles Doctor-rewritten config (operator edit=%s)",
     async (operatorEdit) => {
       const stateDir = tempDirs.make("update-managed-rollback-");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -757,17 +698,13 @@ describe("failed package update recovery safety", () => {
       if (operatorEdit) {
         await fs.writeFile(configPath, current);
       }
-      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const run = updateRun(env);
       const schemaVersions = await readUpdateStateSchemaVersions({
         stateDir: env.OPENCLAW_STATE_DIR,
         config: {},
         env,
       });
-      const originalRoot = tempDirs.make("update-restored-installed-runtime-");
-      await fs.writeFile(
-        path.join(originalRoot, "package.json"),
-        JSON.stringify({ version: "2026.9.1" }),
-      );
+      const originalRoot = await installedRoot("update-restored-installed-runtime-", "2026.9.1");
       mocks.stopCandidate.mockResolvedValue({
         stopped: true,
         inspected: true,
@@ -783,28 +720,22 @@ describe("failed package update recovery safety", () => {
       });
       mocks.restartCandidate.mockResolvedValueOnce("ok");
       const rollback = vi.fn(async () => ({
-        name: "package rollback",
+        ...updateStep("package rollback", { command: "restore", cwd: originalRoot, exitCode: 0 }),
         activePackageRoot: originalRoot,
-        command: "restore",
-        cwd: originalRoot,
-        exitCode: 0,
-        durationMs: 1,
       }));
       let cleanupStatus: string | undefined;
       const complete = vi.fn(async () => {
         cleanupStatus = getUpdateRun(run.runId, { env })?.status;
       });
       const failure = await finishFailedUpdate(
-        {
+        updateResult({
           status: "error",
           mode: "pnpm",
           root: process.cwd(),
           before: { version: "2026.9.1" },
           after: { version: "2026.9.3" },
           reason: "version-mismatch",
-          steps: [],
-          durationMs: 1,
-        },
+        }),
         {
           run,
           originalRoot,
@@ -817,16 +748,13 @@ describe("failed package update recovery safety", () => {
         },
       );
       const recorded = getUpdateRun(run.runId, { env });
-      if (!recorded) {
-        throw new Error("Expected the completed update to remain recorded");
-      }
+      assert(recorded, "Expected the completed update to remain recorded");
       if (operatorEdit) {
         expect(failure.result.reason).toBe("state-migrated-no-rollback");
         expect(recorded.status).toBe("failed");
         expect(recorded.origin.nextAction).toContain("openclaw.json");
         expect(await fs.readFile(configPath, "utf8")).toBe(current);
-        expect(rollback).not.toHaveBeenCalled();
-        expect(mocks.restartCandidate).not.toHaveBeenCalled();
+        expectIdle(rollback, mocks.restartCandidate);
         return;
       }
       expect(failure.result).toMatchObject({ root: originalRoot, after: { version: "2026.9.1" } });
@@ -850,21 +778,21 @@ describe("failed package update recovery safety", () => {
   );
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
-    const failure = await finishFailedUpdate({
-      status: "error",
-      mode: "npm",
-      reason: "doctor-failed",
-      steps: [
-        { name: "package-install", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-        { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
-      ],
-      recovery: {
-        serviceRestartSafe: false,
-        reason: "runtime-verification-failed",
-        packageRollbackVerified: true,
-      },
-      durationMs: 1,
-    });
+    const failure = await finishFailedUpdate(
+      updateResult({
+        status: "error",
+        reason: "doctor-failed",
+        steps: [
+          updateStep("package-install", { command: "npm", cwd: "/", exitCode: 0 }),
+          updateStep("openclaw doctor", { command: "doctor", cwd: "/" }),
+        ],
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          packageRollbackVerified: true,
+        },
+      }),
+    );
     expect(failure.exitCode).toBe(1);
 
     expect(mocks.restart).not.toHaveBeenCalled();

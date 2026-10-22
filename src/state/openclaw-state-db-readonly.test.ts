@@ -151,16 +151,16 @@ it("preserves query authorization denial and recovers the cached reader", async 
   await withOpenClawTestState({ label: "state-readonly-authorizer" }, async ({ env }) => {
     const options = { env };
     const opened = openOpenClawStateDatabase(options);
-    const operation = vi.fn(({ db }: { db: typeof opened.db }) =>
-      db.prepare("SELECT role FROM schema_meta").get(),
-    );
     let denied = false;
-    requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
-      if (action === constants.SQLITE_SELECT && !denied) {
-        denied = true;
-        return constants.SQLITE_DENY;
-      }
-      return constants.SQLITE_OK;
+    const operation = vi.fn(({ db }: { db: typeof opened.db }) => {
+      requireNativeSqliteDatabase(db).setAuthorizer((action) => {
+        if (action === constants.SQLITE_SELECT && !denied) {
+          denied = true;
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      return db.prepare("SELECT role FROM schema_meta").get();
     });
     try {
       expect(() => withExistingOpenClawStateDatabaseReadOnly(operation, options)).toThrow(

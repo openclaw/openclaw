@@ -16,9 +16,9 @@ export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SET
 export const QA_LIVE_SETUP_TOKEN_VALUE_ENV = "OPENCLAW_LIVE_SETUP_TOKEN_VALUE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE";
 const QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE_ID = "anthropic:qa-setup-token";
-const QA_LIVE_API_KEY_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+const QA_LIVE_API_KEY_AGENT_IDS = ["main", "qa"] as const;
 const QA_OPENAI_PROVIDER_ID = "openai";
-const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   anthropic: ["OPENCLAW_LIVE_ANTHROPIC_KEY"],
   gemini: ["OPENCLAW_LIVE_GEMINI_KEY"],
   openai: [
@@ -27,7 +27,7 @@ const QA_LIVE_API_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = Obj
     "OPENCLAW_LIVE_OPENAI_KEY",
     "OPENAI_API_KEY",
   ],
-});
+};
 
 function buildQaLiveApiKeyProfileId(provider: string): string {
   return `qa-live-${provider.replaceAll(/[^a-z0-9_-]/giu, "-")}-env`;

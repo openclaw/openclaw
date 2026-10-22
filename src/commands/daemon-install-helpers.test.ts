@@ -318,6 +318,55 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
 }
 
 describe("buildGatewayInstallPlan", () => {
+  it.each([
+    {
+      label: "explicit empty CA",
+      platform: "linux" as const,
+      current: { NODE_EXTRA_CA_CERTS: "" },
+      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
+      expected: undefined,
+    },
+    {
+      label: "Windows caller CA",
+      platform: "win32" as const,
+      current: { node_extra_ca_certs: "/opt/current.pem" },
+      installed: { NODE_EXTRA_CA_CERTS: "/opt/installed.pem" },
+      expected: "/opt/current.pem",
+    },
+    {
+      label: "Windows installed CA",
+      platform: "win32" as const,
+      current: {},
+      installed: { node_extra_ca_certs: "/opt/installed.pem" },
+      expected: "/opt/installed.pem",
+    },
+  ])(
+    "preserves explicit and installed CA choices ($label)",
+    async ({ platform, current, installed, expected }) => {
+      const actual = await vi.importActual<typeof import("../daemon/service-env.js")>(
+        "../daemon/service-env.js",
+      );
+      mocks.buildServiceEnvironment.mockImplementation(actual.buildServiceEnvironment);
+      const plan = await buildNodePlan({
+        env: isolatedPlanEnv(current),
+        platform,
+        existingEnvironment: installed,
+      });
+      expect(plan.environment.NODE_EXTRA_CA_CERTS).toBe(expected);
+    },
+  );
+
+  it("repairs persisted proxy trust while retaining unrelated service settings", async () => {
+    const ca = "/state/a/secret-egress-proxy/gateway-old/trust-bundle.pem";
+    const plan = await buildNodePlan({
+      env: isolatedPlanEnv({ NODE_EXTRA_CA_CERTS: ca }),
+      existingEnvironment: { SSL_CERT_FILE: ca, CURL_CA_BUNDLE: ca, CUSTOM_SETTING: "keep" },
+    });
+    expect(plan.environment).not.toHaveProperty("SSL_CERT_FILE");
+    expect(plan.environment).not.toHaveProperty("CURL_CA_BUNDLE");
+    expect(plan.environment.CUSTOM_SETTING).toBe("keep");
+  });
+
   beforeAll(async () => {
     const { resolveConfigSecretTargetByPath } = await import("../secrets/target-registry.js");
     resolveConfigSecretTargetByPath(["channels", "discord", "token"]);

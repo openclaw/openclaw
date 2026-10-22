@@ -14,9 +14,7 @@ import {
 } from "./app-server/managed-binary.js";
 
 export type CodexDoctorStartOptionsDependencies = {
-  resolveAgentStartOptions?: typeof resolveCodexAppServerStartOptionsForAgent;
   resolveStartOptions?: typeof resolveManagedCodexAppServerStartOptions;
-  isDesktopCommand?: typeof isManagedCodexDesktopCommand;
 };
 
 /** Selects the same local agent or passive-catalog command for both Doctor probes. */
@@ -37,11 +35,8 @@ export async function resolveCodexDoctorStartOptions(params: {
   if (params.managedOnly && start.commandSource !== "managed") {
     return { status: "skipped", reason: "Codex uses a custom app-server command." };
   }
-  const resolveAgentStartOptions =
-    params.deps?.resolveAgentStartOptions ?? resolveCodexAppServerStartOptionsForAgent;
   const resolveStartOptions =
     params.deps?.resolveStartOptions ?? resolveManagedCodexAppServerStartOptions;
-  const isDesktopCommand = params.deps?.isDesktopCommand ?? isManagedCodexDesktopCommand;
   const candidates: CodexAppServerStartOptions[] = [];
   for (const agentId of listAgentIds(params.cfg)) {
     const model = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
@@ -56,7 +51,7 @@ export async function resolveCodexDoctorStartOptions(params: {
       continue;
     }
     candidates.push(
-      resolveAgentStartOptions({
+      resolveCodexAppServerStartOptionsForAgent({
         startOptions: start,
         agentDir: resolveAgentDir(params.cfg, agentId, params.env),
         env: params.env,
@@ -77,7 +72,7 @@ export async function resolveCodexDoctorStartOptions(params: {
       pluginRoot: params.pluginRoot,
       preferInstalled: false,
     });
-    if (!isDesktopCommand(resolved.command)) {
+    if (!isManagedCodexDesktopCommand(resolved.command)) {
       return { status: "selected", start: resolved };
     }
   }

@@ -6,7 +6,7 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
-import { SessionOwnerChipContent } from "./session-owner-chip.tsx";
+import { SessionOwnerChip } from "./session-owner-chip.tsx";
 import {
   ViewerAvatarContent,
   ViewerFacepileContent,
@@ -75,6 +75,7 @@ it.each([false, true])(
       await waitForSolid(() => expect(image.getAttribute("src")).toBe("blob:solid-avatar"));
     }
     image.dispatchEvent(new Event("load"));
+    flush();
     expect(container.querySelector(".viewer-avatar")?.getAttribute("data-avatar-state")).toBe(
       "loaded",
     );
@@ -102,7 +103,7 @@ it("updates Solid owner attribution and participant stacks from the current prop
   disposals.push(
     mountSolid(
       () => (
-        <SessionOwnerChipContent
+        <SessionOwnerChip
           owner={{ type: "human", id: "ada", label: "Ada" }}
           attribution="owned"
           participantCount={count()}
@@ -153,6 +154,7 @@ it("renders and retires a Solid agent's configured image without losing its fall
     ).unmount,
   );
   container.querySelector("img")!.dispatchEvent(new Event("error"));
+  flush();
   expect(
     container.querySelector(".identity-avatar--agent")?.classList.contains("is-fallback"),
   ).toBe(true);

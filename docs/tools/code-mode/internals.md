@@ -78,7 +78,9 @@ for turn settlement; suppressing its display history does not undo its execution
 Terminal tool and activity events are published only after the nested activity
 append is accepted. Effect and replay-safety evidence is captured before that
 append, so a persistence failure cannot undo a known tool effect or make it safe
-to repeat. Starts and partial updates remain transient. Older missing child
+to repeat. Lifecycle accounting settles from the captured outcome even when
+cancellation, supersession, or persistence failure suppresses terminal presentation.
+Starts and partial updates remain transient. Older missing child
 history cannot be reconstructed from source code or outer results.
 
 Thrown tool errors are catchable. Returned values may instead report failure.

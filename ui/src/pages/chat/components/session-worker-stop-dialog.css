@@ -1,0 +1,118 @@
+.session-worker-stop-dialog {
+  --openclaw-modal-width: 400px;
+}
+.session-worker-stop {
+  padding: 20px 20px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+}
+.session-worker-stop__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 24px;
+}
+.session-worker-stop__heading h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+.session-worker-stop__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+.session-worker-stop__close svg {
+  width: 18px;
+  height: 18px;
+}
+.session-worker-stop__close:hover {
+  background: var(--bg-hover);
+}
+.session-worker-stop__description {
+  margin: 8px 0 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.session-worker-stop__description strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.session-worker-stop .session-worker-stop__actions {
+  margin-top: 20px;
+  padding: 0;
+  border: 0;
+  gap: 8px;
+}
+.session-worker-stop__actions .btn {
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+.session-worker-stop__actions .session-worker-stop__submit {
+  display: grid;
+  min-width: 124px;
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+.session-worker-stop__submit:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 17%, transparent);
+}
+.session-worker-stop__submit[aria-busy="true"] {
+  opacity: 1;
+  cursor: wait;
+}
+.session-worker-stop__button-state {
+  grid-area: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.session-worker-stop__button-state svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: none;
+}
+.session-worker-stop__spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: session-worker-stop-spin 0.8s linear infinite;
+}
+@keyframes session-worker-stop-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 640px) {
+  .session-worker-stop {
+    padding: 16px 16px 14px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-worker-stop__spinner {
+    animation: none;
+  }
+}

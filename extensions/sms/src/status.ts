@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import {
   listTwilioIncomingPhoneNumbers,
@@ -44,11 +43,8 @@ export type SmsProbe = {
 };
 
 type ProbeOptions = {
-  fetchImpl?: typeof fetch;
   deliveryRecords?: readonly SmsDeliveryRecord[];
 };
-
-type RemoteProbeOutcome<T> = { kind: "value"; value: T } | { kind: "error"; error: string };
 
 function resolveRemoteProbeTimeoutMs(timeoutMs: number): number {
   const normalized = Math.max(1, Math.floor(timeoutMs));
@@ -56,22 +52,12 @@ function resolveRemoteProbeTimeoutMs(timeoutMs: number): number {
   return Math.max(0, normalized - settleMarginMs);
 }
 
-async function runRemoteProbe<T>(params: {
-  label: string;
-  timeoutMs: number;
-  run: () => Promise<T>;
-}): Promise<RemoteProbeOutcome<T>> {
-  try {
-    const value = await withTimeout(Promise.resolve().then(params.run), params.timeoutMs, {
-      message: `timed out after ${params.timeoutMs}ms`,
-    });
-    return { kind: "value", value };
-  } catch (error) {
-    return {
-      kind: "error",
-      error: `${params.label} failed: ${formatErrorMessage(error)}`,
-    };
-  }
+function formatRemoteProbeFailure(label: string, error: unknown, timeoutMs: number): string {
+  const message =
+    error instanceof Error && error.name === "TimeoutError"
+      ? `timed out after ${timeoutMs}ms`
+      : formatErrorMessage(error);
+  return `${label} failed: ${message}`;
 }
 
 function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
@@ -228,63 +214,48 @@ export async function probeSmsAccount(params: {
   } else {
     const requestOptions = () => ({
       account: params.account,
-      fetchImpl: params.options?.fetchImpl,
       timeoutMs: remoteTimeoutMs,
     });
-    const webhookTask: Promise<RemoteProbeOutcome<SmsTwilioWebhookProbe>> =
-      params.account.fromNumber || params.account.messagingServiceSid
-        ? runRemoteProbe<SmsTwilioWebhookProbe>({
-            label: "Twilio webhook check",
-            timeoutMs: remoteTimeoutMs,
-            run: params.account.fromNumber
-              ? async () =>
-                  compareTwilioWebhook(
-                    params.account,
-                    (
-                      await listTwilioIncomingPhoneNumbers({
-                        ...requestOptions(),
-                        phoneNumber: params.account.fromNumber,
-                      })
-                    )[0],
-                  )
-              : async () =>
-                  compareTwilioMessagingService(
-                    params.account,
-                    await retrieveTwilioMessagingService({
-                      ...requestOptions(),
-                      serviceSid: params.account.messagingServiceSid,
-                    }),
-                  ),
-          })
+    const webhookTask: Promise<SmsTwilioWebhookProbe> = params.account.fromNumber
+      ? listTwilioIncomingPhoneNumbers({
+          ...requestOptions(),
+          phoneNumber: params.account.fromNumber,
+        }).then(([number]) => compareTwilioWebhook(params.account, number))
+      : params.account.messagingServiceSid
+        ? retrieveTwilioMessagingService({
+            ...requestOptions(),
+            serviceSid: params.account.messagingServiceSid,
+          }).then((service) => compareTwilioMessagingService(params.account, service))
         : Promise.resolve({
-            kind: "value",
-            value: {
-              status: "unavailable",
-              reason: "Twilio SMS check requires fromNumber or messagingServiceSid.",
-            },
+            status: "unavailable",
+            reason: "Twilio SMS check requires fromNumber or messagingServiceSid.",
           });
-    const messageTask: Promise<RemoteProbeOutcome<TwilioMessageLogEntry[]>> = params.account
-      .fromNumber
-      ? runRemoteProbe({
-          label: "Twilio message history check",
-          timeoutMs: remoteTimeoutMs,
-          run: async () =>
-            await listTwilioMessages({
-              ...requestOptions(),
-              to: params.account.fromNumber,
-              pageSize: 3,
-            }),
+    const messageTask = params.account.fromNumber
+      ? listTwilioMessages({
+          ...requestOptions(),
+          to: params.account.fromNumber,
         })
-      : Promise.resolve({ kind: "value", value: [] });
-    const [webhookOutcome, messageOutcome] = await Promise.all([webhookTask, messageTask]);
+      : Promise.resolve([]);
+    const [webhookOutcome, messageOutcome] = await Promise.allSettled([webhookTask, messageTask]);
     webhook =
-      webhookOutcome.kind === "value"
+      webhookOutcome.status === "fulfilled"
         ? webhookOutcome.value
-        : { status: "unavailable", reason: webhookOutcome.error };
-    if (messageOutcome.kind === "value") {
+        : {
+            status: "unavailable",
+            reason: formatRemoteProbeFailure(
+              "Twilio webhook check",
+              webhookOutcome.reason,
+              remoteTimeoutMs,
+            ),
+          };
+    if (messageOutcome.status === "fulfilled") {
       messages = messageOutcome.value;
     } else {
-      messageHistoryError = messageOutcome.error;
+      messageHistoryError = formatRemoteProbeFailure(
+        "Twilio message history check",
+        messageOutcome.reason,
+        remoteTimeoutMs,
+      );
     }
   }
   const recentInbound = recentInboundSummary(messages);

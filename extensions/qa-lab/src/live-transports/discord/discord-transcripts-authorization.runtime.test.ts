@@ -19,7 +19,6 @@ function createEnvironment(outputDir: string) {
   return {
     configureScenario: vi.fn<DiscordQaScenarioEnvironment["configureScenario"]>(),
     driverIdentity: { id: "423456789012345678", bot: true },
-    observedMessages: [],
     outputDir,
     runtimeEnv: {
       guildId: "123456789012345678",
@@ -77,7 +76,6 @@ describe("Discord transcript authorization scenario runner", () => {
           messageId: "623456789012345672",
           channelId: environment.runtimeEnv.channelId,
           senderId: environment.sutIdentity.id,
-          senderIsBot: true,
           text: `${run.negativeMarker} You are not authorized to use this command.`,
         },
       })
@@ -87,7 +85,6 @@ describe("Discord transcript authorization scenario runner", () => {
           messageId: "623456789012345674",
           channelId: environment.runtimeEnv.channelId,
           senderId: environment.sutIdentity.id,
-          senderIsBot: true,
           text: run.positiveMarker,
         },
       })
@@ -97,7 +94,6 @@ describe("Discord transcript authorization scenario runner", () => {
           messageId: "623456789012345676",
           channelId: environment.runtimeEnv.channelId,
           senderId: environment.sutIdentity.id,
-          senderIsBot: true,
           text: run.stopMarker,
         },
       });

@@ -261,7 +261,6 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       id: job.id,
       runId: "cron:linked-job:1",
       query: undefined,
-      status: "all",
       statuses: undefined,
       deliveryStatuses: undefined,
     }),
@@ -345,9 +344,9 @@ it("clears a failed job link when opening another link", async () => {
   expect(page.textContent).not.toContain("Automation no longer exists");
 });
 
-it("drops pending heartbeat scratch when admin access is removed", async () => {
-  const job = createCronViewJob("heartbeat-job", {
-    payload: { kind: "heartbeat" },
+it("drops pending automation scratch when admin access is removed", async () => {
+  const job = createCronViewJob("migrated-job", {
+    payload: { kind: "agentTurn", message: "Review the checklist" },
     sessionTarget: "main",
   });
   const scratch = createDeferred<object>();
@@ -362,6 +361,9 @@ it("drops pending heartbeat scratch when admin access is removed", async () => {
   const row = `[data-test-id="cron-row-${job.id}"]`;
   await dom.waitForElement(page, row);
   dom.click(page, `${row} .cron-table__name-text`);
+  await dom.waitForElement(page, "openclaw-cron-scratch-editor");
+  expect(dom.callsFor(request, "cron.scratch.get")).toHaveLength(0);
+  getButtonByText(page, "Load scratch").click();
   await waitFor(() => expect(dom.callsFor(request, "cron.scratch.get")).toHaveLength(1));
   gateway.emitSnapshot({ hello: harness.operatorHello(["operator.read"]) });
   await page.settle();
@@ -372,7 +374,9 @@ it("drops pending heartbeat scratch when admin access is removed", async () => {
   });
   await settle();
   await page.settle();
-  expect(page.cron.cronForm.payloadText).toBe("");
+  expect(page.cron.cronForm.payloadText).toBe("Review the checklist");
+  expect(page.textContent).not.toContain("private checklist");
+  expect(page.querySelector("openclaw-cron-scratch-editor")).toBeNull();
 });
 
 it.each(["operator.write", "operator.read"])(

@@ -1,8 +1,13 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
-import { createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createChatPaneRails } from "./chat-pane-rails.ts";
+import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { activatePanel, openSlot } from "./sidebar-layout.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
+import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import { activatePanel, openSlot, toggleSidebarPanelExpanded } from "./sidebar-layout.ts";
 
 it.each(["minimize", "close-resource", "explicit-desktop"])(
   "preserves resource layout intent through %s",
@@ -15,7 +20,6 @@ it.each(["minimize", "close-resource", "explicit-desktop"])(
       const host = {
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-        querySelector: () => null,
       };
       const state = createPageState(context, renderLifecycle, host);
       state.updateSidebarLayout(openSlot(state.sidebarLayout, "desktop"), {
@@ -74,7 +78,6 @@ it("owns attachment views in Files without replacing Detail content", () => {
     {
       dispatchEvent: () => true,
       getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
-      querySelector: () => null,
     },
   );
   const detailContent = {
@@ -113,3 +116,91 @@ it("owns attachment views in Files without replacing Detail content", () => {
   expect(state.sessionWorkspaceState?.previews ?? []).toEqual([]);
   expect(state.sidebarContent).toBe(detailContent);
 });
+
+it.each(["catalog", "catalog-after-panel-switch", "external"] as const)(
+  "preserves Files expansion only for %s navigation",
+  async (origin) => {
+    const settings = loadSettings();
+    saveSettings({ ...settings, sidebarSessionLayouts: {} });
+    const context = createChatPageStateContext();
+    const state = createPageState(
+      context,
+      { afterCommit: () => () => {} },
+      {
+        sessionKey: "agent:main:main",
+        dispatchEvent: () => true,
+        getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 900),
+      },
+    );
+    state.client = createTestGatewayClient(vi.fn());
+    state.connected = true;
+    const getFile = vi.spyOn(state.sessions, "getFile").mockResolvedValue({
+      sessionKey: "agent:main:main",
+      root: "/workspace",
+      file: {
+        path: "README.md",
+        name: "README.md",
+        kind: "read",
+        missing: false,
+        previewKind: "text",
+        contentEncoding: "utf8",
+        content: "# Project",
+      },
+    });
+    const owner = sessionWorkspaceForHost(state);
+    const settled = createDeferred();
+    const stop = owner.subscribe(() => {
+      if (owner.state?.previews.some((preview) => preview.content.kind === "file")) {
+        settled.resolve();
+      }
+    });
+    try {
+      state.updateSidebarLayout(
+        toggleSidebarPanelExpanded(
+          openSlot(openSlot(state.sidebarLayout, "detail"), "workspace"),
+          "workspace",
+        ),
+      );
+      if (origin !== "external") {
+        const rails = createChatPaneRails({
+          state,
+          sidebarLayout: state.sidebarLayout,
+          presentationId: "test-pane",
+          presentation: "desktop",
+          presented: true,
+          gatewaySnapshot: context.gateway.snapshot,
+          setObserverVisibility: () => {},
+          updateSidebarLayout: state.updateSidebarLayout,
+        });
+        rails.sessionWorkspace.onOpenFile("README.md", "session");
+        if (origin === "catalog-after-panel-switch") {
+          state.updateSidebarLayout(activatePanel(state.sidebarLayout, "detail"));
+        }
+      } else {
+        void openSessionWorkspaceFile(state, { path: "README.md" });
+      }
+      await settled.promise;
+
+      expect(state.sidebarLayout.expanded).toBe(origin === "catalog");
+      expect(state.sidebarLayout.expandedSide).toBe(origin === "catalog" ? true : undefined);
+      expect(state.sidebarLayout.columns[0]?.activePanelId).toBe(
+        origin === "catalog-after-panel-switch" ? "detail" : "workspace",
+      );
+      expect(state.sessionWorkspaceState?.previews).toEqual([
+        expect.objectContaining({
+          label: "README.md",
+          content: expect.objectContaining({ kind: "file", content: "# Project" }),
+        }),
+      ]);
+
+      // An explicit outer tab activation still restores the split presentation.
+      state.updateSidebarLayout(activatePanel(state.sidebarLayout, "detail"));
+      expect(state.sidebarLayout.expanded).toBe(false);
+      expect(state.sidebarLayout.columns[0]?.activePanelId).toBe("detail");
+    } finally {
+      stop();
+      getFile.mockRestore();
+      saveSettings(settings);
+    }
+  },
+);

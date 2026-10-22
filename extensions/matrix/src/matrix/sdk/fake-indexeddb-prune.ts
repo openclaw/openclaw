@@ -28,20 +28,18 @@ function isMatrixCryptoDatabase(rawDatabase: FakeIndexedDbRawDatabase): boolean 
   return MATRIX_CRYPTO_DATABASE_SUFFIXES.some((suffix) => rawDatabase.name.endsWith(suffix));
 }
 
-function pruneFinishedFakeIndexedDbTransactions(rawDatabase: FakeIndexedDbRawDatabase): number {
+function pruneFinishedFakeIndexedDbTransactions(rawDatabase: FakeIndexedDbRawDatabase): void {
   if (!isMatrixCryptoDatabase(rawDatabase)) {
-    return 0;
+    return;
   }
 
   const transactions = rawDatabase.transactions;
   const activeTransactions = transactions.filter(
     (transaction) => transaction["_state"] !== "finished",
   );
-  const removed = transactions.length - activeTransactions.length;
-  if (removed > 0) {
+  if (transactions.length !== activeTransactions.length) {
     transactions.splice(0, transactions.length, ...activeTransactions);
   }
-  return removed;
 }
 
 export function installFakeIndexedDbTransactionPruner(): void {

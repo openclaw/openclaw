@@ -25,14 +25,21 @@ it("reclaims an interrupted archive's scratch on the next backup run", async () 
       const scratchRoot = state.path("scratch");
       await fs.mkdir(scratchRoot);
       vi.stubEnv("TMPDIR", scratchRoot);
+      vi.stubEnv("TMP", scratchRoot);
+      vi.stubEnv("TEMP", scratchRoot);
       const stale = await createBackupScratchDirectory(scratchRoot);
       const live = await createBackupScratchDirectory(scratchRoot);
       stale.release();
       try {
         await fs.writeFile(path.join(stale.directory, "config-0"), "abandoned");
         await fs.writeFile(path.join(live.directory, "config-0"), "active");
-        await createBackupArchive({ output: state.path("backup.tar.gz"), onlyConfig: true });
+        const result = await createBackupArchive({
+          output: state.path("backup.tar.gz"),
+          onlyConfig: true,
+        });
+        expect(result.warnings ?? []).toEqual([]);
         await expect(fs.stat(stale.directory)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.readdir(scratchRoot)).resolves.toEqual([path.basename(live.directory)]);
         await expect(fs.readFile(path.join(live.directory, "config-0"), "utf8")).resolves.toBe(
           "active",
         );
@@ -51,6 +58,8 @@ it("records failed scratch cleanup without failing the published backup", async 
       const scratchRoot = state.path("scratch");
       await fs.mkdir(scratchRoot);
       vi.stubEnv("TMPDIR", scratchRoot);
+      vi.stubEnv("TMP", scratchRoot);
+      vi.stubEnv("TEMP", scratchRoot);
       const remove = fs.rmdir.bind(fs);
       const removal = vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
         if (path.dirname(String(target)) === scratchRoot) {

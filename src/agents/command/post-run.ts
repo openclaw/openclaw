@@ -1,5 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { recordGoalContinuationSettlement } from "../../auto-reply/reply/goal-continuation-return.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
@@ -36,7 +37,6 @@ import {
   persistPendingFinalDeliveryMarker,
 } from "../pending-final-delivery-marker.js";
 import type { PendingFinalRecoverySource } from "../pending-final-recovery-source.js";
-import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import {
   createAgentRunRestartAbortError,
   throwAgentRunRestartAbortReason,
@@ -81,7 +81,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runOwnedSessionId: string;
     sessionReboundDuringRun: boolean;
   };
-  trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   onSessionOwnershipChanged: (
     ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
     committedCompactionSessionId?: string,
@@ -677,6 +676,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
         }),
       )
     : terminal.outcome;
+  recordGoalContinuationSettlement({
+    runId,
+    sessionKey,
+    result,
+    succeeded:
+      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
+      !hasResultError &&
+      classifyAgentRunTerminalOutcome(outcome) === "success" &&
+      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),
+  });
   return {
     maintenance:
       classifyAgentRunTerminalOutcome(outcome) === "success" &&

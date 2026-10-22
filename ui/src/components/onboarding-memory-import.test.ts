@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -43,18 +44,16 @@ function createProvider(providerId: string, fingerprint: string) {
     source: `/tmp/${providerId}`,
     target: "/tmp/openclaw-research",
     summary: summary(0, 0, 1, 1),
-    items: [
-      {
-        id: `memory:${providerId}:MEMORY.md`,
-        status: "planned" as const,
-        source: `/tmp/${providerId}/MEMORY.md`,
-      },
-      {
-        id: `memory:${providerId}:existing.md`,
-        status: "conflict" as const,
-        source: `/tmp/${providerId}/existing.md`,
-      },
-    ],
+    items: (
+      [
+        ["MEMORY.md", "planned"],
+        ["existing.md", "conflict"],
+      ] as const
+    ).map(([file, status]) => ({
+      id: `memory:${providerId}:${file}`,
+      status,
+      source: `/tmp/${providerId}/${file}`,
+    })),
   };
 }
 
@@ -182,15 +181,32 @@ describe("OnboardingMemoryImport", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("waits for the agents list and triggers loading it", async () => {
+  it("loads agents once through its own notifications and retries on a later notification", async () => {
     const request = vi.fn();
     const context = createContext(request, { agentsLoaded: false });
-    await mount(context);
-    await waitForSolid(() => expect(context.agents.ensureList).toHaveBeenCalledTimes(1));
+    const notify = contextNotifications.get(context)!;
+    const ensureList = vi.mocked(context.agents.ensureList);
+    const pendingList = createDeferred();
+    ensureList.mockImplementationOnce(async () => {
+      context.agents.state.agentsLoading = true;
+      notify();
+      await pendingList.promise;
+      context.agents.state.agentsLoading = false;
+      context.agents.state.agentsError = "Agent list unavailable";
+      notify();
+      return null;
+    });
+    const element = await mount(context);
+    await waitForSolid(() => expect(ensureList).toHaveBeenCalledTimes(1));
     expect(request).not.toHaveBeenCalled();
-    await Promise.resolve();
-    contextNotifications.get(context)!();
-    await waitForSolid(() => expect(context.agents.ensureList).toHaveBeenCalledTimes(2));
+    notify();
+    pendingList.resolve();
+    await ensureList.mock.results[0]!.value;
+    await element.updateComplete;
+    expect(ensureList).toHaveBeenCalledTimes(1);
+
+    notify();
+    await waitForSolid(() => expect(ensureList).toHaveBeenCalledTimes(2));
   });
 
   it("sets the guard after a successful plan with no offers", async () => {
@@ -236,21 +252,39 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("discards a plan when its gateway changes before display", async () => {
-    let resolvePlan!: (plan: ReturnType<typeof createPlan>) => void;
-    const request = vi.fn(
-      async () =>
-        await new Promise<ReturnType<typeof createPlan>>((resolve) => {
-          resolvePlan = resolve;
-        }),
-    );
+    const pendingPlan = createDeferred<ReturnType<typeof createPlan>>();
+    const request = vi.fn(() => pendingPlan.promise);
     const context = createContext(request);
     const element = await mount(context);
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
     context.gateway.snapshot.client = createContext(vi.fn()).gateway.snapshot.client;
-    resolvePlan(createPlan());
+    pendingPlan.resolve(createPlan());
     await Promise.resolve();
     await element.updateComplete;
     expectUnOffered(element);
+  });
+
+  it("aborts pending planning when onboarding deactivates without completing the guard", async () => {
+    const pendingPlan = createDeferred<ReturnType<typeof createPlan>>();
+    let signal!: AbortSignal;
+    const request = vi.fn(
+      async (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+        signal = options.signal;
+        return await pendingPlan.promise;
+      },
+    );
+    const element = await mount(createContext(request));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(signal.aborted).toBe(false);
+    element.active = false;
+    await element.updateComplete;
+    await waitForSolid(() => expect(signal.aborted).toBe(true));
+
+    pendingPlan.resolve(createPlan([]));
+    await request.mock.results[0]!.value;
+    await element.updateComplete;
+    expectUnOffered(element);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("sends frozen provider plans with fresh idempotency keys", async () => {
@@ -271,35 +305,25 @@ describe("OnboardingMemoryImport", () => {
     const applyCalls = request.mock.calls.filter(
       ([method]) => method === "migrations.memory.apply",
     );
-    expect(applyCalls.map(([, params]) => params)).toEqual([
-      {
-        idempotencyKey: "00000000-0000-4000-8000-000000000001",
+    expect(applyCalls.map(([, params]) => params)).toEqual(
+      ["codex", "claude"].map((providerId, index) => ({
+        idempotencyKey: `00000000-0000-4000-8000-00000000000${index + 1}`,
         agentId: "research",
-        providerId: "codex",
-        planFingerprint: "a".repeat(64),
-        itemIds: ["memory:codex:MEMORY.md"],
+        providerId,
+        planFingerprint: (index === 0 ? "a" : "b").repeat(64),
+        itemIds: [`memory:${providerId}:MEMORY.md`],
         overwrite: false,
-      },
-      {
-        idempotencyKey: "00000000-0000-4000-8000-000000000002",
-        agentId: "research",
-        providerId: "claude",
-        planFingerprint: "b".repeat(64),
-        itemIds: ["memory:claude:MEMORY.md"],
-        overwrite: false,
-      },
-    ]);
+      })),
+    );
     expect(randomUuid).toHaveBeenCalledTimes(2);
   });
 
   it("uses same-turn selection and admits only one import while completion is pending", async () => {
-    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
     const request = vi.fn(async (method: string) =>
       method === "migrations.memory.plan"
         ? createPlan(["codex", "claude"])
-        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
-            resolveApply = resolve;
-          }),
+        : await pendingApply.promise,
     );
     const element = await mount(createContext(request));
     const button = await waitForAction(element);
@@ -316,7 +340,7 @@ describe("OnboardingMemoryImport", () => {
     const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
     element.querySelector("openclaw-modal-dialog")!.dispatchEvent(cancel);
     expect(cancel.defaultPrevented).toBe(true);
-    resolveApply(createApplyResult("claude"));
+    pendingApply.resolve(createApplyResult("claude"));
     await waitForAction(element, "continue");
     expect(element.textContent).toContain("Migrated 1, skipped 0");
   });
@@ -368,13 +392,9 @@ describe("OnboardingMemoryImport", () => {
   });
 
   it("restores pending import results after reactivation without exposing them to another gateway", async () => {
-    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
     const request = vi.fn(async (method: string) =>
-      method === "migrations.memory.plan"
-        ? createPlan()
-        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
-            resolveApply = resolve;
-          }),
+      method === "migrations.memory.plan" ? createPlan() : await pendingApply.promise,
     );
     const element = await mount(createContext(request));
     (await waitForAction(element)).click();
@@ -384,7 +404,7 @@ describe("OnboardingMemoryImport", () => {
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
     element.active = true;
     await element.updateComplete;
-    resolveApply(createApplyResult("codex"));
+    pendingApply.resolve(createApplyResult("codex"));
     await waitForAction(element, "continue");
     expect(element.textContent).toContain("Migrated 1, skipped 0");
     expect(request).toHaveBeenCalledTimes(2);
@@ -393,13 +413,45 @@ describe("OnboardingMemoryImport", () => {
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
+  it("shows a completed provider while the next import is pending", async () => {
+    const pendingApply = createDeferred<ReturnType<typeof createApplyResult>>();
+    const request = vi.fn(async (method: string, params?: { providerId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(["codex", "claude"]);
+      }
+      return params?.providerId === "claude"
+        ? await pendingApply.promise
+        : createApplyResult("codex");
+    });
+    const element = await mount(createContext(request));
+    (await waitForAction(element)).click();
+    try {
+      await waitForSolid(() => {
+        expect(request).toHaveBeenCalledTimes(3);
+        expect(element.querySelector("[data-provider-id='codex']")?.textContent).toContain(
+          "Migrated 1, skipped 0",
+        );
+        expect(element.querySelector("[data-provider-id='claude']")?.textContent).toContain(
+          "Importing",
+        );
+      });
+    } finally {
+      pendingApply.resolve(createApplyResult("claude"));
+    }
+    await waitForAction(element, "continue");
+  });
+
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
-    const element = await mount(createContext(request));
+    const context = createContext(request);
+    const element = await mount(context);
     (await waitForAction(element, "skip")).click();
     await element.updateComplete;
     expect(sessionStorage.getItem(guardKey)).toBe("done");
     expect(element.querySelector("openclaw-modal-dialog")).toBeNull();
+    const remounted = await mount(context);
+    expect(remounted.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("continues with later providers after a provider error", async () => {

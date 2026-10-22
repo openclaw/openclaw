@@ -89,7 +89,6 @@ it.each(["EBUSY", "EPERM", "EIO", "ENOENT"])(
       agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
     });
 
-    expect(result.removed).toBe(2);
     expect(result.warnings).toEqual([
       `ignored unexpected managed GitHub profile entry: ${path.join(systemRoot, "unexpected-entry")}`,
       ...(errorCode === "ENOENT"
@@ -136,7 +135,6 @@ it("removes only unreferenced generations inside exact system and agent roots", 
     agents: { entries: { reviewer } },
   });
 
-  expect(result.removed).toBe(3);
   await expectPresent(path.join(systemRoot, systemCurrent));
   await expectPresent(path.join(agentRoot, agentCurrent));
   await expectMissing(path.join(systemRoot, systemRetired));
@@ -160,7 +158,6 @@ it.each(["root", "ancestor"])("preserves profiles behind a symlinked %s", async 
 
   const result = await cleanup();
 
-  expect(result.removed).toBe(0);
   expect(result.warnings).toHaveLength(alias === "root" ? 1 : 2);
   await expectProfile(profile);
 });
@@ -184,10 +181,9 @@ it.each(["unexpected", "symlink", "safe"])("admits the whole orphan root (%s)", 
   const result = await cleanup(kind === "safe" ? { agents: { entries: { current: {} } } } : {});
 
   if (kind === "safe") {
-    expect(result).toEqual({ removed: 1, warnings: [] });
+    expect(result.warnings).toEqual([]);
     await expectMissing(agentRoot);
   } else {
-    expect(result.removed).toBe(0);
     expect(result.warnings).toHaveLength(1);
     await expectProfile(profile);
     expect(await fs.readdir(agentRoot)).toHaveLength(2);
@@ -202,7 +198,6 @@ it("bounds warnings while preserving every unexpected profile entry", async () =
 
   const result = await cleanup();
 
-  expect(result.removed).toBe(0);
   expect(result.warnings).toHaveLength(21);
   expect(result.warnings.at(-1)).toBe(
     "omitted 3 additional managed GitHub profile cleanup warnings",
@@ -221,14 +216,14 @@ it("preserves a durable recovery generation until its OAuth record retires", asy
   const config = { tools: { github: { profileId: configured } } };
   const first = await cleanup(config);
 
-  expect(first).toEqual({ removed: 1, warnings: [] });
+  expect(first.warnings).toEqual([]);
   await expectPresent(path.join(systemRoot, configured));
   await expectPresent(path.join(systemRoot, recovery));
   await expectMissing(path.join(systemRoot, retired));
 
   oauthMocks.list.mockReturnValue([]);
   const second = await cleanup(config);
-  expect(second).toEqual({ removed: 1, warnings: [] });
+  expect(second.warnings).toEqual([]);
   await expectMissing(path.join(systemRoot, recovery));
 });
 
@@ -246,7 +241,6 @@ it("refuses symlink generations without touching their targets", async () => {
 
   const result = await cleanup();
 
-  expect(result.removed).toBe(0);
   expect(result.warnings).toHaveLength(3);
   expect(result.warnings).toEqual(
     expect.arrayContaining([

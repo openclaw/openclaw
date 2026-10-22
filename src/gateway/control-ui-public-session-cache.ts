@@ -11,8 +11,11 @@ export type PublicSessionRepresentation = {
   isCurrent(): boolean;
 };
 
+export type PublicSessionRepresentationKind = "transcript" | "card";
+
 type Entry = {
   sessionKey: string;
+  kind: PublicSessionRepresentationKind;
   bytes: number;
   representation?: PublicSessionRepresentation;
 };
@@ -25,17 +28,25 @@ export function createPublicSessionRepresentationCache() {
     bytes -= entry.bytes;
     entries.delete(key);
   };
-  const invalidate = (sessionKey?: string) => {
+  const invalidate = (sessionKey?: string, runtimeOnly = false) => {
     for (const [key, entry] of entries) {
-      if (!sessionKey || entry.sessionKey === sessionKey) {
+      if (
+        (!sessionKey || entry.sessionKey === sessionKey) &&
+        (!runtimeOnly || entry.kind === "card")
+      ) {
         remove(key, entry);
       }
     }
   };
   const stop = [
-    sessionChanges.subscribe((change) =>
-      invalidate("sessionKey" in change ? change.sessionKey : undefined),
-    ),
+    sessionChanges.subscribe((change) => {
+      // Run publications change live card facts, not published transcript or media content.
+      const runtimeOnly =
+        change.scope === "runtime" ||
+        change.scope === "agent-runs" ||
+        change.scope === "subagent-runs";
+      invalidate("sessionKey" in change ? change.sessionKey : undefined, runtimeOnly);
+    }),
     onInternalSessionTranscriptUpdate((update) =>
       invalidate(update.target?.sessionKey ?? update.sessionKey),
     ),
@@ -52,7 +63,7 @@ export function createPublicSessionRepresentationCache() {
       }
       return entry.representation;
     },
-    begin(key: string, sessionKey: string) {
+    begin(key: string, sessionKey: string, kind: PublicSessionRepresentationKind) {
       const previous = entries.get(key);
       if (previous) {
         remove(key, previous);
@@ -66,6 +77,7 @@ export function createPublicSessionRepresentationCache() {
       }
       const entry: Entry = {
         sessionKey,
+        kind,
         bytes: 0,
       };
       entries.set(key, entry);

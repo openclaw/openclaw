@@ -36,7 +36,7 @@ type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
 
 // Config preparation publishes legacy ownership reads.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
-const snapshotListeners = new Set<() => void>();
+export const clawSchemaVersionNotifications = { onChanged: () => {} };
 const handedOffFacts = resolveGlobalSingleton(
   Symbol.for("openclaw.clawInstallSchemaVersionFacts"),
   () =>
@@ -46,12 +46,6 @@ const handedOffFacts = resolveGlobalSingleton(
       active: boolean;
     }>(),
 );
-
-function notifySnapshotListeners(): void {
-  for (const listener of snapshotListeners) {
-    listener();
-  }
-}
 
 function decodeSchemaVersions(
   rows: ClawInstallSchemaVersionRow[],
@@ -114,7 +108,7 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
     event.path,
     failedSchemaVersionSnapshot(error, previous, isOwnershipUnknown(previous)),
   );
-  notifySnapshotListeners();
+  clawSchemaVersionNotifications.onChanged();
 });
 
 function resolveSnapshotPath(options: OpenClawStateDatabaseOptions): string {
@@ -262,12 +256,7 @@ export async function prepareClawInstallSchemaVersions(
         snapshot = failedSchemaVersionSnapshot(error, current);
       }
       snapshotsByPath.set(path, snapshot);
-      notifySnapshotListeners();
+      clawSchemaVersionNotifications.onChanged();
     },
   };
-}
-
-export function registerClawInstallSchemaVersionSnapshotListener(listener: () => void): () => void {
-  snapshotListeners.add(listener);
-  return () => snapshotListeners.delete(listener);
 }

@@ -15,10 +15,8 @@ import {
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { Model } from "../../llm/types.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
-import {
-  beginReplyMessageInjectionTarget,
-  captureCurrentReplyMessageInjectionTarget,
-} from "../../sessions/session-controller.js";
+import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -48,8 +46,7 @@ import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-const assistantText = (value: string) =>
-  createAssistant(testModel, [{ type: "text", text: value }]);
+const assistantText = (value: string) => createAssistant(testModel, value);
 const call = (ids: string[], name = "read", args: Record<string, unknown> = {}) =>
   createAssistant(
     testModel,
@@ -81,7 +78,7 @@ it("propagates transcript conflicts without synthesizing an assistant provider e
     return append(message, options);
   });
   streamMocks.streamSimple.mockImplementation((model: Model) =>
-    createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
+    createAssistantResultStream(createAssistant(model, "Done.")),
   );
   const events: AgentSessionEvent[] = [];
   session.subscribe((event) => events.push(event));

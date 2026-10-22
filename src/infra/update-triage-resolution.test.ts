@@ -208,58 +208,16 @@ beforeEach(() => {
   repairRuntime.runUpdateRepairTurn.mockResolvedValue(successfulTurn);
 });
 
-it.each(["during Doctor", "during verification"])(
-  "requires repair for admission blocked %s",
-  async (when) => {
-    const blockAdmission = () => {
-      vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
-        throw new Error("managed handoff lease database identity changed");
-      });
-    };
-    if (when === "during Doctor") {
-      validateDoctor.mockImplementationOnce(async () => {
-        blockAdmission();
-        return healthy;
-      });
-    } else {
-      vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-        blockAdmission();
-        return true;
-      });
-    }
-    const result = await validate();
-    expectStopped(
-      result,
-      "managed handoff lease database identity changed",
-      "`openclaw update repair`",
-    );
-    expect(result.summary).not.toContain("retry `openclaw update`");
-  },
-);
-
-it("rejects migrations appearing during verification", async () => {
-  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
-  vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([
-      {
-        pluginId: "codex",
-        reason: "Retained state migration incomplete.",
-        command: "openclaw doctor --fix",
-        requiresStateMigration: true,
-      },
-    ]);
-    return true;
-  });
-  const result = await validate(failure(), {
-    OPENCLAW_STATE_DIR: "/fixture/state",
-    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+it("requires repair when package admission is blocked", async () => {
+  vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
+    throw new Error("managed handoff lease database identity changed");
   });
   expectStopped(
-    result,
-    'Plugin "codex" data/settings upgrade is unfinished',
-    'Run "openclaw doctor --fix" to retry the upgrade.',
+    await validate(),
+    "managed handoff lease database identity changed",
+    "`openclaw update repair`",
   );
+  expect(validateDoctor).not.toHaveBeenCalled();
 });
 
 it("preserves post-core migration guidance", async () => {
@@ -366,23 +324,6 @@ it("rejects resolution during an active update", async () => {
   vi.mocked(findActiveUpdateRun).mockReturnValue(run({ status: "running", phase: "staging" }));
   await expectResolution(false);
 });
-
-it.each(["new active run", "new terminal run"])(
-  "rejects a %s appearing during service verification",
-  async (change) => {
-    vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-      if (change === "new active run") {
-        vi.mocked(findActiveUpdateRun).mockReturnValue(
-          run({ status: "running", phase: "staging" }),
-        );
-      } else {
-        latestRun = run({ runId: "10000000-0000-4000-8000-000000000003" });
-      }
-      return true;
-    });
-    await expectResolution(false, failure(), "owner changed");
-  },
-);
 
 it("rejects Doctor errors after recorded success", async () => {
   validateDoctor.mockResolvedValue({

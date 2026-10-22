@@ -1,13 +1,7 @@
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-
-export type GatewayPluginReloadStatus = Readonly<{
-  phase: "reloading" | "recovering" | "failed";
-  pluginIds: string[];
-  deadlineAtMs?: number;
-  reason?: string;
-}>;
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 /** Plugin service publication and operator-visible reload diagnostics. */
 export function createGatewayPluginRuntimeGeneration(params: {

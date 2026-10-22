@@ -70,7 +70,7 @@ on:
       startup_node_version:
         description: "Exact Node version for installed package probes"
         required: false
-        default: "26.9.0"
+        default: "26.12.1"
         type: string
       installed_startup_cpu_diagnostic:
         description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
@@ -535,7 +535,7 @@ jobs:
         shell: bash
         env:
           NODE_OPTIONS: ${{ inputs.windows_ci_replay != '' && '--max-old-space-size=8192' || env.NODE_OPTIONS }}
-          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          REQUESTED_NODE_VERSION: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -550,7 +550,7 @@ jobs:
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
+          node-version: ${{ inputs.windows_ci_replay != '' && env.OPENCLAW_WINDOWS_REPLAY_NODE_VERSION || inputs.installed_startup_package != '' && inputs.startup_node_version || '24.22.1' }}
 
       - &windows_versions
         name: Runtime versions

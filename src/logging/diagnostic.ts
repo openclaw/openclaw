@@ -79,7 +79,7 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 
-export { diagnosticLogger } from "./diagnostic-runtime.js";
+export { diagnosticLogger, logSessionStateChange } from "./diagnostic-runtime.js";
 
 const webhookStats = {
   received: 0,
@@ -221,9 +221,7 @@ function emitDiagnosticLivenessWarning(
   const phase = getCurrentDiagnosticPhase();
   // Attribute only phases completed during this measured liveness interval.
   // The retained ring is capacity-bounded history, not a temporal recency signal.
-  const recentPhases = getRecentDiagnosticPhases(6, {
-    completedAfter: now - Math.max(0, sample.intervalMs),
-  });
+  const recentPhases = getRecentDiagnosticPhases(now - Math.max(0, sample.intervalMs));
   const recentPhaseSummary = formatRecentDiagnosticPhases(recentPhases);
   const workLabelSummary = formatDiagnosticWorkLabels(work);
   const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
@@ -293,10 +291,6 @@ function formatDiagnosticWorkLabels(work: DiagnosticWorkSnapshot): string {
     work.queuedLabels.length > 0 ? `queued=${work.queuedLabels.join("|")}` : "",
   ].filter(Boolean);
   return parts.join(" ");
-}
-
-function resolveStuckSessionWarnMs(): number {
-  return DEFAULT_STUCK_SESSION_WARN_MS;
 }
 
 function resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number {
@@ -532,38 +526,6 @@ export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.
     agentId: params.agentId,
     channel: params.channel,
     trigger: params.trigger,
-  });
-  markActivity();
-}
-
-export function logSessionStateChange(
-  params: SessionRef & {
-    state: SessionStateValue;
-    reason?: string;
-  },
-) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  const prevState = state.state;
-  state.state = params.state;
-  touchDiagnosticSessionState(state);
-  if (params.state === "processing" && prevState !== "processing") {
-    state.activeQueuedTurn = state.queueDepth > 0;
-  }
-  if (params.state === "idle") {
-    state.queueDepth = Math.max(0, state.queueDepth - 1);
-    state.activeQueuedTurn = false;
-  }
-  emitDiagnosticEvent({
-    type: "session.state",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    prevState,
-    state: params.state,
-    reason: params.reason,
-    queueDepth: state.queueDepth,
   });
   markActivity();
 }
@@ -837,7 +799,8 @@ export function startGatewayDiagnosticHeartbeat(
         heartbeatConfig = undefined;
       }
     }
-    const stuckSessionWarnMs = opts?.testTimings?.stuckSessionWarnMs ?? resolveStuckSessionWarnMs();
+    const stuckSessionWarnMs =
+      opts?.testTimings?.stuckSessionWarnMs ?? DEFAULT_STUCK_SESSION_WARN_MS;
     const stuckSessionAbortMs =
       opts?.testTimings?.stuckSessionAbortMs ?? resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const compactionSafetyTimeoutMs = resolveCompactionTimeoutMs(heartbeatConfig);

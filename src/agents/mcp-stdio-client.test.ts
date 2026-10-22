@@ -1,5 +1,4 @@
-import { ReadBuffer } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import { ReadBuffer, type JSONRPCMessage } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";

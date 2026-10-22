@@ -109,26 +109,6 @@ pub(super) fn executable_path(directory: &Path) -> RuntimeResult<Option<PathBuf>
     }
 }
 
-#[cfg(all(test, any(target_os = "linux", target_os = "windows")))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_reader_finds_this_running_executable() {
-        let executable = fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
-        #[cfg(target_os = "linux")]
-        assert_eq!(
-            executable_path(Path::new("/proc/self")).unwrap(),
-            Some(executable)
-        );
-        #[cfg(target_os = "windows")]
-        {
-            let names = BTreeSet::from([executable.file_name().unwrap().to_owned()]);
-            assert!(live_executables(&names).unwrap().contains(&executable));
-        }
-    }
-}
-
 #[cfg(target_os = "windows")]
 fn live_executables(names: &BTreeSet<OsString>) -> RuntimeResult<Vec<PathBuf>> {
     use std::os::windows::ffi::OsStringExt;

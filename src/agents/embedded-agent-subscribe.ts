@@ -377,10 +377,7 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
     captureModelEvent,
     incrementCompactionCount,
     noteCompactionTokensAfter,
-    getUsageTotals,
-    getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
-    getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
   const removeSourceReplyTerminalHook = installToolAuthoredSourceReplyTerminalHook({

@@ -53,16 +53,6 @@ export function mockNonContainerSystemRuntime(): void {
   vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
 }
 
-export const alreadyCurrentConvergenceCases = [
-  { restart: true, running: true, failure: undefined },
-  { restart: false, running: true, failure: undefined },
-  { restart: true, running: false, failure: undefined },
-  { restart: true, running: true, failure: "doctor" },
-  { restart: true, running: true, failure: "stop" },
-  { restart: true, running: true, failure: undefined, platform: "linux" as const },
-  { restart: true, running: true, failure: "changed owner" },
-];
-
 export function expectedRuntimeSelectionCommand(manager: "nvm" | "fnm", version: string): string {
   return process.platform === "win32"
     ? `${manager} install ${version}; if ($LASTEXITCODE -eq 0) { ${manager} use ${version} }`
@@ -135,11 +125,11 @@ export function expectedManagedRuntimeRecoverySteps(
   manager: "nvm" | "system",
   root: string,
 ): UpdateRecoveryStep[] {
-  const steps = expectedRuntimeRecoverySteps("24.16.0", root, "2026.5.20", clearedContext);
+  const steps = expectedRuntimeRecoverySteps("24.22.1", root, "2026.5.20", clearedContext);
   if (manager === "nvm") {
     steps[2] = {
       kind: "select-runtime",
-      command: expectedRuntimeSelectionCommand("nvm", "24.16.0"),
+      command: expectedRuntimeSelectionCommand("nvm", "24.22.1"),
     };
   }
   return steps;
@@ -187,7 +177,7 @@ export function currentGitCoreFixture(root: string, version: string) {
     runtimeRefusal: {
       status: "error",
       reason: "node-runtime-preflight",
-      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.16.0", root) },
+      failedStep: { recoverySteps: expectedRuntimeRecoverySteps("24.22.1", root) },
     },
   };
 }

@@ -6,11 +6,11 @@ import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
+import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
+import { emptyClientCredentialReceipt } from "./client-credential-receipt.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
-import {
-  runClientCredentialOperation,
-  withClientCredentialStore,
-} from "./client-credential-store.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { withClientCredentialStore } from "./client-credential-store.test-support.js";
 
 it("backs up committed local credentials without retaining socket authentication", async () => {
   await withOpenClawTestState(
@@ -24,6 +24,7 @@ it("backs up committed local credentials without retaining socket authentication
       source.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
       source.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
       source.exec("PRAGMA user_version = 1");
+      writeClientCredentialReceipt(source, emptyClientCredentialReceipt(), "complete");
       source
         .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
         .run("node", "synthetic-device", "synthetic-public-key", "synthetic-private-key", 123, 456);
@@ -116,11 +117,11 @@ it("backs up committed local credentials without retaining socket authentication
       };
       expect(
         runClientCredentialOperation(restoredEnv, {
-          kind: "socket.replace",
-          socket: replacement,
-          expectedToken: null,
+          kind: "socket.ensure",
+          fallback: replacement,
+          requested: { path: replacement.socket_path, token: replacement.socket_token },
         }),
-      ).toEqual({ kind: "changed", changed: true });
+      ).toEqual({ kind: "socket", socket: replacement });
       expect(runClientCredentialOperation(restoredEnv, { kind: "socket.read" })).toEqual({
         kind: "socket",
         socket: replacement,

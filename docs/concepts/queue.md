@@ -21,6 +21,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 - Priority has a bounded head start: foreground work can overtake normal work by up to 15 seconds and background work by up to 30 seconds. After that, newer foreground arrivals cannot keep passing the older work. Lanes and shared capacity groups use the same order, preserving FIFO within each priority. Occupied slots and earlier queued work can still delay admission; running turns are never preempted.
 - CLI, embedded, and Codex runs enter the same **session controller mailbox**. Its selector grants one turn for the physical session before global capacity or backend preparation, so changing runtimes cannot start a competing turn.
 - Inbound messages can be persisted before their turn enters the mailbox. A running turn reads a consistent transcript prefix, so a later queued message does not invalidate its context read. Rewrites, compaction, deletion, and branch changes still invalidate that read.
+- Queued replies and progress updates retain their submitting request's authority. Completing another turn does not invalidate that queued request.
 - Inbound session runs then enter the **global `main` lane**, whose parallelism is capped by `agents.defaults.maxConcurrent`. Ordinary sub-agent runs instead use their immediate spawning/controller session's budget, set by `agents.defaults.subagents.maxConcurrent`. Swarm collector children use their group's separate budget, set by `tools.swarm.maxConcurrent`.
 - Embedded attempt preparation yields to the event loop after 16 stage starts or at least 8 ms of synchronous dispatch work per slice, so concurrent starts leave room for Gateway requests. A running stage is not preempted. Asynchronous stage work can still overlap and does not count toward that time budget; this does not lower the run concurrency limit or change session serialization.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting. `queueAhead` records the enqueue-time backlog, not a prediction of admission order after priority and aging.
@@ -31,11 +32,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
+- `allowCollaborativeSteering: false`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-turn steering is the default. A prompt that arrives mid-run is injected into the active runtime when the run can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-requester steering is the default. A compatible prompt from the active turn’s requester is injected into the runtime when it can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -55,15 +57,15 @@ an interrupted turn is still owed, its resend runs before an ordinary message th
 arrives on that session during startup; later messages queue behind it in arrival
 order. An `interrupt` message wins instead: it cancels a resend that has not
 started and runs, and it ends a running recovered turn like any active run.
-Steering a recovered turn follows the normal tool-permission check, so a steer it
-cannot accept waits and runs as its own turn. Stopping or interrupting a resend
+Steering a recovered turn follows the same requester and collaboration rules as
+other active turns. If its backend cannot accept steering, the input waits and
+runs as its own turn. Stopping or interrupting a resend
 before it starts ends that recovery without sending it again. See
 [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
-Gateway input retains its authenticated operator and original scope ceiling while
-queued or delegated to a child. Collecting messages or steering an active run
-requires compatible operator sources and tool permissions; other input waits in
-FIFO order instead of borrowing the active or newest sender's permissions.
+Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
+
+By default, another person’s steering attempt is refused without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -77,6 +79,7 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
+      allowCollaborativeSteering: false,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect", x: "followup" },
@@ -137,6 +140,21 @@ For mode selection, OpenClaw resolves:
 4. Default `steer`.
 
 For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
+
+## One-message followup
+
+`/followup <message>` sends just that message as a new turn without changing the
+stored queue mode. It waits behind active and already-queued work, stays separate
+from collect batches, and bypasses pending-question answering. If the session has
+no active or queued work, it starts through normal admission. The turn retains
+its submitter and resolves current policy when admitted.
+
+The queued notice appears only after enqueue succeeds. If the message starts
+immediately, its start notice appears when execution starts, before the answer.
+Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
+rules still apply. Gateway-backed chat and the local embedded TUI support this
+command. See [Steer](/tools/steer#one-message-as-a-new-turn) for the contrast with
+steering the active run.
 
 ## Per-session overrides
 

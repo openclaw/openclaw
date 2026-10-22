@@ -1,8 +1,9 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import {
   createBrowserPanelPresentation,
@@ -11,7 +12,6 @@ import {
   type BrowserPanelPresentation,
 } from "./browser-panel-presentation.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
-import dockStyles from "../dock-panel-solid.css?inline";
 import browserStyles from "./browser-panel.css?inline";
 
 type Host = SolidBridgeElement<BrowserPanelInputs, BrowserPanelMethods>;
@@ -22,7 +22,7 @@ function ownerFor(host: Host) {
   if (retained) {
     return retained;
   }
-  const owner = createBrowserPanelPresentation(host);
+  const owner = createBrowserPanelPresentation(host, onSettled);
   owners.set(host, owner);
   for (const key of ["hostedTabs", "activeHostedTabId"] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
@@ -59,6 +59,8 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
       authToken: { default: null, attribute: false },
       embedded: { default: false, type: Boolean, reflect: true },
       tabsInHeader: { default: false, type: Boolean },
+      mobilePresentation: { default: false, type: Boolean },
+      fetchFavicon: { default: undefined, attribute: false },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
       sessionKey: { default: "", attribute: false },
@@ -80,8 +82,6 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
 
 function browserPanelContent(owner: BrowserPanelPresentation) {
   const state = projectOwner(owner, (current) => current);
-  // Native presentation and viewport geometry follow the committed DOM.
-  createEffect(state.revision, () => owner.rendered());
   onSettled(() => {
     let disposed = false;
     let detach: (() => void) | undefined;
@@ -121,6 +121,8 @@ function browserPanelContent(owner: BrowserPanelPresentation) {
           }
           embedded={panel().inputs.embedded}
           tabsInHeader={panel().inputs.tabsInHeader}
+          mobilePresentation={panel().inputs.mobilePresentation}
+          fetchFavicon={panel().inputs.fetchFavicon}
         />
       ) : null}
     </>

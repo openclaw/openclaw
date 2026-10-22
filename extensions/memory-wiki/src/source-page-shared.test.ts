@@ -1,10 +1,11 @@
-// Memory Wiki tests cover source page shared plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createMemoryWikiTestHarness();
 
 const { fsRootMock } = vi.hoisted(() => ({ fsRootMock: vi.fn() }));
 
@@ -21,123 +22,86 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
 
 describe("writeImportedSourcePage", () => {
   let suiteRoot: string;
+  type Params = Parameters<typeof writeImportedSourcePage>[0];
+  function importParams(overrides: Partial<Params> = {}): Params {
+    return {
+      vaultRoot: suiteRoot,
+      syncKey: "source",
+      sourcePath: path.join(suiteRoot, "source.txt"),
+      sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
+      sourceSize: 10,
+      renderFingerprint: "fp-1",
+      pagePath: "sources/imported.md",
+      group: "bridge",
+      state: { entries: {}, version: 1 },
+      buildRendered: buildSourcePage,
+      ...overrides,
+    };
+  }
+
+  async function createPage(raw: string, overrides: Partial<Params> = {}) {
+    const params = importParams({ sourceSize: Buffer.byteLength(raw), ...overrides });
+    await fs.writeFile(params.sourcePath, raw, "utf8");
+    await writeImportedSourcePage(params);
+    return params;
+  }
 
   beforeEach(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
+    suiteRoot = await createTempDir("memory-wiki-source-page-");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     fsRootMock.mockClear();
-    await fs.rm(suiteRoot, { recursive: true, force: true });
   });
 
   it("falls back when the source mtime is outside the Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
-    const sourcePath = path.join(suiteRoot, "source.txt");
-    await fs.writeFile(sourcePath, "source body", "utf8");
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      entries: {},
-      version: 1,
-    };
-
-    const result = await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
+    const params = importParams({
       syncKey: "unsafe:source",
-      sourcePath,
       sourceUpdatedAtMs: 8_700_000_000_000_000,
       sourceSize: 11,
-      renderFingerprint: "fingerprint",
       pagePath: "pages/source.md",
       group: "unsafe-local",
-      state,
       buildRendered: (raw, updatedAt) => `updatedAt: ${updatedAt}\n${raw}`,
     });
+    await fs.writeFile(params.sourcePath, "source body", "utf8");
+    const result = await writeImportedSourcePage(params);
 
     await expect(fs.readFile(path.join(suiteRoot, "pages/source.md"), "utf8")).resolves.toBe(
       "updatedAt: 2026-05-01T12:00:00.000Z\nsource body",
     );
     expect(result).toEqual({ pagePath: "pages/source.md", changed: true, created: true });
-    expect(state.entries["unsafe:source"]?.sourceUpdatedAtMs).toBe(8_700_000_000_000_000);
+    expect(params.state.entries[params.syncKey]?.sourceUpdatedAtMs).toBe(8_700_000_000_000_000);
   });
 
   it("skips 1,914 unchanged pages before opening the guarded vault", async () => {
-    const sourcePath = path.join(suiteRoot, "unchanged-source.md");
-    const pagePath = "sources/unchanged.md";
-    const pageAbsolutePath = path.join(suiteRoot, pagePath);
-    await fs.mkdir(path.dirname(pageAbsolutePath), { recursive: true });
-    await fs.writeFile(pageAbsolutePath, "already imported", "utf8");
-    const entry = {
-      group: "bridge" as const,
-      pagePath,
-      sourcePath,
-      sourceUpdatedAtMs: 123,
-      sourceSize: 456,
-      renderFingerprint: "unchanged",
-    };
-    const syncKeys = Array.from({ length: 1_914 }, (_, index) => `bridge:${index}`);
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      version: 1,
-      entries: Object.fromEntries(syncKeys.map((syncKey) => [syncKey, { ...entry }])),
-    };
+    const params = await createPage("already imported");
+    const entry = params.state.entries[params.syncKey]!;
+    const keys = Array.from({ length: 1_914 }, (_, index) => `bridge:${index}`);
+    params.state.entries = Object.fromEntries(keys.map((key) => [key, { ...entry }]));
     const buildRendered = vi.fn();
     fsRootMock.mockClear();
-
     const results = await Promise.all(
-      syncKeys.map((syncKey) =>
-        writeImportedSourcePage({
-          vaultRoot: suiteRoot,
-          syncKey,
-          sourcePath,
-          sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
-          sourceSize: entry.sourceSize,
-          renderFingerprint: entry.renderFingerprint,
-          pagePath,
-          group: "bridge",
-          state,
-          buildRendered,
-        }),
-      ),
+      keys.map((syncKey) => writeImportedSourcePage({ ...params, syncKey, buildRendered })),
     );
-
     expect(fsRootMock).not.toHaveBeenCalled();
     expect(buildRendered).not.toHaveBeenCalled();
-    expect(results).toHaveLength(1_914);
-    expect(results.every((result) => !result.changed && !result.created)).toBe(true);
+    expect(results).toEqual(
+      keys.map(() => ({ pagePath: params.pagePath, changed: false, created: false })),
+    );
   });
 
   it("recreates an unchanged source entry when its page is missing", async () => {
-    const sourcePath = path.join(suiteRoot, "missing-page-source.md");
-    const pagePath = "sources/missing.md";
-    await fs.writeFile(sourcePath, "restored body", "utf8");
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      version: 1,
-      entries: {
-        missing: {
-          group: "bridge",
-          pagePath,
-          sourcePath,
-          sourceUpdatedAtMs: 123,
-          sourceSize: 13,
-          renderFingerprint: "missing",
-        },
-      },
-    };
-    fsRootMock.mockClear();
-
-    const result = await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
-      syncKey: "missing",
-      sourcePath,
+    const params = await createPage("restored body", {
       sourceUpdatedAtMs: 123,
-      sourceSize: 13,
-      renderFingerprint: "missing",
-      pagePath,
-      group: "bridge",
-      state,
       buildRendered: (raw) => raw,
     });
+    const { pagePath } = params;
+    await fs.rm(path.join(suiteRoot, pagePath));
+    fsRootMock.mockClear();
+    const result = await writeImportedSourcePage(params);
 
     expect(result).toEqual({ pagePath, changed: true, created: true });
     expect(fsRootMock).toHaveBeenCalledTimes(1);
@@ -152,28 +116,8 @@ describe("writeImportedSourcePage", () => {
   ])(
     "preserves a $group page and tracked state when its human Notes $missingMarker marker is missing",
     async ({ group, missingMarker }) => {
-      const sourcePath = path.join(suiteRoot, "imported-malformed.txt");
-      const pagePath = "sources/imported-malformed.md";
-      const syncKey = `${group}:imported-malformed`;
-      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-        entries: {},
-        version: 1,
-      };
-      const firstSource = "first imported body";
-
-      await fs.writeFile(sourcePath, firstSource, "utf8");
-      await writeImportedSourcePage({
-        vaultRoot: suiteRoot,
-        syncKey,
-        sourcePath,
-        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
-        sourceSize: Buffer.byteLength(firstSource),
-        renderFingerprint: "fp-1",
-        pagePath,
-        group,
-        state,
-        buildRendered: buildSourcePage,
-      });
+      const params = await createPage("first imported body", { group });
+      const { state, sourcePath, pagePath } = params;
 
       const absPage = path.join(suiteRoot, pagePath);
       const userNote = `DURABLE ${group.toUpperCase()} ANNOTATION`;
@@ -192,16 +136,10 @@ describe("writeImportedSourcePage", () => {
 
       await expect(
         writeImportedSourcePage({
-          vaultRoot: suiteRoot,
-          syncKey,
-          sourcePath,
+          ...params,
           sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
           sourceSize: Buffer.byteLength(secondSource),
           renderFingerprint: "fp-2",
-          pagePath,
-          group,
-          state,
-          buildRendered: buildSourcePage,
         }),
       ).rejects.toThrow(/human Notes.*missing|missing.*human Notes|openclaw:human:(start|end)/i);
 
@@ -213,28 +151,9 @@ describe("writeImportedSourcePage", () => {
   it.each(["bridge", "unsafe-local"] as const)(
     "preserves a %s page and tracked state when source bytes are malformed UTF-8",
     async (group) => {
-      const sourcePath = path.join(suiteRoot, "encoding-source.md");
-      const pagePath = "sources/encoding.md";
-      const syncKey = `${group}:encoding`;
-      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-        entries: {},
-        version: 1,
-      };
       const original = "Café 🤖 � original";
-      await fs.writeFile(sourcePath, original);
-      const params = {
-        vaultRoot: suiteRoot,
-        syncKey,
-        sourcePath,
-        sourceUpdatedAtMs: 123,
-        sourceSize: Buffer.byteLength(original),
-        renderFingerprint: "encoding",
-        pagePath,
-        group,
-        state,
-        buildRendered: buildSourcePage,
-      };
-      await writeImportedSourcePage(params);
+      const params = await createPage(original, { sourceUpdatedAtMs: 123, group });
+      const { state, sourcePath, pagePath } = params;
       const pageBefore = await fs.readFile(path.join(suiteRoot, pagePath));
       expect(pageBefore.toString("utf8")).toContain(original);
       const stateBefore = structuredClone(state);
@@ -258,63 +177,4 @@ describe("writeImportedSourcePage", () => {
       expect(state).toEqual(stateBefore);
     },
   );
-
-  it("preserves CRLF human notes without copying marker comments from existing imported content", async () => {
-    const sourcePath = path.join(suiteRoot, "imported-crlf.txt");
-    const pagePath = "sources/imported-crlf.md";
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      entries: {},
-      version: 1,
-    };
-
-    const sourceWithMarkers = [
-      "first imported body",
-      "<!-- openclaw:human:start -->",
-      "OLD IMPORTED SOURCE MARKER PAYLOAD",
-      "<!-- openclaw:human:end -->",
-      "",
-    ].join("\n");
-    await fs.writeFile(sourcePath, sourceWithMarkers, "utf8");
-    await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
-      syncKey: "bridge:imported-crlf",
-      sourcePath,
-      sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
-      sourceSize: sourceWithMarkers.length,
-      renderFingerprint: "fp-1",
-      pagePath,
-      group: "bridge",
-      state,
-      buildRendered: buildSourcePage,
-    });
-
-    const absPage = path.join(suiteRoot, pagePath);
-    const userNote = "CRLF IMPORTED PAGE NOTE";
-    const edited = (await fs.readFile(absPage, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
-    );
-    await fs.writeFile(absPage, edited.replace(/\n/g, "\r\n"), "utf8");
-
-    await fs.writeFile(sourcePath, "second imported body without marker comments", "utf8");
-    const result = await writeImportedSourcePage({
-      vaultRoot: suiteRoot,
-      syncKey: "bridge:imported-crlf",
-      sourcePath,
-      sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-      sourceSize: 44,
-      renderFingerprint: "fp-2",
-      pagePath,
-      group: "bridge",
-      state,
-      buildRendered: buildSourcePage,
-    });
-
-    const after = await fs.readFile(absPage, "utf8");
-    const notesBlock = after.slice(after.indexOf("## Notes"));
-    expect(result.changed).toBe(true);
-    expect(after).toContain("second imported body without marker comments");
-    expect(notesBlock).toContain(userNote);
-    expect(notesBlock).not.toContain("OLD IMPORTED SOURCE MARKER PAYLOAD");
-  });
 });

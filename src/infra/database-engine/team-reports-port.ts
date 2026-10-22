@@ -1,4 +1,4 @@
-import path from "node:path";
+import { resolvePluginPortRoots } from "./plugin-port-roots.js";
 import type { DatabasePortProvider } from "./port-descriptor.js";
 
 export const teamReportsPortProvider: DatabasePortProvider = {
@@ -10,13 +10,5 @@ export const teamReportsPortProvider: DatabasePortProvider = {
     return loadTeamReportsPortDescriptor(owner);
   },
   matchesSqlite: (tables) => tables.has("team_reports_schema_migrations"),
-  resolveRoots(context) {
-    return context.plugins.plugins
-      .filter((plugin) => plugin.id === "team-reports")
-      .flatMap((plugin) =>
-        (plugin.backupResources ?? [])
-          .filter((resource) => resource.scope === "state" && resource.disposition === "include")
-          .map((resource) => path.join(context.stateDir, resource.relativePath)),
-      );
-  },
+  resolveRoots: (context) => resolvePluginPortRoots(context, "team-reports"),
 };

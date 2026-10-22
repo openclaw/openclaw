@@ -7,7 +7,6 @@ import {
 } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { Container, TextDisplay } from "./components.message.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,
@@ -226,7 +225,17 @@ describe("BaseInteraction", () => {
       } else {
         await interaction.defer();
       }
-      await interaction.reply({ components: [new Container([new TextDisplay("done")])] });
+      await interaction.reply({
+        components: [
+          {
+            isV2: true,
+            serialize: () => ({
+              type: ComponentType.Container,
+              components: [{ type: ComponentType.TextDisplay, content: "done" }],
+            }),
+          },
+        ],
+      });
       const args = [{ body: v2Payload }, { with_components: true }];
       if (mode === "follow-up") {
         expect(post).toHaveBeenNthCalledWith(2, "/webhooks/app1/token1", ...args);

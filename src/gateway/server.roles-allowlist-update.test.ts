@@ -326,6 +326,12 @@ async function respondToInvoke(
   });
 }
 
+function createDeviceIdentityForTest(prefix: string) {
+  return loadOrCreateDeviceIdentity({
+    path: path.join(updateDirs.make(`${prefix}-`), "client", "credentials.sqlite"),
+  });
+}
+
 test("gateway enforces operator and node permissions", async () => {
   for (const [method, params] of [
     ["node.event", { event: "test", payload: { ok: true } }],
@@ -496,12 +502,7 @@ function nodeFixture(displayName: string, options: Partial<Omit<NodeFixture, "di
     commands: ["canvas.snapshot"],
     platform: "macos",
     deviceFamily: "Mac",
-    deviceIdentity: loadOrCreateDeviceIdentity({
-      path: path.join(
-        os.tmpdir(),
-        `${displayName}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
-      ),
-    }),
+    deviceIdentity: createDeviceIdentityForTest(displayName),
     ...options,
   };
 }

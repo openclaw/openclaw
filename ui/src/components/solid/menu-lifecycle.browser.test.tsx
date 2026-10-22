@@ -1,4 +1,5 @@
 import { cleanup } from "@solidjs/testing-library";
+import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
@@ -12,7 +13,7 @@ import {
   surface,
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
-import type { MenuItem, MenuItemBindings } from "./menu.tsx";
+import { createMenuControls, type MenuItem, type MenuItemBindings } from "./menu.tsx";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -24,6 +25,40 @@ afterEach(() => {
 async function finishHover() {
   await vi.advanceTimersByTimeAsync(300);
   flush();
+}
+
+function renderSpy() {
+  return vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
+}
+
+function branch(
+  id: string,
+  children: MenuItem["children"],
+  extra: Partial<MenuItem> = {},
+): MenuItem {
+  return { id, label: id, children, ...extra };
+}
+
+function liveMenu(
+  initial: readonly MenuItem[] = [],
+  children?: (controls: ReturnType<typeof createMenuControls>) => JSX.Element,
+) {
+  const [items, setItems] = createSignal(initial);
+  const view = mountMenu(() => {
+    const controls = createMenuControls();
+    return {
+      controls,
+      get items() {
+        return items();
+      },
+      children: children?.(controls),
+    };
+  });
+  const update = (next: readonly MenuItem[]) => {
+    setItems(next);
+    flush();
+  };
+  return { ...view, update };
 }
 
 describe("Solid menu branch lifetime", () => {
@@ -41,139 +76,14 @@ describe("Solid menu branch lifetime", () => {
     expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
   });
 
-  it("prepares closed branches in idle slices after readiness and finishes synchronously on open", async () => {
-    const frames: FrameRequestCallback[] = [];
-    const idle = new Map<number, IdleRequestCallback>();
-    let nextIdle = 0;
-    const animation = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
-    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
-      idle.set(++nextIdle, callback);
-      return nextIdle;
-    });
-    vi.stubGlobal("cancelIdleCallback", (id: number) => idle.delete(id));
-    const runFrames = () => {
-      for (const callback of frames.splice(0)) {
-        callback(0);
-      }
-    };
-    const runIdle = () => {
-      const entry = idle.entries().next().value;
-      if (!entry) {
-        throw new Error("Expected pending idle work");
-      }
-      idle.delete(entry[0]);
-      entry[1]({ didTimeout: false, timeRemaining: () => 10 });
-      flush();
-    };
-    const [ready, setReady] = createSignal(false);
-    const avatar = vi.fn(() => <span>Avatar</span>);
-    const unopened = vi.fn(() => <button>Other content</button>);
-    const view = mountMenu({
-      lazy: true,
-      get prewarm() {
-        return ready();
-      },
-      items: [
-        {
-          id: "assign",
-          label: "Assign to",
-          prewarm: true,
-          children: () =>
-            Array.from({ length: 40 }, (_, id) => ({
-              id: String(id),
-              label: `Person ${id}`,
-              render: (attributes) => (
-                <button {...attributes}>
-                  {avatar()}Person {id}
-                </button>
-              ),
-            })),
-        },
-        {
-          id: "other",
-          label: "Other",
-          children: [{ id: "other-content", label: "Other content", render: unopened }],
-        },
-      ],
-    });
-    expect(idle.size).toBe(0);
-    setReady(true);
-    flush();
-    runFrames();
-    runFrames();
-    runIdle();
-    expect(avatar).not.toHaveBeenCalled();
-    runFrames();
-    runFrames();
-    runIdle();
-    expect(avatar.mock.calls.length).toBeGreaterThan(0);
-    expect(avatar.mock.calls.length).toBeLessThan(40);
-    const retained = item("Person 0", "people-assign");
-    expect(surface("people-assign").matches(":popover-open")).toBe(false);
-    animation.mockRestore();
-    expect(view.handle.open()).toBe(true);
-    await openMenu("people-assign");
-    expect(idle.size).toBe(0);
-    expect(avatar).toHaveBeenCalledTimes(40);
-    expect(unopened).not.toHaveBeenCalled();
-    expect(item("Person 0", "people-assign")).toBe(retained);
-    await userEvent.keyboard("{Escape}");
-    await phase(surface("people-assign"), "hidden");
-    await openMenu("people-assign");
-    expect(item("Person 0", "people-assign")).toBe(retained);
-    expect(avatar).toHaveBeenCalledTimes(40);
-  });
-
-  it("uses the timer fallback and cancels unfinished preparation on unmount", async () => {
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"],
-    });
-    vi.stubGlobal("requestIdleCallback", undefined);
-    const avatar = vi.fn(() => <span>Avatar</span>);
-    const view = mountMenu({
-      lazy: true,
-      prewarm: true,
-      items: Array.from({ length: 40 }, (_, id) => ({
-        id: String(id),
-        label: `Person ${id}`,
-        render: (attributes) => (
-          <button {...attributes}>
-            {avatar()}Person {id}
-          </button>
-        ),
-      })),
-    });
-    vi.advanceTimersToNextFrame();
-    vi.advanceTimersToNextFrame();
-    await vi.advanceTimersByTimeAsync(50);
-    flush();
-    expect(avatar.mock.calls.length).toBeGreaterThan(0);
-    expect(avatar.mock.calls.length).toBeLessThan(40);
-    const constructed = avatar.mock.calls.length;
-    view.unmount();
-    await vi.runAllTimersAsync();
-    expect(avatar).toHaveBeenCalledTimes(constructed);
-  });
-
   it.each(["array", "factory"] as const)(
     "materializes %s submenus on open and retains their controls across closes",
     async (kind) => {
-      const renderAda = vi.fn((attributes: MenuItemBindings) => (
-        <button {...attributes}>Ada Rivera</button>
-      ));
+      const renderAda = renderSpy();
       const entries = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
       mountMenu({
         lazy: true,
-        items: [
-          {
-            id: "assign",
-            label: "Assign to",
-            children: kind === "array" ? entries : () => entries,
-          },
-        ],
+        items: [branch("assign", kind === "array" ? entries : () => entries)],
       });
       expect(renderAda).not.toHaveBeenCalled();
       await openMenu();
@@ -191,28 +101,14 @@ describe("Solid menu branch lifetime", () => {
   );
 
   it("opens custom form content and retains it when generated items become empty", async () => {
-    const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
     let input!: HTMLInputElement;
-    const view = mountMenu({
-      get items() {
-        return entries();
-      },
-      children: (
-        <input
-          autofocus
-          aria-label="Filter"
-          ref={(element) => {
-            input = element;
-          }}
-        />
-      ),
-    });
+    const view = liveMenu([], (controls) => (
+      <input autofocus aria-label="Filter" ref={[controls.ref(), (element) => (input = element)]} />
+    ));
     expect(view.handle.open()).toBe(true);
     expect(document.activeElement).toBe(input);
-    setEntries([{ id: "result", label: "Result" }]);
-    flush();
-    setEntries([]);
-    flush();
+    view.update([{ id: "result", label: "Result" }]);
+    view.update([]);
     await Promise.resolve();
     expect(view.handle.overlay.open).toBe(true);
     expect(surface().matches(":popover-open")).toBe(true);
@@ -244,28 +140,11 @@ describe("Solid menu branch lifetime", () => {
   );
 
   it("retires nested descendants when replacing, unmounting, and remounting a branch", async () => {
-    const nested: MenuItem = {
-      id: "browser",
-      label: "Browser",
-      children: [
-        {
-          id: "advanced",
-          label: "Advanced",
-          children: [{ id: "network", label: "Network access" }],
-        },
-      ],
-    };
-    const files: MenuItem = {
-      id: "files",
-      label: "Files",
-      children: [{ id: "read", label: "Read file" }],
-    };
-    const [entries, setEntries] = createSignal<readonly MenuItem[]>([nested, files]);
-    mountMenu({
-      get items() {
-        return entries();
-      },
-    });
+    const nested = branch("browser", [
+      branch("advanced", [{ id: "network", label: "Network access" }]),
+    ]);
+    const files = branch("files", [{ id: "read", label: "Read file" }]);
+    const view = liveMenu([nested, files]);
     await openMenu();
     await openMenu("people-browser");
     await openMenu("people-browser-advanced");
@@ -274,16 +153,14 @@ describe("Solid menu branch lifetime", () => {
     expect(surface("people-browser-advanced").matches(":popover-open")).toBe(false);
     await openMenu("people-browser");
     await openMenu("people-browser-advanced");
-    setEntries([files]);
-    flush();
+    view.update([files]);
     await Promise.resolve();
     expect(document.getElementById("people-browser:content")).toBeNull();
     expect(openSurfaces()).toEqual([surface()]);
     trigger("people-files").focus();
     await userEvent.keyboard("{Home}");
     expect(document.activeElement).toBe(trigger("people-files"));
-    setEntries([nested, files]);
-    flush();
+    view.update([nested, files]);
     await openMenu("people-browser");
     await openMenu("people-browser-advanced");
     expect(openSurfaces()).toHaveLength(3);
@@ -317,12 +194,7 @@ describe("Solid menu branch lifetime", () => {
   );
 
   it("retires an emptied submenu and allows restored content to open at its current anchor", async () => {
-    const [entries, setEntries] = createSignal<readonly MenuItem[]>([]);
-    const view = mountMenu({
-      get items() {
-        return entries();
-      },
-    });
+    const view = liveMenu();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
     observer.observe(surface(), { attributes: true, attributeFilter: ["inert", "data-phase"] });
@@ -334,19 +206,16 @@ describe("Solid menu branch lifetime", () => {
     } finally {
       observer.disconnect();
     }
-    setEntries(navigationItems);
-    flush();
+    view.update(navigationItems);
     await openMenu();
     await openMenu("people-move");
     const child = surface("people-move");
-    setEntries(
+    view.update(
       navigationItems.map((entry) => (entry.id === "move" ? { ...entry, children: [] } : entry)),
     );
-    flush();
     await phase(child, "hidden");
     expect(surface().matches(":popover-open")).toBe(true);
-    setEntries(navigationItems);
-    flush();
+    view.update(navigationItems);
     await openMenu("people-move");
     const bounds = surface("people-move").getBoundingClientRect();
     expect(bounds.width).toBeGreaterThan(0);

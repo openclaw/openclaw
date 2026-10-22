@@ -1,4 +1,5 @@
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceOwner } from "./chat-media-source.ts";
@@ -85,19 +86,19 @@ export function videoLightboxItem(
       const ended = reportAfter(() => controller.handleEnded(media));
       const error = reportAfter(() => controller.handleError(media));
       // The selected lightbox media island owns native playback listeners until disconnect.
-      media.addEventListener("loadedmetadata", metadata);
-      media.addEventListener("play", adopt);
-      media.addEventListener("seeking", adopt);
-      media.addEventListener("ended", ended);
-      media.addEventListener("error", error);
+      const stopListeners = [
+        listen(media, "loadedmetadata", metadata),
+        listen(media, "play", adopt),
+        listen(media, "seeking", adopt),
+        listen(media, "ended", ended),
+        listen(media, "error", error),
+      ];
       refresh();
       return () => {
         active = false;
-        media.removeEventListener("loadedmetadata", metadata);
-        media.removeEventListener("play", adopt);
-        media.removeEventListener("seeking", adopt);
-        media.removeEventListener("ended", ended);
-        media.removeEventListener("error", error);
+        for (const stop of stopListeners) {
+          stop();
+        }
         controller.cancel();
         controller.reset(media);
         releaseChatMediaResourceOwner(refresh);

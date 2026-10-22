@@ -144,6 +144,7 @@ import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import {
+  createJsonlStdinBackendConfig,
   registerCliMcpPreparationTests,
   setRawCliBackendForPrepareTest,
 } from "./prepare-mcp.test-support.js";
@@ -316,16 +317,6 @@ function createArgBackendConfig(
   output: "text" | "json" = "text",
 ): CliBackendPlugin["config"] {
   return { command, args, output, input: "arg", sessionMode: "existing" };
-}
-
-function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["config"] {
-  return {
-    command,
-    args: ["--print"],
-    output: "jsonl",
-    input: "stdin",
-    sessionMode: "existing",
-  };
 }
 
 type CliContextBudgetTestCase = {
@@ -1760,7 +1751,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toMatch(
-        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nFor the current source conversation,/,
+        /^Current event:\nBob: yes\n\n\[OpenClaw room event\]\n\nThis turn has no current conversation\./,
       );
       expect(context.params.prompt).toMatch(
         /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
@@ -1840,7 +1831,7 @@ describe("prepareCliRunContext", () => {
       .finally(preparedRunAdmission.close);
 
     expect(context.params.prompt).toMatch(
-      /^authorized memory context\n\nlatest ask\n\nFor the current source conversation,/,
+      /^authorized memory context\n\nlatest ask\n\nThis turn has no current conversation\./,
     );
     expect(context.params.transcriptPrompt).toBe("latest ask");
     expect(hookRunner.runAuthorizedPromptBuild).toHaveBeenCalledWith(
@@ -2158,9 +2149,7 @@ describe("prepareCliRunContext", () => {
       if (scenario === "lookup-failed") {
         lookup.reject(new Error("optional media lookup failed"));
         expect(await outcome).toEqual({
-          prompt: expect.stringMatching(
-            /^latest ask\n\nNo source-conversation reply can be sent from this turn\./,
-          ),
+          prompt: expect.stringMatching(/^latest ask\n\nThis turn has no current conversation\./),
           transcriptPrompt: "latest ask",
         });
         expect(factory).toHaveBeenCalledOnce();
@@ -2449,9 +2438,8 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.promptToolNamesHash).not.toBe(first.promptToolNamesHash);
     expect(second.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2516,7 +2504,7 @@ describe("prepareCliRunContext", () => {
     );
     expect(second.params.prompt).toBe("latest ask");
     expect(second.promptContext).toEqual({
-      appendContext: expect.stringMatching(/^For the current source conversation,/),
+      appendContext: expect.stringMatching(/^This turn has no current conversation\./),
     });
     expect(
       second.promptContext?.appendContext?.endsWith(`\n\n${labelRuntimeContextText(carrier)}`),
@@ -2676,9 +2664,8 @@ describe("prepareCliRunContext", () => {
       hashCliSessionText(JSON.stringify(["fake_web_tool", "memory_search"])),
     );
     expect(context.reusableCliSession).toEqual({
-      mode: "reuse-with-drift",
-      sessionId: "cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      mode: "invalidate",
+      invalidatedReason: "prompt-tools",
     });
   });
 
@@ -2881,6 +2868,8 @@ describe("prepareCliRunContext", () => {
       sessionKey: "agent:main:main",
       modelProvider: "policy-provider",
       model: "policy-model",
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       clientCaps: ["original-client"],
       toolsAllow: originalToolsAllow,
@@ -2892,6 +2881,8 @@ describe("prepareCliRunContext", () => {
     const questionAuthority = bindQuestionAuthority(() => {});
     originalToolsAllow.push("exec");
     const caller = {
+      messageProvider: "telegram",
+      senderId: "tools-owner",
       senderIsOwner: false,
       disableTools: false,
       clientCaps: ["original-client"],
@@ -2996,7 +2987,8 @@ describe("prepareCliRunContext", () => {
       modelProvider: "question-policy",
       model: "creator-model",
       config,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       senderIsOwner: false,
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
@@ -3006,7 +2998,8 @@ describe("prepareCliRunContext", () => {
     const caller = {
       senderIsOwner: false,
       disableTools: false,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "question-owner",
       clientCaps: ["creator-client"],
       approvalReviewerDeviceId: "creator-reviewer",
       traceAuthorized: mode === "reply-owned",
@@ -3410,6 +3403,10 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
         mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackPolicyTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
         resolveMcpLoopbackScopedTools: vi.fn(() => ({
           agentId: "main",
           tools: projectedToolNames.map((name) => ({ name })),
@@ -3447,7 +3444,7 @@ describe("prepareCliRunContext", () => {
       });
       expect(context.params.prompt).toContain("message-tool-available:false");
       expect(context.params.prompt).toContain(
-        "For the current source conversation, reply normally in your final assistant message",
+        "This turn has no current conversation. Reply normally in your final assistant message",
       );
       expect(context.params.prompt).not.toContain("message(action=send)");
       expect(context.params.prompt).not.toContain("target required this turn");
@@ -3963,7 +3960,7 @@ describe("prepareCliRunContext", () => {
         "Recovered history may be stale; verify current and time-sensitive facts before acting.",
       );
       expect(context.openClawHistoryPrompt).toMatch(
-        /<next_user_message>\nlatest ask\n\nFor the current source conversation,[\s\S]*\n<\/next_user_message>$/,
+        /<next_user_message>\nlatest ask\n\nThis turn has no current conversation\.[\s\S]*\n<\/next_user_message>$/,
       );
       expect(context.params.transcriptPrompt).toBe("latest ask");
     });

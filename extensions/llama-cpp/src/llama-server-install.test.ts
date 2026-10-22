@@ -11,7 +11,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
-  extractWindowsVcRuntime: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
   resolveLlamaCppDataDir: vi.fn(),
 }));
@@ -27,9 +26,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 vi.mock("./defaults.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./defaults.js")>()),
   resolveLlamaCppDataDir: mocks.resolveLlamaCppDataDir,
-}));
-vi.mock("./llama-server-vc-runtime.js", () => ({
-  extractWindowsVcRuntime: mocks.extractWindowsVcRuntime,
 }));
 
 import {
@@ -50,6 +46,8 @@ type FileHandle = Awaited<ReturnType<typeof fs.open>>;
 const tempRoots: string[] = [];
 const pinnedVersion = `version: 0.1.0-dev (build ${LLAMA_SERVER_BUILD}, commit ${LLAMA_SERVER_COMMIT.slice(0, 9)})`;
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const expandCalls = () =>
+  mocks.execFile.mock.calls.filter(([file]) => file.endsWith("\\expand.exe"));
 
 function mockCommand(
   run: (command: string, args: string[], options: { timeout?: number }) => string | Promise<string>,
@@ -62,7 +60,21 @@ function mockCommand(
       callback: (error: unknown, stdout: string, stderr: string) => void,
     ) => {
       void Promise.resolve()
-        .then(() => run(command, args, options))
+        .then(async () => {
+          if (command.endsWith("\\expand.exe")) {
+            const filter = args[0]?.slice(3);
+            const destination = args[2];
+            if (!filter || !destination) {
+              throw new Error("Expected a named CAB extraction");
+            }
+            await fs.writeFile(
+              path.join(destination, filter),
+              `runtime:${filter.replace(/_(?:amd64|arm64)$/u, "")}`,
+            );
+            return "";
+          }
+          return run(command, args, options);
+        })
         .then(
           (output) => callback(null, output, ""),
           (error: unknown) => callback(error, "", ""),
@@ -95,7 +107,7 @@ function download(
 afterEach(async () => {
   vi.restoreAllMocks();
   mocks.execFile.mockReset();
-  mocks.extractWindowsVcRuntime.mockReset();
+  vi.unstubAllEnvs();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.resolveLlamaCppDataDir.mockReset();
   await Promise.all(
@@ -127,7 +139,10 @@ async function createCpuArchive() {
   const serverBytes = await new JSZip()
     .file(source.executable, "server")
     .generateAsync({ type: "nodebuffer" });
-  const runtimeBytes = Buffer.from("verified Visual C++ runtime bundle");
+  const runtimeBytes = Buffer.alloc(96, 0x5a);
+  runtimeBytes.write("MSCF", 32, "ascii");
+  runtimeBytes.writeUInt32LE(48, 40);
+  vi.stubEnv("SystemRoot", "C:\\Windows");
   const asset: LlamaServerAsset = {
     ...source,
     sha256: digest(serverBytes),
@@ -136,17 +151,11 @@ async function createCpuArchive() {
         ...runtime,
         sha256: digest(runtimeBytes),
         size: runtimeBytes.byteLength,
+        containerOffset: 32,
+        containerSize: 48,
       },
     ],
   };
-  mocks.extractWindowsVcRuntime.mockImplementation(
-    async ({ asset: dependency, destDir }: { asset: typeof runtime; destDir: string }) => {
-      for (const file of dependency.files) {
-        await fs.writeFile(path.join(destDir, file.target), `runtime:${file.target}`);
-      }
-      return destDir;
-    },
-  );
   mocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
     response: new Response(new Uint8Array(url === runtime.url ? runtimeBytes : serverBytes)),
     release: vi.fn(),
@@ -404,6 +413,33 @@ describe("downloadVerifiedFile", () => {
 });
 
 describe("ensureLlamaServerInstalled", () => {
+  it.each([
+    ["libssl.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libcrypto.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libgomp.so.1", "OpenMP", "libgomp1"],
+    ["libcustom.so.1", "libcustom.so.1", "system package manager"],
+  ])(
+    "diagnoses the missing %s runtime when reusing an installed server",
+    async (library, runtime, remedy) => {
+      const command = await createInstalledServer();
+      const detail = `${command}: error while loading shared libraries: ${library}: cannot open shared object file: No such file or directory`;
+      mockCommand(() => {
+        throw new Error(detail);
+      });
+      const failure = await ensureLlamaServerInstalled().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringContaining(detail) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(runtime) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(remedy) });
+      expect(failure).toMatchObject({ message: expect.stringContaining("rerun llama.cpp setup") });
+      if (library !== "libgomp.so.1") {
+        expect((failure as Error).message).not.toContain("OpenMP");
+      }
+      expect(await fs.readFile(command, "utf8")).toBe("");
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
+
   it("cancels a queued setup without cancelling another installation or poisoning reuse", async () => {
     const command = await createInstalledServer();
     const started = createDeferred<void>();
@@ -428,7 +464,7 @@ describe("ensureLlamaServerInstalled", () => {
     expect(mocks.execFile.mock.calls.filter(([file]) => file === command)).toHaveLength(2);
   });
 
-  it("allows slow version initialization before publication, after publication, and on reuse", async () => {
+  it("allows slow version initialization during staging and on reuse", async () => {
     const { root, asset, runtime } = await createCpuArchive();
     const calls: Array<{ command: string; args: string[]; timeout?: number }> = [];
     mockCommand(async (command, args, options) => {
@@ -458,7 +494,7 @@ describe("ensureLlamaServerInstalled", () => {
         timeout: call.timeout,
       })),
     ).toEqual(
-      [false, false, true, true].map((published) => ({
+      [false, false, true].map((published) => ({
         published,
         args: ["--version"],
         timeout: 120_000,
@@ -500,7 +536,7 @@ describe("ensureLlamaServerInstalled", () => {
         );
         expect(await fs.readdir(root)).toEqual([]);
       }
-      expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+      expect(expandCalls()).toHaveLength(0);
       expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
         expect.objectContaining({ url: runtime.url }),
       );
@@ -508,7 +544,7 @@ describe("ensureLlamaServerInstalled", () => {
   );
 
   it("preserves both launch errors when the VC runtime fallback cannot start the server", async () => {
-    const { root, asset } = await createCpuArchive();
+    const { root, asset, runtime } = await createCpuArchive();
     let attempt = 0;
     mockCommand((command) => {
       const detail = attempt++ === 0 ? "initial launch failed" : "fallback launch failed";
@@ -518,7 +554,7 @@ describe("ensureLlamaServerInstalled", () => {
     await expect(ensureLlamaServerInstalled({ asset })).rejects.toThrow(
       /Initial startup detail: .*initial launch failed.*Fallback detail: .*fallback launch failed/u,
     );
-    expect(mocks.extractWindowsVcRuntime).toHaveBeenCalledTimes(1);
+    expect(expandCalls()).toHaveLength(runtime.files.length + 1);
     expect(await fs.readdir(root)).toEqual([]);
   });
 
@@ -602,7 +638,7 @@ describe("ensureLlamaServerInstalled", () => {
       });
       const { command, installDir } = resolveManagedLlamaServerPaths(asset);
       if (outcome === "ready") {
-        await expect(result).resolves.toMatchObject({ command, asset: { backend: "cuda" } });
+        await expect(result).resolves.toMatchObject({ command });
         for (const file of runtime.files) {
           expect(await fs.readFile(path.join(installDir, file), "utf8")).toBe(`runtime:${file}`);
         }
@@ -611,8 +647,6 @@ describe("ensureLlamaServerInstalled", () => {
           validatedFiles.every((files) => runtime.files.every((file) => files.includes(file))),
         ).toBe(true);
         expect(commandCalls).toEqual([
-          { args: ["--version"], timeout: 120_000 },
-          { args: ["--list-devices"], timeout: 15_000 },
           { args: ["--version"], timeout: 120_000 },
           { args: ["--list-devices"], timeout: 15_000 },
         ]);
@@ -629,7 +663,7 @@ describe("ensureLlamaServerInstalled", () => {
             { args: ["--version"], timeout: 120_000 },
             { args: ["--list-devices"], timeout: 15_000 },
           ]);
-          expect(mocks.extractWindowsVcRuntime).not.toHaveBeenCalled();
+          expect(expandCalls()).toHaveLength(0);
           expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalledWith(
             expect.objectContaining({ url: vcRuntime.url }),
           );

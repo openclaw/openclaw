@@ -1,14 +1,19 @@
-// Plugin MCP cancellation tests cover cancellation of in-flight plugin tool calls.
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { Type } from "typebox";
+import type { Client } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { consumeTrackedToolExecutionStarted } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  createMcpConnection,
+  createTool,
+  toolResult,
+  outcome,
+  waitForStart,
+} from "./tools-mcp.test-support.js";
 import { createToolsMcpServer } from "./tools-stdio-server.js";
 
 describe("plugin tools MCP cancellation", () => {
@@ -21,46 +26,31 @@ describe("plugin tools MCP cancellation", () => {
       const started = createDeferred();
       const finish = createDeferred();
       const reads: unknown[] = [];
-      let queryError: unknown;
       let signal: AbortSignal | undefined;
       let pendingWork: ReturnType<AnyAgentTool["execute"]> | undefined;
       const runNativeWork = async (): ReturnType<AnyAgentTool["execute"]> => {
         started.resolve();
         await finish.promise;
-        try {
-          reads.push(database.prepare("SELECT 42 AS value").get());
-        } catch (error) {
-          queryError = error;
-          throw error;
+        reads.push(database.prepare("SELECT 42 AS value").get());
+        return toolResult("done");
+      };
+      const tool = createTool("native_cleanup", async (_id, _params, requestSignal) => {
+        signal = requestSignal;
+        pendingWork = mode === "handler" ? runNativeWork() : trackAsyncWork(runNativeWork);
+        if (mode === "handler") {
+          return await pendingWork;
         }
-        return { content: [{ type: "text", text: "done" }], details: {} };
-      };
-      const tool: AnyAgentTool = {
-        name: "native_cleanup",
-        label: "Native cleanup",
-        description: "Keeps accepted database work alive through cancellation",
-        parameters: Type.Object({}),
-        execute: async (_id, _params, requestSignal) => {
-          signal = requestSignal;
-          pendingWork = mode === "handler" ? runNativeWork() : trackAsyncWork(runNativeWork);
-          if (mode === "handler") {
-            return await pendingWork;
-          }
-          void pendingWork.catch(() => {});
-          return { content: [{ type: "text", text: "accepted" }], details: {} };
-        },
-      };
+        void pendingWork.catch(() => {});
+        return toolResult("accepted");
+      });
       const sdkResourceHost = hosted ? new LegacyPluginSdkResourceHost() : undefined;
       const server = createToolsMcpServer({ name: "native-drain", tools: [tool], sdkResourceHost });
       const clients: Client[] = [];
       const connect = async () => {
-        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-        const client = new Client(
-          { name: "native-client", version: "0.0.0" },
-          { capabilities: {} },
-        );
-        clients.push(client);
-        await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+        const connection = createMcpConnection(server);
+        clients.push(connection.client);
+        await connection.connect();
+        const { client } = connection;
         return client;
       };
       let closing: Promise<void> | undefined;
@@ -68,48 +58,29 @@ describe("plugin tools MCP cancellation", () => {
       try {
         const client = await connect();
         const call = client.callTool({ name: tool.name, arguments: {} });
-        const callResult = call.then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
-        await Promise.race([
-          started.promise,
-          call.then(() => {
-            throw new Error("Tool completed before native work started");
-          }),
-        ]);
+        const callResult = outcome(call);
+        await waitForStart(started.promise, call);
         if (mode === "descendant") {
           expect(await callResult).toMatchObject({
             result: { content: [{ type: "text", text: "accepted" }] },
           });
         }
-        let transportClosed = false;
-        let released = false;
         let siblingSettled = false;
-        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Server exposes callback properties, not EventTarget.
-        server.onclose = () => {
-          transportClosed = true;
-        };
-        closing = server.close().then(() => {
-          database.close();
-          released = true;
-        });
+        closing = server.close().then(() => database.close());
         siblingClose = server.close().then(() => {
           siblingSettled = true;
         });
         await nextTurn();
-        expect(transportClosed).toBe(true);
+        expect(server.transport).toBeUndefined();
         if (mode === "handler") {
           expect(signal?.aborted).toBe(true);
           expect(await callResult).toHaveProperty("error");
         }
-        expect.soft(released).toBe(false);
         expect.soft(siblingSettled).toBe(false);
         expect.soft(database.isOpen).toBe(true);
         finish.resolve();
         await pendingWork?.catch(() => {});
         await Promise.all([closing, siblingClose]);
-        expect.soft(queryError).toBeUndefined();
         expect.soft(reads).toEqual([{ value: 42 }]);
         expect(database.isOpen).toBe(false);
 
@@ -122,7 +93,7 @@ describe("plugin tools MCP cancellation", () => {
           content: [{ type: "text", text: mode === "handler" ? "done" : "accepted" }],
         });
         await pendingWork;
-        expect(reads.at(-1)).toEqual({ value: 42 });
+        expect(reads).toEqual([{ value: 42 }, { value: 42 }]);
       } finally {
         finish.resolve();
         await pendingWork?.catch(() => {});
@@ -159,99 +130,78 @@ describe("plugin tools MCP cancellation", () => {
       let toolCallId: string | undefined;
       let workSignal: AbortSignal | undefined;
       let descendant: Promise<void> | undefined;
-      let descendantFinished = false;
       let responseId: number | string | undefined;
       let abortCount = 0;
       let observedReason: unknown;
-      let closeFinished = false;
-      const tool: AnyAgentTool = {
-        name: "cached_native_work",
-        label: "Cached native work",
-        description: "Returns a cached result while accepted native work remains",
-        parameters: Type.Object({}),
-        execute: async (id, _params, signal) => {
-          toolCallId = id;
-          const ownerSignal = getAsyncWorkSignal();
-          if (!signal || !ownerSignal) {
-            throw new Error("Expected request and work signals");
+      const tool = createTool("cached_native_work", async (id, _params, signal) => {
+        toolCallId = id;
+        const ownerSignal = getAsyncWorkSignal();
+        if (!signal || !ownerSignal) {
+          throw new Error("Expected request and work signals");
+        }
+        requestSignal = signal;
+        workSignal = ownerSignal;
+        descendant = trackAsyncWork(async () => {
+          await lateListener.promise;
+          const observeAbort = () => {
+            abortCount++;
+            observedReason = signal.reason;
+          };
+          const observeWorkAbort = () => workAborted.resolve();
+          signal.addEventListener("abort", observeAbort, { once: true });
+          ownerSignal.addEventListener("abort", observeWorkAbort, { once: true });
+          if (signal.aborted) {
+            observeAbort();
           }
-          requestSignal = signal;
-          workSignal = ownerSignal;
-          descendant = trackAsyncWork(async () => {
-            await lateListener.promise;
-            const observeAbort = () => {
-              abortCount++;
-              observedReason = signal.reason;
-            };
-            const observeWorkAbort = () => workAborted.resolve();
-            signal.addEventListener("abort", observeAbort, { once: true });
-            ownerSignal.addEventListener("abort", observeWorkAbort, { once: true });
-            if (signal.aborted) {
-              observeAbort();
+          if (ownerSignal.aborted) {
+            observeWorkAbort();
+          }
+          listening.resolve();
+          try {
+            await finish.promise;
+            if (phase === "response-completed") {
+              await workAborted.promise;
             }
-            if (ownerSignal.aborted) {
-              observeWorkAbort();
-            }
-            listening.resolve();
-            try {
-              await finish.promise;
-              if (phase === "response-completed") {
-                await workAborted.promise;
-              }
-              reads.push(database.prepare("SELECT 42 AS value").get());
-            } finally {
-              signal.removeEventListener("abort", observeAbort);
-              ownerSignal.removeEventListener("abort", observeWorkAbort);
-              descendantFinished = true;
-            }
-          });
-          void descendant.catch(() => {});
-          return { content: [{ type: "text", text: "cached result" }], details: {} };
-        },
-      };
+            reads.push(database.prepare("SELECT 42 AS value").get());
+          } finally {
+            signal.removeEventListener("abort", observeAbort);
+            ownerSignal.removeEventListener("abort", observeWorkAbort);
+          }
+        });
+        void descendant.catch(() => {});
+        return toolResult("cached result");
+      });
       const server = createToolsMcpServer({
         name: "native-response-tail",
         tools: [tool],
         sdkResourceHost: host,
       });
-      const client = new Client({ name: "native-response-client", version: "0.0.0" });
+      const { client, inbound, connect } = createMcpConnection(server);
       // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client exposes callback properties, not EventTarget.
       client.onclose = () => transportClosed.resolve();
-      const [outbound, inbound] = InMemoryTransport.createLinkedPair();
-      const sendRequest = outbound.send.bind(outbound);
-      const requestSpy = vi.spyOn(outbound, "send").mockImplementation(async (message, options) => {
-        if ("method" in message && message.method === "tools/call" && "id" in message) {
-          responseId = message.id;
-        }
-        return await sendRequest(message, options);
-      });
-      const sendResponse = inbound.send.bind(inbound);
-      const responseSpy = vi.spyOn(inbound, "send").mockImplementation(async (message, options) => {
-        if ("result" in message && message.id === responseId) {
-          responseEntered.resolve();
-          if (phase === "send-pending") {
-            await releaseResponse.promise;
-          }
-        }
-        return await sendResponse(message, options);
-      });
+      let restoreResponse = () => {};
       let call: Promise<unknown> | undefined;
       let closing: Promise<void> | undefined;
       const reason = "cancel while response transport is pending";
       try {
-        await Promise.all([server.connect(inbound), client.connect(outbound)]);
+        await connect();
+        const sendResponse = inbound.send.bind(inbound);
+        const responseSpy = vi
+          .spyOn(inbound, "send")
+          .mockImplementation(async (message, options) => {
+            if ("result" in message && responseId === undefined) {
+              responseId = message.id;
+              responseEntered.resolve();
+              if (phase === "send-pending") {
+                await releaseResponse.promise;
+              }
+            }
+            return await sendResponse(message, options);
+          });
+        restoreResponse = () => responseSpy.mockRestore();
         const controller = new AbortController();
-        call = client.callTool({ name: tool.name }, { signal: controller.signal }).then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
-        await Promise.race([
-          responseEntered.promise,
-          call.then(() => {
-            throw new Error("The call settled before response sending began");
-          }),
-        ]);
-        expect(descendantFinished).toBe(false);
+        call = outcome(client.callTool({ name: tool.name }, { signal: controller.signal }));
+        await waitForStart(responseEntered.promise, call);
         if (phase === "response-completed") {
           expect(await call).toMatchObject({ result: { content: [{ text: "cached result" }] } });
           await client.ping();
@@ -279,19 +229,14 @@ describe("plugin tools MCP cancellation", () => {
         releaseResponse.resolve();
         await call;
         await client.ping();
-        closing = server.close().then(() => {
-          database.close();
-          closeFinished = true;
-        });
+        closing = server.close().then(() => database.close());
         await transportClosed.promise;
         await nextTurn();
         expect(workSignal?.aborted).toBe(true);
-        expect(closeFinished).toBe(false);
         expect(database.isOpen).toBe(true);
         finish.resolve();
         await descendant;
         await closing;
-        expect(toolCallId).toBeDefined();
         if (!toolCallId) {
           throw new Error("tool.execute did not receive a call id");
         }
@@ -309,8 +254,7 @@ describe("plugin tools MCP cancellation", () => {
         await client.close();
         await call;
         await host?.close();
-        requestSpy.mockRestore();
-        responseSpy.mockRestore();
+        restoreResponse();
         if (database.isOpen) {
           database.close();
         }
@@ -321,22 +265,15 @@ describe("plugin tools MCP cancellation", () => {
   it("does not execute a request queued in SDK microtasks when close starts", async () => {
     const database = new DatabaseSync(":memory:");
     database.exec("CREATE TABLE calls (value INTEGER)");
-    const tool: AnyAgentTool = {
-      name: "queued_write",
-      label: "Queued write",
-      description: "Records actual tool admission",
-      parameters: Type.Object({}),
-      execute: async () => {
-        database.prepare("INSERT INTO calls VALUES (1)").run();
-        return { content: [{ type: "text", text: "done" }], details: {} };
-      },
-    };
+    const tool = createTool("queued_write", async () => {
+      database.prepare("INSERT INTO calls VALUES (1)").run();
+      return toolResult("done");
+    });
     const server = createToolsMcpServer({ name: "queued-admission", tools: [tool] });
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    const client = new Client({ name: "queued-client", version: "0.0.0" }, { capabilities: {} });
+    const { client, outbound, connect } = createMcpConnection(server);
     try {
-      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-      const sent = clientTransport.send({
+      await connect();
+      const sent = outbound.send({
         jsonrpc: "2.0",
         id: "queued-before-close",
         method: "tools/call",

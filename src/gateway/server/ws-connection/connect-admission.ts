@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   hasGatewayClientCap,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -24,7 +25,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -42,7 +43,6 @@ import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
 import type {
   AuthenticatedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -111,6 +111,7 @@ export async function rejectUnavailableProfileConnect(
 }
 
 export function applyConnectionScopeCap(params: {
+  role: string;
   scopes: string[];
   upgradeReq: IncomingMessage;
 }): string[] {
@@ -119,15 +120,13 @@ export function applyConnectionScopeCap(params: {
   if (rawHeader === undefined) {
     return params.scopes;
   }
-  const declaredScopes = new Set(
-    rawHeader
-      .split(",")
-      .map((scope) => scope.trim())
-      .filter((scope) => scope.length > 0),
-  );
-  return declaredScopes.size === 0
-    ? []
-    : params.scopes.filter((scope) => declaredScopes.has(scope));
+  const declaredScopes = rawHeader
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
+  return params.role === "operator"
+    ? intersectOperatorScopes(params.scopes, declaredScopes)
+    : params.scopes.filter((scope) => declaredScopes.includes(scope));
 }
 
 export function resolveEffectiveConnectionScopes(params: {
@@ -136,26 +135,17 @@ export function resolveEffectiveConnectionScopes(params: {
   verifiedIdentity?: string;
   identityScopes?: Record<string, OperatorScope[]>;
   upgradeReq: IncomingMessage;
-}): { scopes: string[]; addedIdentityScopes: OperatorScope[] } {
+}): string[] {
   const verifiedIdentity = params.verifiedIdentity;
   let identityScopes: OperatorScope[] = [];
   if (params.role === "operator" && verifiedIdentity) {
     identityScopes = resolveIdentityOperatorScopes(verifiedIdentity, params.identityScopes);
   }
-  const scopes = applyConnectionScopeCap({
+  return applyConnectionScopeCap({
+    role: params.role,
     scopes: [...new Set([...params.deviceScopes, ...identityScopes])],
     upgradeReq: params.upgradeReq,
   });
-  const addedIdentityScopes = identityScopes.filter(
-    (scope) =>
-      scopes.includes(scope) &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: [scope],
-        allowedScopes: params.deviceScopes,
-      }),
-  );
-  return { scopes, addedIdentityScopes };
 }
 
 export function rejectGatewayConnectOrigin(

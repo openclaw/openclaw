@@ -1,6 +1,26 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { fetchXaiUsage } from "./usage.js";
+import xaiPlugin from "./index.js";
+
+const provider = await registerSingleProviderPlugin(xaiPlugin);
+async function fetchUsage(fetchFn: typeof fetch) {
+  if (!provider.fetchUsageSnapshot) {
+    throw new Error("xAI usage provider is not registered");
+  }
+  const snapshot = await provider.fetchUsageSnapshot({
+    config: {},
+    env: {},
+    provider: "xai",
+    token: "oauth-token",
+    timeoutMs: 5000,
+    fetchFn,
+  });
+  if (!snapshot) {
+    throw new Error("xAI usage provider returned no snapshot");
+  }
+  return snapshot;
+}
 
 const weekly = {
   type: "USAGE_PERIOD_TYPE_WEEKLY",
@@ -82,7 +102,7 @@ describe("fetchXaiUsage", () => {
         });
         return makeResponse(200, payload);
       });
-      await expect(fetchXaiUsage("oauth-token", 5000, mockFetch)).resolves.toEqual({
+      await expect(fetchUsage(mockFetch)).resolves.toEqual({
         provider: "xai",
         displayName: "SuperGrok",
         billing: [{ type: "balance", label: "Prepaid balance", amount: balance, unit: "USD" }],
@@ -94,7 +114,7 @@ describe("fetchXaiUsage", () => {
 
   it("returns token-expired errors for billing auth failures", async () => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(401, { error: "expired" }));
-    await expect(fetchXaiUsage("oauth-token", 5000, mockFetch)).resolves.toEqual({
+    await expect(fetchUsage(mockFetch)).resolves.toEqual({
       provider: "xai",
       displayName: "xAI",
       windows: [],
@@ -118,7 +138,7 @@ describe("fetchXaiUsage", () => {
     ],
   ])("returns a stable error for %s", async (_name, payload, error) => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
-    const result = await fetchXaiUsage("oauth-token", 5000, mockFetch);
+    const result = await fetchUsage(mockFetch);
     expect(result.error).toBe(error);
     expect(result.windows).toHaveLength(0);
   });

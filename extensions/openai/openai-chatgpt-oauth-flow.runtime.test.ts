@@ -259,6 +259,7 @@ describe("OpenAI Codex OAuth flow", () => {
     const loginPromise = loginOpenAICodex({
       onAuth,
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     });
 
@@ -283,12 +284,14 @@ describe("OpenAI Codex OAuth flow", () => {
           loginOpenAICodex({
             onAuth,
             onPrompt,
-            ...(entry === "manual input" ? { onManualCodeInput: async () => "manual-code" } : {}),
+            onManualCodeInput: async () => (entry === "manual input" ? "manual-code" : ""),
           }),
         ).resolves.toMatchObject({ accountId: "manual-account" });
         expect(onAuth).toHaveBeenCalledOnce();
         if (entry === "manual input") {
           expect(onPrompt).not.toHaveBeenCalled();
+        } else {
+          expect(onPrompt).toHaveBeenCalledOnce();
         }
         expect(ssrfMocks.fetchWithSsrFGuard.mock.calls[0]?.[0].init.body.get("code")).toBe(
           "manual-code",
@@ -296,6 +299,25 @@ describe("OpenAI Codex OAuth flow", () => {
       } finally {
         await closeServer(server);
       }
+    },
+  );
+
+  it.each(["wrong state", "manual rejection"] as const)(
+    "rejects %s without exchanging a token",
+    async (failure) => {
+      const onPrompt = vi.fn(async () => "unused-code");
+      await expect(
+        loginOpenAICodex({
+          onAuth: () => undefined,
+          onPrompt,
+          onManualCodeInput: () =>
+            failure === "wrong state"
+              ? Promise.resolve("manual-code#wrong-state")
+              : Promise.reject(new Error("manual entry failed")),
+        }),
+      ).rejects.toThrow(failure === "wrong state" ? "State mismatch" : "manual entry failed");
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     },
   );
 
@@ -370,6 +392,7 @@ describe("OpenAI Codex OAuth flow", () => {
         await release.promise;
       },
       onPrompt: vi.fn(async () => "unused-code"),
+      onManualCodeInput: () => createDeferred<string>().promise,
       signal: controller.signal,
     }).catch(rejected);
     let socket: Socket | undefined;
@@ -428,14 +451,18 @@ describe("OpenAI Codex OAuth flow", () => {
     const onPrompt = vi.fn(async () => {
       throw new Error("Browser login must not fall back to manual input");
     });
-    const first = loginOpenAICodex({ onAuth, onPrompt, signal: firstController.signal }).catch(
-      () => undefined,
-    );
+    const onManualCodeInput = () => createDeferred<string>().promise;
+    const first = loginOpenAICodex({
+      onAuth,
+      onPrompt,
+      onManualCodeInput,
+      signal: firstController.signal,
+    }).catch(() => undefined);
     try {
       await releasing.promise;
       firstController.abort();
       await expect(
-        loginOpenAICodex({ onAuth, onPrompt, signal: nextController.signal }),
+        loginOpenAICodex({ onAuth, onPrompt, onManualCodeInput, signal: nextController.signal }),
       ).resolves.toMatchObject({ accountId: "new-account" });
       expect(onPrompt).not.toHaveBeenCalled();
       expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);

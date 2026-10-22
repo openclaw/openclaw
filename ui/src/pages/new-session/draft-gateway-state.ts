@@ -160,8 +160,8 @@ export class DraftGatewayState {
     const request = {};
     this.cloudProfileRequest = request;
     this.cloudProfileStatus = client && policy ? "pending" : "initial";
-    this.callbacks.changed();
     if (!client || !policy) {
+      this.callbacks.changed();
       return Promise.resolve();
     }
     const required = policy.requiredProfile;
@@ -204,6 +204,7 @@ export class DraftGatewayState {
           this.callbacks.changed();
         }
       });
+    this.callbacks.changed();
     return this.cloudProfileComplete;
   }
 
@@ -279,6 +280,10 @@ export class DraftGatewayState {
 
   get cloudProfilesReady(): boolean {
     return this.cloudProfilesReadyValue;
+  }
+
+  get cloudProfilesRead(): Promise<void> | undefined {
+    return this.cloudProfileStatus === "initial" ? undefined : this.cloudProfileComplete;
   }
 
   get cloudProfilesPending(): boolean {
@@ -709,6 +714,7 @@ export class DraftGatewayState {
       }
       this.callbacks.changed();
     };
+    // The preference lease requires this live-authority predicate when publishing results.
     this.stopPreferences = preferences.subscribe(
       notify,
       () =>

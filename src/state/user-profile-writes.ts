@@ -56,12 +56,11 @@ async function write<Key extends keyof UserProfileWriteOperations>(
 ): Promise<UserProfileWriteOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
-  const captured = structuredClone(input);
   let publicationSettled: Promise<void> | undefined;
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      (scope) => scope.execute({ type, input: captured }),
+      (scope) => scope.execute({ type, input }),
       {
         assertCurrent,
         createAdmission: (operation) => {

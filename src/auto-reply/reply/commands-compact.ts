@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -83,12 +84,12 @@ function resolveManualCompactContextTokenBudget(params: {
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
-  const liveContextTokens = normalizeContextTokenBudget(params.liveContextTokens);
+  const liveContextTokens = floorPositiveFiniteNumber(params.liveContextTokens);
 
   const model = normalizeOptionalString(params.model);
   const provider = normalizeOptionalString(params.provider);
   if (!model || !provider) {
-    return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
+    return liveContextTokens ?? floorPositiveFiniteNumber(params.persistedContextTokens);
   }
 
   const configuredContextTokens = resolveContextTokensForModel({
@@ -107,11 +108,7 @@ function resolveManualCompactContextTokenBudget(params: {
       : configuredBudget;
   }
 
-  return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
-}
-
-function normalizeContextTokenBudget(value: number | undefined): number | undefined {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+  return liveContextTokens ?? floorPositiveFiniteNumber(params.persistedContextTokens);
 }
 
 function resolveManualCompactContextModelId(params: { provider: string; model: string }): string {
@@ -359,6 +356,9 @@ export async function handleCompactCommand(
             messageChannel: params.command.channel,
             clientCaps: params.ctx.GatewayClientCaps,
             conversationToolPolicy: params.ctx.ConversationToolPolicy,
+            conversationId: params.ctx.ChatId,
+            messageThreadId: params.ctx.MessageThreadId,
+            operatorProfileId: operatorAuthority?.profileId,
             groupId: expectedSession.groupId,
             groupChannel: expectedSession.groupChannel,
             groupSpace: expectedSession.space,

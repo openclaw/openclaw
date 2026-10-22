@@ -7,7 +7,7 @@ import {
   requestRpcSourceCancellation,
 } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { resolveInFlightRunSnapshot } from "./chat-abort.js";
+import { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
 import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 import { boundInFlightRunSnapshotForChatHistory } from "./server-methods/chat-history-budget.js";

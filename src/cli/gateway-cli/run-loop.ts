@@ -1065,11 +1065,12 @@ export async function runGatewayLoop(params: {
   try {
     if (params.ownsProcessLifecycle) {
       releaseOutputOwner = registerSignalExitOwner((code, reason) => {
-        if (Number(code) !== 0 && hostExitCode === 0) {
-          hostExitCode = Number(code);
+        hostExitCode ||= Number(code);
+        // Shutdown logs can hit the broken pipe again; only the first failure requests stop.
+        if (!hostExitRequested) {
+          hostExitRequested = true;
+          request("stop", "process exit", reason);
         }
-        hostExitRequested = true;
-        request("stop", "process exit", reason);
       });
     }
     releaseHostLifeline = installGatewayHostLifeline(() => {

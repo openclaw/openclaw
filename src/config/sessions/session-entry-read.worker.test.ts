@@ -38,6 +38,7 @@ import {
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import {
@@ -58,11 +59,8 @@ function withDatabase(run: (database: Database, env: NodeJS.ProcessEnv) => Promi
 
 function withRetainedReader(target: Target, run: () => void) {
   const retained = new OpenClawAgentDatabaseReadOnlyScope();
-  try {
-    retained.run(target, run);
-  } finally {
-    retained.close();
-  }
+  using _ = { [Symbol.dispose]: () => retained.close() };
+  retained.run(target, run);
 }
 
 function openReader(target: Target, env: NodeJS.ProcessEnv): OpenClawAgentReadOnlyDatabase {
@@ -190,18 +188,16 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
       const read = () => readExact(target, env, [sessionKey], "lifecycle");
       const commitFailure = new Error("Injected snapshot commit failure");
       const exec = reader.db.exec.bind(reader.db);
-      const failingCommit = vi.spyOn(reader.db, "exec").mockImplementation((sql) => {
-        if (sql === "COMMIT") {
-          throw commitFailure;
-        }
-        return exec(sql);
-      });
-      try {
+      {
+        using _ = vi.spyOn(reader.db, "exec").mockImplementation((sql) => {
+          if (sql === "COMMIT") {
+            throw commitFailure;
+          }
+          return exec(sql);
+        });
         expect(read).toThrow(commitFailure);
         expect(reader.db.isTransaction).toBe(false);
         expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
-      } finally {
-        failingCommit.mockRestore();
       }
       const queries = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(reader.db),
@@ -230,9 +226,9 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
     writeSessionEntry(database, sessionKey, { sessionId: "live-session", updatedAt: 1 });
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    using peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const readEntries = entryCache.readExactSessionEntryCandidatesInDatabase;
-    const concurrentCommit = vi
+    using _ = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
       .mockImplementationOnce((...args) => {
         const selected = readEntries(...args);
@@ -243,21 +239,16 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
           .run(sessionKey, "0".repeat(64));
         return selected;
       });
-    try {
-      withRetainedReader(target, () => {
-        const read = () => readExact(target, env, [sessionKey], "lifecycle");
-        expect(read()).toMatchObject({
-          entries: [{ sessionKey, entry: { sessionId: "live-session" } }],
-          pendingArchives: false,
-        });
-        expect(read().pendingArchives).toBe(true);
-        peer.exec("UPDATE session_transcript_archives SET published_at = 2");
-        expect(read().pendingArchives).toBe(false);
+    withRetainedReader(target, () => {
+      const read = () => readExact(target, env, [sessionKey], "lifecycle");
+      expect(read()).toMatchObject({
+        entries: [{ sessionKey, entry: { sessionId: "live-session" } }],
+        pendingArchives: false,
       });
-    } finally {
-      concurrentCommit.mockRestore();
-      peer.close();
-    }
+      expect(read().pendingArchives).toBe(true);
+      peer.exec("UPDATE session_transcript_archives SET published_at = 2");
+      expect(read().pendingArchives).toBe(false);
+    });
   }));
 
 it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation) =>
@@ -586,38 +577,50 @@ it.each(["sharing", "list"] as const)(
     }),
 );
 
-it("preserves listing validation of dirty siblings in selected worker reads", () =>
-  withDatabase(async (database, env) => {
-    const sessionKey = "agent:main:selected";
-    const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    for (const key of [sessionKey, sibling]) {
-      writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
-    }
-    const read = () =>
-      readSessionEntriesFromStoreInWorker({
-        agentId: "main",
-        storePath: database.path,
-        env,
-        sessionKeys: [sessionKey],
-        projection: "list",
-      });
-    expect((await read()).entries).toHaveLength(1);
-    markCanonicalSessionValidationPending(database, [sibling]);
-    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-      JSON.stringify({
-        sessionId: sibling,
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!Mixed:example.org" },
+it.each(["selected", "orphans"] as const)(
+  "preserves listing validation of dirty siblings in %s worker reads",
+  (mode) =>
+    withDatabase(async (database, env) => {
+      const sessionKey = "agent:main:selected";
+      const sibling = "agent:main:matrix:channel:!mixed:example.org";
+      for (const key of [sessionKey, sibling]) {
+        writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
+      }
+      const read = async () =>
+        mode === "orphans"
+          ? readSessionEntrySummariesInWorker({
+              agentId: "main",
+              storePath: database.path,
+              env,
+              mainSessionRecovery: "orphans",
+            })
+          : (
+              await readSessionEntriesFromStoreInWorker({
+                agentId: "main",
+                storePath: database.path,
+                env,
+                sessionKeys: [sessionKey],
+                projection: "list",
+              })
+            ).entries;
+      expect(await read()).toHaveLength(mode === "orphans" ? 0 : 1);
+      markCanonicalSessionValidationPending(database, [sibling]);
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          sessionId: sibling,
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "!Mixed:example.org" },
+          }),
         }),
-      }),
-      sibling,
-    );
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sibling);
-    await expect(read()).rejects.toThrow("non-canonical persisted row");
-  }));
+        sibling,
+      );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(sibling);
+      await expect(read()).rejects.toThrow("non-canonical persisted row");
+    }),
+);
 
 it("reads retained headers and entries from one committed sharing snapshot", () =>
   withDatabase(async (database, env) => {
@@ -625,9 +628,9 @@ it("reads retained headers and entries from one committed sharing snapshot", () 
     seedRetainedSessionHeader(database, sessionKey, "retained-session");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    using peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const readEntries = entryCache.readExactSessionEntryCandidatesInDatabase;
-    const concurrentCommit = vi
+    using _ = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
       .mockImplementationOnce((...args) => {
         const selected = readEntries(...args);
@@ -641,24 +644,17 @@ it("reads retained headers and entries from one committed sharing snapshot", () 
         });
         return selected;
       });
-    try {
-      withRetainedReader(target, () => {
-        const read = () => readExact(target, env, [sessionKey], "sharing");
-        const first = read();
-        expect(first.entries).toEqual([]);
-        expect(first.sharing?.placeholders).toEqual([
-          { sessionKey, sessionId: "retained-session" },
-        ]);
-        const next = read();
-        expect(next.entries).toMatchObject([
-          { sessionKey, entry: { sessionId: "retained-session" } },
-        ]);
-        expect(next.sharing?.placeholders).toEqual([]);
-      });
-    } finally {
-      concurrentCommit.mockRestore();
-      peer.close();
-    }
+    withRetainedReader(target, () => {
+      const read = () => readExact(target, env, [sessionKey], "sharing");
+      const first = read();
+      expect(first.entries).toEqual([]);
+      expect(first.sharing?.placeholders).toEqual([{ sessionKey, sessionId: "retained-session" }]);
+      const next = read();
+      expect(next.entries).toMatchObject([
+        { sessionKey, entry: { sessionId: "retained-session" } },
+      ]);
+      expect(next.sharing?.placeholders).toEqual([]);
+    });
   }));
 
 it.each(["unsettled marker", "missing window"] as const)(

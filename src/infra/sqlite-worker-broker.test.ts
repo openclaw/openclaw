@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as retry from "@openclaw/retry";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -49,6 +50,26 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
+
+it("retires a disk-full nested transaction without claiming a definite write outcome", async () => {
+  const file = databasePath();
+  const store = await open(file, { type: "disk-full" });
+  const outcomes = await Promise.allSettled([append(store, "full"), append(store, "queued")]);
+  expect(outcomes).toMatchObject([
+    { status: "rejected", reason: { code: "outcome-unknown" } },
+    { status: "rejected", reason: { code: "unavailable" } },
+  ]);
+  for (const outcome of outcomes) {
+    assert(outcome.status === "rejected");
+    expect(collectNestedErrorCandidates(outcome.reason)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ errcode: 13 })]),
+    );
+  }
+  const recovered = await open(file);
+  expect(await read(recovered)).toEqual([]);
+  await append(recovered, "recovered");
+  expect(await read(recovered)).toEqual(["recovered"]);
+});
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;

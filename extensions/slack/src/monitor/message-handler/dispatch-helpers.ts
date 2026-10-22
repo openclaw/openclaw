@@ -11,7 +11,7 @@ import {
   resolveSlackReplyBlocks,
   type PreparedSlackReply,
 } from "../../reply-blocks.js";
-import { readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
+import { getOrCreateWeakOwnerMap, readLruMapEntry, writeLruMapEntry } from "../lru-map-cache.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -114,16 +114,6 @@ export type SlackEventDeliveryAttempt = {
 const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
 const slackStreamRecipientTeamCaches = new WeakMap<object, Map<string, string>>();
 
-function getSlackStreamRecipientTeamCache(client: object): Map<string, string> {
-  const existing = slackStreamRecipientTeamCaches.get(client);
-  if (existing) {
-    return existing;
-  }
-  const cache = new Map<string, string>();
-  slackStreamRecipientTeamCaches.set(client, cache);
-  return cache;
-}
-
 export function buildSlackEventDeliveryKey(
   params: SlackEventDeliveryAttempt,
   preparedReply: PreparedSlackReply = prepareSlackReply(params.payload),
@@ -159,7 +149,9 @@ export async function resolveSlackStreamRecipientTeamId(params: {
     params.fallbackTeamId && params.userId
       ? `${params.fallbackTeamId}:${params.userId}`
       : undefined;
-  const cache = cacheKey ? getSlackStreamRecipientTeamCache(params.client) : undefined;
+  const cache = cacheKey
+    ? getOrCreateWeakOwnerMap(slackStreamRecipientTeamCaches, params.client)
+    : undefined;
   const cachedTeamId = cache && cacheKey ? readLruMapEntry(cache, cacheKey) : undefined;
   if (cachedTeamId) {
     return cachedTeamId;

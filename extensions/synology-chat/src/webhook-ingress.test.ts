@@ -13,11 +13,17 @@ import {
   type SynologyWebhookRawEvent,
 } from "./webhook-ingress.js";
 
-type SynologyIngressQueue = NonNullable<
-  Parameters<typeof createSynologyIngressMonitor>[0]["queue"]
+type SynologyIngressPayload = { version: 1; rawEvent: string };
+type SynologyIngressQueue = ReturnType<
+  typeof createChannelIngressQueueForTests<SynologyIngressPayload>
 >;
-type SynologyIngressPayload = Parameters<SynologyIngressQueue["enqueue"]>[1];
 type SynologyIngressDispatch = Parameters<typeof createSynologyIngressMonitor>[0]["dispatch"];
+
+const { openChannelIngressQueue } = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getSynologyRuntime: () => ({ state: { openChannelIngressQueue } }),
+}));
 
 function webhookEvent(params?: {
   postId?: string;
@@ -56,13 +62,11 @@ async function withQueue(run: (queue: SynologyIngressQueue, start: StartIngress)
   });
   const monitors: Ingress[] = [];
   const start: StartIngress = (dispatch) => {
+    openChannelIngressQueue.mockReturnValue(queue);
     const ingress = createSynologyIngressMonitor({
       accountId: "default",
-      queue,
       dispatch,
       runtime: { error: vi.fn() },
-      pollIntervalMs: 10,
-      adoptionStallTimeoutMs: 5_000,
     });
     monitors.push(ingress);
     ingress.start();
@@ -197,7 +201,7 @@ describe("Synology Chat durable ingress", () => {
   });
 
   it("allows concurrent stop calls", async () => {
-    await withQueue(async (queue, start) => {
+    await withQueue(async (_queue, start) => {
       const ingress = start(async (_event, lifecycle) => {
         await lifecycle.onAdopted();
       });

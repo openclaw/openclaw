@@ -27,6 +27,7 @@ import {
 import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import type { ExtensionFactory } from "../../sessions/extensions/types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
@@ -344,13 +345,14 @@ export async function withReplaySession(
 ) {
   const { attempt, target, prepare } = fixture;
   const prepared = await prepare();
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
-  if (options.beforeStart) {
-    handlers.set("before_agent_start", [options.beforeStart]);
-  }
-  if (options.recovery === "compaction") {
-    handlers.set("session_before_compact", [
-      async (event) => {
+  const handlers: ExtensionFactory = (api) => {
+    if (options.beforeStart) {
+      api.on("before_agent_start", async () => {
+        await options.beforeStart?.();
+      });
+    }
+    if (options.recovery === "compaction") {
+      api.on("session_before_compact", async (event) => {
         const { preparation } = event as {
           preparation: { firstKeptEntryId: string; tokensBefore: number };
         };
@@ -361,12 +363,12 @@ export async function withReplaySession(
             tokensBefore: preparation.tokensBefore,
           },
         };
-      },
-    ]);
-  }
+      });
+    }
+  };
   const { session } = await createTestSession({
     sessionManager: prepared.sessionManager,
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
     settingsManager: SettingsManager.inMemory({
       compaction: {
         enabled: options.recovery === "compaction",

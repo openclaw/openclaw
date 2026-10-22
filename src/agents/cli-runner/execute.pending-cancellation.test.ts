@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import * as privateTempWorkspace from "@openclaw/fs-safe/temp";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createProcessAdapterEvents } from "../../process/supervisor/adapters/process-events.js";
 import { createProcessSupervisor } from "../../process/supervisor/supervisor.js";
 import * as failoverErrors from "../failover-error.js";
@@ -7,15 +10,17 @@ import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import { executeDeps } from "./execute-deps.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
-import {
-  setCliRunnerExecuteTestDeps,
-  wrapPreparedCliRunWithTestAdmission,
-} from "./execute.test-support.js";
+import { wrapPreparedCliRunWithTestAdmission } from "./execute.test-support.js";
 import * as cliHelpers from "./helpers.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/temp")>()),
+}));
 
 type ChildAdapterFactory =
   typeof import("../../process/supervisor/adapters/child.js").createChildAdapter;
@@ -149,7 +154,6 @@ function startFencedProcess(
 }
 
 describe("CLI execution cancellation", () => {
-  const restoreProcessSupervisor = executeDeps.getProcessSupervisor;
   let supervisor: ReturnType<typeof createProcessSupervisor>;
   let context: PreparedCliRunContext;
   let controller: AbortController;
@@ -159,7 +163,7 @@ describe("CLI execution cancellation", () => {
   beforeEach(() => {
     createChildAdapterMock.mockReset();
     supervisor = createProcessSupervisor();
-    setCliRunnerExecuteTestDeps({ getProcessSupervisor: () => supervisor });
+    vi.spyOn(executeDeps, "getProcessSupervisor").mockImplementation(() => supervisor);
     spawn = vi.spyOn(supervisor, "spawn");
     cancel = vi.spyOn(supervisor, "cancel");
     context = createRunContext();
@@ -169,7 +173,6 @@ describe("CLI execution cancellation", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    setCliRunnerExecuteTestDeps({ getProcessSupervisor: restoreProcessSupervisor });
     vi.restoreAllMocks();
   });
 
@@ -180,6 +183,7 @@ describe("CLI execution cancellation", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       context.backendResolved.parseJsonlEvent = (line) => {
         if (JSON.parse(line).type === "parser-failure") {
+          controller.abort();
           throw new Error("Unrelated parser failure");
         }
         return null;
@@ -325,6 +329,34 @@ describe("CLI execution cancellation", () => {
     expect(replacementRun.activity.resultSettled).toBe(true);
     firstRun.cancel();
     await expect(firstRun.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+  });
+
+  it("leaves no system prompt workspace when structured image preparation fails", async () => {
+    const rootDir = tempDirs.make("openclaw-cli-prompt-lifetime-");
+    const createWorkspace = privateTempWorkspace.tempWorkspace;
+    let workspace: Awaited<ReturnType<typeof createWorkspace>> | undefined;
+    vi.spyOn(privateTempWorkspace, "tempWorkspace").mockImplementation(async (options) => {
+      workspace = await createWorkspace({ ...options, rootDir });
+      return workspace;
+    });
+    context.workspaceDir = rootDir;
+    context.preparedBackend.backend.systemPromptFileArg = "--system-prompt-file";
+    Object.assign(context.params, {
+      media: [{ kind: "image" }],
+      mediaImageLayout: {
+        slots: [{ kind: "inline", factIndex: 0 }],
+        suppressedFactIndexes: [],
+      },
+    });
+    try {
+      await expect(executePreparedCliRun(context)).rejects.toThrow(
+        "failed to hydrate 1 structured image attachment(s) for CLI input",
+      );
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+      expect(await fs.readdir(rootDir)).toEqual([]);
+    } finally {
+      await workspace?.cleanup();
+    }
   });
 
   it("passes plugin-owned system prompts without writing temporary files or exposing prompt argv", async () => {

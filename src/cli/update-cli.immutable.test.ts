@@ -80,6 +80,7 @@ it("dispatches immutable preparation before mutable admission", async () => {
     sha: targetSha,
     dryRun: false,
     timeoutMs: 60_000,
+    onWarning: expect.any(Function),
   });
   expectJson({ status: "prepared", installKind: "immutable", activation: "disabled", targetSha });
   expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();
@@ -108,6 +109,39 @@ it.each([
     expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();
   },
 );
+
+it.each([false, true])("retains build warnings when activation throws (JSON: %s)", async (json) => {
+  const warning = "Built without the isolated build account";
+  vi.spyOn(immutable, "inspectImmutableInstall").mockResolvedValue({
+    ...installation,
+    activationEnabled: true,
+  });
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(immutable, "prepareImmutableUpdate").mockImplementation(async ({ onWarning }) => {
+    onWarning?.(warning);
+    expect(error).toHaveBeenCalledExactlyOnceWith(`Warning: ${warning}`);
+    expect(activation.activate).not.toHaveBeenCalled();
+    return {
+      status: "prepared",
+      installation: { ...installation, prepared: preparedReceipt },
+      targetSha,
+      steps: [],
+      warnings: [warning],
+    };
+  });
+  activation.activate.mockRejectedValueOnce(new Error("Activation failed"));
+  await expect(updateCommand({ json })).rejects.toBeInstanceOf(ExitError);
+  if (json) {
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ warnings: [warning] }),
+    );
+    expect(error).toHaveBeenCalledExactlyOnceWith(`Warning: ${warning}`);
+  } else {
+    expect(error.mock.calls.filter(([message]) => message === `Warning: ${warning}`)).toHaveLength(
+      1,
+    );
+  }
+});
 
 it.each([
   ["unsupported channel", { channel: "beta" }, { reason: "immutable-preparation-refused" }],
@@ -162,7 +196,10 @@ it.each([
     status: dryRun ? "dry-run" : "prepared",
     installation: dryRun ? adopted : { ...adopted, prepared: preparedReceipt },
   });
-  await updateCommand({ json: true, restart, dryRun, timeout: "600", drainTimeout: "30" });
+  await updateCommand({ json: true, restart, dryRun, timeout: " 600 ", drainTimeout: "30" });
+  expect(immutable.prepareImmutableUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutMs: 600_000 }),
+  );
   expect(activation.activate).toHaveBeenCalledTimes(activates ? 1 : 0);
   if (activates) {
     expect(activation.activate).toHaveBeenCalledWith(

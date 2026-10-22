@@ -615,7 +615,7 @@ describe("worker placement dispatch reclaim", () => {
           expectedState: "local",
           expectedGeneration: 0,
         }),
-      ).rejects.toThrow("changed before retirement");
+      ).rejects.toThrow("during an active turn");
       await placementStore.releaseTurn(claim);
       const retirement = {
         sessionId: REQUEST.sessionId,

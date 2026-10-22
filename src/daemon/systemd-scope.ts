@@ -25,7 +25,10 @@ import {
   runServiceInspectionGuard,
   withServiceInspectionBudget,
 } from "./service-inspection-budget.js";
-import { findServiceOwnershipRefusal, ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  findServiceOwnershipRefusal,
+  SystemdInspectionTimeout,
+} from "./service-inspection-error.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type {
   GatewayServiceCommandConfig,
@@ -382,7 +385,7 @@ async function systemdUnitsShareInstallation(
   const assertCurrent = () => {
     runServiceInspectionGuard(assertInspectionCurrent);
     if (deadline !== undefined && now() >= deadline) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout("user/system installation comparison");
     }
   };
   assertCurrent();
@@ -393,7 +396,9 @@ async function systemdUnitsShareInstallation(
     assertCurrent();
     const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(
+        `installation comparison for ${target.scope} ${target.unitName}`,
+      );
     }
     // Duplicate proof cannot transfer one manager's LoadUnit grant to its peer.
     const command = await readSystemdGatewayCommand(env, target, {
@@ -473,7 +478,9 @@ async function findMarkerOwnedSystemSystemdUnit(
   for (const target of custom.values()) {
     const remaining = deadline === undefined ? undefined : deadline - now();
     if (remaining !== undefined && remaining <= 0) {
-      throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
+      throw new SystemdInspectionTimeout(
+        `custom unit discovery for ${target.scope} ${target.unitName}`,
+      );
     }
     const command = await readSystemdGatewayCommand(env, target, {
       ...options,

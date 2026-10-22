@@ -1,4 +1,3 @@
-// ACP dispatch turns are session-controller turns on their ACP target session.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
@@ -33,12 +32,13 @@ let AcpSessionManager: typeof import("../../acp/control-plane/manager.core.js").
 let acpManagerDeps: typeof import("../../acp/control-plane/manager.types.js").DEFAULT_DEPS;
 
 const acpKey = "agent:codex:acp:controller-turns";
+const hooks = hookMocks.runner;
+const store = sessionStoreMocks;
 const cfg = {
   acp: { enabled: true, dispatch: { enabled: true } },
   session: { sendPolicy: { default: "allow" } },
 } as OpenClawConfig;
 
-/** Runtime turns block until the test releases them by prompt text. */
 function createGatedRuntime() {
   const started: string[] = [];
   const entered = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -73,21 +73,17 @@ function mockAcpSession(sessionKey: string) {
   sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
   acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
     params.sessionKey === sessionKey
-      ? {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          cfg: {},
-          storePath: "/tmp/mock-sessions.json",
-          entry,
-          acp: {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "runtime:controller",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: Date.now(),
+      ? completeAcpSessionFixture(
+          {
+            entry,
+            acp: {
+              agent: "codex",
+              runtimeSessionName: "runtime:controller",
+              lastActivityAt: Date.now(),
+            },
           },
-        }
+          { sessionKey, storePath: "/tmp/mock-sessions.json" },
+        )
       : null,
   );
 }
@@ -106,7 +102,6 @@ function dispatchTo(
     SessionKey: sessionKey,
     BodyForAgent: body,
   });
-  // Ingress reserves the mailbox input on arrival; dispatch reuses the reservation.
   const source = prepareReplySourceInput(ctx, cfg, {});
   if (source.input) {
     options.onSourceReserved?.(source.input);
@@ -164,27 +159,23 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     });
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(manager);
     replyDispatchEntries = [];
-    hookMocks.runner.hasHooks.mockReset();
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "reply_dispatch",
-    );
-    hookMocks.runner.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runReplyDispatch.mockReset();
-    hookMocks.runner.runReplyDispatch.mockImplementation(async (event: unknown, ctx: unknown) => {
+    hooks.hasHooks.mockReset().mockImplementation((name?: string) => name === "reply_dispatch");
+    hooks.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
+    hooks.runReplyDispatch.mockReset().mockImplementation(async (event: unknown, ctx: unknown) => {
       replyDispatchEntries.push(String((event as { sessionKey?: string }).sessionKey));
       return (await tryDispatchAcpReplyHook(event as never, ctx as never)) ?? undefined;
     });
-    hookMocks.runner.runInboundClaim.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runInboundClaimForPlugin.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runInboundClaimForPluginOutcome
+    for (const hook of [hooks.runInboundClaim, hooks.runInboundClaimForPlugin]) {
+      hook.mockReset().mockResolvedValue(undefined);
+    }
+    hooks.runInboundClaimForPluginOutcome.mockReset().mockResolvedValue({ status: "no_handler" });
+    hooks.runMessageReceived.mockReset();
+    internalHookMocks.createInternalHookEvent
       .mockReset()
-      .mockResolvedValue({ status: "no_handler" });
-    hookMocks.runner.runMessageReceived.mockReset();
-    internalHookMocks.createInternalHookEvent.mockReset();
-    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
+      .mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
-    sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.entriesBySessionKey.clear();
+    store.currentEntry = undefined;
+    store.entriesBySessionKey.clear();
     const readSessionEntry = (scope: unknown) => {
       if (
         !scope ||
@@ -194,13 +185,12 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
       ) {
         throw new Error("Expected session lookup scope");
       }
-      return sessionStoreMocks.entriesBySessionKey.get(scope.sessionKey);
+      return store.entriesBySessionKey.get(scope.sessionKey);
     };
-    sessionStoreMocks.loadSessionEntry.mockReset().mockImplementation(readSessionEntry);
-    sessionStoreMocks.loadSessionStoreEntry.mockReset().mockImplementation(readSessionEntry);
-    sessionStoreMocks.resolveSessionStorePathCore
-      .mockReset()
-      .mockReturnValue("/tmp/mock-sessions.json");
+    for (const load of [store.loadSessionEntry, store.loadSessionStoreEntry]) {
+      load.mockReset().mockImplementation(readSessionEntry);
+    }
+    store.resolveSessionStorePathCore.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
     acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
@@ -209,79 +199,64 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   });
 
-  it("queues a channel ACP prompt behind a running ACP turn in the session mailbox", async () => {
-    mockAcpSession(acpKey);
-    const gated = createGatedRuntime();
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime: gated.runtime });
-    // An agent RPC turn holds the session without a channel dispatch admission ticket.
-    const agentTurn = manager.runTurn({
-      admittedRunContext: createTestAdmittedRunContext("agent-run"),
-      cfg,
-      sessionKey: acpKey,
-      provenance: "system",
-      text: "agent",
-      mode: "prompt",
-      requestId: "agent-run",
-    });
-    let prompt: ReturnType<typeof dispatchTo> | undefined;
-    try {
-      await gated.entered("agent", agentTurn);
-      let input: SessionControllerInput | undefined;
-      prompt = dispatchTo(acpKey, "prompt", {
-        onSourceReserved: (reserved) => {
-          input = reserved;
-        },
-      });
-      // The prompt waits for its mailbox claim; it never enters a turn beside the agent turn.
-      await vi.waitFor(() => expect(input?.phase).toBe("waiting"), { timeout: 10_000 });
-      expect(replyDispatchEntries).toEqual([]);
-      gated.release("agent");
-      await agentTurn;
-      await gated.entered("prompt", prompt);
-      gated.release("prompt");
-      await prompt;
-      expect(gated.started).toEqual(["agent", "prompt"]);
-    } finally {
-      gated.release("agent");
-      gated.release("prompt");
-      await Promise.allSettled([agentTurn, prompt]);
-    }
-  });
-
-  it("serializes a bound conversation's ACP turn on the target session controller", async () => {
-    const sourceKey = "agent:main:discord:channel:C1";
-    mockAcpSession(acpKey);
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-controller",
-      targetSessionKey: acpKey,
-      targetKind: "session",
-      status: "active",
-      boundAt: Date.now(),
-      conversation: { channel: "discord", accountId: "default", conversationId: "C1" },
-    });
-    const gated = createGatedRuntime();
-    acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime: gated.runtime });
-    const bound = dispatchTo(sourceKey, "bound");
-    let direct: ReturnType<typeof dispatchTo> | undefined;
-    try {
-      await gated.entered("bound", bound);
-      sessionBindingMocks.resolveByConversation.mockReturnValue(null);
-      direct = dispatchTo(acpKey, "direct");
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      // The source-keyed dispatch holds the target's controller turn, not only its runtime actor.
-      expect(replyDispatchEntries).toEqual([acpKey]);
-      gated.release("bound");
-      await bound;
-      await gated.entered("direct", direct);
-      gated.release("direct");
-      await direct;
-      expect(gated.started).toEqual(["bound", "direct"]);
-    } finally {
-      gated.release("bound");
-      gated.release("direct");
-      await Promise.allSettled([bound, direct]);
-    }
-  });
+  it.each(["agent", "bound"] as const)(
+    "serializes channel dispatch behind a %s ACP turn",
+    async (first) => {
+      mockAcpSession(acpKey);
+      const gated = createGatedRuntime();
+      acpMocks.requireAcpRuntimeBackend.mockReturnValue({ id: "acpx", runtime: gated.runtime });
+      if (first === "bound") {
+        sessionBindingMocks.resolveByConversation.mockReturnValue({
+          bindingId: "binding-controller",
+          targetSessionKey: acpKey,
+          targetKind: "session",
+          status: "active",
+          boundAt: Date.now(),
+          conversation: { channel: "discord", accountId: "default", conversationId: "C1" },
+        });
+      }
+      const firstTurn =
+        first === "bound"
+          ? dispatchTo("agent:main:discord:channel:C1", first)
+          : manager.runTurn({
+              admittedRunContext: createTestAdmittedRunContext("agent-run"),
+              cfg,
+              sessionKey: acpKey,
+              provenance: "system",
+              text: "agent",
+              mode: "prompt",
+              requestId: "agent-run",
+            });
+      const second = first === "agent" ? "prompt" : "direct";
+      let pending: ReturnType<typeof dispatchTo> | undefined;
+      try {
+        await gated.entered(first, firstTurn);
+        sessionBindingMocks.resolveByConversation.mockReturnValue(null);
+        let input: SessionControllerInput | undefined;
+        pending = dispatchTo(acpKey, second, {
+          onSourceReserved: (reserved) => {
+            input = reserved;
+          },
+        });
+        if (first === "agent") {
+          await vi.waitFor(() => expect(input?.phase).toBe("waiting"), { timeout: 10_000 });
+        } else {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+        expect(replyDispatchEntries).toEqual(first === "agent" ? [] : [acpKey]);
+        gated.release(first);
+        await firstTurn;
+        await gated.entered(second, pending);
+        gated.release(second);
+        await pending;
+        expect(gated.started).toEqual([first, second]);
+      } finally {
+        gated.release(first);
+        gated.release(second);
+        await Promise.allSettled([firstTurn, pending]);
+      }
+    },
+  );
 });

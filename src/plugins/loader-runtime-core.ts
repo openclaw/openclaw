@@ -39,8 +39,13 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
+import {
+  readPluginStateMigrationReadiness,
+  readPluginStateMigrationReadinessAsync,
+} from "./plugin-state-migration-readiness.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
@@ -128,6 +133,9 @@ export type InternalPluginLoadOverrides = {
 
 function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
   const subagent: PluginRuntime["subagent"] = {
+    get native() {
+      return runtime.subagent.native;
+    },
     complete: (...args) => runtime.subagent.complete(...args),
     forkSession: (...args) => runtime.subagent.forkSession(...args),
     run: (...args) => runtime.subagent.run(...args),
@@ -210,7 +218,7 @@ export function* loadOpenClawPluginsSteps(
   trackActivationCleanup?: (completion: Promise<void>) => void,
 ): Generator<(() => Promise<void>) | undefined, PluginRegistry> {
   if (getPluginCache().retirement) {
-    throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+    throw new PluginInventoryRetiredError();
   }
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
@@ -271,6 +279,14 @@ export function* loadOpenClawPluginsSteps(
   context.cacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
   try {
+    let pending: Awaited<ReturnType<typeof readPluginStateMigrationReadinessAsync>> | undefined;
+    yield async () => {
+      pending = await readPluginStateMigrationReadinessAsync({ env: context.env });
+    };
+    pending ??= readPluginStateMigrationReadiness({ env: context.env });
+    const pendingStateMigrations = new Map(
+      pending.map((entry) => [normalizePluginPolicyId(entry.pluginId), entry]),
+    );
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
@@ -439,6 +455,7 @@ export function* loadOpenClawPluginsSteps(
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
         { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
+        pendingStateMigrations.get(normalizePluginPolicyId(manifest.id)),
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
           ? degradedPlugin
@@ -591,6 +608,9 @@ export function* loadOpenClawPluginsSteps(
         logger,
         state,
         preparedConfig: input?.source === candidate.source ? input.config : { input: undefined },
+        pendingStateMigration: pendingStateMigrations.get(
+          normalizePluginPolicyId(manifestRecord.id),
+        ),
       });
       const runCandidate = <T>(run: () => T): T =>
         options.previousRegistry ? withPluginRegistryPreparationScope(registry, run) : run();
@@ -609,7 +629,7 @@ export function* loadOpenClawPluginsSteps(
       if (state.pluginLoadAttemptCount !== attemptedBefore) {
         yield;
         if (getPluginCache().retirement) {
-          throw new Error("Plugin inventory has retired; begin a new plugin operation.");
+          throw new PluginInventoryRetiredError();
         }
       }
     }
@@ -679,7 +699,12 @@ export function* loadOpenClawPluginsSteps(
     }
     // Publish only complete registries: failed activation restores the prior runtime selection,
     // then the catch below can discard this builder without poisoning a reusable cache value.
-    if (cacheEnabled) {
+    // Admitted instances can be reused without another ledger read. A deferred replacement
+    // must retry admission instead, including when Doctor completes in this same inventory.
+    if (
+      cacheEnabled &&
+      !registry.diagnostics.some((diagnostic) => diagnostic.code === "plugin-state-migration")
+    ) {
       context.cacheState.set(context.cacheKey, registry);
       if (loaderCacheIdentity.resolvedKey !== context.cacheKey) {
         context.cacheState.set(loaderCacheIdentity.resolvedKey, registry);

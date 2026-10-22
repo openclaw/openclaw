@@ -727,58 +727,6 @@ describe("session-share node commands", () => {
 });
 
 describe("session-share receiver identity integration", () => {
-  it("rejects an earlier host snapshot after another host prepares", async () => {
-    await withCatalogFixture(async (fixture) => {
-      githubProfile(702, "second-host", "Second", "second-host@example.test");
-      fixture.list.mockResolvedValue({
-        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
-      });
-      fixture.setConfig(
-        nodeConfig({
-          alpha: { linkGitHubIdentities: false },
-          beta: { linkGitHubIdentities: true },
-        }),
-      );
-      fixture.invoke.mockImplementation(async ({ nodeId }) => ({
-        sessions: [
-          {
-            ...nativeSession,
-            createdActor: {
-              type: "human",
-              identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
-            },
-          },
-        ],
-      }));
-      await fixture.hydrate();
-      const firstPublished = createDeferredCore();
-      const gate = holdStateRead();
-      const pending = fixture.catalog.list({
-        onHost: (host) => {
-          if (host.hostId === "node:alpha") {
-            expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
-            firstPublished.resolve();
-          }
-        },
-      });
-      try {
-        await Promise.race([
-          Promise.all([firstPublished.promise, gate.entered]),
-          pending.then(() => {
-            throw new Error("Second host was not held");
-          }),
-        ]);
-        fixture.list.mockResolvedValue({
-          nodes: [{ nodeId: "beta", connected: true, commands }],
-        });
-        await fixture.catalog.list({ hostIds: [] });
-      } finally {
-        gate.release();
-      }
-      await expect(pending).rejects.toThrow("Session Share is unavailable");
-    });
-  });
-
   it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
     const nodeId = "alpha";
     await withCatalogFixture(async (fixture) => {

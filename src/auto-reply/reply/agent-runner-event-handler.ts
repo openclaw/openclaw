@@ -242,6 +242,17 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
+    if (phase === "notice") {
+      const noticePayload = createCompactionHookNoticePayload({
+        messages: hookMessages,
+        currentMessageId,
+        applyReplyToMode: params.turn.applyReplyToMode,
+      });
+      if (noticePayload) {
+        await deliverCompactionNoticePayload(noticePayload, "hook");
+      }
+      return;
+    }
     const sendCompactionUserNotices = async (
       noticePhase: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
     ) => {

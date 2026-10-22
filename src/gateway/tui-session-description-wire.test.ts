@@ -23,6 +23,8 @@ it("describes sessions over the published wire without changing legacy key seman
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     const requests: Array<{ method: string; params: unknown }> = [];
     let responseKey = "";
+    const session = (key: string) => ({ key, sessionId: "transcript", model: "selected-model" });
+    const defaults = { model: "default-model" };
     let holdDescription = false;
     const heldRequest = createDeferred();
     let client: GatewayChatClient | undefined;
@@ -30,17 +32,17 @@ it("describes sessions over the published wire without changing legacy key seman
       sendMinimalGatewayConnectChallenge(socket);
       socket.on("message", (data) => {
         const frame = parseMinimalGatewayRequestFrame(data);
-        if (!frame.id || !frame.method) {
+        const { id } = frame;
+        if (!id || !frame.method) {
           return;
         }
+        const reply = (payload: unknown) => sendMinimalGatewayResponse(socket, id, payload);
         if (frame.method === "connect") {
           const hello = buildMinimalGatewayHelloOkPayload({
             methods: ["sessions.describe", "sessions.list"],
           });
-          sendMinimalGatewayResponse(socket, frame.id, {
-            ...hello,
-            server: { ...hello.server, version: "2026.9.4" },
-          });
+          hello.server.version = "2026.9.4";
+          reply(hello);
           return;
         }
         requests.push({ method: frame.method, params: frame.params });
@@ -49,21 +51,9 @@ it("describes sessions over the published wire without changing legacy key seman
             heldRequest.resolve();
             return;
           }
-          sendMinimalGatewayResponse(socket, frame.id, {
-            session: {
-              key: responseKey,
-              sessionId: "selected-transcript",
-              model: "selected-model",
-            },
-          });
+          reply({ session: session(responseKey) });
         } else if (frame.method === "sessions.list" && validateSessionsListParams(frame.params)) {
-          sendMinimalGatewayResponse(socket, frame.id, {
-            ts: 0,
-            path: "synthetic-store",
-            count: 0,
-            sessions: [],
-            defaults: { model: "default-model" },
-          });
+          reply({ defaults });
         } else {
           socket.send(
             JSON.stringify({
@@ -88,7 +78,7 @@ it("describes sessions over the published wire without changing legacy key seman
       client.onConnectError = (error) => connected.reject(error);
       client.start();
       await connected.promise;
-      for (const testCase of [
+      for (const { sessionKey, key, owner, agentId } of [
         { sessionKey: "agent:ops:notes", key: "agent:ops:notes", owner: "ops" },
         { sessionKey: "agent:ops:main", key: "global", owner: "ops" },
         { sessionKey: "main", agentId: "ops", key: "global", owner: "ops" },
@@ -96,31 +86,15 @@ it("describes sessions over the published wire without changing legacy key seman
         { sessionKey: "unknown", key: "unknown", owner: undefined },
       ]) {
         requests.length = 0;
-        responseKey = testCase.key;
-        await expect(
-          client.describeSession({
-            sessionKey: testCase.sessionKey,
-            ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
-          }),
-        ).resolves.toEqual({
-          session: { key: testCase.key, sessionId: "selected-transcript", model: "selected-model" },
-          defaults: { model: "default-model" },
+        responseKey = key;
+        const agent = agentId ? { agentId } : {};
+        await expect(client.describeSession({ sessionKey, ...agent })).resolves.toEqual({
+          session: session(key),
+          defaults,
         });
         expect(requests).toEqual([
-          {
-            method: "sessions.describe",
-            params: {
-              key: testCase.sessionKey,
-              ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
-            },
-          },
-          {
-            method: "sessions.list",
-            params: {
-              ...(testCase.owner ? { agentId: testCase.owner } : {}),
-              limit: 1,
-            },
-          },
+          { method: "sessions.describe", params: { key: sessionKey, ...agent } },
+          { method: "sessions.list", params: { ...(owner ? { agentId: owner } : {}), limit: 1 } },
         ]);
       }
       holdDescription = true;

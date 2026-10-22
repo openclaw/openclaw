@@ -2,8 +2,7 @@ import path from "node:path";
 import { resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { isCiEnvironment, pinnedBunEnv, resolvePinnedBun } from "./pinned-bun.mts";
 
-// Keep oxfmt until the pinned fork is faster for both writing and checking.
-const DEFAULT_FORMAT_TOOL: "oxfmt" | "bun" = "oxfmt";
+const DEFAULT_FORMAT_TOOL: "oxfmt" | "bun" = "bun";
 // Flip only after the pinned fork includes b39aa848 and lint parity passes.
 const DEFAULT_LINT_TOOL: "oxlint" | "bun" = "oxlint";
 

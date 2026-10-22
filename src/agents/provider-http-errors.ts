@@ -108,6 +108,8 @@ type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
   /** Credentials that must not appear in malformed-response diagnostics. */
   requestHeaders?: HeadersInit;
+  /** Caller-facing message for malformed JSON or a non-object JSON response. */
+  malformedResponseError?: string;
 };
 
 function readProviderResponseBytes(
@@ -441,11 +443,13 @@ export async function readProviderJsonResponse<T>(
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
-    // oxlint-disable-next-line preserve-caught-error -- Parser causes can quote partial credentials; header-bearing failures must omit them.
-    throw new Error(
+    const error = new Error(
       `${label}: malformed JSON response`,
       opts?.requestHeaders ? undefined : { cause },
     );
+    throw opts?.malformedResponseError === undefined
+      ? error
+      : new Error(opts.malformedResponseError, { cause: error });
   }
 }
 
@@ -457,7 +461,7 @@ export async function readProviderJsonObjectResponse(
   const payload = await readProviderJsonResponse<unknown>(response, label, opts);
   const object = asOptionalRecord(payload);
   if (!object) {
-    throw new Error(`${label}: malformed JSON response`);
+    throw new Error(opts?.malformedResponseError ?? `${label}: malformed JSON response`);
   }
   return object;
 }

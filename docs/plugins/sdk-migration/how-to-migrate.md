@@ -1513,9 +1513,10 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
 
     | Need | Typed-public import or injected API |
     | --- | --- |
-    | New system event producers | `api.runtime.system.enqueueSystemEvent` |
+    | Immediate session event producers | `api.runtime.system.captureSessionEventTarget` and `enqueueSessionEvent` |
+    | Passive system event producers | `api.runtime.system.enqueueSystemEvent` |
     | System event snapshot inspection and consumption | `openclaw/plugin-sdk/system-event-runtime` |
-    | Heartbeat wake requests | `api.runtime.system.requestHeartbeat` |
+    | Periodic monitoring | Ordinary [automation jobs](/automation/cron-jobs) |
     | Channel activity telemetry | `api.runtime.channel.activity.record` and `.get` |
     | `createDedupeCache`, `resolveGlobalDedupeCache` | `openclaw/plugin-sdk/dedupe-runtime` |
     | Safe local-file/media paths, regular-file checks, and symlink-parent checks | `openclaw/plugin-sdk/security-runtime` (itself a deprecated broad barrel) |
@@ -1532,10 +1533,11 @@ write `agents.entries`. This compatibility window adds no runtime warnings.
     adopting ordinary exec policy; there is no replacement command-text detector.
 
     These are symbol-specific mappings, not replacements for the whole barrel.
-    Private-local entries such as `heartbeat-runtime`, `delivery-queue-runtime`,
+    Private-local entries such as `delivery-queue-runtime`,
     `fetch-runtime`, `runtime-fetch`, and `file-lock` are JavaScript-only host
-    exports, not typed third-party APIs. Heartbeat event/summary/visibility
-    helpers, pending-delivery drain, transport readiness, concurrency, and file
+    exports, not typed third-party APIs. `heartbeat-runtime` has been removed;
+    see the [executor removal mappings](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers).
+    Pending-delivery drain, transport readiness, concurrency, and file
     locking do not have equivalent modern typed-public mappings here. Adapt
     plugin-owned behavior or request a focused public contract for the missing
     host capability.

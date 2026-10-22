@@ -15,7 +15,8 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
   stopHookActive: false,
 };
 
-vi.mock("../infra/agent-events.js", () => ({
+vi.mock(import("../infra/agent-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   emitAgentEvent: emitAgentEventMock,
   getAgentEventLifecycleGeneration: () => "test-generation",
   isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",

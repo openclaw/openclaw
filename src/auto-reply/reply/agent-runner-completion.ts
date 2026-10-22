@@ -13,7 +13,7 @@ import { buildRestartRecoveryExpectedState } from "../../config/sessions/session
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type {
@@ -172,9 +172,10 @@ export async function withAgentTurnCompletion<T>(
             return snapshot.entry!;
           }
           if (outcome.kind !== "committed") {
-            throw new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               outcome.error.message,
               outcome.kind === "unknown" ? "outcome-unknown" : "unavailable",
+              outcome.error,
             );
           }
           if (outcome.failure) {

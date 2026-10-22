@@ -14,8 +14,6 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
-export { mountPage };
-
 export function authOption(
   id: string,
   label = "Provider",

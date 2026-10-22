@@ -1,4 +1,3 @@
-// Tlon durable ingress tests cover append, recovery, tombstones, and guard parity.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,72 +9,56 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UrbitHttpError } from "../urbit/errors.js";
 import { createTlonIngressMonitor } from "./ingress.js";
 
-type TlonIngressQueue = NonNullable<Parameters<typeof createTlonIngressMonitor>[0]["queue"]>;
-type TlonIngressPayload = Parameters<TlonIngressQueue["enqueue"]>[1];
+type TlonIngressPayload = {
+  version: 1;
+  receivedAt: number;
+  source: "channels" | "chat";
+  rawEvent: string;
+};
+type TlonIngressQueue = ReturnType<typeof createQueue>;
 type TlonIngressDispatch = Parameters<typeof createTlonIngressMonitor>[0]["dispatch"];
 
-function channelEvent(params?: { id?: string; nest?: string; text?: string }) {
+const { openChannelIngressQueue } = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  getTlonRuntime: () => ({ state: { openChannelIngressQueue } }),
+}));
+
+function essay(author = "~nec", text = "hello") {
+  return { author, content: [{ text }], sent: 1_700_000_000_000 };
+}
+
+function channelEvent(id = "message-1") {
   return {
-    nest: params?.nest ?? "chat/~zod/general",
+    nest: "chat/~zod/general",
     response: {
       post: {
-        id: params?.id ?? "message-1",
-        "r-post": {
-          set: {
-            essay: {
-              author: "~nec",
-              content: [{ text: params?.text ?? "hello" }],
-              sent: 1_700_000_000_000,
-            },
-          },
-        },
+        id,
+        "r-post": { set: { essay: essay() } },
       },
     },
   };
 }
 
-function channelReplyEvent(params?: { id?: string; nest?: string; text?: string }) {
+function channelReplyEvent(id: string, nest: string) {
   return {
-    nest: params?.nest ?? "chat/~zod/general",
+    nest,
     response: {
       post: {
         id: "parent-post",
         "r-post": {
-          reply: {
-            id: params?.id ?? "reply-1",
-            "r-reply": {
-              set: {
-                memo: {
-                  author: "~nec",
-                  content: [{ text: params?.text ?? "hello" }],
-                  sent: 1_700_000_000_000,
-                },
-              },
-            },
-          },
+          reply: { id, "r-reply": { set: { memo: essay() } } },
         },
       },
     },
   };
 }
 
-function chatEvent(params?: { id?: string; peer?: string; text?: string }) {
-  return {
-    whom: params?.peer ?? "~nec",
-    id: params?.id ?? "dm-1",
-    response: {
-      add: {
-        essay: {
-          author: params?.peer ?? "~nec",
-          content: [{ text: params?.text ?? "hello" }],
-          sent: 1_700_000_000_000,
-        },
-      },
-    },
-  };
+function chatEvent(id: string) {
+  return { whom: "~nec", id, response: { add: { essay: essay() } } };
 }
 
-function createQueue(stateDir: string, accountId = "default"): TlonIngressQueue {
+function createQueue(stateDir: string, accountId = "default") {
   return createChannelIngressQueueForTests<TlonIngressPayload>({
     channelId: "tlon",
     accountId,
@@ -84,37 +67,35 @@ function createQueue(stateDir: string, accountId = "default"): TlonIngressQueue 
 }
 
 async function withQueue<T>(
-  fn: (queue: TlonIngressQueue, stateDir: string) => Promise<T>,
+  fn: (queue: TlonIngressQueue, stateDir: string, start: typeof startMonitor) => Promise<T>,
 ): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tlon-ingress-"));
   const stateDir = await fs.realpath(created);
+  const monitors: ReturnType<typeof startMonitor>[] = [];
   try {
-    return await fn(createQueue(stateDir), stateDir);
+    return await fn(createQueue(stateDir), stateDir, (queue, dispatch) => {
+      const monitor = startMonitor(queue, dispatch);
+      monitors.push(monitor);
+      return monitor;
+    });
   } finally {
+    for (const monitor of monitors) {
+      await monitor.stop();
+    }
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
 function startMonitor(queue: TlonIngressQueue, dispatch: TlonIngressDispatch) {
+  openChannelIngressQueue.mockReturnValue(queue);
   const monitor = createTlonIngressMonitor({
     accountId: "default",
-    queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
-    pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
   });
   monitor.start();
   return monitor;
-}
-
-function deferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
 }
 
 afterEach(() => {
@@ -124,32 +105,28 @@ afterEach(() => {
 
 describe("Tlon durable ingress", () => {
   it("propagates durable append failure before dispatch", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, _stateDir, start) => {
       const appendError = new Error("sqlite unavailable");
       const failingQueue = {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies TlonIngressQueue;
       const dispatch = vi.fn();
-      const monitor = startMonitor(failingQueue, dispatch);
-      try {
-        await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
-          appendError,
-        );
-        expect(dispatch).not.toHaveBeenCalled();
-      } finally {
-        await monitor.stop();
-      }
+      const monitor = start(failingQueue, dispatch);
+      await expect(monitor.receive({ source: "channels", event: channelEvent() })).rejects.toBe(
+        appendError,
+      );
+      expect(dispatch).not.toHaveBeenCalled();
     });
   });
 
   it("recovers an uncompleted message with a fresh drain exactly once", async () => {
-    await withQueue(async (queue, stateDir) => {
+    await withQueue(async (queue, stateDir, start) => {
       const interruptedDispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
-      const interrupted = startMonitor(queue, interruptedDispatch);
+      const interrupted = start(queue, interruptedDispatch);
       await interrupted.receive({
         source: "channels",
-        event: channelEvent({ id: "message-restart" }),
+        event: channelEvent("message-restart"),
       });
       await interrupted.waitForIdle();
       expect(await queue.listClaims()).toHaveLength(1);
@@ -159,64 +136,52 @@ describe("Tlon durable ingress", () => {
       const recoveredDispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const recovered = startMonitor(createQueue(stateDir), recoveredDispatch);
-      try {
-        await recovered.waitForIdle();
-        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await recovered.stop();
-      }
+      const recovered = start(createQueue(stateDir), recoveredDispatch);
+      await recovered.waitForIdle();
+      expect(recoveredDispatch).toHaveBeenCalledTimes(1);
     });
   });
 
   it("retains completed logical ids by count rather than age", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, _stateDir, start) => {
       let now = 1_700_000_000_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
       const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
         await lifecycle.onAdopted();
       });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        const original = channelEvent({ id: "message-aged" });
-        await monitor.receive({ source: "channels", event: original });
-        await monitor.waitForIdle();
+      const monitor = start(queue, dispatch);
+      const original = channelEvent("message-aged");
+      await monitor.receive({ source: "channels", event: original });
+      await monitor.waitForIdle();
 
-        now += 31 * 24 * 60 * 60 * 1_000;
-        await monitor.receive({
-          source: "channels",
-          event: channelEvent({ id: "message-prune-trigger" }),
-        });
-        await monitor.waitForIdle();
-        await monitor.receive({ source: "channels", event: original });
-        await monitor.waitForIdle();
+      now += 31 * 24 * 60 * 60 * 1_000;
+      await monitor.receive({
+        source: "channels",
+        event: channelEvent("message-prune-trigger"),
+      });
+      await monitor.waitForIdle();
+      await monitor.receive({ source: "channels", event: original });
+      await monitor.waitForIdle();
 
-        expect(dispatch).toHaveBeenCalledTimes(2);
-      } finally {
-        await monitor.stop();
-      }
+      expect(dispatch).toHaveBeenCalledTimes(2);
     });
   });
 
   it("uses the nested reply id rather than the parent post id", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, _stateDir, start) => {
       const dispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
-      const monitor = startMonitor(queue, dispatch);
-      const reply = channelReplyEvent({ id: "reply-stable", nest: "chat/~zod/ops" });
-      try {
-        await monitor.receive({ source: "channels", event: reply });
-        await monitor.waitForIdle();
-        expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({ id: "reply-stable", laneKey: "group:chat/~zod/ops" }),
-        ]);
-      } finally {
-        await monitor.stop();
-      }
+      const monitor = start(queue, dispatch);
+      const reply = channelReplyEvent("reply-stable", "chat/~zod/ops");
+      await monitor.receive({ source: "channels", event: reply });
+      await monitor.waitForIdle();
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({ id: "reply-stable", laneKey: "group:chat/~zod/ops" }),
+      ]);
     });
   });
 
   it("dead-letters malformed persisted payloads and authentication failures", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, _stateDir, start) => {
       await queue.enqueue(
         "message-malformed",
         { version: 1, receivedAt: 1, source: "channels", rawEvent: "{" },
@@ -225,50 +190,42 @@ describe("Tlon durable ingress", () => {
       const dispatch = vi.fn<TlonIngressDispatch>(async () => {
         throw new UrbitHttpError({ operation: "Poke", status: 401 });
       });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        await monitor.waitForIdle();
-        expect((await queue.enqueue("message-malformed", {} as TlonIngressPayload)).kind).toBe(
-          "failed",
-        );
+      const monitor = start(queue, dispatch);
+      await monitor.waitForIdle();
+      expect((await queue.enqueue("message-malformed", {} as TlonIngressPayload)).kind).toBe(
+        "failed",
+      );
 
-        await monitor.receive({
-          source: "chat",
-          event: chatEvent({ id: "message-auth" }),
-        });
-        await monitor.waitForIdle();
-        expect((await queue.enqueue("message-auth", {} as TlonIngressPayload)).kind).toBe("failed");
-      } finally {
-        await monitor.stop();
-      }
+      await monitor.receive({
+        source: "chat",
+        event: chatEvent("message-auth"),
+      });
+      await monitor.waitForIdle();
+      expect((await queue.enqueue("message-auth", {} as TlonIngressPayload)).kind).toBe("failed");
     });
   });
 
   it("keeps unrelated authentication failures retryable", async () => {
-    await withQueue(async (queue) => {
+    await withQueue(async (queue, _stateDir, start) => {
       const dispatch = vi.fn<TlonIngressDispatch>(async () => {
         throw Object.assign(new Error("model credentials expired"), { status: 401 });
       });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        await monitor.receive({
-          source: "chat",
-          event: chatEvent({ id: "message-provider-auth" }),
-        });
-        await monitor.waitForIdle();
-        expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
-          "message-provider-auth",
-        ]);
-      } finally {
-        await monitor.stop();
-      }
+      const monitor = start(queue, dispatch);
+      await monitor.receive({
+        source: "chat",
+        event: chatEvent("message-provider-auth"),
+      });
+      await monitor.waitForIdle();
+      expect((await queue.listPending({ limit: "all" })).map((record) => record.id)).toEqual([
+        "message-provider-auth",
+      ]);
     });
   });
 
   it("waits for admitted work and leaves it pending on repeated stop", async () => {
     await withQueue(async (queue) => {
-      const stored = deferred();
-      const release = deferred();
+      const stored = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
       const enqueue = queue.enqueue.bind(queue);
       queue.enqueue = async (...args) => {
         const result = await enqueue(...args);
@@ -280,12 +237,12 @@ describe("Tlon durable ingress", () => {
       const monitor = startMonitor(queue, dispatch);
       const admission = monitor.receive({
         source: "channels",
-        event: channelEvent({ id: "message-stop-1" }),
+        event: channelEvent("message-stop-1"),
       });
       await stored.promise;
       const queuedAdmission = monitor.receive({
         source: "channels",
-        event: channelEvent({ id: "message-stop-2" }),
+        event: channelEvent("message-stop-2"),
       });
 
       let stopSettled = false;
@@ -296,7 +253,7 @@ describe("Tlon durable ingress", () => {
       await Promise.resolve();
       expect(stopSettled).toBe(false);
       await expect(
-        monitor.receive({ source: "channels", event: channelEvent({ id: "message-too-late" }) }),
+        monitor.receive({ source: "channels", event: channelEvent("message-too-late") }),
       ).rejects.toThrow("stopped before dispatch adoption");
 
       release.resolve();

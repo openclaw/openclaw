@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -58,21 +59,13 @@ function transcriptRows(reader: OpenClawAgentReadOnlyDatabase) {
   });
 }
 
-it("cold-loads a complete prior-build seal without validation SQL or snapshots", async () => {
+it("cold-loads a compatible storage seal without validation SQL or snapshots", async () => {
   const fixture = databaseFixture(tempDirs.make("openclaw-clean-startup-"));
   const { path: agentPath } = fixture.agent();
   closeOpenClawAgentDatabaseByPath(agentPath);
   closeOpenClawStateDatabase();
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
   expectFiles([`${agentPath}-wal`, `${agentPath}-shm`], false);
-  const file = fs.statSync(agentPath, { bigint: true });
-  const seal = readSqliteCleanCloseSeal(agentPath, file)!;
-  // Persist the predecessor's identity format independently of the current helper.
-  const previousBuildIdentity = createHash("sha256")
-    .update(JSON.stringify([2, VERSION, "agent"]))
-    .update(OPENCLAW_AGENT_SCHEMA_SQL)
-    .digest("hex");
-  expect(writeSqliteCleanCloseSeal(agentPath, previousBuildIdentity, file, seal)).toBe(true);
   retireSqliteDatabaseAdmissionForPath(agentPath);
   const before = fs.readFileSync(agentPath);
   const validate = vi.spyOn(integrity, "assertSqliteIntegrity");
@@ -89,6 +82,47 @@ it("cold-loads a complete prior-build seal without validation SQL or snapshots",
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
 });
 
+it.each(["legacy", "malformed", "unknown-policy"])(
+  "runs full agent admission for a %s seal",
+  async (kind) => {
+    const fixture = databaseFixture(tempDirs.make("openclaw-invalid-seal-"));
+    const { path: agentPath } = fixture.agent();
+    closeDatabases();
+    const file = fs.statSync(agentPath, { bigint: true });
+    const seal = readSqliteCleanCloseSeal(agentPath, file)!;
+    if (kind === "malformed") {
+      fs.writeFileSync(`${agentPath}.seal`, "{torn");
+    } else {
+      const identity =
+        kind === "legacy"
+          ? createHash("sha256")
+              .update(JSON.stringify([2, VERSION, "agent"]))
+              .update(OPENCLAW_AGENT_SCHEMA_SQL)
+              .digest("hex")
+          : "unknown-policy";
+      expect(
+        writeSqliteCleanCloseSeal(agentPath, identity, file, {
+          ...seal,
+          identity:
+            kind === "legacy"
+              ? undefined
+              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
+        }),
+      ).toBe(true);
+    }
+    retireSqliteDatabaseAdmissionForPath(agentPath);
+    expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
+    fixture.state();
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      fixture.agent();
+      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    } finally {
+      observer.restore();
+    }
+  },
+);
+
 it("admits every previously sealed same-version agent before transcript readers run", async () => {
   const fixture = databaseFixture(tempDirs.make("startup-additive-seal-"));
   const { env } = fixture;
@@ -96,7 +130,7 @@ it("admits every previously sealed same-version agent before transcript readers 
   const agents = ids.map((agentId) => ({ agentId, path: fixture.agent(agentId).path }));
   closeDatabases();
   for (const agent of agents) {
-    const identity = sqliteDatabaseSealSchemaFor("agent");
+    const identity = sqliteDatabaseSealSchemaFor("agent")!.schemaIdentity;
     const seal = readSqliteCleanCloseSeal(agent.path, fs.statSync(agent.path, { bigint: true }))!;
     expect(seal).toBeDefined();
     revokeSqliteDatabaseAdmissionsForPath(agent.path);

@@ -9,10 +9,7 @@ import {
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  composeSessionTranscriptWriteAssertion,
-  hasPromptImageInput,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { composeSessionTranscriptWriteAssertion } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
@@ -20,6 +17,7 @@ import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexQuestionInputHandlers,
   createCodexSteeringQueue,
+  shouldCancelCodexQuestionForImage,
   type CodexQuestionInputAuthority as InputAuthority,
   type CodexSteeringQueueOptions,
   type CodexSteeringPreparation,
@@ -47,7 +45,6 @@ import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { isCodexNativeDelegationDisabledForRun } from "./thread-requests.js";
 import {
   codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -495,7 +492,7 @@ export function activateCodexAttemptTurn(
       optionsLocal?.onQueueSettled?.();
       return undefined;
     }
-    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+    if (shouldCancelCodexQuestionForImage(optionsLocal)) {
       assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply", assertCurrent, authorityKind, preparation);
@@ -559,10 +556,10 @@ export function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    terminalReplyExpectation: params.terminalReplyExpectation,
     startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    supportsCrossProfileSteering:
-      isCodexNativeDelegationDisabledForRun(params) || resourceState.nativeSpawnAdmissionInstalled,
+    supportsCrossProfileSteering: true,
     permissionChangeOwner: params.permissionChange?.owner,
     applyPermissionMode: async (
       mode: NonNullable<typeof params.permissionMode> | null,
@@ -602,8 +599,8 @@ export function activateCodexAttemptTurn(
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
-    // queueMessage resolves only after Codex echoes the steered userMessage completion.
-    // Gateway-owned turns rely on that boundary before finalizing adoption.
+    // Transcript-waiting calls await Codex's steered userMessage completion.
+    // Queue-only calls retain receiver custody after acknowledging acceptance.
     supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: params.model.input.includes("image"),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

@@ -125,6 +125,24 @@ it("preserves explicitly empty default labels metadata", () => {
   expect(isThinkingLevelOptionForSession(session, defaults, "high", [entry])).toBe(false);
 });
 
+it("omits blank thinking choices and keeps the first normalized duplicate label in order", () => {
+  const state = select({
+    session: {
+      thinkingLevels: [
+        { id: "  ", label: "Blank" },
+        { id: " HIGH ", label: "First high" },
+        { id: "high", label: "Later high" },
+        { id: "low", label: "Low" },
+      ],
+    },
+  });
+
+  expect(state.options).toEqual([
+    { value: "high", label: "First high" },
+    { value: "low", label: "Low" },
+  ]);
+});
+
 it("keeps non-reasoning Off-only metadata distinct from an empty profile", () => {
   const entry = model({
     id: "plain",

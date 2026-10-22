@@ -1,13 +1,64 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createStore, onCleanup } from "solid-js";
+import { createPendingFocus } from "./reactive/pending-focus.ts";
 
 type TabsActivation = "auto" | "manual";
 
+export function activeElementFor(element: Element): Element | null {
+  const root = element.getRootNode();
+  return root instanceof ShadowRoot
+    ? (root.activeElement ?? document.activeElement)
+    : document.activeElement;
+}
+
+function focusNeedsRecovery(element: Element): boolean {
+  const current = activeElementFor(element);
+  const root = element.getRootNode();
+  return (
+    current === document.body ||
+    current === document.documentElement ||
+    (root instanceof ShadowRoot && current === root.host)
+  );
+}
+
+type TabFocusTarget = {
+  root: HTMLElement;
+  element: (value: string | null) => HTMLElement | undefined;
+  active: () => string | null | undefined;
+};
+
+/** The panel keeps this handle when its tab strip is replaced during an async close. */
+export function createTabFocus() {
+  let current: TabFocusTarget | undefined;
+  return {
+    attach(target: TabFocusTarget) {
+      current = target;
+      return () => {
+        if (current === target) {
+          current = undefined;
+        }
+      };
+    },
+    focusActive(this: void, options?: FocusOptions) {
+      current?.element(current.active() ?? null)?.focus(options);
+    },
+    restoreAfterClose(closedId: string) {
+      if (!current?.root.isConnected || current.element(closedId)) {
+        return;
+      }
+      const selected = current.element(current.active() ?? null);
+      if (selected && focusNeedsRecovery(selected)) {
+        selected.focus({ preventScroll: true });
+      }
+    },
+  };
+}
+
+export type TabFocus = ReturnType<typeof createTabFocus>;
+
 export type TabsOptions = {
-  /** Omit for local selection; null deliberately leaves every tab unselected. */
-  active?: string | null;
-  defaultActive?: string | null;
+  /** Null deliberately leaves every tab unselected. */
+  active: string | null;
   activation?: TabsActivation;
-  orientation?: "horizontal" | "vertical";
   onSelect?: (value: string, tab: HTMLElement, event: MouseEvent | KeyboardEvent) => boolean | void;
   /** Returning false consumes direct activation without changing selection. */
   onActivate?: (
@@ -21,49 +72,81 @@ export function createTabList(
   read: () => TabsOptions,
   items: () => readonly { value: string; disabled?: boolean }[],
   root: () => HTMLElement,
+  options: { revealActive?: boolean | ((selected: HTMLElement) => void) } = {},
 ) {
   const nodes = new Map<string, HTMLElement>();
-  // Local selection resets only when the caller changes its default.
-  const [localActive, setLocalActive] = createSignal(() => read().defaultActive ?? null);
-  const active = createMemo(() => (read().active === undefined ? localActive() : read().active));
+  const active = createMemo(() => read().active);
   const enabled = createMemo(() =>
     items()
       .filter((item) => !item.disabled)
       .map((item) => item.value),
   );
   // Preserve keyboard focus until selection changes or the focused tab disappears.
-  const [focus, setFocus] = createSignal(
-    (previous?: { active: string | null | undefined; value?: string }) => {
+  const [focus, setFocus] = createStore<{ active: string | null; value?: string }>(
+    (draft) => {
       const selected = active();
       const values = enabled();
-      return {
-        active: selected,
-        value:
-          previous &&
-          previous.active === selected &&
-          previous.value !== undefined &&
-          values.includes(previous.value)
-            ? previous.value
-            : selected != null && values.includes(selected)
-              ? selected
-              : values[0],
-      };
+      draft.value =
+        draft.active === selected && draft.value !== undefined && values.includes(draft.value)
+          ? draft.value
+          : selected != null && values.includes(selected)
+            ? selected
+            : values[0];
+      draft.active = selected;
     },
+    { active: null, value: undefined },
   );
+
+  if (options.revealActive) {
+    const layoutKey = createMemo(() =>
+      JSON.stringify([active(), items().map((item) => item.value)]),
+    );
+    createPendingFocus(
+      () => {
+        const key = layoutKey();
+        let focused = document.activeElement;
+        while (focused instanceof HTMLElement && focused.shadowRoot?.activeElement) {
+          focused = focused.shadowRoot.activeElement;
+        }
+        return { key, focused };
+      },
+      {
+        requested: () => true,
+        focus: ({ focused }) => {
+          queueMicrotask(() => {
+            const selected = nodes.get(active() ?? "");
+            if (!root().isConnected || !selected) {
+              return;
+            }
+            if (typeof options.revealActive === "function") {
+              options.revealActive(selected);
+            } else {
+              selected.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            }
+            // Keyed movement may blur a retained node; newer user focus always wins.
+            if (focused === selected && focusNeedsRecovery(selected)) {
+              selected.focus({ preventScroll: true });
+            }
+          });
+        },
+      },
+    );
+  }
 
   function select(tab: HTMLElement, event: MouseEvent | KeyboardEvent, direct: boolean) {
     const next = tab.dataset.tabValue;
     if (next === undefined || nodes.get(next) !== tab || !enabled().includes(next)) {
       return;
     }
-    setFocus({ active: active(), value: next });
+    setFocus((draft) => {
+      draft.active = active();
+      draft.value = next;
+    });
     if (direct && read().onActivate?.(next, tab, event) === false) {
       return;
     }
-    if (next !== active() && read().onSelect?.(next, tab, event) !== false) {
-      if (read().active === undefined) {
-        setLocalActive(next);
-      }
+    if (next !== active()) {
+      read().onSelect?.(next, tab, event);
     }
   }
 
@@ -94,10 +177,9 @@ export function createTabList(
       }
       return;
     }
-    const vertical = read().orientation === "vertical";
     const rtl = getComputedStyle(root()).direction === "rtl";
-    const nextKey = vertical ? "ArrowDown" : rtl ? "ArrowLeft" : "ArrowRight";
-    const previousKey = vertical ? "ArrowUp" : rtl ? "ArrowRight" : "ArrowLeft";
+    const nextKey = rtl ? "ArrowLeft" : "ArrowRight";
+    const previousKey = rtl ? "ArrowRight" : "ArrowLeft";
     if (![nextKey, previousKey, "Home", "End"].includes(event.key)) {
       return;
     }
@@ -118,18 +200,25 @@ export function createTabList(
     if (!target) {
       return;
     }
-    setFocus({ active: active(), value });
+    setFocus((draft) => {
+      draft.active = active();
+      draft.value = value;
+    });
     if (read().activation !== "manual") {
       select(target, event, false);
     }
     target.focus({ preventScroll: true });
-    target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (typeof options.revealActive === "function") {
+      options.revealActive(target);
+    } else {
+      target.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    }
   }
 
   return {
     active,
     element: (value: string | null) => (value === null ? undefined : nodes.get(value)),
-    tabIndex: (value: string) => (focus().value === value ? 0 : -1),
+    tabIndex: (value: string) => (focus.value === value ? 0 : -1),
     ref(value: string) {
       onCleanup(() => nodes.delete(value));
       return (element: HTMLElement) => {

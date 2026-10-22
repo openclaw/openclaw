@@ -9,8 +9,7 @@ import {
 
 type Assistant = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResult = Extract<AgentMessage, { role: "toolResult" }>;
-type Classification = ReturnType<typeof classifyToolUseResultPairing>;
-type Frame = Classification["frames"][number];
+type Frame = ReturnType<typeof classifyToolUseResultPairing>[number];
 
 export const PREFIX_TOOL_OWNER = Symbol("model-context-prefix-tool-owner");
 type Owner = Assistant | typeof PREFIX_TOOL_OWNER;
@@ -107,11 +106,11 @@ export function createModelContextPairing(
   let snapshot: ReturnType<ModelContextPairing["read"]> | undefined;
 
   function install(
-    classified: Classification,
+    classified: Frame[],
     identities: ReadonlyMap<Assistant, OwnedResult>,
     resolveSource: (source: ToolResult) => ToolResult | undefined,
   ) {
-    frames = classified.frames.map((frame, index) => {
+    frames = classified.map((frame, index) => {
       const identity = identities.get(frame.assistant) ?? {
         owner: frame.assistant,
         order: nextOrder++,
@@ -122,7 +121,7 @@ export function createModelContextPairing(
           owned.set(source, identity);
         }
       }
-      return compactFrame(frame, identity, resolveSource, index === classified.frames.length - 1);
+      return compactFrame(frame, identity, resolveSource, index === classified.length - 1);
     });
     unavailableLastFrame = false;
     boundPrefixFrames();
@@ -223,7 +222,7 @@ export function createModelContextPairing(
       const classified = classifyToolUseResultPairing(input, { preserveUnframedToolResults: true });
       if (
         unknownPrefix &&
-        classified.frames.some(
+        classified.some(
           (frame) =>
             frame.remainder.some(
               (message) =>

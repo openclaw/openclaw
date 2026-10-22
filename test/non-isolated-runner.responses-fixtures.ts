@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export const NON_ISOLATED_RESPONSES_PROBE_KEY = "openclaw.nonIsolatedResponsesProbe";
+const NON_ISOLATED_RESPONSES_PROBE_KEY = "openclaw.nonIsolatedResponsesProbe";
 
 /** Builds a real Responses producer and its next-file teardown observer. */
 export function responsesProducerFixtureFiles(repoRoot: string): Record<string, string> {

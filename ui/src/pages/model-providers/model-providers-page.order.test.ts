@@ -8,7 +8,7 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,

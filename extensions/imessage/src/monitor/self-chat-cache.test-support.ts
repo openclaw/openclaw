@@ -1,8 +1,8 @@
 // Imessage test support covers self chat cache plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSelfChatCache } from "./self-chat-cache.js";
+import { SelfChatCache } from "./self-chat-cache.js";
 
-describe("createSelfChatCache", () => {
+describe("SelfChatCache", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -17,7 +17,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({
       ...directLookup,
       text: "  hello\r\nworld  ",
@@ -37,7 +37,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({
       ...directLookup,
       text: "hello",
@@ -58,7 +58,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     cache.remember({ ...directLookup, text: "hello", createdAt: 123 });
 
     vi.advanceTimersByTime(11_001);
@@ -70,7 +70,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     for (let i = 0; i < 2_000; i += 1) {
       cache.remember({
         ...directLookup,
@@ -91,7 +91,7 @@ describe("createSelfChatCache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
 
-    const cache = createSelfChatCache();
+    const cache = new SelfChatCache();
     const prefix = "a".repeat(256);
     const suffix = "b".repeat(256);
     const longTextA = `${prefix}${"x".repeat(300)}${suffix}`;

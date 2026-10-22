@@ -1,4 +1,140 @@
 import { vi } from "vitest";
+import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
+import {
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  type RealtimeTalkCallbacks,
+  type RealtimeTalkWebRtcSdpSessionResult,
+} from "./shared.ts";
+import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
+
+export async function createWebRtcTransport({
+  client = {},
+  callbacks = {},
+  session = {},
+  inputDeviceId,
+  videoDeviceId,
+}: {
+  client?: Record<string, unknown>;
+  callbacks?: RealtimeTalkCallbacks;
+  session?: Partial<RealtimeTalkWebRtcSdpSessionResult>;
+  inputDeviceId?: string;
+  videoDeviceId?: string;
+} = {}) {
+  const context = {
+    input: await prepareRealtimeTalkTestInput(inputDeviceId),
+    client: client as never,
+    sessionKey: "main",
+    callbacks,
+    videoDeviceId,
+  };
+  const transport = new WebRtcSdpRealtimeTalkTransport(
+    { provider: "openai", transport: "webrtc", clientSecret: "client-secret-123", ...session },
+    context,
+  );
+  return { transport, context };
+}
+
+export async function startWebRtcTransport(
+  client: Record<string, unknown> = {},
+  callbacks: RealtimeTalkCallbacks = {},
+  session: Partial<RealtimeTalkWebRtcSdpSessionResult> = {},
+) {
+  const onStatus = vi.fn<NonNullable<RealtimeTalkCallbacks["onStatus"]>>();
+  const onTalkEvent = vi.fn<NonNullable<RealtimeTalkCallbacks["onTalkEvent"]>>();
+  const onTranscript = vi.fn<NonNullable<RealtimeTalkCallbacks["onTranscript"]>>();
+  const { transport } = await createWebRtcTransport({
+    client,
+    callbacks: { onStatus, onTalkEvent, onTranscript, ...callbacks },
+    session,
+  });
+  const result = await transport.start();
+  const peer = FakePeerConnection.instances.at(-1);
+  if (!peer || result !== "ready") {
+    throw new Error("expected ready WebRTC transport");
+  }
+  return {
+    transport,
+    peer,
+    onStatus,
+    onTalkEvent,
+    onTranscript,
+    dispatch: (event: unknown) => dispatchRealtimeEvent(peer, event),
+    sent: (type?: string) =>
+      sentRealtimeEvents(peer).filter((event) => !type || event.type === type),
+  };
+}
+
+export function toolOutput(callId: string, result: unknown) {
+  return {
+    type: "conversation.item.create",
+    item: { type: "function_call_output", call_id: callId, output: JSON.stringify(result) },
+  };
+}
+
+export function userMessage(content: unknown[]) {
+  return { type: "conversation.item.create", item: { type: "message", role: "user", content } };
+}
+
+export function audioFixture() {
+  const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+  const stream = {
+    getAudioTracks: () => [track],
+    getTracks: () => [track],
+  } as unknown as MediaStream;
+  return { track, stream };
+}
+
+export function stubMedia(...streams: MediaStream[]) {
+  const getUserMedia = vi.fn();
+  for (const stream of streams) {
+    getUserMedia.mockResolvedValueOnce(stream);
+  }
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  return getUserMedia;
+}
+
+export function stubMicrophone() {
+  const { track, stream } = audioFixture();
+  const getUserMedia = vi.fn(async () => stream);
+  Object.defineProperty(globalThis.navigator, "mediaDevices", {
+    configurable: true,
+    value: { getUserMedia },
+  });
+  return { stopInputTrack: track.stop, getUserMedia };
+}
+
+export function dispatchCompletedToolCall(
+  peer: FakePeerConnection | undefined,
+  overrides: {
+    responseId?: string | null;
+    responseStatus?: string | null;
+    itemId?: string | null;
+    itemStatus?: string | null;
+    callId?: string | null;
+    name?: string | null;
+    arguments?: string | null;
+  } = {},
+): void {
+  const field = (value: string | null | undefined, fallback: string): string | undefined =>
+    value === undefined ? fallback : (value ?? undefined);
+  dispatchRealtimeEvent(peer, {
+    type: "response.done",
+    response: {
+      id: field(overrides.responseId, "response-1"),
+      status: field(overrides.responseStatus, "completed"),
+      output: [
+        {
+          type: "function_call",
+          id: field(overrides.itemId, "item-control"),
+          status: field(overrides.itemStatus, "completed"),
+          call_id: field(overrides.callId, "call-control"),
+          name: field(overrides.name, REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME),
+          arguments: field(overrides.arguments, JSON.stringify({ text: "status" })),
+        },
+      ],
+    },
+  });
+}
 
 class FakeDataChannel extends EventTarget {
   readyState: RTCDataChannelState = "open";

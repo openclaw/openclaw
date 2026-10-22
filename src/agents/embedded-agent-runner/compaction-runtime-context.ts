@@ -1,4 +1,7 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  floorPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,7 +25,6 @@ import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { normalizeContextTokenBudget } from "./utils.js";
 
 type NullableCompactionContextKey =
   | "sessionKey"
@@ -254,7 +256,7 @@ export function resolveCompactionContextTokenBudget(params: {
 }) {
   // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
-    normalizeContextTokenBudget(
+    floorPositiveFiniteNumber(
       resolveContextWindowInfo({
         cfg: params.config,
         provider: params.provider,
@@ -268,8 +270,8 @@ export function resolveCompactionContextTokenBudget(params: {
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
   return Math.min(
-    normalizeContextTokenBudget(params.requestedTokenBudget) ??
-      normalizeContextTokenBudget(params.fallbackTokenBudget) ??
+    floorPositiveFiniteNumber(params.requestedTokenBudget) ??
+      floorPositiveFiniteNumber(params.fallbackTokenBudget) ??
       resolvedBudget,
     resolvedBudget,
   );

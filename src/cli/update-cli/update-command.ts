@@ -17,6 +17,7 @@ import {
   resolveGitInstallDir,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { runAdmittedUpdate } from "./update-command-admitted.js";
 import { withUpdateCandidateAdmission } from "./update-command-candidate-admission.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
@@ -48,7 +49,6 @@ import {
 } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
 
@@ -293,7 +293,7 @@ async function updateCommandInternal(
         },
         before: { version: currentVersion ?? VERSION },
       },
-      { env: run.env },
+      run,
     );
     if (
       opts.channel &&
@@ -319,7 +319,7 @@ async function updateCommandInternal(
     }
 
     if (opts.dryRun) {
-      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, { env: run.env });
+      finishUpdateRun(run.runId, { status: "skipped", reason: "dry-run" }, run);
       return await previewUpdateCommand({
         target,
         prepared,

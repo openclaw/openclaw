@@ -93,6 +93,8 @@ type DeviceWorkerLaunchRequest = {
   timeoutMs: number;
   credentialExpiresAtMs?: number;
   signal?: AbortSignal;
+  /** Shutdown bounds receipt waits independently of the turn's cancellation. */
+  cancellationSignal?: AbortSignal;
   onDispatchReady?: () => void;
 };
 
@@ -423,6 +425,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const deadline = createDeadline({
       now,
       timeoutMs: cancellationTimeoutMs,
+      signal: params.request.cancellationSignal,
       label: "node worker cancellation",
     });
     let delayMs = pollIntervalMs;

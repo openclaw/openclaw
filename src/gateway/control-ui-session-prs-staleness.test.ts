@@ -123,17 +123,20 @@ it.each(["replacement", "metadata"] as const)(
         },
       ]);
       vi.stubGlobal("fetch", fetchImpl);
-      const load = () =>
-        loadControlUiSessionPullRequests(
-          { sessionKey },
-          {
-            resolveGitContext: async () => {
-              captured.resolve();
-              await release.promise;
-              return gitContext;
-            },
-          },
-        );
+      const gitRead = vi
+        .spyOn(gitWorker, "runGitWorkerOperation")
+        .mockImplementation(async (operation) => {
+          if (operation.type === "checkout.revision") {
+            return "held-context";
+          }
+          if (operation.type === "checkout.context") {
+            captured.resolve();
+            await release.promise;
+            return gitContext;
+          }
+          throw new Error("Unexpected held-context Git operation");
+        });
+      const load = () => loadControlUiSessionPullRequests({ sessionKey });
       const pending = load().then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),
@@ -189,6 +192,7 @@ it.each(["replacement", "metadata"] as const)(
       } finally {
         release.resolve();
         await pending;
+        gitRead.mockRestore();
       }
     });
   },
@@ -274,16 +278,20 @@ it("discards pending PR work after same-file reopen even when persisted rows are
     const release = createDeferred();
     const fetchImpl = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchImpl);
-    const pending = loadControlUiSessionPullRequests(
-      { sessionKey },
-      {
-        resolveGitContext: async () => {
+    const gitRead = vi
+      .spyOn(gitWorker, "runGitWorkerOperation")
+      .mockImplementation(async (operation) => {
+        if (operation.type === "checkout.revision") {
+          return "held-context";
+        }
+        if (operation.type === "checkout.context") {
           entered.resolve();
           await release.promise;
           return testGitContext;
-        },
-      },
-    ).then(
+        }
+        throw new Error("Unexpected held-context Git operation");
+      });
+    const pending = loadControlUiSessionPullRequests({ sessionKey }).then(
       () => true,
       () => false,
     );
@@ -302,6 +310,7 @@ it("discards pending PR work after same-file reopen even when persisted rows are
     } finally {
       release.resolve();
       await pending;
+      gitRead.mockRestore();
     }
   });
 });

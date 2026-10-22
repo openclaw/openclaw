@@ -41,18 +41,17 @@ async function seedBroadcastHistory(storePath: string) {
   await replaceSessionEntry(target, entry);
   await replaceTranscriptEvents(target, [
     { type: "session", version: 3, id: target.sessionId },
-    {
+    ...(
+      [
+        ["question", null, "user", "Stored question"],
+        ["answer", "question", "assistant", "Stored answer"],
+      ] as const
+    ).map(([id, parentId, role, content]) => ({
       type: "message",
-      id: "question",
-      parentId: null,
-      message: { role: "user", content: "Stored question" },
-    },
-    {
-      type: "message",
-      id: "answer",
-      parentId: "question",
-      message: { role: "assistant", content: "Stored answer" },
-    },
+      id,
+      parentId,
+      message: { role, content },
+    })),
   ]);
   await waitForSessionTranscriptProjection(target);
   loadAccessorSessionEntryReadOnlyMock.mockReturnValue(entry);
@@ -61,28 +60,28 @@ async function seedBroadcastHistory(storePath: string) {
 
 it.each(["by-id", "count"] as const)(
   "awaits the stored %s read without host SQLite before broadcasting",
-  async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (kind) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { target, readers, handler, broadcastToConnIds } = await seedBroadcastHistory(
         state.statePath("broadcast.sqlite"),
       );
       const held = createDeferredCore();
       const release = createDeferredCore();
-      const holdResult = async <T>(pending: Promise<T>): Promise<T> => {
-        const result = await pending;
-        held.resolve();
-        await release.promise;
-        return result;
-      };
+      const hold =
+        <Args extends unknown[], T>(read: (...args: Args) => Promise<T>) =>
+        async (...args: Args): Promise<T> => {
+          const result = await read(...args);
+          held.resolve();
+          await release.promise;
+          return result;
+        };
       if (kind === "by-id") {
         readSessionMessageByIdAsyncMock.mockImplementation(
-          (...args: Parameters<typeof readers.readSessionMessageByIdAsync>) =>
-            holdResult(readers.readSessionMessageByIdAsync(...args)),
+          hold(readers.readSessionMessageByIdAsync),
         );
       } else {
         readSessionMessageCountAsyncMock.mockImplementation(
-          (...args: Parameters<typeof readers.readSessionMessageCountAsync>) =>
-            holdResult(readers.readSessionMessageCountAsync(...args)),
+          hold(readers.readSessionMessageCountAsync),
         );
       }
       const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
@@ -134,6 +133,5 @@ it.each(["by-id", "count"] as const)(
         sql.restore();
         snapshot.mockRestore();
       }
-    });
-  },
+    }),
 );

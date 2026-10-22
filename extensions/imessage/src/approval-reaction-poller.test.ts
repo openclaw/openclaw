@@ -1,14 +1,23 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { pollPendingIMessageApprovalReactions as poll } from "./approval-reaction-poller.js";
-import {
-  clearIMessageApprovalReactionTargetsForTest,
-  registerIMessageApprovalReactionTarget,
-  resolveIMessageApprovalReactionTargetWithPersistence,
-} from "./approval-reactions.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import type { IMessagePayload } from "./monitor/types.js";
 import { resolvedApproval } from "./test-support/approval.js";
+
+let runtimeEnv: typeof import("openclaw/plugin-sdk/runtime-env");
+let poll: typeof import("./approval-reaction-poller.js").pollPendingIMessageApprovalReactions;
+let registerIMessageApprovalReactionTarget: typeof import("./approval-reactions.js").registerIMessageApprovalReactionTarget;
+let resolveIMessageApprovalReactionTargetWithPersistence: typeof import("./approval-reactions.js").resolveIMessageApprovalReactionTargetWithPersistence;
+
+beforeEach(async () => {
+  vi.resetModules();
+  runtimeEnv = await import("openclaw/plugin-sdk/runtime-env");
+  ({ pollPendingIMessageApprovalReactions: poll } = await import("./approval-reaction-poller.js"));
+  ({
+    registerIMessageApprovalReactionTarget,
+    resolveIMessageApprovalReactionTargetWithPersistence,
+  } = await import("./approval-reactions.js"));
+});
 
 const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
@@ -135,7 +144,6 @@ describe("iMessage approval reaction poller", () => {
   }
 
   beforeEach(() => {
-    clearIMessageApprovalReactionTargetsForTest();
     accountSequence += 1;
     accountId = `test-${accountSequence}`;
     resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);
@@ -203,8 +211,9 @@ describe("iMessage approval reaction poller", () => {
     });
     await registerTarget();
     const request = createRpcRequest([buildGroupApprovalMessage()]);
-    const logVerboseMessage = vi.fn();
-    const pollParams = buildPollParams(request, { logVerboseMessage });
+    const logVerboseMessage = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    onTestFinished(() => logVerboseMessage.mockRestore());
+    const pollParams = buildPollParams(request);
 
     await poll(pollParams);
     await poll(pollParams);

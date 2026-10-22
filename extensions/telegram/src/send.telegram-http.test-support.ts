@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import { Bot } from "grammy";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach } from "vitest";
@@ -23,53 +25,62 @@ export function resolveTelegramTestUpload(fields: Record<string, unknown>, key: 
   return upload;
 }
 
-export function useTelegramHttpFixture() {
-  let server: Server;
-  let bot: Bot;
-  let mediaDir: string;
-  let photoPath: string;
-  let env: ReturnType<typeof captureEnv> | undefined;
-  const sockets = new Set<Socket>();
-  const requests: Array<{ method: string; fields: Record<string, unknown> }> = [];
-  const events: string[] = [];
-  const endpoints: string[] = [];
-  const rejections: Array<
+// Lifecycle hooks initialize these before any case uses the fixture.
+class TelegramHttpState {
+  bot!: Bot;
+  mediaDir!: string;
+  photoPath!: string;
+  responseFor?: (method: string, fields: Record<string, unknown>) => unknown;
+  handleRequest?: (
+    method: string,
+    fields: Record<string, unknown>,
+    response: ServerResponse,
+  ) => boolean;
+  requestHold?: {
+    arrived: ReturnType<typeof createDeferred<void>>;
+    release: ReturnType<typeof createDeferred<void>>;
+  };
+  sockets = new Set<Socket>();
+  requestSockets = new Map<string, Socket>();
+  requests: Array<{ method: string; fields: Record<string, unknown> }> = [];
+  events: string[] = [];
+  endpoints: string[] = [];
+  rejections: Array<
     | string
     | { error_code: number; description: string; parameters?: Record<string, number> }
     | { resetConnection: true }
   > = [];
-  let responseFor: ((method: string, fields: Record<string, unknown>) => unknown) | undefined;
-  let requestHold:
-    | {
-        arrived: ReturnType<typeof createDeferred<void>>;
-        release: ReturnType<typeof createDeferred<void>>;
-      }
-    | undefined;
-  const cfg = {
+  cfg = {
     channels: { telegram: { botToken: "123456:telegram-send-http-fixture", apiRoot: "" } },
   };
-  const buttons = [[{ text: "Continue", callback_data: "continue" }]];
-  const telegramOutbound = createTelegramOutboundAdapter();
-  const runtime = {
+  buttons = [[{ text: "Continue", callback_data: "continue" }]];
+  telegramOutbound = createTelegramOutboundAdapter();
+  runtime = {
     log() {},
     error() {},
     exit(): never {
       throw new Error("unexpected exit");
     },
   };
+}
+
+export function useTelegramHttpFixture() {
+  let server: Server;
+  const state = new TelegramHttpState();
+  let env: ReturnType<typeof captureEnv> | undefined;
+  const { cfg, requests, requestSockets, rejections, buttons, runtime } = state;
+  const config = (overrides: TelegramAccountConfig) => ({
+    channels: { telegram: { ...cfg.channels.telegram, ...overrides } },
+  });
 
   beforeAll(async () => {
     const proxyKeys = [
       "OPENCLAW_DEBUG_PROXY_ENABLED",
       "OPENCLAW_DEBUG_PROXY_URL",
-      "ALL_PROXY",
-      "all_proxy",
-      "HTTP_PROXY",
-      "http_proxy",
-      "HTTPS_PROXY",
-      "https_proxy",
-      "NO_PROXY",
-      "no_proxy",
+      ...["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"].flatMap((key) => [
+        key,
+        key.toLowerCase(),
+      ]),
       "OPENCLAW_PROXY_URL",
       "OPENCLAW_PROXY_ACTIVE",
       "OPENCLAW_PROXY_CA_FILE",
@@ -84,23 +95,19 @@ export function useTelegramHttpFixture() {
     process.env.no_proxy = process.env.NO_PROXY;
     process.env.OPENCLAW_TELEGRAM_DNS_RESULT_ORDER = "ipv4first";
     resetTelegramClientOptionsCacheForTests();
-    mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-physical-send-"));
-    photoPath = path.join(mediaDir, "pixel.png");
+    state.mediaDir = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-physical-send-"));
+    state.photoPath = path.join(state.mediaDir, "pixel.png");
     await fs.writeFile(
-      photoPath,
+      state.photoPath,
       Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6V8AAAAASUVORK5CYII=",
         "base64",
       ),
     );
-    await fs.copyFile(photoPath, path.join(mediaDir, "second.png"));
+    await fs.copyFile(state.photoPath, path.join(state.mediaDir, "second.png"));
     server = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
       const respond = async () => {
-        const body = Buffer.concat(chunks);
+        const body = await buffer(request);
         const contentType = request.headers["content-type"] ?? "application/json";
         const fields = contentType.includes("multipart/form-data")
           ? Object.fromEntries(
@@ -108,16 +115,22 @@ export function useTelegramHttpFixture() {
             )
           : (JSON.parse(body.toString("utf8")) as Record<string, unknown>);
         const method = request.url?.split("/").at(-1) ?? "";
+        if (method === "sendMessage" || method === "editMessageText") {
+          requestSockets.set(request.url!.slice(0, request.url!.lastIndexOf("/")), request.socket);
+        }
         requests.push({ method, fields });
-        endpoints.push(request.url ?? "");
-        events.push("http");
-        const held = requestHold;
-        requestHold = undefined;
+        state.endpoints.push(request.url ?? "");
+        state.events.push("http");
+        const held = state.requestHold;
+        state.requestHold = undefined;
         if (held) {
           held.arrived.resolve();
           await held.release.promise;
         }
         response.setHeader("content-type", "application/json");
+        if (state.handleRequest?.(method, fields, response)) {
+          return;
+        }
         const rejection = rejections.shift();
         if (rejection) {
           if (typeof rejection === "object" && "resetConnection" in rejection) {
@@ -130,7 +143,7 @@ export function useTelegramHttpFixture() {
           response.end(JSON.stringify({ ok: false, ...error }));
           return;
         }
-        const custom = responseFor?.(method, fields);
+        const custom = state.responseFor?.(method, fields);
         if (custom !== undefined) {
           response.end(JSON.stringify({ ok: true, result: custom }));
           return;
@@ -184,45 +197,45 @@ export function useTelegramHttpFixture() {
                   : message;
         response.end(JSON.stringify({ ok: true, result }));
       };
-      request.on("end", () => {
-        void respond().catch((error: unknown) =>
-          response.destroy(error instanceof Error ? error : new Error(String(error))),
-        );
-      });
+      void respond().catch((error: unknown) =>
+        response.destroy(error instanceof Error ? error : new Error(String(error))),
+      );
     });
     // Application-clock jumps must not evict a real HTTP request's peer socket.
     server.keepAliveTimeout = 0;
     server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
+      state.sockets.add(socket);
+      socket.on("close", () => state.sockets.delete(socket));
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
     });
     cfg.channels.telegram.apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    bot = new Bot(cfg.channels.telegram.botToken, {
-      client: { apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}` },
+    state.bot = new Bot(cfg.channels.telegram.botToken, {
+      client: { apiRoot: cfg.channels.telegram.apiRoot },
     });
   });
 
   beforeEach(() => {
+    requestSockets.clear();
     requests.length = 0;
-    events.length = 0;
-    endpoints.length = 0;
+    state.events.length = 0;
+    state.endpoints.length = 0;
     rejections.length = 0;
-    responseFor = undefined;
+    state.responseFor = undefined;
+    state.handleRequest = undefined;
   });
 
   afterAll(async () => {
     try {
       resetTelegramClientOptionsCacheForTests();
-      for (const socket of sockets) {
+      for (const socket of state.sockets) {
         socket.destroy();
       }
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
-      await fs.rm(mediaDir, { recursive: true, force: true });
+      await fs.rm(state.mediaDir, { recursive: true, force: true });
     } finally {
       env?.restore();
     }
@@ -245,16 +258,8 @@ export function useTelegramHttpFixture() {
   ) {
     if (entry === "public") {
       return sendMessageTelegram("123", text, {
-        cfg: {
-          channels: {
-            telegram: {
-              ...cfg.channels.telegram,
-              richMessages: rich,
-              linkPreview: options.linkPreview,
-            },
-          },
-        },
-        api: bot.api,
+        cfg: config({ richMessages: rich, linkPreview: options.linkPreview }),
+        api: state.bot.api,
         textMode: options.textMode ?? (rich ? undefined : "html"),
         replyToMessageId: 7,
         quoteText: "quote",
@@ -262,13 +267,13 @@ export function useTelegramHttpFixture() {
         messageThreadId: options.threadId,
         onPlatformSendDispatch: dispatch,
         assertPlatformSendAuthorized,
-        ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [mediaDir], buttons } : {}),
+        ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [state.mediaDir], buttons } : {}),
         ...(rich ? { buttons } : {}),
       });
     }
     return deliverReplies({
       cfg,
-      bot,
+      bot: state.bot,
       chatId: "123",
       token: cfg.channels.telegram.botToken,
       runtime,
@@ -280,7 +285,7 @@ export function useTelegramHttpFixture() {
           ...(mediaUrl || rich ? { channelData: { telegram: { buttons } } } : {}),
         },
       ],
-      mediaLocalRoots: [mediaDir],
+      mediaLocalRoots: [state.mediaDir],
       replyToMode: options.firstReply ? "first" : "all",
       textLimit: options.textLimit ?? 4000,
       ...(options.threadId ? { thread: { scope: "forum", id: options.threadId } } : {}),
@@ -302,15 +307,8 @@ export function useTelegramHttpFixture() {
     messageId: number,
     assertDirectAdapterHandoff?: () => void,
   ) {
-    await telegramOutbound.pinDeliveredMessage!({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: token,
-            apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-          },
-        },
-      },
+    await state.telegramOutbound.pinDeliveredMessage!({
+      cfg: config({ botToken: token }),
       target: { channel: "telegram", to: "123", accountId: "default" },
       messageId: String(messageId),
       pin: { enabled: true },
@@ -318,34 +316,5 @@ export function useTelegramHttpFixture() {
     });
   }
 
-  return {
-    cfg,
-    requests,
-    events,
-    endpoints,
-    rejections,
-    buttons,
-    runtime,
-    telegramOutbound,
-    sendThrough,
-    pinThroughAdapter,
-    set responseFor(value: typeof responseFor) {
-      responseFor = value;
-    },
-    get bot() {
-      return bot;
-    },
-    get mediaDir() {
-      return mediaDir;
-    },
-    get photoPath() {
-      return photoPath;
-    },
-    get requestHold() {
-      return requestHold;
-    },
-    set requestHold(value: typeof requestHold) {
-      requestHold = value;
-    },
-  };
+  return Object.assign(state, { sendThrough, pinThroughAdapter });
 }

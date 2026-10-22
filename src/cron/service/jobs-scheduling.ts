@@ -26,10 +26,24 @@ import {
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
+import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
-/** Skip reason recorded when a main-session heartbeat run is disabled. */
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
+/** A new timer receipt owns continuation; never reopen the interrupted occurrence. */
+export function resolveCronRestartRetryAtMs(
+  job: CronJob,
+  startedAtMs: number,
+  nowMs: number,
+): number | undefined {
+  if (
+    !isJobEnabled(job) ||
+    job.payload.kind !== "agentTurn" ||
+    !["at", "every", "cron"].includes(job.schedule.kind)
+  ) {
+    return undefined;
+  }
+  return Math.max(nowMs, startedAtMs) + MIN_REFIRE_GAP_MS;
+}
 
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();

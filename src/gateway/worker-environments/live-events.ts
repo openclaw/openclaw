@@ -17,7 +17,6 @@ import {
   getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
 } from "../../infra/agent-run-registry.js";
-import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerLiveTrajectoryRecorder,
@@ -49,7 +48,6 @@ const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
 const DEFAULT_MAX_SESSIONS = 128;
 const DEFAULT_MAX_ACTIVE_RUNS = 32;
-const MAX_FENCED_ENVIRONMENTS = 4096;
 
 export type WorkerLiveEventApplicationResult =
   | { ok: true; result: WorkerLiveEventResult }
@@ -74,7 +72,6 @@ function capacityExceeded(): WorkerLiveEventFailure {
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions = {}) {
-  const fencedEnvironmentEpochs = new Map<string, number>();
   const windows = new Map<string, LiveEventWindow>();
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
@@ -530,11 +527,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (params.request.runEpoch !== params.identity.ownerEpoch) {
       return { ok: false, details: { reason: "epoch-mismatch" } };
     }
-    if (
-      params.request.runEpoch <= (fencedEnvironmentEpochs.get(params.identity.environmentId) ?? -1)
-    ) {
-      return invalidEvent();
-    }
     const sessionId = params.identity.sessionId;
     const window = resolveOrCreateWindow(sessionId, params);
     if ("ok" in window) {
@@ -566,20 +558,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
   };
 
-  const clearEnvironment = (environmentId: string, ownerEpoch: number): void => {
-    let fencedEpoch = Math.max(fencedEnvironmentEpochs.get(environmentId) ?? -1, ownerEpoch);
+  const clearEnvironment = (environmentId: string): void => {
     for (const window of windows.values()) {
       if (window.environmentId === environmentId) {
-        fencedEpoch = Math.max(fencedEpoch, window.runEpoch);
         clearWindow(window);
       }
-    }
-    if (fencedEpoch >= 0) {
-      // Oldest tombstones may expire because service/store ownership stays authoritative.
-      // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
-      fencedEnvironmentEpochs.delete(environmentId);
-      fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 
@@ -587,7 +570,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     for (const window of windows.values()) {
       clearWindow(window);
     }
-    fencedEnvironmentEpochs.clear();
   };
 
   return { apply, clear, clearEnvironment, rotateCredential };

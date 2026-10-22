@@ -34,7 +34,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -112,7 +112,7 @@ async function refreshCard(
     context: f.context,
     respond,
     isWebchatConnect: () => true,
-    extraHandlers: options.extraHandlers ?? createProgressCardHandlers(),
+    extraHandlers: options.extraHandlers ?? progressCardHandlers,
   });
   return respond;
 }
@@ -145,7 +145,7 @@ describe("registered progress refresh admission", () => {
         }
         const cardRead = createDeferredCore();
         const releaseRead = createDeferredCore();
-        const handlers = createProgressCardHandlers();
+        const handlers = { ...progressCardHandlers };
         let readingTerminalCard = false;
         let revoked = false;
         const originalRefresh = handlers["progressCard.refresh"]!;

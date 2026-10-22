@@ -8,9 +8,9 @@ import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { cancelSessionEffectHandoff as cancelHandoff } from "./session-controller.lifecycle-observation.js";
 import {
   beginSessionEffect as beginAdmission,
-  cancelSessionEffectHandoff as cancelHandoff,
   consumeSessionEffectHandoff as consumeHandoff,
   getSessionMutationCount,
   getSessionControllerWorkCount,
@@ -75,6 +75,85 @@ it("validates default admission once after earlier store writes", async () => {
     await writer;
   }
   expect(observations).toEqual(["after"]);
+});
+
+it.each([
+  { label: "Error", reason: new Error("cancel queued admission") },
+  { label: "primitive", reason: "cancel queued admission" },
+])(
+  "cancels queued writer admission without later validation ($label)",
+  async ({ label, reason }) => {
+    const scope = `store-cancel-validation-${label}`;
+    const identities = ["session-cancel-validation"];
+    const entered = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = runExclusiveSessionStoreWrite(scope, async () => {
+      entered.resolve();
+      await releaseWriter.promise;
+    });
+    await entered.promise;
+    const controller = new AbortController();
+    const assertAllowed = vi.fn();
+    const pending = admit({ scope, identities, signal: controller.signal, assertAllowed });
+    const rejected =
+      reason instanceof Error
+        ? expect(pending).rejects.toBe(reason)
+        : expect(pending).rejects.toMatchObject({
+            message: "Session effect cancelled",
+            cause: reason,
+          });
+    try {
+      await waitForImmediate();
+      controller.abort(reason);
+      await rejected;
+      expect(assertAllowed).not.toHaveBeenCalled();
+      expect(workActive(scope, identities)).toBe(false);
+    } finally {
+      releaseWriter.resolve();
+      await writer;
+    }
+    expect(assertAllowed).not.toHaveBeenCalled();
+  },
+);
+
+it("joins an admitted validator before releasing cancelled effect custody", async () => {
+  const owner = target("store-admitted-validation", "session-admitted-validation");
+  const entered = createDeferred();
+  const releaseValidator = createDeferred();
+  const controller = new AbortController();
+  const reason = "cancel admitted validation";
+  let completed = false;
+  const pending = admit({
+    ...owner,
+    signal: controller.signal,
+    assertAllowed: async () => {
+      entered.resolve();
+      await releaseValidator.promise;
+    },
+  });
+  const outcome = pending.then(
+    (ref) => {
+      completed = true;
+      ref.release();
+    },
+    (error: unknown) => {
+      completed = true;
+      return error;
+    },
+  );
+  try {
+    await entered.promise;
+    controller.abort(reason);
+    await waitForImmediate();
+    expect(completed).toBe(false);
+    expect(workActive(owner.scope, owner.identities)).toBe(true);
+    releaseValidator.resolve();
+    await expect(outcome).resolves.toBe(reason);
+    expect(workActive(owner.scope, owner.identities)).toBe(false);
+  } finally {
+    releaseValidator.resolve();
+    await outcome;
+  }
 });
 
 it("atomically hands admitted work across an interrupted RPC boundary", async () => {

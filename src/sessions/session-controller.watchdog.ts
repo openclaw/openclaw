@@ -213,7 +213,6 @@ export function createSessionControllerWatchdog(params: {
       phase: closed ? "settled" : params.readPhase(),
       hasActiveAttempt: attempt?.isCurrent() === true,
       semanticProgressAtMs: progressOrigin(at),
-      transportProgressAtMs: transportAt,
       lastProgressReason: stagnationCurrent(at) ? "tool_loop:argument_churn" : reason,
       warningMs,
       semanticDeadlineAtMs: semanticDeadline(at),

@@ -12,8 +12,6 @@ import {
 } from "../sessions/agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "../sessions/agent-session-loop-resource-loader.test-support.js";
 import { generateSummary as generateRealSummary } from "../sessions/compaction/compaction.js";
-import { createEventBus } from "../sessions/event-bus.js";
-import { createExtensionRuntime, loadExtensionFromFactory } from "../sessions/extensions/loader.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { mockCallArg } from "./compact.hooks.assertions.test-support.js";
@@ -103,14 +101,6 @@ export function registerCompactionSafeguardTests({
       limitHistoryTurnsMock.mockImplementation(originalHistoryLimit);
     });
 
-    const loadSafeguard = () =>
-      loadExtensionFromFactory(
-        safeguard,
-        getWorkspaceDir(),
-        createEventBus(),
-        createExtensionRuntime(),
-      );
-
     function createConversation(contents: string[]) {
       const manager = SessionManager.inMemory(getWorkspaceDir());
       for (const content of contents) {
@@ -162,7 +152,10 @@ export function registerCompactionSafeguardTests({
                   compaction: { keepRecentTokens: retention },
                   retry: { enabled: false },
                 }),
-          resourceLoader: createResourceLoader(handlers),
+          resourceLoader: await createResourceLoader(handlers, {
+            cwd: getWorkspaceDir(),
+            agentDir: getWorkspaceDir(),
+          }),
         });
         if (reasoning !== undefined) {
           await created.session.setThinkingLevel(thinkingLevel ?? "off");
@@ -180,12 +173,11 @@ export function registerCompactionSafeguardTests({
         "## Compaction fixture\nWORKSPACE_RULE_MARKER\n",
       );
       const sessionManager = createConversation(["Start.", "Preserve rules.", "Continue."]);
-      const extension = await loadSafeguard();
       vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(
         actualExtensions.buildEmbeddedExtensionFactories,
       );
       resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-      await bindSession(sessionManager, { handlers: extension.handlers });
+      await bindSession(sessionManager, { handlers: safeguard });
       const result = await compact({
         config: {
           agents: {
@@ -277,7 +269,6 @@ export function registerCompactionSafeguardTests({
           "Keep the rollout notes.",
         ]);
         const originalMessages = sessionManager.buildSessionContext().messages;
-        const extension = await loadSafeguard();
         const requestedModels: string[] = [];
         const requestedThinking: Array<string | undefined> = [];
         const stream = vi.fn<StreamFn>((activeModel, _context, options) => {
@@ -312,7 +303,7 @@ export function registerCompactionSafeguardTests({
         });
         await bindSession(sessionManager, {
           stream,
-          handlers: extension.handlers,
+          handlers: safeguard,
           reasoning: outcome === "thinking",
         });
         const config = {

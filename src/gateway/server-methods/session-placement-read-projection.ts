@@ -1,7 +1,9 @@
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
 import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-facts.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
 import { sessionModelRevision } from "../session-model-revision.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
@@ -31,12 +33,14 @@ export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
-  const { cfg, entry, placementFactsReader, activitySummaryEnabled } = params;
+  const { cfg, entry, preparedRuntimeOwnership, placementFactsReader, activitySummaryEnabled } =
+    params;
   const { key, agentId } = params.target;
   const context = params.context ?? {};
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -77,7 +81,11 @@ export function readSessionRowFacts(params: {
       workspaceResultReconciling,
       environment,
       identity,
-      sessionModelRevision: sessionModelRevision(entry, identity?.inference),
+      sessionModelRevision: sessionModelRevision(
+        entry,
+        identity?.inference,
+        preparedRuntimeOwnership,
+      ),
       failedRecoveryAction,
       retryOnSend,
     };
@@ -96,7 +104,7 @@ export function readSessionRowFacts(params: {
     return summary && Object.freeze(summary);
   };
   let activitySummary = readActivitySummary();
-  let unplaced:
+  let presented:
     | Readonly<
         Pick<
           GatewaySessionRow,
@@ -108,18 +116,22 @@ export function readSessionRowFacts(params: {
         >
       >
     | undefined;
+  let diskSpaceVersion: number | undefined;
+  let runnerVersion: number | undefined;
+  let runtimeInstallVersion: number | undefined;
   return {
     hasBoard: params.databaseFacts.hasBoard,
     refreshActivitySummary(databaseFacts = activitySummaryFacts) {
       activitySummaryFacts = databaseFacts;
       activitySummary = readActivitySummary();
-      unplaced = undefined;
+      presented = undefined;
     },
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
       if (currentSource !== placementSource) {
         placementSource = currentSource;
         placementFacts = readPlacementFacts();
+        presented = undefined;
       }
       const {
         placement,
@@ -132,21 +144,35 @@ export function readSessionRowFacts(params: {
         retryOnSend,
       } = placementFacts;
       const permissionModePending = isSessionPermissionChangePending(entry.sessionId);
-      if (!placement && !move) {
-        if (
-          !unplaced ||
-          unplaced.permissionModePending !== permissionModePending ||
-          unplaced.sessionModelRevision !== revision
-        ) {
-          unplaced = Object.freeze({
-            sessionModelRevision: revision,
-            permissionModePending,
-            activitySummary,
-          });
-        }
-        return unplaced;
+      const currentDiskSpaceVersion = placement
+        ? context.workerPlacementDiskSpaceReader?.version()
+        : undefined;
+      const currentRunnerVersion = placement
+        ? context.workerPlacementRunnerAvailabilityReader?.version()
+        : undefined;
+      const currentRuntimeInstallVersion = placement
+        ? context.workerPlacementRuntimeInstallReader?.version()
+        : undefined;
+      const startStatus =
+        placement?.state === "provisioning" && placement.environmentId
+          ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
+          : undefined;
+      if (
+        presented &&
+        presented.permissionModePending === permissionModePending &&
+        diskSpaceVersion === currentDiskSpaceVersion &&
+        runnerVersion === currentRunnerVersion &&
+        runtimeInstallVersion === currentRuntimeInstallVersion &&
+        (presented.placement?.state === "provisioning"
+          ? presented.placement.startStatus
+          : undefined) === startStatus
+      ) {
+        return presented;
       }
-      return {
+      diskSpaceVersion = currentDiskSpaceVersion;
+      runnerVersion = currentRunnerVersion;
+      runtimeInstallVersion = currentRuntimeInstallVersion;
+      presented = freezeTrustedJsonSnapshot({
         sessionModelRevision: revision,
         ...(placement
           ? {
@@ -162,9 +188,7 @@ export function readSessionRowFacts(params: {
                 workspaceResultReconciling,
                 retryOnSend,
                 {
-                  startStatus: placement.environmentId
-                    ? context.workerEnvironmentService?.get(placement.environmentId)?.startStatus
-                    : undefined,
+                  startStatus,
                   workerRuntimeInstall: context.workerPlacementRuntimeInstallReader?.read(
                     placement,
                     environment ?? null,
@@ -176,7 +200,8 @@ export function readSessionRowFacts(params: {
         ...(move ? { placementMove: projectWorkerPlacementMove(move) } : {}),
         permissionModePending,
         activitySummary,
-      };
+      });
+      return presented;
     },
   };
 }

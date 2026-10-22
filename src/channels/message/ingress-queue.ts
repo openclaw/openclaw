@@ -80,9 +80,6 @@ export async function listChannelIngressQueueAccountIdsReadOnly(params: {
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "channelIngress.accounts") {
-    throw new Error("Channel ingress account reader returned an unexpected result");
-  }
   return reply.result;
 }
 

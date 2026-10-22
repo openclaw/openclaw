@@ -57,6 +57,24 @@ export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
+type SessionGitHubPullRequestSource = {
+  repository: string;
+  repositoryId: number;
+  branch: string;
+  commit: string;
+};
+
+/** Original PR selection for one managed workspace; never a publication receipt or permission grant. */
+export type SessionGitHubPullRequestBinding = {
+  url: string;
+  host: string;
+  number: number;
+  base: SessionGitHubPullRequestSource;
+  head: SessionGitHubPullRequestSource;
+  /** Prepared initial PR head; absence means its first import is incomplete. */
+  preparedHeadCommit?: string;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -349,6 +367,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       repoRoot: string;
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
@@ -635,6 +654,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */
@@ -660,7 +687,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   /** Original host-admitted operator basis, owned by the exact restart source claim. */
-  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
   /** Unhanded exec completion obligations; no command arguments or output. */
   pendingExecNotifications?: Record<
     string,
@@ -677,6 +704,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
       > & { toolsAllow?: readonly string[][] };
     }
   >;
+  /** Original requester facts retained by the exact host-admitted restart source claim. */
+  restartRecoveryRequesterSource?: import("../../agents/requester-run-recovery-source.js").RestartRecoveryRequesterSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 

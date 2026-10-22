@@ -80,6 +80,7 @@ export async function inspectManagedHandoffRepairFacts(
   previous: ManagedHandoffLease,
   discovered: DiscoveredRepairFacts,
   retained?: ManagedHandoffRepairFacts,
+  familyExited = false,
 ): Promise<ManagedHandoffRepairFacts> {
   const facts = {
     runIds: [...new Set([...(retained?.runIds ?? []), ...discovered.runIds])],
@@ -87,7 +88,7 @@ export async function inspectManagedHandoffRepairFacts(
     timeoutMs: Math.max(retained?.timeoutMs ?? 0, discovered.timeoutMs ?? 0) || null,
   };
   const grace = Math.max(45 * 60_000, facts.timeoutMs ?? 0);
-  if (Date.now() - previous.updatedAt < grace) {
+  if (!familyExited && Date.now() - previous.updatedAt < grace) {
     throw new Error(
       `Handoff was last recorded at ${new Date(previous.updatedAt).toISOString()}; its recovery grace ends at ${new Date(previous.updatedAt + grace).toISOString()}. Retry openclaw update repair then.`,
     );
@@ -99,6 +100,7 @@ export async function inspectManagedHandoffRepairFacts(
       artifactPaths: facts.artifactPaths,
       windowsUserSid: discovered.windowsUserSid,
       drivers: [previous.helper, previous.executor, ...(discovered.drivers ?? [])],
+      familyExited,
     });
     const pids = [...new Set([...census.matchingPids, ...census.unverifiedPids])];
     if (pids.length || census.error) {

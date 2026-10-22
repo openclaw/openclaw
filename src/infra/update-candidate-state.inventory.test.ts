@@ -254,14 +254,16 @@ describe("snapshot inventory", () => {
       }),
     );
     expect((await fs.readFile(shared)).equals(sourceDatabase)).toBe(true);
-    if (change === "added file") {
+    if (change === "added file" || change === "locator symlink") {
       expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
     } else {
       expect(snapshot.code, "snapshot must refuse uninventoried bytes").not.toBe(0);
       expect(snapshot.stderr.toString("utf8")).toContain(
         change === "enlarged file"
           ? "file exceeds limit of 4096 bytes (got 16777216)"
-          : "changed after snapshot inventory",
+          : change === "install record"
+            ? "Plugin record locator was not inventoried"
+            : "changed after snapshot inventory",
       );
       expectFailurePhase(
         snapshot,

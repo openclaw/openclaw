@@ -1,35 +1,27 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import type { NativeChromeExtensionSetupAction } from "../app/native-chrome-setup.ts";
 import type { LegacyChromeInstallResult } from "../app/native-device-settings.ts";
 import { projectNativeDeviceSettings } from "../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { ChromeSetupStatus, type ChromeSetupStatusProps } from "./chrome-setup-status.tsx";
 import "./native-chrome-setup.css";
 
-const resetOnDisconnect = new WeakMap<HTMLElement, () => void>();
-function NativeChromeSetupContent(_: object, host: HTMLElement) {
+export function NativeChromeSetup() {
+  let host!: HTMLElement;
   const capability = useOptionalApplication()?.nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : undefined;
   const browser = () => projection?.read()?.browser;
-  const [state, setState] = createSignal<ChromeSetupStatusProps>({
+  const [state, setState] = createStore<ChromeSetupStatusProps>({
     running: false,
     failed: null,
     result: null,
     legacyResult: null,
   });
-  let generation = 0;
+  let disposed = false;
   let pending = false;
-  const reset = () => {
-    generation++;
-    pending = false;
-    setState({ running: false, failed: null, result: null, legacyResult: null });
-  };
-  resetOnDisconnect.set(host, reset);
-  onCleanup(() => {
-    generation++;
-    resetOnDisconnect.delete(host);
+  onSettled(() => () => {
+    disposed = true;
   });
   const actions = createMemo<readonly NativeChromeExtensionSetupAction[]>(() => {
     const available = browser();
@@ -48,10 +40,9 @@ function NativeChromeSetupContent(_: object, host: HTMLElement) {
     if (!host.isConnected || !capability || pending || !actions().includes(action)) {
       return;
     }
-    const current = ++generation;
-    const isCurrent = () => host.isConnected && generation === current;
+    const isCurrent = () => !disposed && host.isConnected;
     pending = true;
-    setState({ running: true, failed: null, result: null, legacyResult: null });
+    setState(() => ({ running: true, failed: null, result: null, legacyResult: null }));
     try {
       if (browser()?.chromeSetupActions === undefined) {
         let legacyResult: LegacyChromeInstallResult;
@@ -63,25 +54,30 @@ function NativeChromeSetupContent(_: object, host: HTMLElement) {
           return;
         }
         if (isCurrent() && actions().includes(action)) {
-          setState((value) => ({ ...value, legacyResult }));
+          setState((value) => {
+            value.legacyResult = legacyResult;
+          });
         }
       } else {
         const result = await capability.setupChromeExtension(action);
         if (isCurrent() && actions().includes(action)) {
-          setState((value) => ({ ...value, result }));
+          setState((value) => {
+            value.result = result;
+          });
         }
       }
     } catch {
       if (isCurrent()) {
-        setState((value) => ({
-          ...value,
-          failed: "setup",
-        }));
+        setState((value) => {
+          value.failed = "setup";
+        });
       }
     } finally {
       if (isCurrent()) {
         pending = false;
-        setState((value) => ({ ...value, running: false }));
+        setState((value) => {
+          value.running = false;
+        });
       }
     }
   };
@@ -94,35 +90,32 @@ function NativeChromeSetupContent(_: object, host: HTMLElement) {
       ] as const
     ).filter(([action]) => actions().includes(action));
   return (
-    <Show when={browser()}>
-      <div class="native-chrome-setup">
-        <p>{t("configPage.deviceSettings.chromeExtensionHint")}</p>
-        <div class="native-chrome-setup__actions">
-          <For each={visibleActions()}>
-            {([action, label]) => (
-              <button
-                type="button"
-                class="btn"
-                disabled={state().running}
-                onClick={() => void setup(action)}
-              >
-                {t(`configPage.deviceSettings.${label}`)}
-              </button>
-            )}
-          </For>
+    <openclaw-native-chrome-setup ref={(element) => (host = element)}>
+      <Show when={browser()}>
+        <div class="native-chrome-setup">
+          <p>{t("configPage.deviceSettings.chromeExtensionHint")}</p>
+          <div class="native-chrome-setup__actions">
+            <For each={visibleActions()}>
+              {([action, label]) => (
+                <button
+                  type="button"
+                  class="btn"
+                  disabled={state.running}
+                  onClick={() => void setup(action)}
+                >
+                  {t(`configPage.deviceSettings.${label}`)}
+                </button>
+              )}
+            </For>
+          </div>
+          <ChromeSetupStatus
+            result={state.result}
+            legacyResult={state.legacyResult}
+            running={state.running}
+            failed={state.failed}
+          />
         </div>
-        <ChromeSetupStatus
-          result={state().result}
-          legacyResult={state().legacyResult}
-          running={state().running}
-          failed={state().failed}
-        />
-      </div>
-    </Show>
+      </Show>
+    </openclaw-native-chrome-setup>
   );
 }
-
-defineSolidBridge("openclaw-native-chrome-setup", NativeChromeSetupContent, {
-  properties: {},
-  disconnected: (host) => resetOnDisconnect.get(host)?.(),
-});

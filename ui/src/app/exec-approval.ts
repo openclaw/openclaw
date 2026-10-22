@@ -4,11 +4,14 @@ import {
   readNonBlankString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import type { StreamApprovalProposal } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
 import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-core.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
+  warningText?: string | null;
+  streamProposal?: StreamApprovalProposal;
   scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
@@ -148,6 +151,15 @@ function parseApprovalScope(value: unknown): ApprovalScope | null {
   }
 }
 
+function parseStreamProposal(value: unknown): ExecApprovalRequestPayload["streamProposal"] {
+  return isRecord(value) &&
+    typeof value.jobId === "string" &&
+    typeof value.name === "string" &&
+    (value.operation === "add" || value.operation === "update")
+    ? { jobId: value.jobId, name: value.name, operation: value.operation }
+    : undefined;
+}
+
 function parseApprovalRequested(
   kind: ExecApprovalRequest["kind"],
   payload: unknown,
@@ -175,6 +187,8 @@ function parseApprovalRequested(
           request: {
             ...source,
             command,
+            warningText: readStringValue(request.warningText) ?? null,
+            streamProposal: parseStreamProposal(request.streamProposal),
             cwd: readStringValue(request.cwd) ?? null,
             host: readStringValue(request.host) ?? null,
             security: readStringValue(request.security) ?? null,
@@ -426,7 +440,9 @@ export async function refreshPendingApprovalQueue(
     for (const entry of refreshed) {
       scheduleApprovalExpiryPrune(state, entry);
     }
-    return true;
+    return [execResult, pluginResult, systemAgentResult].every(
+      (result) => result.status === "fulfilled",
+    );
   } finally {
     refreshes.delete(refresh);
     if (refreshes.size === 0) {

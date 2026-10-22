@@ -290,7 +290,6 @@ describe("browser chrome helpers", () => {
           ok: true,
           wsUrl,
           browser: "Browserless/Mock",
-          userAgent: "Browserless Mock UA",
         });
       },
     });

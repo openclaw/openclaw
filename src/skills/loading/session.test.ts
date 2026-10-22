@@ -171,3 +171,32 @@ it("reports malformed frontmatter by file and keeps loading sibling skills", asy
     }),
   ]);
 });
+
+it.each(["nonregular", "cyclic-symlink"] as const)(
+  "reports %s ignore rules without loading that subtree or losing siblings",
+  async (kind) => {
+    const root = tempDirs.make("openclaw-skill-ignore-read-");
+    const brokenDir = path.join(root, "broken");
+    await writeRawSkill(
+      path.join(brokenDir, "private-skill"),
+      "---\nname: private-skill\ndescription: Must not load without ignore rules\n---\n",
+    );
+    const ignorePath = path.join(brokenDir, ".gitignore");
+    if (kind === "nonregular") {
+      await fs.mkdir(ignorePath);
+    } else {
+      await fs.symlink(".gitignore", ignorePath);
+    }
+    await writeRawSkill(
+      path.join(root, "valid"),
+      "---\nname: valid\ndescription: Valid sibling\n---\n",
+    );
+
+    const result = loadSkillsFromPath(root);
+
+    expect(result.skills.map((skill) => skill.name)).toEqual(["valid"]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ type: "warning", path: brokenDir }),
+    ]);
+  },
+);

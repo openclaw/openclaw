@@ -1,21 +1,23 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
+import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
+registerEnglishCatalog(registerLogbookEnglish);
+
 export type LogbookProps = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  initialClient: GatewayBrowserClient | null;
 };
 
 /** Stable category hue so colors stay consistent across renders and days. */
@@ -315,13 +317,12 @@ export function Logbook(props: LogbookProps) {
     locale.locale();
     return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
   };
-  const model = createLogbook();
+  // PluginPage's keyed host keeps this client fixed until the model is disposed.
+  const initialClient = props.initialClient;
+  const model = createLogbook(initialClient);
   const state = () => model.state;
-  // A client change retires logbook requests and starts loading the newly connected Gateway.
-  createEffect(
-    () => (props.connected ? props.client : null),
-    (client) => void (model.connect(client) && model.load()),
-  );
+  // PluginPageOwner remounts this view when the connection changes.
+  onSettled(() => void model.load());
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">

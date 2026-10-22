@@ -116,18 +116,6 @@ export function loadChatComposerState(
   );
 }
 
-function persistChatComposerStateResult(
-  state: ChatComposerPersistenceState,
-  sessionKey: string = state.sessionKey,
-  options: ChatComposerPersistOptions = {},
-): ChatComposerPersistStatus {
-  return persistCapturedChatComposerStateResult(
-    state,
-    captureChatOutboxAdmission(state, sessionKey, options.agentId),
-    options,
-  );
-}
-
 function persistCapturedChatComposerStateResult(
   state: ChatComposerPersistenceState,
   captured: Pick<ReturnType<typeof captureChatOutboxAdmission>, "scope" | "awaitingDefaults"> & {
@@ -245,7 +233,13 @@ export function persistChatComposerState(
   sessionKey: string = state.sessionKey,
   options: ChatComposerPersistOptions = {},
 ): boolean {
-  return persistChatComposerStateResult(state, sessionKey, options) === "persisted";
+  return (
+    persistCapturedChatComposerStateResult(
+      state,
+      captureChatOutboxAdmission(state, sessionKey, options.agentId),
+      options,
+    ) === "persisted"
+  );
 }
 
 export type ChatQueueAdmissionResult = "admitted" | "source-changed" | "full" | "storage-failed";
@@ -254,9 +248,8 @@ export function admitStoredChatComposerQueueItem(
   state: ChatComposerScope,
   captured: ReturnType<typeof captureChatOutboxAdmission>,
   item: ChatQueueItem,
-  replaces?: StoredChatQueueReplacement,
 ): boolean {
-  return admitStoredChatComposerQueueItemResult(state, captured, item, replaces) === "admitted";
+  return admitStoredChatComposerQueueItemResult(state, captured, item) === "admitted";
 }
 
 export function admitStoredChatComposerQueueItemResult(
@@ -340,11 +333,12 @@ export function admitStoredChatComposerQueueItemResult(
  * expected row, one full-document write, and one read-back verification — so
  * the whole set commits or none of it does. A mid-batch storage failure can
  * never leave a permutation half-applied the way a per-row write loop would.
+ * A null next row removes it; removing an absent row is a no-op.
  */
 export function updateStoredChatComposerQueueItems(
   state: ChatComposerScope,
   sessionKey: string,
-  updates: readonly { expected: ChatQueueItem; next: ChatQueueItem }[],
+  updates: readonly { expected: ChatQueueItem; next: ChatQueueItem | null }[],
   agentId?: string,
 ): boolean {
   if (updates.length === 0) {
@@ -354,7 +348,7 @@ export function updateStoredChatComposerQueueItems(
   if (
     !storage ||
     !sessionKey.trim() ||
-    updates.some(({ expected, next }) => expected.id !== next.id)
+    updates.some(({ expected, next }) => (next ? expected.id !== next.id : !expected.id.trim()))
   ) {
     return false;
   }
@@ -363,78 +357,49 @@ export function updateStoredChatComposerQueueItems(
     const store = readStore(storage, target);
     const scope = {
       sessionKey,
-      agentId: agentId ?? updates[0]!.expected.agentId ?? updates[0]!.next.agentId,
+      agentId: agentId ?? updates[0]!.expected.agentId ?? updates[0]!.next?.agentId,
     };
     const storeSessionKey = storedChatOutboxScopeKey(scope);
     const session = store.sessions[storeSessionKey] ?? null;
     const nextQueue = (session?.queue ?? []).slice();
+    let changed = false;
     for (const { expected, next } of updates) {
       const index = nextQueue.findIndex((entry) => entry.id === expected.id);
-      const stored = index >= 0 ? nextQueue[index] : undefined;
-      const serializedNext =
-        stored && queueItemVersionMatches(stored, expected, scope)
-          ? serializeQueueItemForScope(next, scope)
-          : null;
-      if (!serializedNext) {
-        // A missing or stale row rejects the whole batch before anything is written.
+      if (index < 0 && next === null) {
+        continue;
+      }
+      // A missing or stale row rejects the whole batch before anything is written.
+      if (index < 0 || !queueItemVersionMatches(nextQueue[index]!, expected, scope)) {
         return false;
       }
-      nextQueue[index] = serializedNext;
+      if (next === null) {
+        nextQueue.splice(index, 1);
+      } else {
+        const serializedNext = serializeQueueItemForScope(next, scope);
+        if (!serializedNext) {
+          return false;
+        }
+        nextQueue[index] = serializedNext;
+      }
+      changed = true;
+    }
+    if (!changed) {
+      return true;
     }
     writeStoredComposerSession(store, storeSessionKey, session, nextQueue);
     writeStore(storage, target, store);
     notifyStoredChatOutboxChanges();
     const persistedQueue = readStore(storage, target).sessions[storeSessionKey]?.queue ?? [];
-    return updates.every(({ next }) => {
+    return updates.every(({ expected, next }) => {
+      const persisted = persistedQueue.find((entry) => entry.id === expected.id);
+      if (next === null) {
+        return !persisted;
+      }
       const serializedNext = serializeQueueItemForScope(next, scope);
-      const persisted = persistedQueue.find((entry) => entry.id === next.id);
       return Boolean(
         persisted && serializedNext && queueItemsEqual(persisted, serializedNext, scope),
       );
     });
-  } catch {
-    return false;
-  }
-}
-
-export function removeStoredChatComposerQueueItem(
-  state: ChatComposerScope,
-  sessionKey: string,
-  id: string,
-  expected?: ChatQueueItem,
-  agentId?: string,
-): boolean {
-  const storage = getSafeSessionStorage();
-  if (!storage || !sessionKey.trim() || !id.trim()) {
-    return false;
-  }
-  try {
-    const target = storageTargetForComposer(state);
-    const store = readStore(storage, target);
-    const scope = { sessionKey, agentId: agentId ?? expected?.agentId };
-    const storeSessionKey = storedChatOutboxScopeKey(scope);
-    const session = store.sessions[storeSessionKey] ?? null;
-    const queue = session?.queue ?? [];
-    const index = queue.findIndex((item) => item.id === id);
-    if (index < 0) {
-      return true;
-    }
-    const stored = queue[index];
-    if (!stored || (expected && !queueItemVersionMatches(stored, expected, scope))) {
-      return false;
-    }
-    writeStoredComposerSession(
-      store,
-      storeSessionKey,
-      session,
-      queue.filter((_, queueIndex) => queueIndex !== index),
-    );
-    writeStore(storage, target, store);
-    notifyStoredChatOutboxChanges();
-    const persisted = readStore(storage, target).sessions[storeSessionKey]?.queue?.some(
-      (item) => item.id === id,
-    );
-    return !persisted;
   } catch {
     return false;
   }
@@ -521,10 +486,7 @@ export class ChatComposerPersistence {
     }
     this.ready = true;
     this.pending = null;
-    const { revisions, snapshot: stored } = loadCapturedChatComposerState(
-      state,
-      resolveUiConversationIdentity(state, state.sessionKey),
-    );
+    const { revisions, snapshot: stored } = loadChatComposerState(state, state.sessionKey);
     this.committedDraftRevision = revisions.committed;
     this.latestDraftRevision = revisions.latestAttempt;
     this.durableRestoreProtected =
@@ -554,10 +516,7 @@ export class ChatComposerPersistence {
     const restored = restoreChatComposerState(state, options);
     this.pending = null;
     this.clearTimer();
-    const { revisions } = loadCapturedChatComposerState(
-      state,
-      resolveUiConversationIdentity(state, state.sessionKey),
-    );
+    const { revisions } = loadChatComposerState(state, state.sessionKey);
     this.committedDraftRevision = revisions.committed;
     this.latestDraftRevision = revisions.latestAttempt;
     this.lastPersisted = this.snapshot(state, revisions.committed, revisions.committed);
@@ -819,10 +778,8 @@ export class ChatComposerPersistence {
     );
   }
 
-  private resolveDurableScope(
-    state: DurableChatComposerPersistenceState,
-    scope: StoredChatOutboxScope = resolveUiConversationIdentity(state, state.sessionKey),
-  ) {
+  private resolveDurableScope(state: DurableChatComposerPersistenceState) {
+    const scope = resolveUiConversationIdentity(state, state.sessionKey);
     if (isIncognitoComposerScope(state, scope)) {
       return null;
     }
@@ -852,10 +809,7 @@ export class ChatComposerPersistence {
           !this.isUnchanged(state) ||
           (this.lastPersisted && !isChatComposerOwnerCurrent(state, this.lastPersisted.owner))
         ) {
-          loadCapturedChatComposerState(
-            state,
-            resolveUiConversationIdentity(state, state.sessionKey),
-          );
+          loadChatComposerState(state, state.sessionKey);
         }
         this.retireDurableScope(connectedScope, this.latestDraftRevision);
       }
@@ -886,10 +840,7 @@ export class ChatComposerPersistence {
       state.chatReplyTarget = null;
       state.chatAttachments = [];
       this.pending = null;
-      const { revisions } = loadCapturedChatComposerState(
-        state,
-        resolveUiConversationIdentity(state, state.sessionKey),
-      );
+      const { revisions } = loadChatComposerState(state, state.sessionKey);
       this.committedDraftRevision = revisions.committed;
       this.latestDraftRevision = revisions.latestAttempt;
       // Read the replacement account; never clear its saved draft with old presentation.
@@ -956,7 +907,7 @@ export class ChatComposerPersistence {
         this.committedDraftRevision = adoptedRevision;
         this.latestDraftRevision = adoptedRevision;
         this.lastPersisted = this.snapshot(state, adoptedRevision, adoptedRevision);
-        persistChatComposerStateResult(state, state.sessionKey, {
+        persistChatComposerState(state, state.sessionKey, {
           agentId: resolveUiConversationIdentity(state, state.sessionKey).agentId,
           draft: state.chatMessage,
           mentions: state.chatMentions,

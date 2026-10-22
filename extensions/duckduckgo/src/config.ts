@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
-  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -9,16 +9,14 @@ const DEFAULT_DDG_SAFE_SEARCH = "moderate";
 
 export type DdgSafeSearch = "strict" | "moderate" | "off";
 
-function resolveDdgWebSearchConfig(config?: OpenClawConfig) {
-  return asOptionalRecord(config?.plugins?.entries?.duckduckgo?.config?.webSearch);
-}
-
 export function resolveDdgRegion(config?: OpenClawConfig): string | undefined {
-  return normalizeOptionalString(resolveDdgWebSearchConfig(config)?.region);
+  return normalizeOptionalString(
+    resolveProviderWebSearchPluginConfig(config, "duckduckgo")?.region,
+  );
 }
 
 export function resolveDdgSafeSearch(config?: OpenClawConfig): DdgSafeSearch {
-  const safeSearch = resolveDdgWebSearchConfig(config)?.safeSearch;
+  const safeSearch = resolveProviderWebSearchPluginConfig(config, "duckduckgo")?.safeSearch;
   const normalized = normalizeLowercaseStringOrEmpty(safeSearch);
   if (normalized === "strict" || normalized === "off") {
     return normalized;

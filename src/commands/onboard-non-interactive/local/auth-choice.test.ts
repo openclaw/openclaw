@@ -9,7 +9,7 @@ import {
 import * as authProfileStore from "../../../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
-import type { ModelDefinitionConfig } from "../../../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../../config/types.models.js";
 import * as fetchGuard from "../../../infra/net/fetch-guard.js";
 import { ExitError } from "../../../runtime.js";
 import { withTempDir } from "../../../test-utils/temp-dir.js";
@@ -26,19 +26,20 @@ vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
   vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
 );
-vi.mock("../../auth-choice-options.js", () => ({
-  formatAuthChoiceChoicesForCli,
-}));
+// mock-isolation: The fixed choice list avoids installed-provider discovery in dispatch tests.
+vi.mock("../../auth-choice-options.js", () => ({ formatAuthChoiceChoicesForCli }));
 
-const applyNonInteractivePluginProviderChoice = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("./auth-choice.plugin-providers.js", () => ({
-  applyNonInteractivePluginProviderChoice,
-}));
+const applyNonInteractivePluginProviderChoice = vi.hoisted(() =>
+  vi.fn<typeof import("./auth-choice.plugin-providers.js").applyNonInteractivePluginProviderChoice>(
+    async () => undefined,
+  ),
+);
+// mock-isolation: Capture provider dispatch without loading or installing real providers.
+vi.mock("./auth-choice.plugin-providers.js", () => ({ applyNonInteractivePluginProviderChoice }));
 
 const resolveNonInteractiveApiKey = vi.hoisted(() => vi.fn());
-vi.mock("../api-keys.js", () => ({
-  resolveNonInteractiveApiKey,
-}));
+// mock-isolation: Tests provide synthetic credential resolution without reading host secrets.
+vi.mock("../api-keys.js", () => ({ resolveNonInteractiveApiKey }));
 
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() =>
   vi.fn<
@@ -105,18 +106,10 @@ function createAzureCatalogConfig() {
 }
 
 function createRuntime() {
-  return {
-    error: vi.fn(),
-    exit: vi.fn(),
-    log: vi.fn(),
-  };
+  return { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
 }
 
-const target = {
-  agentId: "main",
-  agentDir: "/tmp/main-agent",
-  workspaceDir: "/tmp/workspace",
-};
+const target = { agentId: "main", agentDir: "/tmp/main-agent", workspaceDir: "/tmp/workspace" };
 
 let runtime: ReturnType<typeof createRuntime>;
 let nextConfig: OpenClawConfig;
@@ -133,6 +126,49 @@ function applyChoice(params: Partial<ChoiceParams>) {
     target,
     ...params,
   });
+}
+
+const customBaseUrl = "https://models.custom.local/v1";
+function applyCustomChoice(opts: ChoiceParams["opts"] = {}, config = nextConfig) {
+  return applyChoice({ nextConfig: config, opts: { customBaseUrl, ...opts } });
+}
+
+function localConfig(provider: Partial<ModelProviderConfig> = {}): OpenClawConfig {
+  return { models: { providers: { local: { baseUrl: customBaseUrl, models: [], ...provider } } } };
+}
+
+function mockDiscovery(response: Response, finalUrl = `${customBaseUrl}/models`) {
+  return vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
+    response,
+    finalUrl,
+    release: async () => {},
+  });
+}
+
+function mockAuthenticatedDiscovery(key: string) {
+  return vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockImplementation(async (input) => ({
+    response:
+      new Headers(input.init?.headers).get("Authorization") === `Bearer ${key}`
+        ? Response.json({ data: [{ id: "discovered-chat" }] })
+        : new Response(null, { status: 401 }),
+    finalUrl: input.url,
+    release: async () => {},
+  }));
+}
+
+async function pluginCredentialConverter() {
+  applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(nextConfig);
+  await applyChoice({ authChoice: "demo-provider-api-key", opts: { secretInputMode: "ref" } });
+  const params = applyNonInteractivePluginProviderChoice.mock.calls.at(-1)?.[0];
+  expect(params).toBeDefined();
+  return params!.toApiKeyCredential;
+}
+
+function expectModelSelection(config: OpenClawConfig | null, primary: string, refs: string[]) {
+  expect(resolveAgentModelPrimaryValue(config?.agents?.defaults?.model)).toBe(primary);
+  expect(config?.agents?.defaults?.models).toMatchObject(
+    Object.fromEntries(refs.map((ref) => [ref, {}])),
+  );
 }
 
 describe("applyNonInteractiveAuthChoice", () => {
@@ -183,14 +219,11 @@ describe("applyNonInteractiveAuthChoice", () => {
       .mockImplementation((params) =>
         params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
       );
-
     try {
       const result = await applyChoice({
-        nextConfig,
         authChoice: "apiKey",
         opts: { tokenProvider: "demo-provider" },
       });
-
       expect(result).toBe(resolvedConfig);
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
@@ -202,12 +235,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
       choiceId: "modern\nchoice",
     } as never);
-
-    const result = await applyChoice({
-      nextConfig,
-      authChoice: "legacy\u001b[31mchoice",
-    });
-
+    const result = await applyChoice({ authChoice: "legacy\u001b[31mchoice" });
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
       '"legacy\\u001b[31mchoice" is no longer supported. Use --auth-choice "modern\\nchoice" instead.',
@@ -220,12 +248,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     resolveDeprecatedProviderInstallCatalogEntry.mockReturnValueOnce({
       choiceId: "qwen-api-key",
     } as never);
-
-    const result = await applyChoice({
-      nextConfig,
-      authChoice: "modelstudio-api-key",
-    });
-
+    const result = await applyChoice({ authChoice: "modelstudio-api-key" });
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
       '"modelstudio-api-key" is no longer supported. Use --auth-choice "qwen-api-key" instead.',
@@ -237,8 +260,8 @@ describe("applyNonInteractiveAuthChoice", () => {
   it.each(["openai", "openai-responses"] as const)(
     "imports discovered %s models and keeps authored metadata",
     async (compatibility) => {
-      const request = vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-        response: Response.json({
+      const request = mockDiscovery(
+        Response.json({
           data: [
             { id: " local-large " },
             { id: "local-small" },
@@ -247,9 +270,7 @@ describe("applyNonInteractiveAuthChoice", () => {
             { id: 7 },
           ],
         }),
-        finalUrl: "https://models.custom.local/v1/models",
-        release: async () => {},
-      });
+      );
       resolveNonInteractiveApiKey.mockResolvedValueOnce({
         key: "fixture-discovery-key",
         source: "env",
@@ -264,34 +285,15 @@ describe("applyNonInteractiveAuthChoice", () => {
         input: ["text" as const],
         cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
       };
-      const result = await applyChoice({
-        nextConfig: {
-          models: {
-            providers: {
-              local: {
-                baseUrl: "https://models.custom.local/v1",
-                models: [authored],
-              },
-            },
-          },
-        },
-        opts: {
-          customBaseUrl: "https://models.custom.local/v1",
-          customProviderId: "local",
-          customCompatibility: compatibility,
-        },
-      });
+      const result = await applyCustomChoice(
+        { customProviderId: "local", customCompatibility: compatibility },
+        localConfig({ models: [authored] }),
+      );
       expect(result?.models?.providers?.local?.models).toEqual([
         authored,
         expect.objectContaining({ id: "local-small" }),
       ]);
-      expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-        "local/local-large",
-      );
-      expect(result?.agents?.defaults?.models).toMatchObject({
-        "local/local-large": {},
-        "local/local-small": {},
-      });
+      expectModelSelection(result, "local/local-large", ["local/local-large", "local/local-small"]);
       expect(request).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           url: "https://models.custom.local/v1/models",
@@ -314,26 +316,9 @@ describe("applyNonInteractiveAuthChoice", () => {
       vi.stubEnv("DISCOVERY_CONFIGURED_KEY", "fixture-configured-key");
       vi.stubEnv("OPENAI_API_KEY", "fixture-configured-key");
       vi.stubEnv("CUSTOM_API_KEY", undefined);
-      const request = vi
-        .spyOn(fetchGuard, "fetchWithSsrFGuard")
-        .mockImplementation(async (input) => ({
-          response:
-            new Headers(input.init?.headers).get("Authorization") ===
-            "Bearer fixture-configured-key"
-              ? Response.json({ data: [{ id: "discovered-chat" }] })
-              : new Response(null, { status: 401 }),
-          finalUrl: input.url,
-          release: async () => {},
-        }));
-      const config: OpenClawConfig = {
-        models: {
-          providers: { local: { baseUrl: "https://models.custom.local/v1", apiKey, models: [] } },
-        },
-      };
-      const result = await applyChoice({
-        nextConfig: config,
-        opts: { customBaseUrl: "https://models.custom.local/v1", customProviderId: "local" },
-      });
+      const request = mockAuthenticatedDiscovery("fixture-configured-key");
+      const config: OpenClawConfig = localConfig({ apiKey });
+      const result = await applyCustomChoice({ customProviderId: "local" }, config);
       expect(result?.models?.providers?.local?.models).toEqual([
         expect.objectContaining({ id: "discovered-chat" }),
       ]);
@@ -353,22 +338,10 @@ describe("applyNonInteractiveAuthChoice", () => {
         secrets: {
           providers: { discovery: { source: "file", path: secretPath, mode: "singleValue" } },
         },
-        models: {
-          providers: { local: { baseUrl: "https://models.custom.local/v1", apiKey, models: [] } },
-        },
+        ...localConfig({ apiKey }),
       };
-      vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockImplementation(async (input) => ({
-        response:
-          new Headers(input.init?.headers).get("Authorization") === "Bearer fixture-file-key"
-            ? Response.json({ data: [{ id: "discovered-chat" }] })
-            : new Response(null, { status: 401 }),
-        finalUrl: input.url,
-        release: async () => {},
-      }));
-      const result = await applyChoice({
-        nextConfig: config,
-        opts: { customBaseUrl: "https://models.custom.local/v1", customProviderId: "local" },
-      });
+      mockAuthenticatedDiscovery("fixture-file-key");
+      const result = await applyCustomChoice({ customProviderId: "local" }, config);
       expect(result?.models?.providers?.local?.models).toEqual([
         expect.objectContaining({ id: "discovered-chat" }),
       ]);
@@ -400,25 +373,13 @@ describe("applyNonInteractiveAuthChoice", () => {
           [profileId]: createApiKeyCredential(profileProvider, "fixture-bound-key"),
         }),
       );
-      const request = vi
-        .spyOn(fetchGuard, "fetchWithSsrFGuard")
-        .mockImplementation(async (input) => ({
-          response:
-            new Headers(input.init?.headers).get("Authorization") === "Bearer fixture-bound-key"
-              ? Response.json({ data: [{ id: "discovered-chat" }] })
-              : new Response(null, { status: 401 }),
-          finalUrl: input.url,
-          release: async () => {},
-        }));
-      const result = await applyChoice({
-        nextConfig: {
+      const request = mockAuthenticatedDiscovery("fixture-bound-key");
+      const result = await applyCustomChoice(
+        { customProviderId: "local" },
+        {
           models: {
             providers: {
-              local: {
-                baseUrl: "https://models.custom.local/v1",
-                apiKey: profileId,
-                models: [],
-              },
+              local: { baseUrl: "https://models.custom.local/v1", apiKey: profileId, models: [] },
               shared: {
                 baseUrl: sameEndpoint ? "https://models.custom.local/v1" : "https://other.local/v1",
                 models: [],
@@ -426,8 +387,7 @@ describe("applyNonInteractiveAuthChoice", () => {
             },
           },
         },
-        opts: { customBaseUrl: "https://models.custom.local/v1", customProviderId: "local" },
-      });
+      );
       if (sameEndpoint) {
         expect(result?.models?.providers?.local?.models).toEqual([
           expect.objectContaining({ id: "discovered-chat" }),
@@ -470,11 +430,10 @@ describe("applyNonInteractiveAuthChoice", () => {
   ])(
     "preserves authored Azure discovery metadata ($name)",
     async ({ modelIds, customImageInput }) => {
-      vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-        response: Response.json({ data: modelIds.map((id) => ({ id })) }),
-        finalUrl: `${azureBaseUrl}/models`,
-        release: async () => {},
-      });
+      mockDiscovery(
+        Response.json({ data: modelIds.map((id) => ({ id })) }),
+        `${azureBaseUrl}/models`,
+      );
       const { config, model } = createAzureCatalogConfig();
       const result = await applyChoice({
         nextConfig: config,
@@ -500,13 +459,7 @@ describe("applyNonInteractiveAuthChoice", () => {
         "api-key": config.models?.providers?.local?.apiKey,
       });
       expect(result?.gateway).toEqual(config.gateway);
-      expect(result?.agents?.defaults?.models).toMatchObject({
-        "local/chat-prod": {},
-        "local/new-chat": {},
-      });
-      expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
-        `local/${modelIds[0]}`,
-      );
+      expectModelSelection(result, `local/${modelIds[0]}`, ["local/chat-prod", "local/new-chat"]);
     },
   );
 
@@ -530,12 +483,8 @@ describe("applyNonInteractiveAuthChoice", () => {
     Response.json({ models: [] }),
     new Response("unavailable", { status: 503 }),
   ])("requires a manual model when discovery returns no usable ids (%#)", async (response) => {
-    vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-      response,
-      finalUrl: "https://models.custom.local/v1/models",
-      release: async () => {},
-    });
-    const result = await applyChoice({ opts: { customBaseUrl: "https://models.custom.local/v1" } });
+    mockDiscovery(response);
+    const result = await applyCustomChoice();
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
       "No models could be discovered from the custom provider. Check the base URL and credentials, or pass --custom-model-id explicitly.",
@@ -549,68 +498,37 @@ describe("applyNonInteractiveAuthChoice", () => {
     const request = vi
       .spyOn(fetchGuard, "fetchWithSsrFGuard")
       .mockRejectedValue(new Error("Unexpected discovery request"));
-    const result = await applyChoice({
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelIds: ["first", "second"],
-      },
-    });
+    const result = await applyCustomChoice({ customModelIds: ["first", "second"] });
     expect(
       result?.models?.providers?.["custom-models-custom-local"]?.models.map((model) => model.id),
     ).toEqual(["second", "first"]);
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
+    expectModelSelection(result, "custom-models-custom-local/first", [
       "custom-models-custom-local/first",
-    );
-    expect(result?.agents?.defaults?.models).toMatchObject({
-      "custom-models-custom-local/first": {},
-      "custom-models-custom-local/second": {},
-    });
+      "custom-models-custom-local/second",
+    ]);
     expect(request).not.toHaveBeenCalled();
   });
 
   it("keeps discovered models together when a provider id collides", async () => {
-    const request = vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-      response: Response.json({ data: [{ id: "first" }, { id: "second" }] }),
-      finalUrl: "https://models.custom.local/v1/models",
-      release: async () => {},
-    });
-    const result = await applyChoice({
-      nextConfig: {
-        models: {
-          providers: {
-            local: {
-              baseUrl: "https://other.example/v1",
-              apiKey: "other-endpoint-key",
-              models: [],
-            },
-          },
-        },
-      },
-      opts: { customBaseUrl: "https://models.custom.local/v1", customProviderId: "local" },
-    });
+    const request = mockDiscovery(Response.json({ data: [{ id: "first" }, { id: "second" }] }));
+    const result = await applyCustomChoice(
+      { customProviderId: "local" },
+      localConfig({ baseUrl: "https://other.example/v1", apiKey: "other-endpoint-key" }),
+    );
     expect(Object.keys(result?.models?.providers ?? {})).toEqual(["local", "local-2"]);
     expect(new Headers(request.mock.calls[0]?.[0].init?.headers).has("Authorization")).toBe(false);
     expect(result?.models?.providers?.["local-2"]?.models.map((model) => model.id)).toEqual([
       "second",
       "first",
     ]);
-    expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe("local-2/first");
-    expect(result?.agents?.defaults?.models).toMatchObject({
-      "local-2/first": {},
-      "local-2/second": {},
-    });
+    expectModelSelection(result, "local-2/first", ["local-2/first", "local-2/second"]);
   });
 
   it("keeps an explicit model authoritative without discovering", async () => {
     const request = vi
       .spyOn(fetchGuard, "fetchWithSsrFGuard")
       .mockRejectedValue(new Error("Unexpected discovery request"));
-    const result = await applyChoice({
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "manual-model",
-      },
-    });
+    const result = await applyCustomChoice({ customModelId: "manual-model" });
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models).toEqual([
       expect.objectContaining({ id: "manual-model" }),
     ]);
@@ -623,16 +541,10 @@ describe("applyNonInteractiveAuthChoice", () => {
       source: "env",
       envVarName: "CUSTOM_API_KEY",
     });
-
-    const result = await applyChoice({
-      nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-        secretInputMode: "ref",
-      } as never,
+    const result = await applyCustomChoice({
+      customModelId: "local-large",
+      secretInputMode: "ref",
     });
-
     expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toEqual({
       source: "env",
       provider: "default",
@@ -643,48 +555,36 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(resolveNonInteractiveApiKey).toHaveBeenCalledOnce();
     const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls[0] ?? [];
-    expect(apiKeyParams?.provider).toBe("custom-models-custom-local");
-    expect(apiKeyParams?.flagName).toBe("--custom-api-key");
-    expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");
-    expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
-    expect(apiKeyParams?.agentDir).toBe(target.agentDir);
-    expect(apiKeyParams?.secretInputMode).toBe("ref");
+    expect(apiKeyParams).toMatchObject({
+      provider: "custom-models-custom-local",
+      flagName: "--custom-api-key",
+      envVar: "CUSTOM_API_KEY",
+      envVarName: "CUSTOM_API_KEY",
+      agentDir: target.agentDir,
+      secretInputMode: "ref",
+    });
   });
 
+  const unresolvedKey = {
+    source: "env",
+    provider: "default",
+    id: "UNRESOLVED_DISCOVERY_KEY",
+  } as const;
   it.each([
-    { name: "explicit model", modelId: "local-large", apiKey: undefined, persisted: false },
-    { name: "saved inline key", modelId: undefined, apiKey: "fixture-saved-key", persisted: false },
-    {
-      name: "persisted policy with inline key",
-      modelId: undefined,
-      apiKey: "fixture-saved-key",
-      persisted: true,
-    },
-    {
-      name: "persisted policy with unresolved SecretRef",
-      modelId: undefined,
-      apiKey: { source: "env", provider: "default", id: "UNRESOLVED_DISCOVERY_KEY" },
-      persisted: true,
-    },
-    {
-      name: "unresolved SecretRef",
-      persisted: false,
-      modelId: undefined,
-      apiKey: { source: "env", provider: "default", id: "UNRESOLVED_DISCOVERY_KEY" },
-    },
+    ["explicit model", "local-large", undefined, false],
+    ["saved inline key", undefined, "fixture-saved-key", false],
+    ["persisted policy with inline key", undefined, "fixture-saved-key", true],
+    ["persisted policy with unresolved SecretRef", undefined, unresolvedKey, true],
+    ["unresolved SecretRef", undefined, unresolvedKey, false],
   ] as const)(
-    "skips credentials for custom no-auth with $name",
-    async ({ modelId, apiKey, persisted }) => {
+    "skips credentials for custom no-auth with %s",
+    async (_name, modelId, apiKey, persisted) => {
       vi.stubEnv("CUSTOM_API_KEY", undefined);
       vi.stubEnv("UNRESOLVED_DISCOVERY_KEY", undefined);
       resolveNonInteractiveApiKey.mockResolvedValueOnce(
         persisted
           ? null
-          : {
-              key: "ambient-env-key-must-be-ignored",
-              source: "env",
-              envVarName: "CUSTOM_API_KEY",
-            },
+          : { key: "ambient-env-key-must-be-ignored", source: "env", envVarName: "CUSTOM_API_KEY" },
       );
       const authorizationHeaders: Array<string | null> = [];
       const request = vi
@@ -700,28 +600,10 @@ describe("applyNonInteractiveAuthChoice", () => {
             release: async () => {},
           };
         });
-
-      const result = await applyChoice({
-        nextConfig: {
-          models: {
-            providers: {
-              local: {
-                baseUrl: "https://models.custom.local/v1",
-                apiKey,
-                ...(persisted ? { auth: "none" as const } : {}),
-                models: [],
-              },
-            },
-          },
-        },
-        opts: {
-          customBaseUrl: "https://models.custom.local/v1",
-          customProviderId: "local",
-          customModelId: modelId,
-          customNoAuth: !persisted,
-        },
-      });
-
+      const result = await applyCustomChoice(
+        { customProviderId: "local", customModelId: modelId, customNoAuth: !persisted },
+        localConfig({ apiKey, ...(persisted ? { auth: "none" } : {}) }),
+      );
       expect(authorizationHeaders).toEqual(modelId ? [] : [null]);
       expect(request).toHaveBeenCalledTimes(modelId ? 0 : 1);
       expect(result?.models?.providers?.local).toMatchObject({
@@ -737,22 +619,15 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
     const profileKey = "fixture-custom-profile-secret";
     resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: profileKey, source: "profile" });
-
     const result = await applyChoice({
-      nextConfig,
       opts: {
         customBaseUrl: "https://models.custom.local/v1",
         customModelId: "local-large",
         secretInputMode: "ref",
       } as never,
     });
-
     expect(result).not.toBeNull();
-    await commitNonInteractiveOnboardConfig({
-      nextConfig: result!,
-      baseConfig: nextConfig,
-    });
-
+    await commitNonInteractiveOnboardConfig({ nextConfig: result!, baseConfig: nextConfig });
     const persistedConfig = writeWizardConfigFile.mock.calls.at(-1)?.[0];
     expect(
       persistedConfig?.models?.providers?.["custom-models-custom-local"]?.apiKey,
@@ -769,16 +644,10 @@ describe("applyNonInteractiveAuthChoice", () => {
     "never serializes an unreferenceable custom $source key in secret-ref mode",
     async (resolved) => {
       resolveNonInteractiveApiKey.mockResolvedValueOnce(resolved);
-
-      const result = await applyChoice({
+      const result = await applyCustomChoice(
+        { customModelId: "local-large", secretInputMode: "ref" },
         nextConfig,
-        opts: {
-          customBaseUrl: "https://models.custom.local/v1",
-          customModelId: "local-large",
-          secretInputMode: "ref",
-        } as never,
-      });
-
+      );
       expect(result).toBeNull();
       expect(writeWizardConfigFile).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -796,14 +665,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       throw exit;
     });
     await expect(
-      applyChoice({
-        opts: {
-          customBaseUrl: "https://models.custom.local/v1",
-          customModelId: "local-large",
-          secretInputMode: "ref",
-          json: true,
-        },
-      }),
+      applyCustomChoice({ customModelId: "local-large", secretInputMode: "ref", json: true }),
     ).rejects.toBe(exit);
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.error).toHaveBeenCalledOnce();
@@ -826,11 +688,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     const profileConfig = {
       models: {
         providers: {
-          [providerId]: {
-            baseUrl: "https://models.custom.local/v1",
-            apiKey: ref,
-            models: [],
-          },
+          [providerId]: { baseUrl: "https://models.custom.local/v1", apiKey: ref, models: [] },
         },
       },
     } as OpenClawConfig;
@@ -838,16 +696,10 @@ describe("applyNonInteractiveAuthChoice", () => {
       key: "fixture-existing-profile-secret",
       source: "profile",
     });
-
-    const result = await applyChoice({
-      nextConfig: profileConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-        secretInputMode: "ref",
-      } as never,
-    });
-
+    const result = await applyCustomChoice(
+      { customModelId: "local-large", secretInputMode: "ref" },
+      profileConfig,
+    );
     expect(result?.models?.providers?.[providerId]?.apiKey).toEqual(ref);
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -874,16 +726,10 @@ describe("applyNonInteractiveAuthChoice", () => {
       key: "fixture-plaintext-profile-key",
       source: "profile",
     });
-
-    const result = await applyChoice({
-      nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-        secretInputMode: "plaintext",
-      } as never,
+    const result = await applyCustomChoice({
+      customModelId: "local-large",
+      secretInputMode: "plaintext",
     });
-
     expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBe(
       "fixture-plaintext-profile-key",
     );
@@ -895,26 +741,8 @@ describe("applyNonInteractiveAuthChoice", () => {
   ] as const)(
     "rejects non-referenceable $source plugin credentials in secret-ref mode",
     async (resolved) => {
-      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(nextConfig as never);
-
-      await applyChoice({
-        nextConfig,
-        authChoice: "demo-provider-api-key",
-        opts: { secretInputMode: "ref" } as never,
-      });
-
-      const [pluginParams] = applyNonInteractivePluginProviderChoice.mock.calls.at(
-        -1,
-      ) as unknown as [
-        {
-          toApiKeyCredential: (params: { provider: string; resolved: typeof resolved }) => unknown;
-        },
-      ];
-      const credential = pluginParams.toApiKeyCredential({
-        provider: "demo-provider",
-        resolved,
-      });
-
+      const toApiKeyCredential = await pluginCredentialConverter();
+      const credential = toApiKeyCredential({ provider: "demo-provider", resolved });
       expect(credential).toBeNull();
       expect(runtime.exit).toHaveBeenCalledWith(1);
       const errorText = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
@@ -925,26 +753,9 @@ describe("applyNonInteractiveAuthChoice", () => {
   );
 
   it("preserves env-backed plugin credentials and profile metadata in secret-ref mode", async () => {
-    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(nextConfig as never);
-
-    await applyChoice({
-      nextConfig,
-      authChoice: "demo-provider-api-key",
-      opts: { secretInputMode: "ref" } as never,
-    });
-
-    const [pluginParams] = applyNonInteractivePluginProviderChoice.mock.calls.at(-1) as unknown as [
-      {
-        toApiKeyCredential: (params: {
-          provider: string;
-          resolved: { key: string; source: "env"; envVarName: string };
-          email: string;
-          metadata: Record<string, string>;
-        }) => unknown;
-      },
-    ];
+    const toApiKeyCredential = await pluginCredentialConverter();
     expect(
-      pluginParams.toApiKeyCredential({
+      toApiKeyCredential({
         provider: "demo-provider",
         resolved: {
           key: "fixture-valid-plugin-env-secret",
@@ -984,16 +795,10 @@ describe("applyNonInteractiveAuthChoice", () => {
 
   it("honors explicit text-only override for known custom vision models", async () => {
     resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
-
-    const result = await applyChoice({
+    const result = await applyCustomChoice(
+      { customModelId: "gpt-4o", customImageInput: false },
       nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "gpt-4o",
-        customImageInput: false,
-      } as never,
-    });
-
+    );
     expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
       "text",
     ]);
@@ -1042,13 +847,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     if (!expectedError) {
       applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
     }
-
-    const result = await applyChoice({
-      nextConfig,
-      authChoice,
-      opts: {},
-    });
-
+    const result = await applyChoice({ authChoice, opts: {} });
     expect(writeWizardConfigFile).not.toHaveBeenCalled();
     expect(resolveNonInteractiveApiKey).not.toHaveBeenCalled();
     if (expectedError) {
@@ -1059,7 +858,6 @@ describe("applyNonInteractiveAuthChoice", () => {
       expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
       return;
     }
-
     expect(result).toBe(resolvedConfig);
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();

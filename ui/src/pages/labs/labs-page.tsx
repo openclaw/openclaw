@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal } from "solid-js";
+import { For, createSignal, onSettled } from "solid-js";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import {
   LearnMoreLink,
@@ -21,6 +21,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
   labFeatureMergePatch,
@@ -53,17 +54,9 @@ export function LabsPage() {
       publish();
     },
   });
-  // Config replacements retire pending saves before reloading and resubscribing.
-  createEffect(
-    () => context.runtimeConfig,
-    (runtimeConfig) => {
-      config.replaceSource(runtimeConfig);
-      pending = null;
-      saveError = null;
-      publish();
-      void runtimeConfig.ensureLoaded();
-    },
-  );
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+  });
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);
@@ -289,52 +282,32 @@ export function LabsPage() {
           />
         )}
         {props.feature.id === "composerPredictions" ? (
-          <SettingsRow
+          <SettingsSelectRow
             nested
             title={t("labsPage.composerPredictions.model")}
             description={t("labsPage.composerPredictions.modelDescription")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("labsPage.composerPredictions.model")}
-                value={predictionModel()}
-                disabled={!canToggle()}
-                onChange={(event) => setPredictionModel(event.currentTarget.value)}
-              >
-                <option value="utility" selected={predictionModel() === "utility"}>
-                  {t("labsPage.composerPredictions.utility")}
-                </option>
-                <option value="conversation" selected={predictionModel() === "conversation"}>
-                  {t("labsPage.composerPredictions.conversation")}
-                </option>
-                <option value="default" selected={predictionModel() === "default"}>
-                  {t("labsPage.composerPredictions.default")}
-                </option>
-              </select>
-            }
+            value={predictionModel()}
+            disabled={!canToggle()}
+            onChange={setPredictionModel}
+            options={[
+              { value: "utility", label: t("labsPage.composerPredictions.utility") },
+              { value: "conversation", label: t("labsPage.composerPredictions.conversation") },
+              { value: "default", label: t("labsPage.composerPredictions.default") },
+            ]}
           />
         ) : null}
         {props.feature.id === "codeMode" ? (
-          <SettingsRow
+          <SettingsSelectRow
             nested
             title={t("labsPage.codeMode.executor")}
             description={t("labsPage.codeMode.executorDescription")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("labsPage.codeMode.executor")}
-                value={executorValue()}
-                disabled={!canToggle()}
-                onChange={(event) => setCodeModeExecutor(event.currentTarget.value)}
-              >
-                <option value="node" selected={executorValue() === "node"}>
-                  {t("labsPage.codeMode.executorNode")}
-                </option>
-                <option value="quickjs" selected={executorValue() === "quickjs"}>
-                  {t("labsPage.codeMode.executorQuickjs")}
-                </option>
-              </select>
-            }
+            value={executorValue()}
+            disabled={!canToggle()}
+            onChange={setCodeModeExecutor}
+            options={[
+              { value: "node", label: t("labsPage.codeMode.executorNode") },
+              { value: "quickjs", label: t("labsPage.codeMode.executorQuickjs") },
+            ]}
           />
         ) : null}
       </>

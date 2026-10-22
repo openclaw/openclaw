@@ -7,10 +7,13 @@ import { t } from "../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/plugins.css";
 import "../../styles/claws-catalog.css";
+import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import type { ClawsCatalogViewProps } from "./claws-catalog-view-props.ts";
 import { ClawsDetailView } from "./claws-detail-view.tsx";
 
-function CatalogList(props: ClawsCatalogViewProps) {
+function CatalogList(
+  props: ClawsCatalogViewProps & { onSearchRef: (element: HTMLInputElement) => void },
+) {
   return (
     <>
       <label class="claws-catalog__search">
@@ -18,6 +21,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
           <Icon name="search" />
         </span>
         <input
+          ref={props.onSearchRef}
           type="search"
           data-claws-search
           autofocus
@@ -50,7 +54,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
                 <Show when={entry().summary}>
                   <p>{entry().summary}</p>
                 </Show>
-                <span class="claws-catalog__meta">{t("clawsCatalog.publisher")}</span>
+                <span class="claws-catalog__meta">{`@${entry().ownerHandle}`}</span>
               </div>
               <button
                 type="button"
@@ -70,6 +74,7 @@ function CatalogList(props: ClawsCatalogViewProps) {
 }
 
 export function ClawsCatalogView(props: ClawsCatalogViewProps) {
+  let searchInput!: HTMLInputElement;
   return (
     <Show
       when={props.selected}
@@ -82,7 +87,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
             >
               <a
                 class="plugin-catalog-detail__back"
-                href={pathForRoute("agents-home", props.basePath)}
+                href={pathForRoute("claws", props.basePath)}
                 onClick={(event) => {
                   if (shouldHandleNavigationClick(event)) {
                     event.preventDefault();
@@ -96,14 +101,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
                 when={props.error}
                 fallback={
                   <>
-                    <div class="plugin-catalog-detail__hero">
-                      <div class="plugin-catalog-detail__icon skeleton" />
-                      <div>
-                        <div class="plugin-catalog-detail__loading-title skeleton" />
-                        <div class="plugin-catalog-detail__loading-publisher skeleton" />
-                        <div class="plugin-catalog-detail__loading-summary skeleton" />
-                      </div>
-                    </div>
+                    <PluginDetailLoadingHero />
                     <div class="plugin-catalog-detail__content">
                       <div class="plugin-catalog-detail__main" aria-hidden="true">
                         <div class="plugin-catalog-detail__loading-card skeleton" />
@@ -124,6 +122,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
           </SettingsPage>
         ) : (
           <openclaw-modal-dialog
+            prop:initialFocus={() => searchInput}
             label={t("clawsCatalog.title")}
             style={{ "--openclaw-modal-width": "min(720px, calc(100vw - 24px))" }}
             onModal-cancel={(event: Event) => {
@@ -149,7 +148,12 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
                 </button>
               </header>
               <div class="claws-catalog__body">
-                <CatalogList {...props} />
+                <CatalogList
+                  {...props}
+                  onSearchRef={(element) => {
+                    searchInput = element;
+                  }}
+                />
               </div>
             </section>
           </openclaw-modal-dialog>

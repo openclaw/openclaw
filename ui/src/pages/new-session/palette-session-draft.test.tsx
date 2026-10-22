@@ -41,10 +41,21 @@ describe("PaletteSessionDraft", () => {
       initialRun: { status: "idle" },
     });
     vi.mocked(context.placementStartup.start).mockImplementation(() => submitted.resolve());
+    const readers: FileReader[] = [];
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+      readers.push(this);
+    });
     host.draft.setMessage("Carry my cold Send into the required worker");
     host.draft.adoptImageFiles([new File(["cold attachment"], "cold.txt", { type: "text/plain" })]);
     await host.updateComplete;
-    expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(host.querySelector('.chat-attachment-loading[data-state="reading"]')).not.toBeNull(),
+    );
+    const pendingReader = expectDefined(readers[0], "pending cold attachment reader");
+    Object.defineProperty(pendingReader, "result", {
+      value: "data:text/plain;base64," + btoa("cold attachment"),
+    });
+    pendingReader.dispatchEvent(new ProgressEvent("load"));
     await waitForSolid(() => {
       expect(host.querySelector('.chat-attachment-loading[data-state="ready"]')).not.toBeNull();
     });
@@ -62,7 +73,10 @@ describe("PaletteSessionDraft", () => {
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
-      { reconciliation: "background" },
+      {
+        reconciliation: "background",
+        signal: expect.any(AbortSignal),
+      },
     );
     expect(context.placementStartup.start).toHaveBeenCalledOnce();
     expect(context.placementStartup.start).toHaveBeenCalledWith(
@@ -75,6 +89,35 @@ describe("PaletteSessionDraft", () => {
       }),
     );
   });
+
+  it.each(["synchronous", "deferred"] as const)(
+    "does not auto-submit after a %s attachment read failure",
+    async (failure) => {
+      const { host, context } = await mount();
+      let failRead: (() => void) | undefined;
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+        this: FileReader,
+      ) {
+        if (failure === "synchronous") {
+          throw new Error("Read failed");
+        }
+        failRead = () => this.dispatchEvent(new ProgressEvent("error"));
+      });
+      host.draft.setMessage("Keep this prompt after the attachment fails.");
+      host.draft.adoptImageFiles(
+        [new File(["payload"], "unreadable.txt", { type: "text/plain" })],
+        true,
+      );
+      failRead?.();
+      await waitForSolid(() => expect(host.draft.messageLocked).toBe(false));
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(host.draft.message).toBe("Keep this prompt after the attachment fails.");
+      expect(host.querySelector(".chat-attachment-thumb")).toBeNull();
+      await waitForSolid(() => expect(host.draft.canSubmit).toBe(true));
+      await host.draft.submit();
+      expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    },
+  );
 
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
@@ -304,7 +347,10 @@ describe("PaletteSessionDraft", () => {
       await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
         expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
-        { reconciliation: "background" },
+        {
+          reconciliation: "background",
+          signal: expect.any(AbortSignal),
+        },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();

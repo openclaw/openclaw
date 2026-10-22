@@ -18,7 +18,7 @@ const project: ProjectRecord = {
 function harness() {
   const request = vi.fn(async (): Promise<ProjectsListResult> => ({ projects: [project] }));
   const hello = gatewayHelloForMethods(["projects.list"], ["operator.read", "operator.write"]);
-  hello.auth!.recoveryScope = "principal-a";
+  hello.auth!.recoveryScope = "test-recovery-scope";
   const connection = watchedGateway({
     client: createTestGatewayClient(request),
     hello,
@@ -70,6 +70,22 @@ describe("registered project catalog", () => {
   beforeEach(async () => {
     h = harness();
     await h.store.refresh();
+  });
+  it("keeps registered projects while offline and awaiting reconnect refresh", async () => {
+    const hello = h.snapshot.hello;
+    h.snapshot.phase = "reconnecting";
+    h.snapshot.hello = null;
+    h.emit();
+    expect(h.store.snapshot.result?.projects).toEqual([project]);
+    const refreshed = createDeferred<ProjectsListResult>();
+    h.request.mockReturnValue(refreshed.promise);
+    h.snapshot.phase = "connected";
+    h.snapshot.hello = hello;
+    h.emit();
+    expect(h.store.snapshot.result?.projects).toEqual([project]);
+    refreshed.resolve({ projects: [] });
+    await h.store.refresh();
+    expect(h.store.snapshot.result?.projects).toEqual([]);
   });
   it("retires project facts on config publication and reads the current GitHub host", async () => {
     expect(h.store.snapshot.ready).toBe(true);

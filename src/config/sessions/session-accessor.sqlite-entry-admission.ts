@@ -5,6 +5,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -29,7 +30,6 @@ import { createSessionWorkerExecutionSource } from "./session-worker-execution-s
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type { SessionAdmissionDatabaseClaim } from "./session-admission-claim.types.js";
-export type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 
 type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
 
@@ -137,16 +137,7 @@ export async function loadSessionEntryForAdmission(
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
             const execution = captureOpenClawAgentDatabaseExecution(
               options,
-              observed.key.startsWith("file:")
-                ? {
-                    expectedIdentity: {
-                      kind: "file",
-                      physicalIdentity: observed.key.slice("file:".length),
-                      nativeLocation: observed.canonicalPath,
-                      birthtime: observed.birthtime,
-                    },
-                  }
-                : { expectedCreationIdentity: observed },
+              toAgentExecutionConstraints(observed),
             );
             const assertSourceCurrent = () => {
               assertCurrent();

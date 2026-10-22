@@ -348,7 +348,6 @@ describe("subagent orphan recovery — faithful restart path", () => {
               startedAt,
               lifecycleGeneration: getAgentEventLifecycleGeneration,
               state: {
-                currentTurnUserMessagePersisted: true,
                 lifecycleEnded: false,
                 lifecycleFinishing: false,
               },
@@ -610,6 +609,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         rotateAgentEventLifecycleGeneration();
         await initSubagentRegistry();
         await activateGatewayRuntime();
+        await fixture.settle();
       }
       const announce = vi.mocked(runSubagentAnnounceFlow);
       const cleanupBrowser = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
@@ -633,14 +633,14 @@ describe("subagent orphan recovery — faithful restart path", () => {
           ).toBeUndefined();
           return;
         }
-        await vi.waitFor(() =>
-          expect(announce).toHaveBeenCalledWith(
-            expect.objectContaining({
-              childRunId: runId,
-              outcome: expect.objectContaining({ status: "error", error: "Saved restart outcome" }),
-              suppressChildSessionEffects: owner !== "original",
-            }),
-          ),
+        // A concurrent sweep skips recovery already owned by startup.
+        await fixture.settle();
+        expect(announce).toHaveBeenCalledWith(
+          expect.objectContaining({
+            childRunId: runId,
+            outcome: expect.objectContaining({ status: "error", error: "Saved restart outcome" }),
+            suppressChildSessionEffects: owner !== "original",
+          }),
         );
         expect(cleanupBrowser).toHaveBeenCalledTimes(owner === "original" ? 1 : 0);
         if (owner !== "original") {

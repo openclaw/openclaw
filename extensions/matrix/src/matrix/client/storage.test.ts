@@ -480,7 +480,7 @@ describe("matrix client storage paths", () => {
 
   it("does not scan token-history roots when the canonical current-token state is claimed", async () => {
     const oldStoragePaths = await seedOldStorageRoot();
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    fs.mkdirSync(path.join(oldStoragePaths.rootDir, "crypto"), { recursive: true });
 
     const canonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
       currentTokenStateClaimed: true,
@@ -619,7 +619,7 @@ describe("matrix client storage paths", () => {
     }
 
     const oldStoragePaths = await seedOldStorageRoot();
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    fs.mkdirSync(path.join(oldStoragePaths.rootDir, "crypto"), { recursive: true });
     if (!claimed) {
       seedThreadBinding(oldStoragePaths.rootDir, "old");
     } else {

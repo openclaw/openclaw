@@ -1,28 +1,58 @@
 /** Tests diagnostic cache-trace event writing, redaction, and stream wrapping. */
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCacheTrace } from "./cache-trace.js";
+
+const writerMocks = vi.hoisted(() => ({
+  getQueuedFileWriter: vi.fn<typeof import("./queued-file-writer.js").getQueuedFileWriter>(),
+}));
+
+vi.mock("./queued-file-writer.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queued-file-writer.js")>()),
+  getQueuedFileWriter: writerMocks.getQueuedFileWriter,
+}));
 
 const sha256 = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
 
 describe("createCacheTrace", () => {
+  beforeEach(() => {
+    writerMocks.getQueuedFileWriter.mockReset();
+    for (const key of [
+      "OPENCLAW_CACHE_TRACE",
+      "OPENCLAW_CACHE_TRACE_FILE",
+      "OPENCLAW_CACHE_TRACE_MESSAGES",
+      "OPENCLAW_CACHE_TRACE_PROMPT",
+      "OPENCLAW_CACHE_TRACE_SYSTEM",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
   const bareAnthropicKey = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
   const bareAwsKey = "AKIAIOSFODNN7EXAMPLE"; // pragma: allowlist secret
   const bareGithubKey = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"; // pragma: allowlist secret
   const bareGoogleKey = "AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW"; // pragma: allowlist secret
   const barePerplexityKey = "pplx-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
 
-  function memoryTrace(overrides: Partial<Parameters<typeof createCacheTrace>[0]> = {}) {
+  function memoryTrace(
+    overrides: Partial<Parameters<typeof createCacheTrace>[0]> & { env?: NodeJS.ProcessEnv } = {},
+  ) {
     const lines: string[] = [];
+    const { env, ...options } = overrides;
+    for (const [key, value] of Object.entries(env ?? {})) {
+      vi.stubEnv(key, value);
+    }
+    writerMocks.getQueuedFileWriter.mockReturnValue({
+      filePath: "memory",
+      write: (line) => lines.push(line),
+      flush: async () => undefined,
+    });
     const trace = createCacheTrace({
       cfg: { diagnostics: { cacheTrace: { enabled: true } } },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
-      },
-      ...overrides,
+      ...options,
     });
     return { lines, trace };
   }

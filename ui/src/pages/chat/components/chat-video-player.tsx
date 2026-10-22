@@ -1,5 +1,6 @@
-import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -8,6 +9,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
@@ -44,7 +46,6 @@ function ChatVideoPlayerContent(
   let mediaVisible = false;
   let expandButton: HTMLButtonElement | undefined;
   let active = true;
-  let sourceSyncQueued = false;
   const syncSource = () => {
     const currentMedia = media;
     if (!active || !currentMedia || !host.isConnected || !mediaVisible) {
@@ -77,15 +78,7 @@ function ChatVideoPlayerContent(
         media.pause();
       }
     }
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);
@@ -123,19 +116,19 @@ function ChatVideoPlayerContent(
   const preparing = () => sourceState.read().readiness === "preparing" && !props.preview;
   const loading = () => props.preview && !frameReady();
   const onExpand = () => (props.onExpand && sourceState.read().readySource ? expand : undefined);
-  const dimensions = createMemo(() =>
+  const dimensions = () =>
     props.mediaWidth && props.mediaHeight
       ? { "aspect-ratio": `${props.mediaWidth} / ${props.mediaHeight}` }
       : props.preview
         ? { "aspect-ratio": "16 / 9" }
-        : {},
-  );
+        : {};
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() => ({ name: props.label, href: downloadHref() }));
     const viewport = createChatAttachmentViewportRef(() => {
       mediaVisible = true;
       syncSource();
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       mediaVisible = false;
       expandButton = undefined;
       const previousMedia = media;
@@ -152,7 +145,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={viewport}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >

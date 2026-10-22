@@ -42,6 +42,7 @@ installer_step() { run_quiet_step "$@"; }
 installer_error() { ui_error "$@"; }
 installer_npm_version_error() {
     echo "Unable to determine npm version from ${1}; no package changes were made." >&2
+    echo "Support: https://community.openclaw.ai/" >&2
 }
 installer_clone_error() {
     ui_error "Could not publish the cloned checkout: ${1}"
@@ -71,11 +72,11 @@ NODE_BREW_FORMULA="node"
 # Linux package repositories can publish builds ahead of the Node release line.
 # Provision the supported LTS line there so a fresh install never receives a prerelease runtime.
 NODE_LINUX_DEFAULT_MAJOR=24
-NODE_24_MIN_MINOR=16
-NODE_24_MIN_PATCH=0
-NODE_26_MIN_MINOR=1
-NODE_26_MIN_PATCH=0
-NODE_SUPPORTED_VERSION_LABEL="24.16.0+ or 26.1.0+"
+NODE_24_MIN_MINOR=22
+NODE_24_MIN_PATCH=1
+NODE_26_MIN_MINOR=12
+NODE_26_MIN_PATCH=1
+NODE_SUPPORTED_VERSION_LABEL="24.22.1+ or 26.12.1+"
 
 ORIGINAL_PATH="${PATH:-}"
 
@@ -465,7 +466,7 @@ ui_success() {
 }
 
 ui_error() {
-    local msg="$*"
+    local msg="$*"$'\nSupport: https://community.openclaw.ai/'
     if [[ -n "$GUM" ]]; then
         "$GUM" log --level error "$msg"
     else
@@ -551,11 +552,12 @@ show_footer_links() {
     local faq_url="https://docs.openclaw.ai/start/faq"
     if [[ -n "$GUM" ]]; then
         local content
-        content="$(printf '%s\n%s' "Need help?" "FAQ: ${faq_url}")"
+        content="$(printf '%s\n%s\n%s' "Need help?" "FAQ: ${faq_url}" "Support: https://community.openclaw.ai/")"
         ui_panel "$content"
     else
         echo ""
         echo -e "FAQ: ${INFO}${faq_url}${NC}"
+        echo "Support: https://community.openclaw.ai/"
     fi
 }
 
@@ -1258,6 +1260,9 @@ print_usage() {
     cat <<EOF
 OpenClaw installer (macOS + Linux)
 
+Support: https://community.openclaw.ai/
+FAQ: https://docs.openclaw.ai/start/faq
+
 Usage:
   curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- [options]
 
@@ -1533,7 +1538,7 @@ parse_node_version_components_for_binary() {
 
     # This standalone installer runs before OpenClaw exists on disk. Mirror the
     # release grammar in node-version.mjs; parity cases guard this boundary.
-    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
         return 1
     fi
     major="${BASH_REMATCH[1]}"
@@ -1547,6 +1552,9 @@ parse_node_version_components_for_binary() {
             return 1
         fi
     done
+    if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+        return 1
+    fi
     echo "${major} ${minor} ${patch}"
     return 0
 }
@@ -2102,7 +2110,7 @@ install_node_with_apk() {
     active_version="$(node -v 2>/dev/null || echo "missing")"
     sqlite_version="$(node_binary_sqlite_version node)"
     ui_error "Alpine apk repositories did not provide Node.js with WAL-reset-safe SQLite; found ${active_version} with SQLite ${sqlite_version} (${active_path})"
-    echo "Use an official node:${NODE_DEFAULT_MAJOR}-alpine container or a glibc-based host until Alpine ships patched SQLite, then rerun the installer."
+    echo "Use an official node:26.12.1-alpine container or a glibc-based host until Alpine ships patched SQLite, then rerun the installer."
     exit 1
 }
 
@@ -2374,7 +2382,7 @@ ensure_pnpm() {
     local repo_dir="${1:-$PWD}"
     local spec version pnpm_dir corepack_cmd="" npm_cmd lifecycle_arg selected_version
     spec="$(repo_pnpm_spec "$repo_dir" || true)"
-    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.11.1"
+    [[ "$spec" == pnpm@* ]] || spec="pnpm@12.15.0"
     version="${spec#pnpm@}"
     version="${version%%+*}"
     pnpm_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pnpm.XXXXXX")" || return 1
@@ -2612,9 +2620,8 @@ warn_shell_path_missing_dir() {
         return 0
     fi
 
-    # persist_shell_path_prepend may already have written the export line; in
-    # that case new shells are fine and the user only needs to reload this one.
-    # RC lines may spell the home dir as $HOME instead of the expanded path.
+    # A profile reference cannot prove what PATH a new shell will end up with.
+    # Always offer a current-shell remedy before any conditional profile hint.
     local dir_home_form="\$HOME${dir#"$HOME"}"
     local managed_node_bin="$HOME/.openclaw/tools/node/bin"
     local managed_node_home_form="\$HOME/.openclaw/tools/node/bin"
@@ -2623,33 +2630,46 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
+    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    shell_name="${shell_name##*/}"
+    # Keep path bytes literal, including history expansion in interactive Bash.
+    quoted_dir="${managed_node_bin:-$dir}"
+    fish_dir="$quoted_dir"
+    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    quoted_dir="'$quoted_dir'"
+    fish_dir="${fish_dir//\\/\\\\}"
+    fish_dir="${fish_dir//\"/\\\"}"
+    fish_dir="${fish_dir//\$/\\\$}"
+    echo ""
+    ui_warn "PATH missing ${label}: ${dir}"
+    echo "  This directory was not on PATH when the installer started."
+    case "$shell_name" in
+        bash|zsh)
+            echo "  For this shell, run:"
+            printf "    export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+            ;;
+        fish)
+            echo "  For this shell, run:"
+            printf "    set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+            ;;
+        *)
+            echo "  Add this directory to PATH using your shell's syntax. Examples:"
+            printf "    Bash/zsh: export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+            printf "    Fish: set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+            ;;
+    esac
+    echo "  For future shells, check your shell startup file."
+
+    local rc
     for rc in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.config/fish/conf.d/openclaw.fish"; do
         if [[ -f "$rc" ]] && {
             grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc" ||
                 { [[ -n "$managed_node_bin" ]] && { grep -Fq "$managed_node_bin" "$rc" || grep -Fq "$managed_node_home_form" "$rc"; }; }
         }; then
-            echo ""
-            ui_info "PATH updated in ${rc}: added ${label} (${dir})"
-            echo "  New terminals pick this up automatically."
-            if [[ "$rc" == *.fish ]]; then
-                echo "  For this shell, run: source ${rc}"
-            else
-                echo "  For this shell, run: source ${rc}; hash -r"
-            fi
+            printf '  If your shell reads %s and it adds this directory to PATH, reloading it may help.\n' "$rc"
             return 0
         fi
     done
-
-    echo ""
-    ui_warn "PATH missing ${label}: ${dir}"
-    echo "  This can make openclaw show as \"command not found\" in new terminals."
-    if [[ "${SHELL:-}" == */fish ]]; then
-        echo "  Fix (Fish: ~/.config/fish/conf.d/openclaw.fish):"
-        echo "    fish_add_path -- \"${dir}\""
-    else
-        echo "  Fix (zsh: ~/.zshrc, bash: ~/.bashrc):"
-        echo "    export PATH=\"${dir}:\$PATH\""
-    fi
 }
 
 openclaw_command_for_user() {

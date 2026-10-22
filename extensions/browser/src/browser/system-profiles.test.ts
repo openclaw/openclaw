@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -57,7 +58,7 @@ vi.mock("./server-context.js", () => ({
   },
 }));
 
-const { readSystemProfileCookies, importSystemProfileCookies } =
+const { listSystemProfiles, readSystemProfileCookies, importSystemProfileCookies } =
   await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
@@ -137,6 +138,48 @@ afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
 });
+
+it.skipIf(process.platform === "win32")(
+  "keeps the event loop running while browser data access is parked",
+  async () => {
+    const homeDir = tempDirs.make("openclaw-system-profile-parked-");
+    const root = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
+    fs.mkdirSync(root, { recursive: true });
+    // A FIFO parks open() until a writer arrives, like macOS App Data consent awaiting an answer.
+    const localState = path.join(root, "Local State");
+    execFileSync("mkfifo", [localState]);
+    vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+    // Releases a synchronous reader so a regression fails the assertion instead of hanging.
+    const valve = spawn(
+      "sh",
+      ["-c", 'sleep 3; while :; do printf "{}" > "$1"; done', "sh", localState],
+      { stdio: "ignore" },
+    );
+    const readFile = vi.spyOn(fs.promises, "readFile");
+    try {
+      let settled = false;
+      const discoveries = Promise.all([listSystemProfiles("chrome"), listSystemProfiles()]).finally(
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(settled).toBe(false);
+
+      await fs.promises.writeFile(
+        localState,
+        JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } }),
+      );
+      const personal = [{ browser: "chrome", id: "Default", name: "Personal", hasCookies: false }];
+      await expect(discoveries).resolves.toEqual([personal, personal]);
+      expect(readFile.mock.calls.filter(([file]) => file === localState)).toHaveLength(1);
+    } finally {
+      valve.kill();
+    }
+  },
+);
 
 it("snapshots, decrypts, and applies the domain allowlist", async () => {
   createSystemProfileFixture();

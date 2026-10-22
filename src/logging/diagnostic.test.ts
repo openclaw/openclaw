@@ -1,6 +1,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -173,6 +174,36 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionState({ sessionKey })).toBe(keyed);
     expect(getDiagnosticSessionState({ sessionId: "s1" })).toBe(keyed);
     expect(diagnosticSessionStates.size).toBe(1);
+  });
+
+  it("does not create or rewrite idle state when a controller retires", () => {
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    try {
+      const sessionKey = "agent:main:controller-retired";
+      const retirement = {
+        sessionKey,
+        sessionId: "original-session",
+        state: "idle" as const,
+        consumeQueuedTurn: false,
+      };
+      logSessionStateChange(retirement);
+      expect(diagnosticSessionStates.size).toBe(0);
+
+      vi.setSystemTime(1_000);
+      logMessageQueued({ sessionKey, sessionId: "adopted-session", source: "pending-followup" });
+      vi.setSystemTime(2_000);
+      logSessionStateChange(retirement);
+
+      expect(diagnosticSessionStates.get(sessionKey)).toMatchObject({
+        sessionId: "adopted-session",
+        state: "idle",
+        queueDepth: 1,
+        lastActivity: 1_000,
+      });
+    } finally {
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+    }
   });
 
   it("merges split sessionId and sessionKey state without leaving stale queued work", () => {

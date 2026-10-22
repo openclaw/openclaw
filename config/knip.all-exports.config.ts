@@ -58,6 +58,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/fixtures/gateway-bench-profile-startup.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
   "test/scripts/full-release-validation-at-sha.admission-fixture.mjs!",
+  // The locale finalizer harness preloads this provider through NODE_OPTIONS.
+  "test/scripts/control-ui-locale-provider.fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.
   "test/scripts/state-read-worker-dependency.test-support.mts!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
@@ -186,6 +188,10 @@ const workspaces = Object.fromEntries(
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
                 ? ["src/report-run.benchmark.test-support.ts!"]
+                : []),
+              // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
+              ...(workspace === "extensions/diagnostics-prometheus"
+                ? ["src/metric-store.benchmark.test-support.ts!"]
                 : []),
               // The PostgreSQL fixture resolves this backend through openEngineWorkerStore.
               ...(workspace === "extensions/workboard"

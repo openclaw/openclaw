@@ -51,7 +51,6 @@ type LoopDetectionResult =
       message: string;
       pairedToolName?: string;
       warningKey?: string;
-      livenessSignal?: "argument_churn";
     };
 
 const TOOL_CALL_HISTORY_SIZE = 30;
@@ -552,8 +551,6 @@ export function detectToolCallLoop(
   const argumentChurn = getArgumentChurnNoProgressStreak(history, toolName, currentHash);
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
-  const argumentChurnLivenessSignal =
-    argumentChurn.count >= TOOL_LOOP_WARNING_THRESHOLD ? ("argument_churn" as const) : undefined;
 
   if (unknownToolStreak.count >= UNKNOWN_TOOL_THRESHOLD) {
     return {
@@ -603,9 +600,6 @@ export function detectToolCallLoop(
         ? `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`
         : `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
       warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
-      ...(!critical && argumentChurnLivenessSignal
-        ? { livenessSignal: argumentChurnLivenessSignal }
-        : {}),
     };
   }
 
@@ -636,9 +630,6 @@ export function detectToolCallLoop(
         : `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
-      ...(!critical && argumentChurnLivenessSignal
-        ? { livenessSignal: argumentChurnLivenessSignal }
-        : {}),
     };
   }
 

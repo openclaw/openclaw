@@ -32,7 +32,7 @@ import {
   resolvePlaybackMetadataForSource,
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
-import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { unlinkIfExists } from "../media/temp-files.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -67,6 +67,7 @@ import {
 } from "./ingress-attribution.js";
 import {
   resolveManagedImageOriginalPath,
+  deleteAgedOrphanManagedImageFiles,
   deleteManagedImageRecordArtifacts,
   insertManagedImageRecordWithFile,
 } from "./managed-image-attachments.custody.js";
@@ -79,7 +80,6 @@ import {
 import {
   attachManagedImageRecordsToMessage,
   captureManagedImageContext,
-  listManagedImageOriginalMediaIds,
   listManagedImageRecordEntries,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
@@ -147,12 +147,6 @@ export type PreparedOutgoingMedia = {
   durationMs?: number;
   width?: number;
   height?: number;
-};
-
-type CleanupManagedOutgoingMediaRecordsResult = {
-  deletedRecordCount: number;
-  deletedFileCount: number;
-  retainedCount: number;
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
@@ -256,61 +250,6 @@ function getManagedImageMetadataLimitError(
   return null;
 }
 
-function resolveManagedImageOriginalsDir(stateDir: string): string {
-  const runtimeMediaRoot =
-    path.resolve(stateDir) === path.resolve(resolveStateDir())
-      ? getMediaDir()
-      : path.join(stateDir, "media");
-  return path.join(runtimeMediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
-}
-
-async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<boolean> {
-  try {
-    const names = await fs.readdir(path.join(stateDir, "media", "outgoing", "records"));
-    return names.some((name) => name.endsWith(".json") || name.includes(".json.doctor-importing-"));
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-async function deleteAgedOrphanManagedImageFiles(params: {
-  stateDir: string;
-  nowMs: number;
-  minAgeMs: number;
-}): Promise<number> {
-  // Destructive migration barrier only: runtime never parses or serves legacy metadata.
-  // Any legacy source may own an old file, so Doctor must retire all JSON before orphan reaping.
-  if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
-    return 0;
-  }
-  const referencedMediaIds = new Set(await listManagedImageOriginalMediaIds(params.stateDir));
-  const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
-  let names: string[];
-  try {
-    names = await fs.readdir(originalsDir);
-  } catch {
-    return 0;
-  }
-  let deletedCount = 0;
-  for (const name of names) {
-    if (referencedMediaIds.has(name)) {
-      continue;
-    }
-    const filePath = path.join(originalsDir, name);
-    try {
-      const stat = await fs.lstat(filePath);
-      if (!stat.isFile() || params.nowMs - stat.mtimeMs < params.minAgeMs) {
-        continue;
-      }
-      await fs.rm(filePath, { force: true });
-      deletedCount += 1;
-    } catch {
-      // A later maintenance pass retries transient filesystem failures and races.
-    }
-  }
-  return deletedCount;
-}
-
 function deriveAltText(source: string, index: number) {
   const fallback = `Generated image ${index + 1}`;
   try {
@@ -387,7 +326,7 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   agentId?: string;
   forceDeleteSessionRecords?: boolean;
   hasActiveSessionRun?: (sessionKey: string, agentId: string | undefined) => boolean;
-}): Promise<CleanupManagedOutgoingMediaRecordsResult> {
+}): Promise<void> {
   const stateDir = params?.stateDir ?? resolveStateDir();
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
@@ -401,9 +340,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   const entries = await listManagedImageRecordEntries({ stateDir });
   let pendingPreparedAttachmentIds: Set<string> | null | undefined;
 
-  let deletedRecordCount = 0;
-  let deletedFileCount = 0;
-  let retainedCount = 0;
   const transcriptAttachmentIndexCache = new Map<
     string,
     SessionManagedOutgoingAttachmentIndex | null
@@ -411,7 +347,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
-      retainedCount += 1;
       continue;
     }
     if (
@@ -424,7 +359,6 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
           globalCompatibilityOwnerAgentId,
         ) !== agentIdFilter)
     ) {
-      retainedCount += 1;
       continue;
     }
 
@@ -456,24 +390,16 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       }
     }
 
-    const deleted = shouldDelete
-      ? await deleteManagedImageRecordArtifacts(record, stateDir, entry.cleanupPending)
-      : undefined;
-    if (deleted?.deletedRecord) {
-      deletedRecordCount += 1;
-      deletedFileCount += deleted.deletedFileCount;
-    } else {
-      retainedCount += 1;
+    if (shouldDelete) {
+      await deleteManagedImageRecordArtifacts(record, stateDir, entry.cleanupPending);
     }
   }
 
-  deletedFileCount += await deleteAgedOrphanManagedImageFiles({
+  await deleteAgedOrphanManagedImageFiles({
     stateDir,
     nowMs,
     minAgeMs: Math.max(transientMaxAgeMs, DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS),
   });
-
-  return { deletedRecordCount, deletedFileCount, retainedCount };
 }
 
 export async function removeManagedOutgoingMediaBlocks(

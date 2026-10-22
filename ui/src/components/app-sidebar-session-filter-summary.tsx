@@ -5,7 +5,7 @@ import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import "./sidebar-collapse-toggle.tsx";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
@@ -108,42 +108,37 @@ export function countSidebarSessionFilters(host: SessionFilterHost) {
   return Number(host.sessionsStatusFilter !== "active");
 }
 
-function renderSidebarSessionFilter(
-  host: SessionFilterHost & Pick<SessionListHost, "sidebarMenus">,
-  className: string,
-) {
-  const count = createMemo(() => countSidebarSessionFilters(host));
-  return (
-    <button
-      type="button"
-      class={[className, "sidebar-session-sort", { "sidebar-session-sort--filtered": count() > 0 }]}
-      title={t("chat.sidebar.sortSessions")}
-      aria-label={t("chat.sidebar.sortSessions")}
-      aria-description={
-        count() > 0
-          ? t("chat.sidebar.activeFilterCount", {
-              count: String(count()),
-            })
-          : undefined
-      }
-      aria-haspopup="dialog"
-      aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
-      onClick={(event: MouseEvent) => {
-        if (event.currentTarget instanceof HTMLElement) {
-          host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
-        }
-      }}
-    >
-      <Icon name="listFilter" />
-    </button>
-  );
-}
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
+  const count = createMemo(() => countSidebarSessionFilters(host));
   return (
     <div class="sidebar-session-toolbar sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
       <SidebarOwnerPicker host={host} />
-      {renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+      <button
+        type="button"
+        class={[
+          "sidebar-session-toolbar__button sidebar-session-sort",
+          { "sidebar-session-sort--filtered": count() > 0 },
+        ]}
+        title={t("chat.sidebar.sortSessions")}
+        aria-label={t("chat.sidebar.sortSessions")}
+        aria-description={
+          count() > 0
+            ? t("chat.sidebar.activeFilterCount", {
+                count: String(count()),
+              })
+            : undefined
+        }
+        aria-haspopup="dialog"
+        aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
+        onClick={(event: MouseEvent) => {
+          if (event.currentTarget instanceof HTMLElement) {
+            host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
+          }
+        }}
+      >
+        <Icon name="listFilter" />
+      </button>
+      <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
     </div>
   );
 }

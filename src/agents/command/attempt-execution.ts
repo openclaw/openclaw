@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -65,6 +66,7 @@ import { withPreparedSessionCapabilityRead } from "../subagents/spawn/subagent-s
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
 import {
+  createCommandSuccessfulAuthProfileCallback,
   resolveCommandAuthProfileSelection,
   resolveHarnessAuthProfileSelection,
 } from "./attempt-auth-selection.js";
@@ -77,6 +79,7 @@ import {
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
 import type { AgentAttemptParams } from "./attempt-execution.types.js";
+import { buildCommandAttemptToolContext } from "./attempt-tool-context.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -227,25 +230,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         ? ["structured_output"]
         : undefined,
   });
-  const toolContext = {
-    messageChannel: params.messageChannel,
-    messageProvider: params.opts.messageProvider ?? params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    chatId: params.runContext.chatId,
-    channelContext: params.runContext.channelContext,
-    currentThreadTs: params.runContext.currentThreadTs,
-    currentInboundAudio: params.runContext.currentInboundAudio,
-    replyToMode: params.runContext.replyToMode,
-    senderId: params.runContext.senderId,
-    senderIsOwner: params.opts.senderIsOwner,
-    scheduledToolPolicy: params.opts.scheduledToolPolicy,
-    pinnedWidgetAuthoring: params.opts.pinnedWidgetAuthoring,
-  };
+  const toolContext = buildCommandAttemptToolContext(params);
   if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
     params.fallbackRuntimeState.originRuntime =
       !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
@@ -756,20 +741,12 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     onRetryWait: params.deferredLifecycle?.beginRetryWait,
     assistantErrorTranscript: params.assistantErrorTranscript,
     authProfileFailurePolicy: params.authProfileFailurePolicy,
-    onUserMessagePersisted: params.onUserMessagePersisted,
     onCompactionAccounting: params.onCompactionAccounting,
     onCompactionRequestBudget: params.onCompactionRequestBudget,
-    onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
-      ? (successfulProfileId) =>
-          params.onSuccessfulAuthProfile?.({
-            authProfileId: successfulProfileId,
-            authProfileIdSource: successfulProfileId
-              ? successfulProfileId === authProfileId
-                ? harnessAuthSelection.authProfileIdSource
-                : "auto"
-              : undefined,
-          })
-      : undefined,
+    onSuccessfulAuthProfile: createCommandSuccessfulAuthProfileCallback(params, {
+      authProfileId,
+      authProfileIdSource: harnessAuthSelection.authProfileIdSource,
+    }),
     onExecutionStarted: async (info) => {
       await params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {
@@ -778,6 +755,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
   };
+  embeddedRunParams.executionSelection = captureReplyExecutionSelection({
+    run: { ...embeddedRunParams, sessionFile: params.sessionFile },
+    sessionEntry: params.sessionEntry,
+  });
   setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
   setChannelSourceTurnSameThreadRequired(
     embeddedRunParams,

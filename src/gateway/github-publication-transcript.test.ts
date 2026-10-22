@@ -107,16 +107,31 @@ function messageTail(
   return { type: "message", id: "tail", ...fields, message: { role, content } };
 }
 
-function tailScenario(
-  label: string,
-  tail: Record<string, unknown>,
-  count = 1,
-  beforeTail?: Record<string, unknown>[],
-) {
-  return { label, tail, count, beforeTail };
-}
 const reset = [{ type: "reset", id: "reset", parentId: null, reason: "reset" }];
 const danglingLabel = { type: "label", id: "tail", targetId: "absent", label: "Unknown" };
+const tails: Array<
+  [
+    label: string,
+    tail: Record<string, unknown>,
+    count: number,
+    beforeTail?: Record<string, unknown>[],
+  ]
+> = [
+  ["unreadable message", messageTail("assistant", null, { parentId: null }), 1],
+  ["missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2],
+  ["parentless row", messageTail("user", "Continued"), 1],
+  ["unattached label", { ...danglingLabel, parentId: null }, 1],
+  ["invalid leaf control", { type: "leaf", id: "tail", parentId: "report", targetId: "absent" }, 1],
+  ["side append", messageTail("user", "Side", { parentId: null, appendMode: "side" }), 1],
+  ["parentless row after reset", messageTail("user", "Continued"), 2, reset],
+  ["parentless dangling label after reset", danglingLabel, 2, reset],
+  [
+    "parentless side append after reset",
+    messageTail("user", "Side", { appendMode: "side" }),
+    2,
+    reset,
+  ],
+];
 
 describe("GitHub publication transcript reporting", () => {
   it("commits one memory-only private report before marking its publication receipt", async () => {
@@ -175,37 +190,8 @@ describe("GitHub publication transcript reporting", () => {
   });
 
   it.each(
-    [
-      tailScenario("unreadable message", messageTail("assistant", null, { parentId: null })),
-      tailScenario("missing parent", messageTail("user", "Branch", { parentId: "absent" }), 2),
-      tailScenario("parentless row", messageTail("user", "Continued")),
-      tailScenario("unattached label", { ...danglingLabel, parentId: null }),
-      tailScenario("invalid leaf control", {
-        type: "leaf",
-        id: "tail",
-        parentId: "report",
-        targetId: "absent",
-      }),
-      tailScenario(
-        "side append",
-        messageTail("user", "Side", { parentId: null, appendMode: "side" }),
-      ),
-      tailScenario("parentless row after reset", messageTail("user", "Continued"), 2, reset),
-      tailScenario("parentless dangling label after reset", danglingLabel, 2, reset),
-      tailScenario(
-        "parentless side append after reset",
-        messageTail("user", "Side", { appendMode: "side" }),
-        2,
-        reset,
-      ),
-    ].flatMap((scenario) =>
-      ["identity", "compressed"].map((encoding) => ({
-        label: scenario.label,
-        beforeTail: scenario.beforeTail,
-        tail: scenario.tail,
-        count: scenario.count,
-        encoding,
-      })),
+    tails.flatMap(([label, tail, count, beforeTail]) =>
+      ["identity", "compressed"].map((encoding) => ({ label, tail, count, beforeTail, encoding })),
     ),
   )(
     "preserves canonical report visibility after $label ($encoding)",

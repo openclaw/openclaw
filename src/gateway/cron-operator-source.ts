@@ -5,7 +5,7 @@ import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence
 import { resolveCronRequesterExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.js";
+import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 
 /** Re-admit a captured same-conversation source, never a session owner or ambient scheduler. */
@@ -13,7 +13,7 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   agentId: string;
   sessionKey: string;
-  entry: InternalSessionEntry;
+  entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">;
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {

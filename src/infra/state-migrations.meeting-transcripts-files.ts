@@ -30,6 +30,11 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceSizeBytes: number;
 };
 
+export type LegacyMeetingTranscriptSource = Pick<
+  LegacyMeetingTranscriptSnapshot,
+  "sourceDir" | "sourceHash"
+>;
+
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;
   manifest: Readonly<Record<string, string>>;
@@ -530,7 +535,7 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
 }
 
 export async function rehashLegacyMeetingTranscriptSnapshots(
-  snapshots: LegacyMeetingTranscriptSnapshot[],
+  snapshots: LegacyMeetingTranscriptSource[],
 ): Promise<boolean> {
   for (const snapshot of snapshots) {
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
@@ -547,7 +552,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
 
 export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   sourceRoot: string;
-  snapshots: LegacyMeetingTranscriptSnapshot[];
+  snapshots: LegacyMeetingTranscriptSource[];
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;

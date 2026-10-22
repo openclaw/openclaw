@@ -157,8 +157,7 @@ it("preserves protocol dispositions without exposing remote diagnostic text", as
   expect(error).toBeInstanceOf(Error);
   expect(error).toMatchObject({
     name: "McpEventRequestError",
-    code: -32602,
-    reason: "cursor_expired",
+    message: "MCP Events request failed (code -32602, reason cursor_expired)",
   });
   expect(String(error)).not.toContain("private-account-secret");
 });

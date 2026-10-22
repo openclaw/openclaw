@@ -16,6 +16,7 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  isSidebarNewTabActive,
   openSlot,
   sidebarActivePanel,
   sidebarMainPanel,
@@ -77,7 +78,7 @@ function hasResourceSlot(layout: SidebarLayout, slot: ResourceSlot): boolean {
 
 /** Read-only discovery belongs to the visible session, not to a global tool dock. */
 export class ChatPaneActiveResources {
-  private readonly listeners = new Set<() => void>();
+  private render?: () => void;
   private owner: ActiveResourceOwner | null = null;
   private descriptorRead:
     | {
@@ -165,8 +166,10 @@ export class ChatPaneActiveResources {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.render = listener;
+    return () => {
+      this.render = undefined;
+    };
   }
 
   reconcileObservation(): void {
@@ -337,9 +340,7 @@ export class ChatPaneActiveResources {
       this.reveal(owner, "desktop");
     }
     if (changed) {
-      for (const listener of this.listeners) {
-        listener();
-      }
+      this.render?.();
     }
   }
 
@@ -354,7 +355,7 @@ export class ChatPaneActiveResources {
     }
     const next = openSlot(layout, slot);
     // Add to the same dock without stealing an already-visible selection or expanding chat.
-    if (layout.open && sidebarActivePanel(layout)) {
+    if (layout.open && (sidebarActivePanel(layout) || isSidebarNewTabActive(layout))) {
       next.columns[0]!.activePanelId = layout.columns[0]!.activePanelId;
     }
     if (

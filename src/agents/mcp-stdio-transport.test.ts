@@ -4,15 +4,15 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { PassThrough } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client, SdkError, SdkErrorCode } from "@modelcontextprotocol/client";
+import { EmptyResultSchema, JSONRPCRequestSchema } from "@modelcontextprotocol/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import {
   connectMcpClient,
   disposeMcpClient,
-  McpClientConnectTimeoutError,
+  ensureMcpSessionConnected,
 } from "./mcp-client-lifecycle.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import {
@@ -21,6 +21,7 @@ import {
   waitForStdioCleanup,
   writeRpc,
 } from "./mcp-stdio.test-support.js";
+import { observeNativeMcpProbe } from "./native-mcp-connect.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -85,6 +86,40 @@ afterEach(async () => {
 });
 
 describe("OpenClawStdioClientTransport", () => {
+  it.each(["exit", "error", "send", "close", "detached"] as const)(
+    "keeps legacy probe eligibility and SDK callbacks through %s",
+    async (mode) => {
+      const fixture = await startedFixture();
+      const { transport, onerror, onexit } = fixture;
+      const probe = observeNativeMcpProbe(transport);
+      const failure = new Error("probe I/O failed");
+      const negotiationError = new SdkError(SdkErrorCode.EraNegotiationFailed, "probe failed");
+      if (mode === "detached") {
+        probe.detach();
+      } else if (mode === "error") {
+        fixture.emitError(failure);
+        expect(onerror).toHaveBeenCalledExactlyOnceWith(failure);
+      } else if (mode === "send") {
+        rejectStdioWrites(fixture.stdin, failure, "callback");
+        await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "ping" })).rejects.toBe(
+          failure,
+        );
+      } else if (mode === "close") {
+        void transport.close();
+      }
+      fixture.root.resolve({ code: 23, signal: null });
+      await Promise.resolve();
+      expect(onexit).toHaveBeenCalledExactlyOnceWith({ code: 23, signal: null });
+      expect(probe.canRestartLegacy(negotiationError)).toBe(mode === "exit");
+      probe.detach();
+      fixture.emitError(failure);
+      expect(onerror).toHaveBeenLastCalledWith(failure);
+      expect(probe.canRestartLegacy(negotiationError)).toBe(mode === "exit");
+      fixture.extinction.resolve();
+      await transport.close();
+    },
+  );
+
   it("binds an exact environment without importing MCP default variables", async () => {
     await startedFixture({
       exactEnv: true,
@@ -229,15 +264,33 @@ describe("OpenClawStdioClientTransport", () => {
       await cleanupScope.run(async () => {
         const controller = new AbortController();
         const initializeWritten = once(fixture.stdin, "readable");
-        const connecting = connectMcpClient({
-          client,
-          transport,
-          timeoutMs: trigger === "timed-out" ? 50 : 5_000,
-          signal: controller.signal,
-        });
+        const connecting =
+          trigger === "timed-out"
+            ? ensureMcpSessionConnected(
+                {
+                  client,
+                  transport,
+                  serverName: "doctor-mcp-proof",
+                  retiring: false,
+                  connected: false,
+                },
+                50,
+              )
+            : connectMcpClient({
+                client,
+                transport,
+                timeoutMs: 5_000,
+                signal: controller.signal,
+              });
         const rejected =
           trigger === "timed-out"
-            ? expect(connecting).rejects.toBeInstanceOf(McpClientConnectTimeoutError)
+            ? expect(connecting).rejects.toMatchObject({
+                message:
+                  'MCP server "doctor-mcp-proof" timed out: did not complete initialize within 0.05s',
+                cause: expect.objectContaining({
+                  message: "MCP server connection timed out after 50ms",
+                }),
+              })
             : expect(connecting).rejects.toThrow("fixture initialization failed");
         await initializeWritten;
         const initialize = readRequest(fixture.stdin);
@@ -368,20 +421,20 @@ describe("OpenClawStdioClientTransport", () => {
   });
 
   it("forwards owner stream errors and retains stderr diagnostics", async () => {
-    const fixture = createFixture({ stderr: "pipe" });
+    const fixture = createFixture();
     const { transport, onerror } = fixture;
     await transport.start();
     const failure = new Error("simulated pipe failure");
     fixture.emitError(failure);
     fixture.stderr.write("server diagnostic");
     expect(onerror).toHaveBeenCalledWith(failure);
-    expect(transport.stderr?.read()?.toString()).toBe("server diagnostic");
+    expect(transport.stderr.read()?.toString()).toBe("server diagnostic");
   });
 
   it("backpressures unread stderr and delivers every byte when the reader resumes", async () => {
-    const fixture = await startedFixture({ stderr: "pipe" });
+    const fixture = await startedFixture();
     const { transport } = fixture;
-    const destination = transport.stderr!;
+    const destination = transport.stderr;
     const chunk = Buffer.alloc(16 * 1024, 0xad);
     let completed = false;
     const writing = (async () => {
@@ -413,6 +466,18 @@ describe("OpenClawStdioClientTransport", () => {
     fixture.stdout.write('invalid\n{"jsonrpc":"2.0","id":1,"result":{}}\n');
     expect(onerror).toHaveBeenCalledOnce();
     expect(onmessage).toHaveBeenCalledExactlyOnceWith({ jsonrpc: "2.0", id: 1, result: {} });
+  });
+
+  it("accepts string response ids in the generic transport", async () => {
+    const { transport, stdout, onerror, onmessage } = createFixture();
+    await transport.start();
+    stdout.write('{"jsonrpc":"2.0","id":"peer-request","result":{}}\n');
+    expect(onerror).not.toHaveBeenCalled();
+    expect(onmessage).toHaveBeenCalledExactlyOnceWith({
+      jsonrpc: "2.0",
+      id: "peer-request",
+      result: {},
+    });
   });
 
   it("reports an oversized stdout frame without an unhandled error crash", async () => {

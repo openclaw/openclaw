@@ -397,8 +397,11 @@ These placements do not register arbitrary Settings routes.
 The host supplies the selected Settings agent, engine availability, connection
 state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
 operator RPC remains trusted native UI authority, bound to the mounted view's
-lifetime. Retained callbacks reject after that lifetime ends, including when the advertised
-method catalog changes. An absent method catalog means the method is unavailable. The host keeps
+lifetime. A memory view stays mounted through a same-client reconnect: `connected` and
+`connectionEpoch` arrive through `update(snapshot)`, and a reply to a request sent in an earlier
+epoch rejects. Agent, engine, route, advertised method catalog, Gateway client, account or
+recovery identity, and operator-access changes end the view; retained callbacks then reject.
+An absent method catalog means the method is unavailable. The host keeps
 routing, agent selection, engine decisions, and config writes; the plugin owns
 its presentation, status requests, and indexed-memory search. Search and full-file
 reads remain agent-scoped through the existing Gateway methods. Only an explicit
@@ -569,6 +572,9 @@ activation reports from currently connected Control UI clients. A report names t
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser
 means no browser activation receipt yet.
+Each catalog refresh sends its activation receipts together after the plugins
+finish initializing or reach their activation deadline. Healthy plugins become
+available immediately while other plugins are still initializing.
 
 For the underlying manifest fields, see [Plugin manifest](/plugins/manifest).
 For install, update, and removal, see [Manage plugins](/plugins/manage-plugins).

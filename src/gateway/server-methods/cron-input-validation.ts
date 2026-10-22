@@ -9,6 +9,7 @@ import type { AuthProfileAuthorization } from "../../agents/auth-profiles/author
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { createRestartRecoveryOperatorSource } from "../../agents/operator-run-recovery-source.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertValidCronAnnounceDelivery,
@@ -317,7 +318,14 @@ export async function captureCronCreatorSession(
     ? creatorSession?.createdActor
     : resolveOperatorSessionCreation(caller.client).actor;
   const actorId = normalizeOptionalString(actor?.id);
-  const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
+  const createdActor = callerScope
+    ? attributeDelegatedSessionCreator(
+        legacyActor,
+        callerScope.creatorProfileId,
+        callerScope.agentId,
+      )
+    : legacyActor;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
     !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"

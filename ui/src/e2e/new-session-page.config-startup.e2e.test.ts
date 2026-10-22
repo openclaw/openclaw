@@ -79,14 +79,17 @@ suite.define(() => {
         const rosterReads = (await gateway.getRequests("agents.list")).length;
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
-        await gateway.deferNext("agents.list");
-        await gateway.setOnline(true);
-        await waitForControlUiGatewayReady(page);
-        await gateway.waitForRequest("agents.list", { after: rosterReads });
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
         expect(await message.inputValue()).toBe("Keep the warm draft");
         await start.click({ force: true });
         await message.press("Enter");
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        await gateway.deferNext("agents.list");
+        await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
+        await gateway.waitForRequest("agents.list", { after: rosterReads });
+        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
+        expect(await message.inputValue()).toBe("Keep the warm draft");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.resolveDeferred("agents.list", roster("/workspace-b"));

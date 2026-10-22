@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { toolIcons } from "./icons-tools.ts";
 import { Icon } from "./solid/icon.tsx";
 
 describe("icon registries", () => {
@@ -21,7 +20,7 @@ describe("icon registries", () => {
   it("preserves tool geometry, filled shapes, and nested SVG gradients", () => {
     const view = mountSolid(() => (
       <>
-        {toolIcons.lightbulb()}
+        <Icon name="lightbulb" />
         <Icon name="gripVertical" />
         <Icon name="lobster" />
       </>

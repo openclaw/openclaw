@@ -1,5 +1,4 @@
 import type * as Loopback from "../../gateway/mcp-http.loopback-runtime.js";
-import { registerListener } from "../../shared/listeners.js";
 import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
 
 type McpTerminalOutcome = Loopback.McpLoopbackToolCallTerminalOutcome;
@@ -24,7 +23,7 @@ export function createAskUserDeadlineTracking(
   isOverflowed: () => boolean,
 ) {
   const deadlines = new WeakMap<CliLoopbackCall, number>();
-  const listeners = new Set<() => void>();
+  let onChange: (() => void) | undefined;
   let selected: number | undefined;
   const selectDeadline = () => {
     if (isOverflowed()) {
@@ -45,7 +44,7 @@ export function createAskUserDeadlineTracking(
       return;
     }
     selected = nextDeadline;
-    listeners.forEach((listener) => listener());
+    onChange?.();
   };
   const clear = (call: CliLoopbackCall) => {
     deadlines.delete(call);
@@ -67,6 +66,8 @@ export function createAskUserDeadlineTracking(
     update,
     refresh,
     get: () => selected,
-    onChange: (listener: () => void) => registerListener(listeners, listener),
+    setOnChange: (listener: (() => void) | undefined) => {
+      onChange = listener;
+    },
   };
 }

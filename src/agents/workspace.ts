@@ -18,7 +18,6 @@ import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shar
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
-import { DuplicateAgentError } from "./agent-create-error.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -51,7 +50,10 @@ import {
 } from "./workspace-file-read.js";
 import { ensureGitRepo } from "./workspace-git.js";
 import { LEGACY_WORKSPACE_STATE_CURRENT_FILENAME } from "./workspace-legacy-state.js";
-import { runWorkspacePreparation } from "./workspace-preparation.js";
+import {
+  maybeWriteWorkspaceAttestation,
+  runWorkspacePreparation,
+} from "./workspace-preparation.js";
 import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
@@ -61,9 +63,7 @@ import {
   hasWorkspaceSetupStateMarker,
   recentWorkspaceAttestation,
   mergeWorkspaceSetupState,
-  replaceWorkspaceAttestation,
   type WorkspaceAttestation,
-  type WorkspaceStateSnapshot,
   type WorkspaceSetupState,
 } from "./workspace-state-store.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
@@ -400,36 +400,6 @@ async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string,
   return hashes;
 }
 
-async function maybeWriteWorkspaceAttestation(
-  dir: string,
-  guard?: WorkspaceStateGuard,
-): Promise<void> {
-  const assertHost = guard?.assertHost;
-  // Order snapshots by when their filesystem observation starts. The store
-  // compares against a separate lock-time clock, so a newer committed scan
-  // wins when this async collection finishes later.
-  const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedBootstrapHashes(dir);
-  assertHost?.();
-  try {
-    await replaceWorkspaceAttestation({
-      workspaceDir: dir,
-      attestedAtMs,
-      generatedHashes,
-      assertCurrent: assertHost,
-      recoveryHoldPredicate: guard?.recoveryHoldPredicate,
-      beforeLegacyApply: guard?.beforeLegacyApply,
-    });
-  } catch (error) {
-    if (error instanceof DuplicateAgentError) {
-      throw error;
-    }
-    // Attestation is a lifecycle guard; setup should not fail solely because
-    // the auxiliary disappearance evidence could not be refreshed.
-  }
-  assertHost?.();
-}
-
 async function workspaceAttestationHasSurvivalEvidence(params: {
   dir: string;
   bootstrapPath: string;
@@ -458,24 +428,11 @@ async function workspaceAttestationHasSurvivalEvidence(params: {
 async function workspaceSetupStateHasSurvivalEvidence(params: {
   dir: string;
   bootstrapPath: string;
-  initialState: WorkspaceStateSnapshot;
-  guard?: WorkspaceStateGuard;
 }): Promise<boolean> {
   if (await pathExists(params.bootstrapPath)) {
     return true;
   }
   if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
-    return true;
-  }
-  const currentState = await readCanonicalWorkspaceStateSnapshot(
-    params.dir,
-    undefined,
-    params.guard,
-  );
-  if (
-    currentState.setup.bootstrapSeededAt !== params.initialState.setup.bootstrapSeededAt ||
-    currentState.setup.setupCompletedAt !== params.initialState.setup.setupCompletedAt
-  ) {
     return true;
   }
   const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
@@ -702,8 +659,6 @@ async function ensureAgentWorkspaceOwned(
       !(await workspaceSetupStateHasSurvivalEvidence({
         dir,
         bootstrapPath,
-        initialState,
-        guard,
       }))
     ) {
       if (recentSetupState) {
@@ -720,7 +675,12 @@ async function ensureAgentWorkspaceOwned(
       );
     }
     if (hasContentEvidence || purpose) {
-      await maybeWriteWorkspaceAttestation(dir, guard);
+      await maybeWriteWorkspaceAttestation(
+        dir,
+        initialState.attestation,
+        collectGeneratedBootstrapHashes,
+        guard,
+      );
     }
     return { dir, bootstrapPending: false };
   }
@@ -773,8 +733,6 @@ async function ensureAgentWorkspaceOwned(
     !(await workspaceSetupStateHasSurvivalEvidence({
       dir,
       bootstrapPath,
-      initialState,
-      guard,
     }))
   ) {
     // Setup can outlive a best-effort attestation write or arrive alone from
@@ -888,7 +846,12 @@ async function ensureAgentWorkspaceOwned(
     });
   }
   await ensureGitRepo(dir, isBrandNewWorkspace, beforeFileMutation);
-  await maybeWriteWorkspaceAttestation(dir, guard);
+  await maybeWriteWorkspaceAttestation(
+    dir,
+    initialState.attestation,
+    collectGeneratedBootstrapHashes,
+    guard,
+  );
 
   return {
     dir,

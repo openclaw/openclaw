@@ -443,19 +443,16 @@ async function runStateLeaseOwnerInScope<T>(
     const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
       const params = { ...identity, database: validated.database, transaction };
-      const expiresAt = verifyLeaseOwnership(params);
       if (workerHeartbeat) {
         try {
-          workerHeartbeat.assertResponsive(expiresAt);
+          workerHeartbeat.assertRunning();
         } catch (error) {
           abortLost(error);
           throw leaseLost.signal.reason;
         }
-        // Worker acknowledgement is liveness only. Recheck persisted ownership
-        // after waiting, including inside a caller's already-held transaction.
-        assertActive();
-        verifyLeaseOwnership(params);
       }
+      // Durable ownership authorizes the effect; worker liveness adds no authority.
+      verifyLeaseOwnership(params);
     };
     const renewForHandoff = () => {
       const params = { ...identity, database: validated.database };

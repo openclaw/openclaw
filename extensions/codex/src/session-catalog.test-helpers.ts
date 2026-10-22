@@ -101,10 +101,9 @@ beforeEach(() => {
   pinnedConnectionMocks.getClient.mockReset().mockResolvedValue(pinnedConnectionMocks.client);
   pinnedConnectionMocks.releaseClient.mockReset();
   pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset().mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
+  transcriptMirrorMocks.importCodexThreadHistoryToTranscript
+    .mockReset()
+    .mockResolvedValue(undefined);
 });
 
 afterEach(async () => {

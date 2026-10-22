@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it as test, vi } from "vitest";
 import * as configEnv from "../config/config-env-vars.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -24,6 +25,8 @@ import {
   runUsageCostWorker as run,
 } from "./session-cost-usage-worker-runtime.js";
 import { loadSessionCostSummariesFromCache as read } from "./session-cost-usage.js";
+import * as operationAdmission from "./sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 const usageEvent = {
   type: "message",
@@ -67,6 +70,42 @@ async function expectSummary(sessionFile: string, config = {}, agentId = "main")
 function writeUsage(sessionFile: string) {
   fs.writeFileSync(sessionFile, JSON.stringify(usageEvent) + "\n");
 }
+
+test("refuses a foreign cache file appearing after its creating grant", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {};
+    const agentId = "usage-foreign-creation";
+    const sessionFile = state.path("usage.jsonl");
+    writeUsage(sessionFile);
+    const prepared = prepare({ config, agentId, sessionFiles: [sessionFile] });
+    const target = prepared.location.databasePath;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    let injected = false;
+    const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
+      authorize(request, () => {
+        if (
+          !injected &&
+          request.stage === "prepare" &&
+          isRecord(request.facts) &&
+          request.facts.kind === "shared-owner"
+        ) {
+          fs.writeFileSync(target, "foreign file");
+          injected = true;
+        }
+        return grant();
+      });
+    });
+    try {
+      await expect(refresh({ config, agentId, sessionFiles: [sessionFile] })).rejects.toThrow(
+        "Agent database target changed before creating open",
+      );
+      expect(injected).toBe(true);
+      expect(await fs.promises.readFile(target, "utf8")).toBe("foreign file");
+    } finally {
+      observer.mockRestore();
+    }
+  });
+});
 
 it("refreshes retained colon session IDs", async ({ usage: { scope } }) => {
   const database = openOpenClawAgentDatabase(scope);
@@ -145,6 +184,20 @@ it("inventories retained usage by transcript recency and logical agent after wri
     files: [
       { sessionId: "first", mtimeMs: 2000 },
       { sessionId: "second", mtimeMs: 2000 },
+    ],
+  });
+  // The smallest transcript is oldest: refresh priority is independent of inventory recency.
+  await expect(
+    run(prepared, {
+      kind: "refresh",
+      maxFiles: 1,
+    }),
+  ).resolves.toMatchObject({
+    kind: "refresh",
+    changed: true,
+    remainingFiles: [
+      { sessionFile: expect.stringContaining(":first:") },
+      { sessionFile: expect.stringContaining(":second:") },
     ],
   });
   appendUsage("main", "old", "agent:main:old", 4000);

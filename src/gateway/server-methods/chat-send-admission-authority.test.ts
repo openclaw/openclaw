@@ -20,10 +20,13 @@ import { runInDetachedAsyncContext } from "../../shared/detached-async-context.j
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import * as profileReader from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
 import { SessionMutationAuthorizationChangedError as AuthorizationChangedError } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { bindChatProfile } from "./chat-send-admission-fixtures.test-support.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import {
   prepareAuthorizedChatAdmission,
@@ -293,3 +296,75 @@ it("joins a session write still publishing when durable recovery reconciliation 
     await fixture.cleanup();
   }
 });
+
+it.each(["revocation", "role change"] as const)(
+  "keeps operator %s during authority preparation non-terminal",
+  async (change) => {
+    await using fixture = await createBrowserFollowupFixture({ active: false });
+    const { profile } = bindChatProfile(fixture.client, "admission-operator@example.test");
+    setUserProfileRole(profile.id, "write");
+    const cfg = { ...rolePolicyConfig(), session: { store: fixture.scope.storePath } };
+    cfg.gateway!.roles!.definitions.denied = {
+      agents: "*",
+      sessions: { others: "none" },
+      scopes: [],
+    };
+    fixture.client.connect.scopes = ["operator.read", "operator.write"];
+    fixture.context.getRuntimeConfig = () => cfg;
+    const prepared = await prepareChatAdmission(fixture);
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const prepare = profileReader.prepareUserProfileIdentity;
+    const profileRead = vi
+      .spyOn(profileReader, "prepareUserProfileIdentity")
+      .mockImplementation(async (...args) => {
+        const preparedProfile = await prepare(...args);
+        entered.resolve();
+        await resume.promise;
+        return preparedProfile;
+      });
+    let connected = true;
+    const respond = vi.fn();
+    const pending = admitChatSend({
+      ...prepared,
+      respond,
+      hasCurrentClientAuthority: () => connected,
+    });
+    const outcome = outcomeOf(pending);
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        outcome,
+        "chat admission settled before operator authority preparation",
+      );
+      if (change === "revocation") {
+        connected = false;
+      } else {
+        setUserProfileRole(profile.id, "denied");
+      }
+      resume.resolve();
+      await expect(pending).resolves.toEqual({ ok: false });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining(
+            change === "revocation" ? "caller authority" : "operator role changed",
+          ),
+        }),
+      );
+      expect(fixture.context.broadcast).not.toHaveBeenCalled();
+      expect(rpcSourceTesting.size).toBe(0);
+      expect(lifecycleRelease(fixture)).toBeUndefined();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      profileRead.mockRestore();
+      const result = await outcome;
+      if ("value" in result && result.value.ok) {
+        result.value.value.cleanupAdmittedRun();
+      }
+    }
+  },
+);

@@ -79,7 +79,7 @@ describe("candidate node runtime compatibility", () => {
     Object.defineProperty(process, "versions", {
       value: {
         ...process.versions,
-        node: runtime === "renamed Node" ? "26.7.0" : process.versions.node,
+        node: runtime === "renamed Node" ? "26.12.1" : process.versions.node,
         bun: runtime === "Bun" ? "1.4.3" : undefined,
       },
     });

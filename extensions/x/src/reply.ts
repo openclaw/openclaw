@@ -3,7 +3,6 @@ import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { XApiClient } from "./api.js";
 import type { XAssertActive } from "./fetch.js";
 import type { XMedia } from "./media.js";
-import { normalizeXReplyTarget } from "./target.js";
 import { findXUrls } from "./urls.js";
 
 const DEFAULT_X_REPLY_SIGNATURE = "🤖 automated reply";
@@ -148,13 +147,6 @@ export async function sendXReply(options: {
   signal?: AbortSignal;
   assertActive?: XAssertActive;
 }): Promise<{ postIds: string[]; text: string }> {
-  const replyToId = normalizeXReplyTarget(options.replyToId);
-  if (!replyToId) {
-    throw new PlatformMessageNotDispatchedError(
-      "X target must be x:<postId> or an https://x.com/<handle>/status/<postId> URL",
-      { cause: undefined, retryable: false },
-    );
-  }
   let chunks: string[];
   try {
     chunks = chunkXReply(
@@ -192,7 +184,7 @@ export async function sendXReply(options: {
       const id = await options.api.reply({
         text,
         ...(postIds.length === 0 && mediaIds.length ? { mediaIds } : {}),
-        inReplyToId: postIds.at(-1) ?? replyToId,
+        inReplyToId: postIds.at(-1) ?? options.replyToId,
         signal: options.signal,
         assertActive: options.assertActive,
       });

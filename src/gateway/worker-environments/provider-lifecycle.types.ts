@@ -64,7 +64,7 @@ export type WorkerProviderLifecycleInputOptions = {
   prepareNodeArtifacts?: (
     profileSnapshot: WorkerProfile,
     signal?: AbortSignal,
-  ) => Promise<{ artifacts: WorkerPreparationArtifacts; assertCurrent: () => void }>;
+  ) => Promise<{ artifacts: WorkerPreparationArtifacts }>;
   registerPreparedWorkspace?: (params: {
     record: WorkerEnvironmentRecord;
     deviceId: string;
@@ -117,7 +117,12 @@ export type WorkerProviderLifecycleOptions = Omit<
     installation: WorkerInstallationArtifact,
     run: (signal: AbortSignal) => Promise<T>,
   ) => Promise<T>;
-  callProvider: <T>(environmentId: string, run: () => Promise<T>, timeoutMs?: number) => Promise<T>;
+  callProvider: <T>(
+    environmentId: string,
+    run: () => Promise<T>,
+    timeoutMs?: number,
+    observationSignal?: AbortSignal,
+  ) => Promise<T>;
   isStopping: () => boolean;
   move: (
     record: WorkerEnvironmentRecord,

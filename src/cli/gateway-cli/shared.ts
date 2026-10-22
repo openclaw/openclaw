@@ -1,4 +1,3 @@
-// Shared gateway CLI helpers for supervised-service stop guidance.
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,

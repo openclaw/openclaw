@@ -33,6 +33,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { createChatRunState } from "../server-chat-state.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
@@ -103,9 +104,17 @@ afterEach(async () => {
 function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () => void } = {}) {
   const sessionKey = `agent:work:queued-refresh-` + randomUUID();
   queueKeys.add(sessionKey);
-  const storeScope = "/synthetic/progress-refresh/" + randomUUID();
+  const scope = {
+    storeScope: "/synthetic/progress-refresh/" + randomUUID(),
+    sessionKey,
+    sessionId: "session",
+    agentId: "work",
+  };
+  const { storeScope, ...identity } = scope;
+  const target = { sessionKey, agentId: identity.agentId };
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
+    chatRunState: createChatRunState(),
     dedupe: new Map(),
     broadcast: vi.fn(),
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -146,8 +155,6 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
       request.respond(cached.ok, cached.payload, cached.error);
       return;
     }
-    const target = { sessionKey, agentId: "work" };
-    const identity = { ...target, sessionId: "session" };
     const registration = registerChatAbortController({
       runId,
       ...identity,
@@ -156,9 +163,8 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
       projectSessionActive: false,
       target: captureSessionTarget({
         storeScope,
-        sessionKey,
-        incarnation: "session",
-        agentId: "work",
+        ...target,
+        incarnation: identity.sessionId,
       }),
     });
     if (!registration.entry) {
@@ -234,13 +240,7 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
   });
   const refresh = async (key = "click-1") => {
     invocation.respond.mockClear();
-    await requestProgressCardRefresh(
-      invocation,
-      { sessionKey, agentId: "work" },
-      card,
-      key,
-      async () => card,
-    );
+    await requestProgressCardRefresh(invocation, target, card, key, async () => card);
     return invocation.respond;
   };
   const start = async () => {
@@ -251,7 +251,7 @@ function fixture(options: { parkSteer?: boolean; onQueuedFollowupSettled?: () =>
     }
     return { runId: item[0], ...item[1] };
   };
-  return { context, card, sources, sessionKey, storeScope, releases, refresh, start, runFollowup };
+  return { context, card, sources, sessionKey, scope, releases, refresh, start, runFollowup };
 }
 
 function expectReleased(f: ReturnType<typeof fixture>, runId: string) {
@@ -300,6 +300,7 @@ function holdQueuedExecution(f: ReturnType<typeof fixture>) {
     });
     entered.resolve(turn);
     await releaseExecution.promise;
+    turn.operation.freezeAbort();
     const execution = createSettledExecution();
     execution.runId = turn.runId;
     execution.outcome.resolved = { provider: "test", model: "test" };
@@ -353,13 +354,11 @@ describe("queued progress refresh settlement", () => {
   it.each([false, true])(
     "reconciles queued completion before a new intent (late cancellation: %s)",
     async (lateCancellation) => {
-      const f = fixture({
-        onQueuedFollowupSettled: () => {
-          if (lateCancellation) {
-            expect(requestRpcSourceCancellation(source.sourceRef)).toBe(false);
-          }
-        },
-      });
+      const onQueuedFollowupSettled = vi.fn(() =>
+        lateCancellation ? requestRpcSourceCancellation(source.sourceRef) : undefined,
+      );
+      const f = fixture({ onQueuedFollowupSettled });
+      const originalCard = structuredClone(f.card);
       const source = await f.start();
       expect(isRpcSourceQueued(source.sourceRef)).toBe(true);
       expect(rpcSourceTesting.get(source.runId)).toBe(source.sourceRef);
@@ -375,17 +374,14 @@ describe("queued progress refresh settlement", () => {
 
       await execution.finish();
       await source.sourceRef.input.settlement.promise;
+      expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+      expect(onQueuedFollowupSettled).toHaveReturnedWith(lateCancellation ? false : undefined);
       expectReleased(f, source.runId);
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
         status: "completed",
       });
-      expect(f.card).toEqual({
-        sessionKey: f.sessionKey,
-        revision: 7,
-        updatedAt: 1,
-        markdown: "Previous status",
-      });
+      expect(f.card).toEqual(originalCard);
       expect(f.context.broadcast).not.toHaveBeenCalled();
       expect(mocks.execute).toHaveBeenCalledOnce();
 
@@ -420,15 +416,7 @@ describe("queued progress refresh settlement", () => {
       turnAdoptionLifecycle: undefined,
       queuedFollowupReplyDisposition: undefined,
     };
-    const replacementSource = createRpcSourceForTest(
-      {},
-      {
-        storeScope: f.storeScope,
-        sessionKey: f.sessionKey,
-        sessionId: "session",
-        agentId: "work",
-      },
-    );
+    const replacementSource = createRpcSourceForTest({}, f.scope);
     bindSessionControllerSource(replacementSource.input, replacement);
     expect(
       enqueueFollowupRun(
@@ -478,12 +466,10 @@ describe("queued progress refresh settlement", () => {
     const successor = createRpcSourceForTest(
       {},
       {
+        ...f.scope,
         runId: source.runId,
-        storeScope: f.storeScope,
         phase: "waiting",
         sessionId: "successor-session",
-        sessionKey: f.sessionKey,
-        agentId: "work",
       },
     );
     // The old producer retains custody; replacing correlation cannot transfer it.

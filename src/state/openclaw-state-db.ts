@@ -104,14 +104,6 @@ export { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-m
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-discovery.js";
 
-/** Reject a fresh shared-state open after known corruption until repair clears it. */
-function assertOpenClawStateDatabaseFreshOpenAllowed(
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  const env = options.env ?? process.env;
-  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(resolveDatabasePath(options), env);
-}
-
 const deferredStateDatabases = new WeakSet<EngineConnection>();
 
 function readPublishedStateSchemaVersion(database: EngineConnection): number {
@@ -142,7 +134,7 @@ function repairDoctorStateDatabase(
   }
   if (scope === "readability") {
     // A writer close can checkpoint WAL and invalidate a generation-bound corruption refusal.
-    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   }
   return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
     repairStateSchema(pathname, env, scope, options.integrityCheck),
@@ -211,19 +203,25 @@ export async function prepareOpenClawStateDatabaseSchema(
     let needsRepair = mode === "doctor";
     if (mode === "doctor-preparation") {
       try {
-        assertOpenClawStateDatabaseFreshOpenAllowed(options);
+        stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       } catch {
         // The full repair must clear quarantine before dependent readers can proceed.
         needsRepair = true;
       }
     }
-    return needsRepair ||
-      needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
-      ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
-          repairStarted = true;
-          return repairStateSchema(pathname, env, scope, options.integrityCheck);
-        })
-      : { changes: [], warnings: [] };
+    if (
+      !needsRepair &&
+      !needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
+    ) {
+      return { changes: [], warnings: [] };
+    }
+    repairStarted = true;
+    // Retire prior writers and publish their native-close receipts before the
+    // private repair handle validates its source and acquires exclusive custody.
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
+      repairStateSchema(pathname, env, scope, options.integrityCheck),
+    );
   } finally {
     // Readiness checks borrow the live generation; only admitted repair retires it.
     if (repairStarted) {
@@ -309,7 +307,10 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   if (!existsSync(pathname)) {
     return undefined;
   }
-  assertOpenClawStateDatabaseFreshOpenAllowed(options);
+  stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+    pathname,
+    options.env ?? process.env,
+  );
   const prepared = isStatePostgres() ? pathname : await prepareSqliteReadOnlyLocation(pathname);
   const connection = openOpenClawStateReadConnection(pathname, prepared);
   const { db } = connection.database;
@@ -364,7 +365,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   const pathname = options.database?.path ?? resolveDatabasePath(options);
   if (isArtifactPreservingStateRead("agent", pathname)) {
     assertStateFileSnapshotAllowed();
-    assertOpenClawStateDatabaseFreshOpenAllowed(options);
+    stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
     const db = openSqliteReadOnlyDatabase(pathname, { timeout: busyTimeoutMs });
     assertSupportedStateSchemaVersion(db, pathname);
     return readOnlyStateDatabase({ db, path: pathname }, () => {
@@ -405,7 +406,7 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     const open = (remaining: () => number) => {
       getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
       stateDbCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
-      assertOpenClawStateDatabaseFreshOpenAllowed(options);
+      stateDbCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       if (cached) {
         // A closed handle can leave Kysely and WAL helpers cached.
         stateDbCache.closeStaleCachedOpenClawStateDatabase(cached);

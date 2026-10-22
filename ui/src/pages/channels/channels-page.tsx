@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
@@ -8,10 +8,10 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
@@ -22,7 +22,7 @@ import { createChannelSetup } from "./wizard-setup.ts";
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
-function createChannelsPage(getContext: () => ApplicationContext) {
+function createChannelsPage(context: ApplicationContext) {
   const [selectedChannel, setSelectedChannel] = createSignal<string | null>(null);
   const [pairingChannelFilter, setPairingChannelFilter] = createSignal<string | null>(null);
   const [pairingAccountFilter, setPairingAccountFilter] = createSignal<string | null>(null);
@@ -32,16 +32,8 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     prompt: ChannelPairingPrompt | null;
   } = { prompt: null };
   let publishOperations = () => {};
-  const operationState = projectSource(operations, {
-    read: (source) => source,
-    subscribe: (_source, notify) => {
-      publishOperations = notify;
-      return () => {
-        publishOperations = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const operationState = projectMutableSource(operations, (source) => source);
+  publishOperations = operationState.publish;
   function updateOperations(patch: Partial<typeof operations>) {
     Object.assign(operations, patch);
     publishOperations();
@@ -49,12 +41,10 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   let active = true;
   const pairingPoll = useVisiblePoll(CHANNEL_PAIRING_POLL_INTERVAL_MS, pollPairing);
   let pairingRoot: HTMLElement | undefined;
-  // Projection identities belong to this mounted page; replacement only swaps their sources.
-  const initialContext = untrack(getContext);
-  const gatewayProjection = projectGateway(initialContext.gateway);
-  const channelsProjection = projectChannels(initialContext.channels);
-  const configProjection = projectRuntimeConfig(initialContext.runtimeConfig);
-  const settings = projectSource(initialContext.theme, {
+  const gatewayProjection = projectGateway(context.gateway);
+  const channelsProjection = projectChannels(context.channels);
+  const configProjection = projectRuntimeConfig(context.runtimeConfig);
+  const settings = projectSource(context.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
     // The projection owns theme observation for the persisted advanced-settings preference.
     subscribe: (theme, notify) => theme?.subscribe(notify) ?? (() => {}),
@@ -62,25 +52,24 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   });
 
   const pluginPresentation = createChannelPluginPresentation({
-    getContext,
+    getContext: () => context,
     getProps: viewProps,
     getConnection: () => connection,
     getChannelIds: () => resolveChannelOrder(channelsProjection.read().channelsSnapshot),
-    isConnected: () => active && getContext().gateway.snapshot.phase === "connected",
+    isConnected: () => active && context.gateway.snapshot.phase === "connected",
   });
 
   const wizardHost = createChannelSetup({
-    getContext,
+    getContext: () => context,
     clearSelection: () => setSelectedChannel(null),
   });
 
   let schemaLoadStarted = false;
-  let channelsSource: ApplicationContext["channels"] | undefined;
   let gatewayPairingAuthSignature: string | null = null;
   let canManagePairing = false;
   let canAdmin = false;
   const connection = new GatewayPageBinding(() => publishOperations(), {
-    getGateway: () => getContext().gateway,
+    getGateway: () => context.gateway,
     onSnapshot: handleGatewaySnapshot,
   });
 
@@ -120,14 +109,14 @@ function createChannelsPage(getContext: () => ApplicationContext) {
         ensureInitialData();
       }
       if (!initial && (identityChanged || transportChanged)) {
-        void getContext().channels.refresh(false);
+        void context.channels.refresh(false);
       }
       if (
         !initial &&
         (identityChanged || transportChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
-        void getContext().channels.refreshPairing();
+        void context.channels.refreshPairing();
       }
     } else {
       schemaLoadStarted = false;
@@ -135,7 +124,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   }
 
   function ensureInitialData() {
-    const context = getContext();
     const gateway = context.gateway.snapshot;
     const client = gateway.client;
     if (gateway.phase !== "connected" || !client) {
@@ -166,29 +154,28 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   }
 
   function pollPairing() {
-    const snapshot = getContext().gateway.snapshot;
+    const snapshot = context.gateway.snapshot;
     if (
       active &&
       snapshot.phase === "connected" &&
       hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
     ) {
-      void getContext().channels.refreshPairing();
+      void context.channels.refreshPairing();
     }
   }
 
   function setShowAdvancedSettings(enabled: boolean) {
     patchSettings({ showAdvancedSettings: enabled });
-    getContext().theme.refresh();
+    context.theme.refresh();
   }
 
   async function saveChannelConfig() {
-    if (await getContext().runtimeConfig.save()) {
-      await getContext().channels.refresh(true);
+    if (await context.runtimeConfig.save()) {
+      await context.channels.refresh(true);
     }
   }
 
   async function reloadChannelConfig() {
-    const context = getContext();
     await context.runtimeConfig.discardDraft({ reloadOnly: true });
     await context.channels.refresh(true);
   }
@@ -231,7 +218,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   }
 
   function openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
-    if (getContext().channels.state.pairingBusyRequestId) {
+    if (context.channels.state.pairingBusyRequestId) {
       return;
     }
     setPairingNotice(null);
@@ -265,7 +252,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       requestId: prompt.request.requestId,
     };
     if (prompt.kind === "dismiss") {
-      const dismissed = await getContext().channels.dismissPairing(target);
+      const dismissed = await context.channels.dismissPairing(target);
       if (dismissed && operations.prompt === prompt) {
         updateOperations({ prompt: null });
         setPairingNotice(t("channels.pairing.dismissedNotice"));
@@ -273,7 +260,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       return;
     }
 
-    const result = await getContext().channels.approvePairing({
+    const result = await context.channels.approvePairing({
       ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
@@ -302,7 +289,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     gatewayProjection.read();
     const channels = channelsProjection.read();
     const config = configProjection.read().state;
-    const context = getContext();
     return {
       channels,
       config,
@@ -344,24 +330,11 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       onConfigReload: () => void reloadChannelConfig(),
     };
   }
-  // Rebind Gateway, channel, config, and theme subscriptions together when their context changes.
-  createEffect(getContext, (context) => {
-    // Subscription callbacks reconcile synchronous owner receipts; their reads do not subscribe.
-    gatewayProjection.replaceSource(context.gateway);
-    channelsProjection.replaceSource(context.channels);
-    configProjection.replaceSource(context.runtimeConfig);
-    settings.replaceSource(context.theme);
+  // The application owns these services for this mounted page's lifetime.
+  onSettled(() => {
     // Gateway receipts retire plugin operations and pairing prompts synchronously.
-    connection.refresh();
-    if (channelsSource && channelsSource !== context.channels) {
-      connection.invalidate();
-      pluginPresentation.details.reset();
-    }
-    channelsSource = context.channels;
+    connection.connect();
     const applyChannels = () => {
-      if (getContext().channels !== context.channels) {
-        return;
-      }
       pluginPresentation.details.sync();
       reconcilePairingFilter(context.channels.state.pairingSnapshot);
       pluginPresentation.ensure(context.gateway.snapshot.client);
@@ -369,31 +342,25 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
     const stopChannels = channelsProjection.subscribe(applyChannels);
     applyChannels();
-    schemaLoadStarted = false;
     const applyConfig = () => {
-      if (getContext().runtimeConfig === context.runtimeConfig) {
-        pluginPresentation.details.sync();
-        ensureInitialData();
-      }
+      pluginPresentation.details.sync();
+      ensureInitialData();
     };
     // Configuration completion receipts drive the initial channel and schema loading state machine.
     const stopConfig = configProjection.subscribe(applyConfig);
     applyConfig();
     return () => {
+      active = false;
       stopChannels();
       stopConfig();
+      connection.dispose();
     };
-  });
-  onCleanup(() => {
-    active = false;
-    connection.dispose();
   });
   return viewProps;
 }
 
-export function ChannelsPage(props: { context?: ApplicationContext }) {
-  const application = useOptionalApplication();
-  const viewProps = createMemo(createChannelsPage(() => props.context ?? application!));
+export function ChannelsPage() {
+  const viewProps = createMemo(createChannelsPage(useApplication()));
   return (
     <openclaw-channels-page>
       <SettingsPageHeader

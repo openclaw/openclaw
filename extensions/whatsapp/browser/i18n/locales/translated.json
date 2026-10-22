@@ -659,5 +659,37 @@
       }
     }
   },
-  "sv": {}
+  "sv": {
+    "common": {
+      "configured": "Konfigurerad",
+      "linked": "Länkad",
+      "running": "Körs",
+      "connected": "Ansluten",
+      "lastConnect": "Senaste anslutning",
+      "lastMessage": "Senaste meddelande",
+      "authAge": "Tid sedan autentisering",
+      "na": "Ej tillämpligt",
+      "yes": "Ja",
+      "no": "Nej",
+      "relink": "Länka igen",
+      "working": "Arbetar…",
+      "showQr": "Visa QR-kod",
+      "waitForScan": "Vänta på skanning",
+      "logout": "Logga ut",
+      "refresh": "Uppdatera"
+    },
+    "channels": {
+      "lastError": "Senaste fel",
+      "setup": {
+        "whatsappQrAlt": "QR-kod för WhatsApp"
+      },
+      "whatsapp": {
+        "title": "WhatsApp",
+        "subtitle": "Länka WhatsApp Web och övervaka anslutningsstatus.",
+        "phoneNumber": "Telefonnummer",
+        "logoutConfirmTitle": "Logga ut från WhatsApp-kontot {accountId}?",
+        "logoutConfirmMessage": "Om du loggar ut från kontot {accountId} stoppas dess lyssnare och dess sparade inloggningsuppgifter raderas."
+      }
+    }
+  }
 }

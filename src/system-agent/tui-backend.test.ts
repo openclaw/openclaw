@@ -1,8 +1,13 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import { channelsAddCommand } from "../commands/channels/add.js";
+import * as configModule from "../config/config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { runHostedGatewaySetup, runHostedSearchSetup } from "./hosted-setup.runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -12,6 +17,17 @@ import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.j
 
 const verifiedInferenceMocks = vi.hoisted(() => ({
   preparedBindings: new WeakMap<object, OpenClawConfig>(),
+}));
+
+vi.mock("../commands/channels/add.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/channels/add.js")>()),
+  channelsAddCommand: vi.fn(),
+}));
+
+vi.mock("./hosted-setup.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./hosted-setup.runtime.js")>()),
+  runHostedGatewaySetup: vi.fn(),
+  runHostedSearchSetup: vi.fn(),
 }));
 
 vi.mock("../plugins/providers.js", () => ({
@@ -30,11 +46,11 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./verified-inference.js")>();
   return {
     ...original,
-    resolveSystemAgentVerifiedInferenceState: vi.fn(async (binding, deps) => {
+    resolveSystemAgentVerifiedInferenceState: vi.fn(async (binding) => {
       const config = verifiedInferenceMocks.preparedBindings.get(binding);
       return config
         ? { config, route: binding.execution }
-        : await original.resolveSystemAgentVerifiedInferenceState(binding, deps);
+        : await original.resolveSystemAgentVerifiedInferenceState(binding);
     }),
   };
 });
@@ -77,16 +93,19 @@ const verifiedConfig = {
 } satisfies OpenClawConfig;
 
 function configSnapshot(config: OpenClawConfig) {
-  return {
+  return createConfigFileSnapshot({
     exists: true,
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "h",
-    config,
+    raw: null,
+    parsed: config,
     runtimeConfig: config,
     sourceConfig: config,
     issues: [],
-  };
+    warnings: [],
+    legacyIssues: [],
+  });
 }
 
 let sharedVerifiedFixture: Awaited<
@@ -109,12 +128,13 @@ async function createVerifiedTuiOptions(
   if (!useRealVerification) {
     verifiedInferenceMocks.preparedBindings.set(fixture.binding, config);
   }
+  const reader = vi
+    .spyOn(configModule, "readConfigFileSnapshot")
+    .mockResolvedValue(configSnapshot(config));
+  onTestFinished(() => reader.mockRestore());
   return {
     verifiedInference: fixture.binding,
-    deps: {
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      ...deps,
-    },
+    deps,
   };
 }
 
@@ -132,13 +152,11 @@ describe("runSystemAgentTui", () => {
   it("rejects a missing inference binding before overview, TUI, or setup", async () => {
     const loadOverview = vi.fn(async () => overview);
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-    const runChannelsAdd = vi.fn(async () => undefined);
     const fixture = sharedVerifiedFixture;
     const options: SystemAgentTuiOptions = {
       verifiedInference: fixture.binding,
       deps: { loadOverview },
       runTui,
-      runChannelsAdd,
     };
     Reflect.deleteProperty(options, "verifiedInference");
 
@@ -148,7 +166,7 @@ describe("runSystemAgentTui", () => {
 
     expect(loadOverview).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
-    expect(runChannelsAdd).not.toHaveBeenCalled();
+    expect(channelsAddCommand).not.toHaveBeenCalled();
   });
 
   it("reports a changed verified route without recommending onboarding", async () => {
@@ -204,7 +222,7 @@ describe("runSystemAgentTui", () => {
 
     expect(runTuiCalls).toBe(1);
     expect(resolveVerifiedState).toHaveBeenCalledOnce();
-    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
+    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
     const [resolveOrder] = resolveVerifiedState.mock.invocationCallOrder;
     const [runTuiOrder] = runTui.mock.invocationCallOrder;
     if (resolveOrder === undefined || runTuiOrder === undefined) {
@@ -535,9 +553,43 @@ describe("runSystemAgentTui", () => {
 
     for (const { handoff, expected } of cases) {
       const events: string[] = [];
+      vi.mocked(channelsAddCommand).mockImplementation(async (opts, _runtime, params) => {
+        events.push(
+          `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
+        );
+      });
+      vi.mocked(runHostedSearchSetup).mockImplementation(
+        async (_prompter, beforePersistentEffect) => {
+          events.push(`search:${typeof beforePersistentEffect}`);
+          return "applied";
+        },
+      );
+      vi.mocked(runHostedGatewaySetup).mockImplementation(
+        async (_prompter, beforePersistentEffect) => {
+          await beforePersistentEffect(runtime);
+          events.push("gateway:guarded");
+          return "applied";
+        },
+      );
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
-      const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      if (handoff.target === "gateway") {
+        const configFixture = await createInferenceConfigFixture(verifiedConfig);
+        const snapshot = configFixture.snapshot;
+        const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        );
+        verified = {
+          verifiedInference: fixture.binding,
+          deps: { loadOverview: async () => overview },
+        };
+        const reader = vi
+          .spyOn(configModule, "readConfigFileSnapshot")
+          .mockImplementation(configFixture.read);
+        onTestFinished(() => reader.mockRestore());
+      }
       await runSystemAgentTui(
         {
           ...verified,
@@ -569,18 +621,6 @@ describe("runSystemAgentTui", () => {
             await backend.sendChat({ message: "open setup wizard" });
             await requestedExit;
             return { exitReason: "exit" };
-          },
-          runChannelsAdd: async (opts, _runtime, params) => {
-            events.push(
-              `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
-            );
-          },
-          runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
-            events.push(`search:${typeof beforePersistentEffect}`);
-          },
-          runGatewaySetupHandoff: async (_runtime, beforePersistentEffect) => {
-            await beforePersistentEffect();
-            events.push("gateway:guarded");
           },
         },
         runtime,

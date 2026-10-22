@@ -1,13 +1,11 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
   isOpenAIGpt6Model,
   supportsOpenAITemperature,
-  type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAISimpleReasoningEffort,
@@ -24,6 +22,7 @@ import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-re
 import {
   OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS,
   OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT,
+  OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
   type OpenAIResponsesOptions,
   type OpenAIResponsesRequestParams,
 } from "./openai-responses-contracts.js";
@@ -38,30 +37,6 @@ import {
 import { getCompat } from "./openai-transport-params.js";
 import { resolvePromptCacheKey, type OpenAIModeModel } from "./openai-transport-shared.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
-
-const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-  "github-copilot",
-]);
-
-function raiseMinimalReasoningForResponsesWebSearch(params: {
-  model: Model;
-  effort: OpenAIApiReasoningEffort;
-  tools: unknown;
-}): OpenAIApiReasoningEffort {
-  if (params.effort !== "minimal" || !hasResponsesWebSearchTool(params.tools)) {
-    return params.effort;
-  }
-  for (const effort of ["low", "medium", "high"] as const) {
-    const resolved = resolveOpenAIRequestReasoning(params.model, effort).effort;
-    if (resolved && resolved !== "none" && resolved !== "minimal") {
-      return resolved;
-    }
-  }
-  return params.effort;
-}
 
 const OPENAI_CODEX_RESPONSES_UNSUPPORTED_PARAMS = [
   "max_output_tokens",
@@ -109,51 +84,12 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-// Continuation compares input prefixes, so keep the changing system prompt in
-// instructions on routes that support it. Other routes embed it in input.
-function resolveOpenAIResponsesInstructions(
-  model: Model,
-  context: Context,
-  usesInstructionsField: boolean,
-): string | undefined {
-  if (!usesInstructionsField) {
-    return undefined;
-  }
-  const instructions = buildOpenAIResponsesInstructionsText(context);
-  if (instructions && instructions.trim().length > 0) {
-    return instructions;
-  }
-  return usesNativeOpenAICodexResponsesBackend(model)
-    ? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
-    : undefined;
-}
-
 // xAI /responses/compact needs the system prompt first in input, not instructions:
 // https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
   const compat = getCompat(model);
   const role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
   return buildResponsesInputMessage(role, [{ type: "input_text", text: instructions }]);
-}
-
-// The Responses API rejects an empty `input` array; when the only content
-// for this turn was the system prompt (now carried by `instructions`
-// instead), inject a placeholder input item so the request stays valid.
-function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Context): void {
-  if (messages.length > 0 || !context.systemPrompt) {
-    return;
-  }
-  const text = buildOpenAIResponsesInstructionsText(context);
-  if (!text) {
-    throw new Error(
-      "OpenAI Responses requires non-empty input when only systemPrompt is provided.",
-    );
-  }
-  messages.push(
-    buildResponsesInputMessage("user", [
-      { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
-    ]),
-  );
 }
 
 export function buildOpenAIResponsesParams(
@@ -174,30 +110,49 @@ export function buildOpenAIResponsesParams(
     (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
     replayMode,
     retainUserProvenance,
   });
-  ensureOpenAIResponsesNonEmptyInput(messages, context);
+  // The Responses API rejects an empty `input` array; when the only content
+  // for this turn was the system prompt (now carried by `instructions`
+  // instead), inject a placeholder input item so the request stays valid.
+  if (messages.length === 0 && context.systemPrompt) {
+    const text = buildOpenAIResponsesInstructionsText(context);
+    if (!text) {
+      throw new Error(
+        "OpenAI Responses requires non-empty input when only systemPrompt is provided.",
+      );
+    }
+    messages.push(
+      buildResponsesInputMessage("user", [
+        { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
+      ]),
+    );
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
   const promptCacheKey = compat.supportsPromptCacheKey
     ? resolvePromptCacheKey(options, cacheRetention)
     : undefined;
-  const instructions = resolveOpenAIResponsesInstructions(
-    model,
-    context,
-    payloadPolicy.usesInstructionsField,
-  );
+  // Continuation compares input prefixes, so keep the changing system prompt in
+  // instructions on routes that support it. Other routes embed it in input.
+  let instructions = payloadPolicy.usesInstructionsField
+    ? buildOpenAIResponsesInstructionsText(context)
+    : undefined;
+  if (payloadPolicy.usesInstructionsField && (!instructions || instructions.trim().length === 0)) {
+    instructions = usesNativeOpenAICodexResponsesBackend(model)
+      ? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
+      : undefined;
+  }
   const params: OpenAIResponsesRequestParams = {
     model: model.id,
     input: messages,
     stream: true,
     prompt_cache_key: promptCacheKey,
-    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat),
+    ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
     ...(instructions ? { instructions } : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -231,7 +186,12 @@ export function buildOpenAIResponsesParams(
       transport: "stream",
       supportsStrictMode: compat.supportsStrictMode,
     });
-    const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
+    const { projection, tools: converted } = prepareResponsesTools(
+      tools,
+      strict,
+      model,
+      Boolean(options?.onPayload),
+    );
     if (
       converted.length > 0 ||
       (projection.inputToolCount === 0 && projection.diagnostics.length === 0)
@@ -256,11 +216,16 @@ export function buildOpenAIResponsesParams(
         ? undefined
         : resolveOpenAIRequestReasoning(model, requestedEffort).effort;
     if (resolvedEffort !== undefined) {
-      const effort = raiseMinimalReasoningForResponsesWebSearch({
-        model,
-        effort: resolvedEffort,
-        tools: params.tools,
-      });
+      let effort = resolvedEffort;
+      if (effort === "minimal" && hasResponsesWebSearchTool(params.tools)) {
+        for (const candidate of ["low", "medium", "high"] as const) {
+          const resolved = resolveOpenAIRequestReasoning(model, candidate).effort;
+          if (resolved && resolved !== "none" && resolved !== "minimal") {
+            effort = resolved;
+            break;
+          }
+        }
+      }
       const summary =
         effort !== "none" &&
         (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary !== undefined)

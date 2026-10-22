@@ -254,6 +254,23 @@ describe("gateway port resolution", () => {
 });
 
 describe("state + config path candidates", () => {
+  it("keeps an environment profile isolated when its config is missing", async () => {
+    await withTestDir({ prefix: "openclaw-env-profile-" }, async (home) => {
+      const defaultDir = path.join(home, ".openclaw");
+      await fs.mkdir(defaultDir, { recursive: true });
+      await fs.writeFile(path.join(defaultDir, "openclaw.json"), "{}");
+      const env = { HOME: home, OPENCLAW_PROFILE: "work" };
+      const stateDir = path.join(home, ".openclaw-work");
+      const configPath = path.join(stateDir, "openclaw.json");
+
+      expect(resolveStateDir(env)).toBe(stateDir);
+      expect(resolveConfigPathCandidate(env)).toBe(configPath);
+      expect(resolveDefaultConfigCandidates(env)).toEqual([configPath]);
+      expect(isDefaultStateDir(env)).toBe(false);
+      expect(allowsProcessHomeSessionScan(env, () => home)).toBe(false);
+    });
+  });
+
   it("pins a relative state-dir override before later resolution", () => {
     const env = {
       OPENCLAW_STATE_DIR: "relative-state",
@@ -288,6 +305,15 @@ describe("state + config path candidates", () => {
       expect(CONFIG_PATH).toBe(selectedConfigPath);
       expect(isNixMode).toBe(true);
       expect(STATE_DIR).toBe(selectedStateDir);
+
+      const home = path.resolve("/tmp/openclaw-profile-runtime-home");
+      const stateDir = path.join(home, ".openclaw-work");
+      expect(pinRuntimePaths({ HOME: home, OPENCLAW_PROFILE: "work" })).toEqual({
+        configPath: path.join(stateDir, "openclaw.json"),
+        stateDir,
+      });
+      expect(CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
+      expect(STATE_DIR).toBe(stateDir);
     } finally {
       pinRuntimePaths({
         OPENCLAW_CONFIG_PATH: originalConfigPath,

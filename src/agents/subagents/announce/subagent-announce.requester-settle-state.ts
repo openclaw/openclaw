@@ -1,7 +1,9 @@
+import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
+import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -10,7 +12,18 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
-/** Only a known missing result may mint another public continuation; private retries reconcile. */
+export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
+  // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
+  return (
+    entry.delivery?.status !== "delivered" ||
+    entry.execution.interruptionReason === "gateway-restart"
+  );
+}
+
+/**
+ * Only a known missing result, or an effect-free run whose transcript write was
+ * rejected, may mint another public continuation; private retries reconcile.
+ */
 export function resolveRequesterSettleRetryState(params: {
   state: RequesterSettleWakeBatchState;
   delivery: SubagentAnnounceDeliveryResult;
@@ -22,7 +35,9 @@ export function resolveRequesterSettleRetryState(params: {
   const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
   if (
     delivery.disposition !== "retryable" ||
-    (!parentOnly && delivery.reason !== "visible_reply_missing") ||
+    (!parentOnly &&
+      delivery.reason !== "visible_reply_missing" &&
+      delivery.reason !== "requester_transcript_conflict") ||
     delivery.reason === "requester_abandoned" ||
     attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
     retryDelay === undefined
@@ -38,7 +53,7 @@ export function resolveRequesterSettleRetryState(params: {
   };
 }
 
-export type RequesterSettleWakeBatchCallbacks = {
+type RequesterSettleWakeBatchCallbacks = {
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
@@ -48,8 +63,17 @@ export type RequesterSettleWakeBatchCallbacks = {
     batch: readonly SubagentRunRecord[],
     rearmGeneration?: number,
     delivery?: SubagentAnnounceDeliveryResult,
-    onCommitted?: () => void,
+    onCommitted?: () => void | Promise<void>,
   ) => void | Promise<void>;
+};
+
+export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  settledEntry: SubagentRunRecord;
+  signal?: AbortSignal;
+  isSourceCurrent: () => boolean;
+  onDescendantsPending?: (deadline?: number) => void;
 };
 
 export function waitForRequesterDescendants(
@@ -91,6 +115,29 @@ export function readSharedBatchState(
     ...(source?.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true } : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
   };
+}
+
+/** Cancellation closes a wave only after its current task ownership is considered. */
+export function isRequesterSettleDeliveryClosed(params: {
+  requesterRun: SubagentRunRecord | null | undefined;
+  currentRequester: SubagentRunRecord | null | undefined;
+  currentRuns: readonly SubagentRunRecord[];
+  batch: readonly SubagentRunRecord[];
+  requesterYieldBatch: boolean;
+}): boolean {
+  const { requesterRun, currentRequester, currentRuns } = params;
+  const currentBatch = params.batch.map(
+    (entry) => currentRuns.find((current) => isSameSubagentRunOwner(current, entry)) ?? entry,
+  );
+  return (
+    requesterRun?.killReconciliation?.suppressTaskDelivery === true ||
+    requesterRun?.suppressCompletionDelivery === true ||
+    currentRequester?.killReconciliation?.suppressTaskDelivery === true ||
+    currentRequester?.suppressCompletionDelivery === true ||
+    // A yielded cohort reports the members it still holds; requester-wide cancellation
+    // already removed its own. An ordinary wave owes nothing once every member retired.
+    (!params.requesterYieldBatch && currentBatch.every(isSubagentObligationRetired))
+  );
 }
 
 export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null | undefined) {

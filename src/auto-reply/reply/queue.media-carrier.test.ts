@@ -56,6 +56,12 @@ it("drains the complete parked image turn after active steering rejects it", asy
   const q = trackedQueue();
   const key = q.key;
   const run = createQueueTestRun({ prompt: "  caption\n", messageId: key });
+  Object.assign(run.run, {
+    agentId: "main",
+    sessionKey: key,
+    messageProvider: "telegram",
+    senderId: "media-requester",
+  });
   run.images = [image("inline-png", "image/png")];
   run.imageOrder = ["offloaded", "inline"];
   run.media = [{ path: "/tmp/stored.png", contentType: "image/png" }, { kind: "image" }];

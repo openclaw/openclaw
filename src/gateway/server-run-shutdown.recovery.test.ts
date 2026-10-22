@@ -1,10 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import {
+  markOrphanedMainSessionForRecovery,
   markRestartAbortedMainSessions,
-  markStartupOrphanedMainSessionsForRecovery,
 } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { recoverStore } from "../agents/main-session-recovery/main-session-restart-recovery-store.js";
@@ -31,6 +30,7 @@ import {
   hasLiveAgentRunContext,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../process/command-queue.js";
 import {
@@ -68,6 +68,34 @@ import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 const cfg = { agents: { entries: { main: {} } } };
 let state: OpenClawTestState;
 let storePath: string;
+
+type ShutdownParams = Parameters<typeof prepareGatewayRunShutdown>[0];
+function shutdown(
+  {
+    chatRunState,
+    agentRunSeq,
+    broadcast,
+    nodeSendToSession,
+  }: Pick<ShutdownParams, "chatRunState" | "agentRunSeq" | "broadcast" | "nodeSendToSession">,
+  resolveGatewayContext: GatewayContextResolver,
+  overrides: Partial<ShutdownParams> = {},
+) {
+  return prepareGatewayRunShutdown({
+    chatRunState,
+    agentRunSeq,
+    broadcast,
+    nodeSendToSession,
+    resolveGatewayContext,
+    timeoutMs: 0,
+    warnings: [],
+    getPendingReplyCount: () => 0,
+    removeChatRun: () => undefined,
+    markMainSessionsAbortedForRestart: async (params) => {
+      await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
+    },
+    ...overrides,
+  });
+}
 
 function recoveryTarget(sessionKey: string, sessionId: string) {
   return captureSessionTarget({
@@ -191,16 +219,7 @@ it.each([
   const harness = createAgentEventTestHarness();
   let replacement: ReturnType<typeof registerRecoveryRun> | undefined;
   try {
-    await prepareGatewayRunShutdown({
-      resolveGatewayContext,
-      timeoutMs: 0,
-      warnings: [],
-      getPendingReplyCount: () => 0,
-      chatRunState: harness.chatRunState,
-      agentRunSeq: harness.agentRunSeq,
-      removeChatRun: () => undefined,
-      broadcast: harness.broadcast,
-      nodeSendToSession: harness.nodeSendToSession,
+    await shutdown(harness, resolveGatewayContext, {
       markMainSessionsAbortedForRestart: async (params) => {
         if (releaseAt === "user abort") {
           registration.controller.abort(createAgentRunDirectAbortError());
@@ -265,10 +284,12 @@ it.each([
   }
 });
 
-it.each(["admission", "queue", "delegated"] as const)(
+it.each(["admission", "queue", "delegated", "delegated source-only"] as const)(
   "retains %s work through shutdown and gives it one explicit recovery outcome",
   async (kind) => {
-    const sessionKey = `agent:main:dashboard:restart-${kind}`;
+    const delegated = kind === "delegated" || kind === "delegated source-only";
+    const sourceOnly = kind === "delegated source-only";
+    const sessionKey = delegated ? "agent:main:main" : `agent:main:dashboard:restart-${kind}`;
     const sessionId = `restart-${kind}-session`;
     const runId = `restart-${kind}-run`;
     const target = { storePath, sessionKey };
@@ -276,9 +297,12 @@ it.each(["admission", "queue", "delegated"] as const)(
     await replaceSessionEntry(target, {
       sessionId,
       updatedAt: 1_000,
-      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliveryRunId: sourceOnly ? undefined : runId,
       restartRecoveryDeliverySourceRunId: runId,
-      restartRecoverySourceIngress: kind === "delegated" ? "internal" : "control-ui",
+      restartRecoverySourceIngress: sourceOnly ? undefined : delegated ? "internal" : "control-ui",
+      ...(sourceOnly
+        ? { restartRecoveryRuns: [{ runId, lifecycleGeneration: "before-restart" }] }
+        : {}),
     });
     await appendTranscriptMessage(
       { ...target, sessionId },
@@ -287,7 +311,7 @@ it.each(["admission", "queue", "delegated"] as const)(
           role: "user",
           content: "Finish the synthetic task after restart.",
           idempotencyKey: runId,
-          ...(kind === "delegated" ? { provenance: { kind: "inter_session" } } : {}),
+          ...(delegated ? { provenance: { kind: "inter_session" } } : {}),
         },
       },
     );
@@ -332,20 +356,7 @@ it.each(["admission", "queue", "delegated"] as const)(
     const recoveryLog = vi.spyOn(mainSessionRecoveryLog, "info");
     try {
       const harness = createAgentEventTestHarness();
-      await prepareGatewayRunShutdown({
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        chatRunState: harness.chatRunState,
-        agentRunSeq: harness.agentRunSeq,
-        removeChatRun: () => undefined,
-        broadcast: harness.broadcast,
-        nodeSendToSession: harness.nodeSendToSession,
-        markMainSessionsAbortedForRestart: async (params) => {
-          await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-        },
-      });
+      await shutdown(harness, resolveGatewayContext);
       expect(loadSessionEntry(target)).toMatchObject({
         status: "interrupted",
         abortedLastRun: true,
@@ -372,21 +383,34 @@ it.each(["admission", "queue", "delegated"] as const)(
         });
       await recover();
       await recover();
-      if (kind === "delegated") {
+      if (delegated) {
         expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)).toMatchObject({
-          status: "failed",
+        const settled = loadSessionEntry(target);
+        expect(settled).toMatchObject({
+          sessionId,
+          status: "interrupted",
           abortedLastRun: false,
-          mainRestartRecovery: {
-            tombstone: { reason: "delegated recovery sender authority is unavailable" },
-          },
+          restartRecoveryTerminalRunIds: [runId],
         });
+        expect(settled?.mainRestartRecovery).toBeUndefined();
+        expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(settled?.restartRecoveryRuns).toBeUndefined();
+        expect(settled?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
         const transcript = JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }));
         expect(transcript).toContain("delegated recovery sender authority is unavailable");
-        expect(transcript.match(/use Resume to continue in this session/g)).toHaveLength(1);
+        expect(transcript.match(/Send a new authenticated message to continue/g)).toHaveLength(1);
         expect(recoveryLog).toHaveBeenCalledWith(
           expect.stringContaining('"reason":"delegated_authority_unavailable"'),
         );
+        rotateAgentEventLifecycleGeneration();
+        expect(
+          await markOrphanedMainSessionForRecovery({ target, expectedSessionId: sessionId, cfg }),
+        ).toEqual({ marked: 0, skipped: 0 });
+        await recover();
+        expect(JSON.stringify(await loadTranscriptEvents({ ...target, sessionId }))).toBe(
+          transcript,
+        );
+        expect(gatewayRuntime.dispatchAgent).not.toHaveBeenCalled();
       } else {
         expect(gatewayRuntime.dispatchAgent).toHaveBeenCalledTimes(1);
         expect(loadSessionEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });
@@ -531,16 +555,7 @@ it.each(["none", "active", "pending"] as const)(
     try {
       expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
       expect(pendingValidation).not.toHaveBeenCalled();
-      const shutdown = await prepareGatewayRunShutdown({
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        chatRunState: harness.chatRunState,
-        agentRunSeq: harness.agentRunSeq,
-        removeChatRun: () => undefined,
-        broadcast: harness.broadcast,
-        nodeSendToSession: harness.nodeSendToSession,
+      const closing = await shutdown(harness, resolveGatewayContext, {
         markMainSessionsAbortedForRestart: async (params) => {
           await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
           successor = await beginSessionEffect({
@@ -573,7 +588,7 @@ it.each(["none", "active", "pending"] as const)(
       expect(successor?.isActive()).toBe(true);
       expect(successorInterrupt).not.toHaveBeenCalled();
       let released = false;
-      void shutdown.released.then(
+      void closing.released.then(
         () => {
           released = true;
         },
@@ -586,9 +601,9 @@ it.each(["none", "active", "pending"] as const)(
       persistFinalWrite.resolve();
       await finalWrite;
       if (callbackFailure === "none") {
-        await shutdown.released;
+        await closing.released;
       } else {
-        await expect(shutdown.released).rejects.toThrow(
+        await expect(closing.released).rejects.toThrow(
           `Synthetic ${callbackFailure} admission cancellation failure`,
         );
       }
@@ -709,13 +724,8 @@ it.each(
         lastRunId: clientRunId,
       });
 
-      await prepareGatewayRunShutdown({
-        ...params,
-        resolveGatewayContext,
-        timeoutMs: 0,
-        warnings: [],
-        getPendingReplyCount: () => 0,
-        removeChatRun: () => undefined,
+      await shutdown(params, resolveGatewayContext, {
+        restartRecoveryCandidates: params.restartRecoveryCandidates,
         markMainSessionsAbortedForRestart: async (captured) => {
           if (outcome === "replacement") {
             // The old terminal is already durable; a newer turn wins before its marker writes.
@@ -777,7 +787,7 @@ it.each(
       releaseWrite.resolve();
       await drain();
       heldWrite?.mockRestore();
-      unsubs.heartbeatUnsub();
+      heartbeatNotifications.onEvent = () => {};
       unsubs.transcriptUnsub();
       unsubs.lifecycleUnsub();
       releaseClaim();
@@ -863,19 +873,8 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     }
     registrations[1]!.controller.abort(createAgentRunRestartAbortError());
     const warnings: string[] = [];
-    await prepareGatewayRunShutdown({
-      resolveGatewayContext,
-      timeoutMs: 0,
+    await shutdown(harness, resolveGatewayContext, {
       warnings,
-      getPendingReplyCount: () => 0,
-      chatRunState: harness.chatRunState,
-      agentRunSeq: harness.agentRunSeq,
-      removeChatRun: () => undefined,
-      broadcast: harness.broadcast,
-      nodeSendToSession: harness.nodeSendToSession,
-      markMainSessionsAbortedForRestart: async (params) => {
-        await markRestartAbortedMainSessions({ ...params, cfg, stateDir: state.stateDir });
-      },
     });
     await joinPersistence();
     expect(read(mainKey).mainRestartRecovery?.cycleId).toEqual(expect.any(String));
@@ -901,60 +900,6 @@ it("persists recovery when restart cancellation precedes shutdown marking", asyn
     });
     expect(active).toEqual({ active: false, runIds: [] });
 
-    rotateAgentEventLifecycleGeneration();
-    await markStartupOrphanedMainSessionsForRecovery({ cfg, stateDir: state.stateDir });
-    const mainTarget = { storePath, sessionKey: mainKey };
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const observed = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "observe",
-        cycleId: "next-boot",
-        lifecycleGeneration,
-        sessionKey: mainKey,
-      },
-    });
-    if (
-      observed.transition.kind !== "observed" ||
-      observed.transition.view.status !== "recoverable"
-    ) {
-      throw new Error("eligible dashboard main session lost its restart recovery owner");
-    }
-    const reserved = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "prepare_attempt",
-        attempt: observed.transition.view.nextAttempt,
-        observation: observed.transition.view.observation,
-        lifecycleGeneration,
-        runId: "resumed-main-run",
-        now: Date.now(),
-        executionIdentity: { state: "disabled" },
-      },
-    });
-    expect(reserved.transition.kind).toBe("reserved");
-    const admitted = await commitMainSessionRecovery({
-      target: mainTarget,
-      command: {
-        kind: "admit_recovery",
-        lifecycleGeneration,
-        runId: "resumed-main-run",
-        sessionId: read(mainKey).sessionId,
-        now: Date.now(),
-      },
-    });
-    expect(admitted.transition.kind).toBe("admitted_recovery");
-    await persistGatewaySessionLifecycleEvent({
-      sessionKey: mainKey,
-      event: {
-        runId: "resumed-main-run",
-        sessionId: read(mainKey).sessionId,
-        lifecycleGeneration,
-        ts: Date.now(),
-        data: { phase: "end" },
-      },
-    });
-    expect(read(mainKey).status).toBe("done");
     const child = read(childKey);
     expect(child).toMatchObject({
       status: "interrupted",

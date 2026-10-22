@@ -77,15 +77,16 @@ const providedCfg: CoreConfig = {
 };
 
 function createClient(isReady = () => true) {
-  return {
+  const client = {
     nick: "openclaw",
     isReady: vi.fn(isReady),
-    sendRaw: vi.fn(),
     join: vi.fn(),
     sendPrivmsg: vi.fn(),
     quit: vi.fn(),
     close: vi.fn(),
   } satisfies IrcClient;
+  hoisted.connectIrcClient.mockResolvedValue(client);
+  return client;
 }
 
 describe("sendMessageIrc cfg threading", () => {
@@ -118,7 +119,6 @@ describe("sendMessageIrc cfg threading", () => {
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: namedCfg,
-      client,
       accountId: "work",
     });
 
@@ -164,7 +164,7 @@ describe("sendMessageIrc cfg threading", () => {
   it("fails hard when cfg is omitted", async () => {
     const client = createClient();
 
-    await expect(sendMessageIrc("#ops", "ping", { client } as never)).rejects.toThrow(
+    await expect(sendMessageIrc("#ops", "ping", {} as never)).rejects.toThrow(
       "IRC send requires a resolved runtime config",
     );
 
@@ -180,7 +180,6 @@ describe("sendMessageIrc cfg threading", () => {
 
     const result = await sendMessageIrc("#room", "hello", {
       cfg: providedCfg,
-      client,
     });
 
     expect(hoisted.currentConfig).not.toHaveBeenCalled();
@@ -198,7 +197,6 @@ describe("sendMessageIrc cfg threading", () => {
     await expect(
       sendMessageIrc("#room", "#", {
         cfg: providedCfg,
-        client,
         replyTo: "irc-parent-1",
       }),
     ).rejects.toThrow("Message must be non-empty for IRC sends");
@@ -209,7 +207,6 @@ describe("sendMessageIrc cfg threading", () => {
 
   it("uses one transient connection for a chunked outbound message", async () => {
     const client = createClient();
-    hoisted.connectIrcClient.mockResolvedValue(client);
     const onDeliveryResult = vi.fn();
     const onPlatformSendDispatch = vi.fn();
     const text = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(" ");
@@ -288,7 +285,6 @@ describe("sendMessageIrc cfg threading", () => {
   it("stops before recording another chunk after the connection closes", async () => {
     let ready = true;
     const client = createClient(() => ready);
-    hoisted.connectIrcClient.mockResolvedValue(client);
     const onDeliveryResult = vi.fn(() => {
       ready = false;
     });
@@ -346,7 +342,7 @@ describe("sendMessageIrc cfg threading", () => {
         sendIrcMessages(
           "#room",
           "first second",
-          { cfg: providedCfg, client },
+          { cfg: providedCfg },
           () => [{ text: "first" }, { text: "second" }],
           onDeliveryResult,
         ),
@@ -369,14 +365,11 @@ describe("sendMessageIrc cfg threading", () => {
     const client = createClient();
     const failure = new Error("first send refused");
     client.sendPrivmsg.mockRejectedValueOnce(failure);
-    await expect(sendMessageIrc("#room", "hello", { cfg: providedCfg, client })).rejects.toBe(
-      failure,
-    );
+    await expect(sendMessageIrc("#room", "hello", { cfg: providedCfg })).rejects.toBe(failure);
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
     const client = createClient();
-    hoisted.connectIrcClient.mockResolvedValue(client);
 
     const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "irc",

@@ -15,6 +15,7 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
@@ -219,6 +220,7 @@ export async function createComposedCatalogFixture(
       databasePath: resolveOpenClawStateSqlitePath(),
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         stateDir: state.stateDir,

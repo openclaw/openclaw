@@ -58,6 +58,7 @@ export function useOverlayControl(
   onCleanup(() => overlay.dispose());
   const connect = (onConnect: () => void, onOpen?: (open: boolean) => void) => {
     mounted = true;
+    // Deliver each accepted transition to policy callbacks before publishing onOpenChange.
     const stopOpen = overlay.subscribe((open) => {
       onOpen?.(open);
       props.onOpenChange?.(open);
@@ -106,5 +107,5 @@ export function useOverlayControl(
       stopHidden?.();
     };
   };
-  return { connect, mountBody, bodyMounted: () => Boolean(disposeBody) };
+  return { connect, bodyMounted: () => Boolean(disposeBody) };
 }

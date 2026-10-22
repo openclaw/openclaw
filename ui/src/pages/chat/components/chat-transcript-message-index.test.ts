@@ -4,7 +4,11 @@ import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
-import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
+import {
+  projectTranscriptChain,
+  projectTranscriptIndex,
+  projectTranscriptRows,
+} from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 function makeMessage(
@@ -393,8 +397,13 @@ vi.mock("./chat-position-projection.ts", async (importOriginal) => {
   return {
     ...original,
     projectChatPositions: (...args: Parameters<typeof original.projectChatPositions>) => {
-      work.positionItems += args[0].length;
-      return original.projectChatPositions(...args);
+      function* counted() {
+        for (const item of args[0]) {
+          work.positionItems++;
+          yield item;
+        }
+      }
+      return original.projectChatPositions(counted(), args[1], args[2], args[3]);
     },
   };
 });
@@ -448,27 +457,31 @@ it("keeps stream-only projection work bounded by the tail across history sizes",
     resetChatThreadState();
     const input = streamInput(size);
     const expanded = new Map<string, boolean>();
+    let initialChain: Chain | undefined;
     const project = (stream: string) => {
       const items = buildCachedChatItems({ ...input, stream });
-      return indexFor(
-        chainFor(items, {
-          ...chainOptions,
-          runWorking: true,
-        }),
-        expanded,
-        labels,
-      );
+      const chain = chainFor(items, { ...chainOptions, runWorking: true });
+      initialChain ??= chain;
+      expect(chain.transcriptItems).toBe(initialChain.transcriptItems);
+      expect(chain.collapsedItems).toBe(initialChain.collapsedItems);
+      return indexFor(chain, expanded, labels);
     };
-    project("Initial");
+    const initial = project("Initial");
+    const previews = new Map();
+    const presentation = projectTranscriptRows(initial.rows, previews, []);
     Object.assign(work, { chainCalls: 0, chainItems: 0, positionItems: 0 });
     for (const stream of ["One", "One two", "One two three"]) {
-      project(stream);
+      const next = project(stream);
+      expect(next.rows).toBe(initial.rows);
+      expect(next.positionIndex.markers).toBe(initial.positionIndex.markers);
+      expect(projectTranscriptRows(next.rows, previews, [])).toBe(presentation);
     }
     return { ...work };
   };
   const small = measure(20);
   const large = measure(400);
   expect(large).toEqual(small);
+  expect(measure(1_000)).toEqual(small);
   expect(large.chainCalls).toBe(0);
   expect(large.positionItems).toBeLessThanOrEqual(6);
 });
@@ -536,13 +549,39 @@ it.each([
     const index = indexFor(chain, expanded);
     const fullChain = chainFor([...items], options);
     const fullIndex = indexFor(fullChain, expanded);
-    expect(chain).toEqual(fullChain);
-    expect(index).toEqual(fullIndex);
+    const currentChain = (value: Chain) => ({
+      ...value,
+      collapsedItems: value.collapsedItems.map((item) =>
+        item.key === value.live?.item.key ? value.live.item : item,
+      ),
+      transcriptItems: value.transcriptItems.map((item) =>
+        item.key === value.live?.item.key ? value.live.item : item,
+      ),
+    });
+    const currentIndex = (value: Index) => ({
+      ...value,
+      rows: value.rows.map((row) =>
+        row.kind === "item" && row.key === value.liveItem?.key
+          ? { ...row, item: value.liveItem }
+          : row,
+      ),
+      positionIndex: {
+        ...value.positionIndex,
+        markers: value.positionIndex.markers.map((marker) => ({
+          ...marker,
+          message:
+            value.positionIndex.liveMarkers?.find((candidate) => candidate.id === marker.id)
+              ?.message ?? marker.message,
+        })),
+      },
+    });
+    expect(currentChain(chain)).toEqual(currentChain(fullChain));
+    expect(currentIndex(index)).toEqual(currentIndex(fullIndex));
     expect(chainFor(items, options)).toBe(chain);
     expect(indexFor(chain, expanded)).toBe(index);
     if (live) {
       const ownerKey = index.transcriptMessageKeys.get(live.key);
-      const owner = chain.transcriptItems.find((item) => item.key === ownerKey);
+      const owner = chain.live?.item ?? chain.transcriptItems.find((item) => item.key === ownerKey);
       expect(owner?.kind).toBe(framed && !searchActive ? "agent-run-frame" : "stream-run");
       const visible = delta !== 1 && delta !== 7;
       expect(index.positionIndex.markerIdsByMessageId.has(live.key)).toBe(visible);
@@ -554,7 +593,8 @@ it.each([
       }
       if (framed && visible) {
         expect(
-          index.positionIndex.markers.find((marker) => marker.id === "run:live")?.message,
+          currentIndex(index).positionIndex.markers.find((marker) => marker.id === "run:live")
+            ?.message,
         ).toMatchObject({ content: [{ type: "text", text: stream }] });
       }
       if ([3, 4, 6, 9].includes(delta)) {
@@ -767,9 +807,9 @@ describe("system event presentation", () => {
       "group",
       "system-event-group",
       "agent-run-frame",
-      "system-event-group",
+      "notice",
       "group",
-      "system-event-group",
+      "notice",
     ]);
     expect(chain.transcriptItems[1]).toMatchObject({
       events: [expect.anything(), expect.anything()],
@@ -798,11 +838,7 @@ describe("system event presentation", () => {
       timestamp: 25,
     } as const;
     const chain = chainFor([events[0]!, pending, events[1]!], chainOptions);
-    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
-      "system-event-group",
-      "notice",
-      "system-event-group",
-    ]);
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual(["notice", "notice", "notice"]);
     expect(chain.transcriptItems[1]).toBe(pending);
   });
 });

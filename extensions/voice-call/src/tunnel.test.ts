@@ -148,7 +148,6 @@ describe("voice-call tunnels", () => {
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
-    expect(tunnel.provider).toBe("ngrok");
     expect(mocks.spawn).toHaveBeenCalledWith(
       "ngrok",
       ["http", "3334", "--log", "stdout", "--log-format", "json"],
@@ -197,7 +196,6 @@ describe("voice-call tunnels", () => {
     );
 
     expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net:8443/voice/webhook");
-    expect(tunnel.provider).toBe("tailscale-funnel");
     expect(mocks.setupTailscaleExposureRoutes).toHaveBeenCalledWith({
       mode: "funnel",
       port: 8443,

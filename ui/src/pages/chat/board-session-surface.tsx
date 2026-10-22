@@ -1,14 +1,17 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Show } from "solid-js";
+import { Show, type Element } from "solid-js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 
 export type BoardSessionSurfaceProps = {
+  onViewRef?: (element: HTMLElementTagNameMap["openclaw-board-view"]) => void | (() => void);
+  controls?: Element;
   active: PresentationValue;
   session: BoardGetParams;
   snapshot: BoardSnapshot | undefined;
@@ -24,8 +27,10 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementR
   const active = usePanePresentation(() => props.active);
   return (
     <div class="board-session-surface" hidden={!active()} inert={!active()}>
+      {props.controls}
       <div class="board-session-surface__board">
         <openclaw-board-view
+          ref={[elementRef(props.onViewRef)]}
           prop:active={active()}
           prop:session={props.session}
           prop:snapshot={props.snapshot}

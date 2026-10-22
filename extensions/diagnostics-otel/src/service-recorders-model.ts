@@ -50,11 +50,10 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
       metadata: DiagnosticEventMetadata,
     ) {
       if (!runtime.tracesEnabled || !metadata.trusted) {
-        return undefined;
+        return;
       }
-      const trackedSpan = runtime.getTrackedInternalOrTrustedSpan(evt, metadata);
-      if (trackedSpan) {
-        return trackedSpan.spanContext();
+      if (runtime.getTrackedInternalOrTrustedSpan(evt, metadata)) {
+        return;
       }
       const spanAttrs: Record<string, string | number | boolean> = {
         "openclaw.provider": evt.provider,
@@ -69,17 +68,15 @@ export function createModelRecorders(runtime: DiagnosticsRecorderRuntime) {
         spanAttrs["openclaw.transport"] = evt.transport;
       }
       assignModelCallPromptStatsAttrs(spanAttrs, evt);
-      return runtime
-        .trackInternalOrTrustedSpan(
-          evt,
-          metadata,
-          runtime.spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
-            kind: SpanKind.CLIENT,
-            parentContext: runtime.activeTrustedParentContext(evt, metadata),
-            startTimeMs: evt.ts,
-          }),
-        )
-        .spanContext();
+      runtime.trackInternalOrTrustedSpan(
+        evt,
+        metadata,
+        runtime.spanWithDuration(modelCallSpanName(evt), spanAttrs, undefined, {
+          kind: SpanKind.CLIENT,
+          parentContext: runtime.activeTrustedParentContext(evt, metadata),
+          startTimeMs: evt.ts,
+        }),
+      );
     },
     recordModelCallFinished(
       evt: ModelCallLifecycleDiagnosticEvent,

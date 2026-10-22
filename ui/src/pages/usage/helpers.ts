@@ -1,4 +1,4 @@
-import type { SessionLogEntry, UsageProps } from "./types.ts";
+import type { SessionLogEntry, UsageFilterState } from "./usage-state-types.ts";
 
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
@@ -22,7 +22,7 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
 }
 
 export function prepareUsageDateRange(
-  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
+  range: Pick<UsageFilterState, "startDate" | "endDate" | "selectedDays" | "timeZone">,
 ) {
   const { startDate, endDate, selectedDays, timeZone } = range;
   const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;

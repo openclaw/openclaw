@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,6 +13,7 @@ import {
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
+import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -35,6 +36,7 @@ import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timelin
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -285,7 +287,12 @@ export function createModelLifecycle(params: {
     },
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
-  const observer = params.createObserver(areDiagnosticsEnabledForProcess());
+  const observer = params.createObserver(
+    areDiagnosticsEnabledForProcess() &&
+      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
+        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
+        hasInternalDiagnosticEventInterest("model.call.error", true)),
+  );
   const eventBase: ModelCallEventBase = {
     ...modelCallHookEventBase({ ...params.ctx, callId }),
     ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
@@ -371,6 +378,19 @@ export function createModelLifecycle(params: {
   signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
+    if (observer.state.reasoningSuppressed) {
+      const warning = recordReasoningSuppressedDiagnostic(
+        {
+          sessionKey: eventBase.sessionKey,
+          sessionId: eventBase.sessionId ?? (eventBase.sessionKey ? undefined : eventBase.runId),
+        },
+        eventBase.provider,
+        eventBase.model,
+      );
+      if (warning) {
+        log.warn(warning);
+      }
+    }
     if (observer.state.terminalEventEmitted) {
       return;
     }

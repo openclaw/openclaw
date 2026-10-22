@@ -6,7 +6,7 @@
  * falling back to the Bot Framework `activity.from.id`.
  */
 
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
   resolveMSTeamsAccountStateNamespace,
@@ -37,9 +37,7 @@ const MSTEAMS_MAX_SSO_TOKENS = 5000;
 const STORE_KEY_VERSION_PREFIX = "v2:";
 
 function makeMSTeamsSsoTokenStoreKey(connectionName: string, userId: string): string {
-  return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
-    .update(JSON.stringify([connectionName, userId]))
-    .digest("hex")}`;
+  return `${STORE_KEY_VERSION_PREFIX}${sha256Hex(JSON.stringify([connectionName, userId]))}`;
 }
 
 export function createMSTeamsSsoTokenStoreFs(params?: {
@@ -63,7 +61,7 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
       await withMSTeamsSqliteMutationLock(namespace, async () => {
         await tokenStore.register(
           makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
-          toPluginJsonValue({ ...token }),
+          toPluginJsonValue(token),
         );
       });
     },

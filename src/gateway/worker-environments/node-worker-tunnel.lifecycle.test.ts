@@ -40,7 +40,7 @@ import {
   transport,
   withWorkspaceDrain,
   workspaceTransfer,
-  workspaceCommandPayload,
+  workspaceReply,
   tunnelLaunchPlan as plan,
 } from "./node-worker-tunnel.test-support.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -82,10 +82,7 @@ async function expectPending(promise: Promise<unknown>) {
   expect(settled).not.toHaveBeenCalled();
 }
 const nullReply = { ok: true, payloadJSON: "null" };
-const drainReply = () => ({
-  ok: true,
-  payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
-});
+const drainReply = () => workspaceReply("/node/workspace", { stdout: "drained\n" });
 
 function receiptIdentity(input: NodeWorkerLaunchInput, planHash = "b".repeat(64)) {
   return {
@@ -185,7 +182,7 @@ describe("node worker tunnel lifetime", () => {
     }
   });
 
-  it.each([8_000, 30_000])(
+  it.each([3_000, 30_000])(
     "shares the %i ms shutdown budget across remote stop and drain without renewing it",
     async (budgetMs) => {
       const closeAll = vi.fn(async () => {});
@@ -200,7 +197,7 @@ describe("node worker tunnel lifetime", () => {
         if (request.command === STOP_ENVIRONMENT) {
           stopEntered.resolve();
           await new Promise<void>((resolve) => {
-            setTimeout(resolve, 6_000);
+            setTimeout(resolve, 1_000);
           });
           return nullReply;
         }
@@ -212,28 +209,31 @@ describe("node worker tunnel lifetime", () => {
       nodeTransport.invoke = invoke;
       const manager = createManager();
       const stopWithin = (ms: number) =>
-        runWithProcessCleanupBudget({ deadline: performance.now() + ms, warn: vi.fn() }, () =>
-          manager.stopAll(),
-        );
-      const stopping = stopWithin(budgetMs).catch((error: unknown) => error);
+        runWithProcessCleanupBudget({ deadline: performance.now() + ms, warn: vi.fn() }, () => {
+          manager.beginClose();
+          return manager.stopAll();
+        });
+      let stopped = false;
+      const stopping = stopWithin(budgetMs).catch((error: unknown) => {
+        stopped = true;
+        return error;
+      });
       try {
         await stopEntered.promise;
-        await vi.advanceTimersByTimeAsync(6_000);
-        const boundedMs = Math.min(10_000, budgetMs);
-        expect(invoke.mock.calls.map(([request]) => request.timeoutMs)).toEqual([
-          boundedMs,
-          boundedMs - 6_000,
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+          STOP_ENVIRONMENT,
+          "worker.workspace.exec.v1",
         ]);
-        await vi.advanceTimersByTimeAsync(boundedMs - 6_000);
+        const boundedMs = Math.min(5_000, budgetMs);
+        await vi.advanceTimersByTimeAsync(boundedMs - 1_001);
+        expect(stopped).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(stopped).toBe(true);
         expect(await stopping).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
         expect(closeAll).toHaveBeenCalledOnce();
         await expect(stopWithin(30_000)).rejects.toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
         expect(invoke).toHaveBeenCalledTimes(2);
-        invoke.mockImplementation(withWorkspaceDrain(async () => nullReply));
-        await expect(manager.stopAll()).resolves.toBeUndefined();
-        expect(invoke.mock.calls.slice(2).map(([request]) => request.timeoutMs)).toEqual([
-          60_000, 60_000,
-        ]);
       } finally {
         await vi.advanceTimersByTimeAsync(60_000);
         await stopping;
@@ -241,6 +241,155 @@ describe("node worker tunnel lifetime", () => {
       }
     },
   );
+
+  it("keeps the original shutdown deadline after a failed cleanup attempt", async () => {
+    enableTransferCleanup();
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
+    const manager = createManager();
+    const failure = new Error("Node cleanup failed before acknowledging stop");
+    nodeTransport.invoke = withWorkspaceDrain(async () => {
+      throw failure;
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    let retry: Promise<unknown> | undefined;
+    try {
+      manager.beginClose();
+      await expect(manager.stopAll()).rejects.toBe(failure);
+      await vi.advanceTimersByTimeAsync(2_000);
+      nodeTransport.invoke = withWorkspaceDrain(async () => {
+        entered.resolve();
+        await release.promise;
+        return nullReply;
+      });
+      let stopped = false;
+      retry = manager.stopAll().catch((error: unknown) => {
+        stopped = true;
+        return error;
+      });
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(stopped).toBe(true);
+      expect(await retry).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
+    } finally {
+      release.resolve();
+      await retry;
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds already-cancelling active turns at shutdown while retaining transfer settlement", async () => {
+    const records = [
+      record,
+      { ...record, environmentId: "environment-2", attachedSessionIds: ["session-2"] },
+    ];
+    const statusesEntered = createDeferred();
+    const cancellationsEntered = createDeferred();
+    const remoteRelease = createDeferred();
+    const transferRelease = createDeferred();
+    const host = await currentNodeHost();
+    host.capturedExecPolicy = true;
+    host.promptContext = 1;
+    let statusCount = 0;
+    let cancellationCount = 0;
+    nodeTransport.invoke = withWorkspaceDrain(async (request) => {
+      if (request.command === LAUNCH) {
+        const input = request.params as NodeWorkerLaunchInput;
+        request.onDispatchReady?.("launch-invoke");
+        return supervisorReply({
+          ...receiptIdentity(input, nodeWorkerPlanHash(input)),
+          state: "running",
+        });
+      }
+      if (request.command === READ_STATUS && ++statusCount === records.length) {
+        statusesEntered.resolve();
+      }
+      if (request.command === CANCEL_LAUNCH && ++cancellationCount === records.length) {
+        cancellationsEntered.resolve();
+      }
+      // The remote owner never acknowledges cancellation or environment stop.
+      await remoteRelease.promise;
+      return nullReply;
+    });
+    transfer.close = vi.fn(async () => await transferRelease.promise);
+    const closeAll = vi.fn(async () => {});
+    transfer.closeAll = closeAll;
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => nodeTransport,
+      sleep: async () => {},
+    });
+    const manager = createManager({
+      getEnvironment: (id) => records.find((entry) => entry.environmentId === id),
+      listEnvironments: () => records,
+      launchNodeWorker: adapter.launch,
+    });
+    const controllers = records.map(() => new AbortController());
+    const launchSettled = vi.fn();
+    const launches: Promise<unknown>[] = [];
+    let stopping: Promise<unknown> | undefined;
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    try {
+      for (const [index, currentEnvironment] of records.entries()) {
+        const sessionId = currentEnvironment.attachedSessionIds[0]!;
+        const handle = await manager.start({
+          ...startRequest(),
+          environmentId: currentEnvironment.environmentId,
+          sessionId,
+        });
+        const launchPlan = plan();
+        launchPlan.admission.environmentId = currentEnvironment.environmentId;
+        launchPlan.admission.sessionId = sessionId;
+        launchPlan.assignment.turnId = `turn-${index + 1}`;
+        launchPlan.assignment.runId = `run-${index + 1}`;
+        launches.push(
+          handle
+            .launchTurn({
+              plan: launchPlan,
+              turnClaim: {
+                ...turnClaim(),
+                sessionId,
+                runId: launchPlan.assignment.runId,
+                owner: {
+                  kind: "worker",
+                  environmentId: currentEnvironment.environmentId,
+                  ownerEpoch: currentEnvironment.ownerEpoch,
+                },
+              },
+              signal: controllers[index]!.signal,
+            })
+            .then(launchSettled, (error: unknown) => {
+              launchSettled();
+              return error;
+            }),
+        );
+      }
+      await statusesEntered.promise;
+      for (const controller of controllers) {
+        controller.abort(new Error("active turn cancelled before restart"));
+      }
+      await cancellationsEntered.promise;
+      manager.beginClose();
+      const stopSettled = vi.fn();
+      stopping = manager.stopAll().then(stopSettled, (error: unknown) => {
+        stopSettled();
+        return error;
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(launchSettled).toHaveBeenCalledTimes(2);
+      expect(transfer.close).toHaveBeenCalledTimes(2);
+      expect(stopSettled).not.toHaveBeenCalled();
+      expect(closeAll).not.toHaveBeenCalled();
+      transferRelease.resolve();
+      expect(await stopping).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
+      expect(closeAll).toHaveBeenCalledOnce();
+    } finally {
+      transferRelease.resolve();
+      await vi.advanceTimersByTimeAsync(30_000);
+      remoteRelease.resolve();
+      await Promise.allSettled([...launches, ...(stopping ? [stopping] : [])]);
+      vi.useRealTimers();
+    }
+  });
 
   it("reads the current destination's launch vocabulary with a legacy fallback while offline", async () => {
     const host = await currentNodeHost();

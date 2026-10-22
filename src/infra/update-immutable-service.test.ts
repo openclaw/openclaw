@@ -16,7 +16,7 @@ import {
   assertImmutableServiceStoppedCurrent,
   inspectImmutableActivationService,
   controlImmutableService,
-  verifyImmutableService,
+  readImmutableService,
 } from "./update-immutable-service.js";
 
 vi.mock("node:fs", async (original) => {
@@ -77,7 +77,7 @@ it.each(["stateDir", "configPath", "profile"] as const)(
   "refuses adoption when the supplied %s does not match the effective service",
   async (key) => {
     service[key] = key === "profile" ? "other" : "/unrelated";
-    await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+    await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
       "effective environment",
     );
   },
@@ -89,7 +89,7 @@ it("refuses a current symlink redirected to another generation", async () => {
   await fs.writeFile(path.join(other, "dist", "index.js"), "");
   await fs.unlink(path.join(root, "current"));
   await fs.symlink(other, path.join(root, "current"));
-  await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+  await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
     "current immutable generation",
   );
 });
@@ -321,9 +321,9 @@ describe("immutable activation service", () => {
         "gateway",
       ];
       command.workingDirectory = generation;
-      await expect(
-        verifyImmutableService(service, root, generation, node),
-      ).resolves.toBeUndefined();
+      await expect(readImmutableService(service, root, generation, node)).resolves.toMatchObject({
+        command,
+      });
       await expect(inspect()).rejects.toThrow("packaged stable Gateway launcher");
       expect(lifecycle.stopSystemdService).not.toHaveBeenCalled();
       expect(lifecycle.startSystemdService).not.toHaveBeenCalled();

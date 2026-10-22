@@ -64,11 +64,11 @@ it.each([
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     };
     const request = vi.fn(async (method: string) =>
-      method === "logbook.status" ? status : method === "logbook.days" ? { days: [] } : timeline,
+      method === "logbook.status" ? status : timeline,
     );
     // SAFETY: This view fixture only invokes request on the browser client.
     const client = { request } as unknown as GatewayBrowserClient;
-    dispose = mountSolid(() => <Logbook client={client} connected={true} />, {
+    dispose = mountSolid(() => <Logbook initialClient={client} />, {
       container,
     }).unmount;
     await waitForSolid(() =>

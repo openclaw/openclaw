@@ -348,7 +348,6 @@ export function createPersonalGitHubPublicationCoordinator(
       action.assertCurrent();
       if (existing) {
         assertPersonalGitHubPublicationReplay(existing, input, selected);
-        action.assertCurrent();
         return (await status(existing, action, action)).result;
       }
       const bound = await bindPersonalGitHubPublicationSelection(action, selected, {

@@ -7,6 +7,7 @@ import type {
 } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
+  hasOrphanedMainSessionWork,
   hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
   isRetryableUnadoptedChatClaim,
@@ -29,6 +30,7 @@ import {
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import {
   captureGatewaySessionControllerWork,
+  captureSessionControllerSettlement,
   isSessionControllerWorkActive,
 } from "../../sessions/session-controller.lifecycle.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
@@ -286,6 +288,7 @@ export async function markRestartAbortedMainSessions(params: {
               captureYieldedMainSessionContinuation({
                 entry,
                 requester,
+                purpose: "recovery",
               })
             ) {
               recordSkip("yielded_continuation", sessionKey);
@@ -371,23 +374,11 @@ type OrphanMarkParams = {
   cfg?: OpenClawConfig;
   updatedBeforeMs?: number;
   lifecycleGeneration: string;
+  onOwnerPending?: (
+    target: RestartRecoveryStoreTarget & { sessionKey: string; sessionId: string },
+    settled: Promise<void>,
+  ) => void;
 };
-
-function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
-  const settledInterruption =
-    entry.abortedLastRun === false &&
-    !entry.lifecycleRunId &&
-    !entry.activeWriterRunId &&
-    entry.lastRunId !== undefined &&
-    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
-  return (
-    entry.archivedAt === undefined &&
-    isMainRestartRecoveryCandidate(entry, sessionKey) &&
-    (hasMainSessionRecoveryClaim(entry) ||
-      entry.abortedLastRun === true ||
-      (entry.status === "interrupted" && !settledInterruption))
-  );
-}
 
 async function markOrphanedMainSessionStore(
   params: OrphanMarkParams & {
@@ -404,9 +395,9 @@ async function markOrphanedMainSessionStore(
     const entry = await readSessionEntryReadOnlyInWorker({ ...params.target, sessionKey: key });
     sessionKeys = entry && hasOrphanedMainSessionWork(entry, key) ? [key] : [];
   } else {
-    sessionKeys = (await readSessionEntrySummariesInWorker(params.target))
-      .filter(({ entry, sessionKey }) => hasOrphanedMainSessionWork(entry, sessionKey))
-      .map(({ sessionKey }) => sessionKey);
+    sessionKeys = (
+      await readSessionEntrySummariesInWorker({ ...params.target, mainSessionRecovery: "orphans" })
+    ).map(({ sessionKey }) => sessionKey);
   }
   if (sessionKeys.length === 0) {
     return { marked: 0, skipped: 0 };
@@ -466,11 +457,22 @@ async function markOrphanedMainSessionStore(
         ) ||
         isSessionControllerWorkActive(params.target.storePath, [sessionKey, entry.sessionId]);
       if (hasLiveOwner()) {
+        const settled = captureSessionControllerSettlement({
+          scope: params.target.storePath,
+          identities: [sessionKey, entry.sessionId],
+        });
+        if (settled) {
+          params.onOwnerPending?.(
+            { ...params.target, sessionKey, sessionId: entry.sessionId },
+            settled,
+          );
+        }
         return undefined;
       }
       const continuation = captureYieldedMainSessionContinuation({
         entry,
         requester: requesters.get(sessionKey),
+        purpose: "recovery",
       });
       if (continuation) {
         // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
@@ -545,6 +547,7 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   stateDir?: string;
   startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
+  onOwnerPending?: OrphanMarkParams["onOwnerPending"];
 }): Promise<{ marked: number; skipped: number; failedTargets?: RestartRecoveryStoreTarget[] }> {
   const result = { marked: 0, skipped: 0 };
   const failedTargets: RestartRecoveryStoreTarget[] = [];

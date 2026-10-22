@@ -60,13 +60,12 @@ export function parseAssistantTextSignature(
   } else {
     try {
       const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+      const phase = normalizeAssistantPhase(parsed.phase);
       result =
         parsed.v === 1
           ? {
               ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-              ...(normalizeAssistantPhase(parsed.phase)
-                ? { phase: normalizeAssistantPhase(parsed.phase) }
-                : {}),
+              ...(phase ? { phase } : {}),
             }
           : null;
     } catch {

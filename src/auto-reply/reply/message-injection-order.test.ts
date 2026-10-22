@@ -107,11 +107,7 @@ it.each([
         },
         mode,
         text: "also check the migration",
-        getToolAuthorityOverlay: () => ({
-          senderIsOwner: true,
-          disableTools: false,
-          traceAuthorized: false,
-        }),
+        getToolAuthorityOverlay: () => authority(true),
         prepareToolAuthorityOverlay: async () => {
           await Promise.resolve();
           context = "prepared legacy Talk context";
@@ -342,11 +338,7 @@ it("classifies refused caller policy projection as an authority mismatch before 
       text: "refused",
       options: {
         isInboundUserMessage: true,
-        toolAuthorityOverlay: {
-          senderIsOwner: false,
-          disableTools: false,
-          traceAuthorized: false,
-        },
+        toolAuthorityOverlay: authority(),
       },
     }),
   ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
@@ -371,6 +363,8 @@ it.each([
       agentId: "main",
       sessionId: talkSessionId,
       sessionKey: talkSessionKey,
+      messageProvider: "telegram",
+      senderId: "talk-requester",
     });
     const operation = createOperation({ sessionId: talkSessionId, sessionKey: talkSessionKey });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
@@ -382,52 +376,34 @@ it.each([
       entered.resolve();
       await resume.promise;
     };
-    const injection: Injection = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, options, assertCurrent) => {
+    const handle = makeBackend(
+      talkSessionId,
+      fingerprint,
+      async (text, assertCurrent, prepareCurrent, options) => {
         if (acceptBeforeRevocation) {
+          if (prepareCurrent) {
+            await prepareCurrent();
+          }
           assertCurrent();
           enqueue(text);
           options?.onQueueAccepted?.(true);
         }
         await waitForCaller();
+        if (prepareCurrent) {
+          await prepareCurrent();
+        }
         assertCurrent();
         if (!acceptBeforeRevocation) {
           enqueue(text);
         }
       },
-      ...(backend === "prepared"
-        ? {
-            queueMessageAsync: (async (text, options, preparation) => {
-              if (acceptBeforeRevocation) {
-                await preparation.prepareCurrent();
-                preparation.assertCurrent();
-                enqueue(text);
-                options?.onQueueAccepted?.(true);
-              }
-              await waitForCaller();
-              await preparation.prepareCurrent();
-              preparation.assertCurrent();
-              if (!acceptBeforeRevocation) {
-                enqueue(text);
-              }
-            }) satisfies NonNullable<Injection["queueMessageAsync"]>,
-          }
-        : {}),
-    };
-    const handle = {
-      ...createHandle({ runId: talkSessionId, toolAuthorityFingerprint: fingerprint }),
-      kind: "embedded" as const,
-      cancel() {},
-      messageInjectionV2: injection,
-    };
+      backend === "prepared",
+    );
     registerTestEmbeddedRun(talkSessionId, handle, talkSessionKey, undefined, undefined, operation);
     operation.setPhase("running");
     let overlay: Overlay = {
-      senderIsOwner: false,
-      disableTools: false,
-      traceAuthorized: false,
+      messageProvider: "telegram",
+      ...authority(false, "talk-requester"),
     };
     const outcome = controlTalk({
       sessionKey: talkSessionKey,

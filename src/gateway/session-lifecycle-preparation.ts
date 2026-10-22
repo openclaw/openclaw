@@ -408,6 +408,7 @@ export async function commitPreparedSessionWorkspace(params: {
   assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
   projectId?: string;
+  priorWorkspace?: SessionEntry["priorWorkspace"];
   clearPendingIntent?: boolean;
   onCommitted?: () => void;
   missingSessionMessage: string;
@@ -428,6 +429,7 @@ export async function commitPreparedSessionWorkspace(params: {
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+          ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent
             ? { pendingProjectGitUrl: undefined, pendingWorktree: undefined }
             : {}),
@@ -448,6 +450,25 @@ export async function commitPreparedSessionWorkspace(params: {
     }
     return entry;
   } catch (error) {
+    if (prepared.worktree) {
+      // A lost acknowledgement or post-commit error must not remove the accepted checkout.
+      // If this read cannot establish ownership, preserve the allocation for recovery.
+      const { withSessionEntryReadOnlyInWorker } =
+        await import("../config/sessions/session-entry-read-runtime.js");
+      const bound = await withSessionEntryReadOnlyInWorker(
+        params.target,
+        () => {},
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value?.worktree?.id === prepared.worktree?.id;
+        },
+      );
+      if (bound) {
+        throw error;
+      }
+    }
     await prepared.rollback?.();
     throw error;
   }

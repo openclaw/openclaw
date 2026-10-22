@@ -1,5 +1,6 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type {
+  FollowupRun,
   ReplyOperation,
   ReplyOperationRunState,
   ReplyPreRunRejectionCode,
@@ -66,6 +67,34 @@ export function recordReplyOperationAgentTurn(
     }
     state.agentTurnOwner = owner;
   }
+}
+
+export function recordReplyFollowupAdmission(
+  state: ReplyOperationRunState | undefined,
+  params: {
+    explicitFollowup: boolean;
+    requesterMismatch: boolean;
+    unavailableSteer: boolean;
+    followupRun: FollowupRun;
+  },
+): void {
+  if (!state) {
+    return;
+  }
+  state.admission = {
+    status: "accepted",
+    mode: "followup",
+    ...(params.explicitFollowup
+      ? { reason: "explicit-followup" as const }
+      : params.requesterMismatch
+        ? { reason: "requester-mismatch" as const }
+        : params.unavailableSteer &&
+            params.followupRun.currentInboundEventKind !== "room_event" &&
+            (!params.followupRun.run.inputProvenance ||
+              params.followupRun.run.inputProvenance.kind === "external_user")
+          ? { reason: "steering-unavailable" as const }
+          : {}),
+  };
 }
 
 export function recordReplyPreRunRejection(

@@ -2,7 +2,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry as loadAccessorSessionEntry,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { sessionStoreEntry } from "./test/server-sessions.test-helpers.js";
@@ -70,23 +69,6 @@ export async function seedTranscriptRows(params: {
       now: Date.parse(`2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`),
     });
   }
-}
-
-export async function loadTranscriptRows(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<Array<Record<string, unknown>>> {
-  const rows = await loadTranscriptEvents({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-  return rows.map((row) =>
-    row && typeof row === "object" && !Array.isArray(row) ? (row as Record<string, unknown>) : {},
-  );
 }
 
 export function isCompactOperationEvent(message: unknown, phase: "start" | "end") {

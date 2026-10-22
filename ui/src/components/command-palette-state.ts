@@ -9,6 +9,7 @@ import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
@@ -32,7 +33,6 @@ import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
-import type { CommandPaletteProps, PaletteFilter } from "./command-palette-view.tsx";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 const SEARCH_DEBOUNCE_MS = 200;
@@ -50,6 +50,8 @@ const SESSION_SEARCH_SCOPE = {
 } as const;
 const CATALOG_CACHE_TTL_MS = 30_000;
 
+export type PaletteFilter = "all" | "sessions" | "messages";
+
 export type CommandPaletteProperties = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
@@ -59,7 +61,6 @@ export type CommandPaletteProperties = {
 };
 /** Search and draft handoffs keep same-turn reads while Solid owns the presentation. */
 export class CommandPaletteState {
-  private readonly listeners = new Set<() => void>();
   private publicationPending = false;
   private connected = false;
   readonly changed = () => {
@@ -71,19 +72,17 @@ export class CommandPaletteState {
       if (this.connected) {
         this.draft.synchronize();
         this.draft.settled();
+        if (this.open) {
+          this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+        }
       }
       this.publicationPending = false;
     });
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
   open = false;
   private pluginIconUrls: Record<string, string> = {};
+  private readonly pluginIconTiles = new Set<() => string>();
   private readonly pluginIcons = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(this.context!),
     isConnected: () => this.element.isConnected && this.open && this.gateway.connected,
@@ -92,10 +91,12 @@ export class CommandPaletteState {
       this.changed();
     },
   });
-  private initialInput: CommandPaletteOpenInput | undefined;
-  private takeInitialInput: CommandPaletteInputHandoff | undefined;
+  private initialInput: CommandPaletteOpenInput | CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
-  private readonly mentionMenu = createHumanMentionMenu();
+  private stopInputFocus: (() => void) | undefined;
+  private readonly mentionMenu = createHumanMentionMenu((nextOpen) =>
+    this.notifyMentionChange(nextOpen),
+  );
   private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
   private composing = false;
@@ -106,12 +107,13 @@ export class CommandPaletteState {
     getTextarea: () => this.inputElement ?? null,
     commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
   };
-  private readonly notifyMentionChange = () => {
-    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+  // Menu transitions arrive before Solid publishes the new store value.
+  private readonly notifyMentionChange = (nextOpen = this.mentionMenu.open) => {
+    if (nextOpen || this.draft.mentions.length > 0) {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     } else {
-      this.scheduleSessionSearch(this.draft.message);
+      this.scheduleSessionSearch(this.draft.message, false, nextOpen);
     }
     this.changed();
   };
@@ -124,7 +126,7 @@ export class CommandPaletteState {
   private activeId: string | null = null;
   private sessionItems: readonly CommandPaletteItem[] = [];
   private catalogItems: readonly CommandPaletteItem[] = [];
-  private sessionSearchPending = false;
+  private sessionSearchRead: { promise: Promise<void> } | undefined;
   private sessionSearchFailed = false;
   private sessionSearchPartial = false;
   private archivedTranscriptsExcluded = 0;
@@ -138,7 +140,17 @@ export class CommandPaletteState {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private readonly modelReader = new ModelCatalogReader(this.changed);
+  private modelItems: readonly CommandPaletteItem[] = [];
+  private readonly modelReader = new ModelCatalogReader(() => {
+    const snapshot = this.modelReader.snapshot;
+    if (snapshot.hasSnapshot) {
+      this.settledModels = snapshot;
+      // Project accepted catalog publications, not every rendering/selection read.
+      this.modelItems = getCommandPaletteModelItems(snapshot);
+    }
+    this.changed();
+  });
+  private settledModels = this.modelReader.snapshot;
   private readonly gateway: GatewayPageBinding;
 
   constructor(
@@ -147,6 +159,7 @@ export class CommandPaletteState {
     private readonly context: ApplicationContext,
     rendered: () => Promise<unknown>,
     private readonly onDraftInitialized: () => void,
+    private readonly publish: () => void,
   ) {
     this.draft = new PaletteSessionDraft(
       element,
@@ -172,7 +185,18 @@ export class CommandPaletteState {
     );
     this.gateway = new GatewayPageBinding(this.changed, {
       getGateway: () => this.context?.gateway,
-      invalidateRequests: this.handleAgentSelection,
+      invalidateRequests: (change) => {
+        this.invalidateSessionSearch();
+        this.sessionSearchRead = undefined;
+        this.catalogLoad = undefined;
+        this.modelReader.clear();
+        if (change.identityChanged) {
+          this.clearSessionSearch();
+          this.clearCatalogSearch();
+        } else if (change.snapshot.phase !== "connected") {
+          this.scheduleSessionSearch(this.draft.message);
+        }
+      },
       onSnapshot: () => this.synchronizePresentationScope(),
       ensureInitialData: () => this.scheduleSessionSearch(this.draft.message),
     });
@@ -187,6 +211,8 @@ export class CommandPaletteState {
       if (invalidation === "clear") {
         this.catalogLoad = undefined;
         this.catalogItems = [];
+        this.settledModels = this.modelReader.snapshot;
+        this.modelItems = getCommandPaletteModelItems(this.settledModels);
       }
       if (this.open) {
         void this.ensureCatalogItems(true);
@@ -212,8 +238,8 @@ export class CommandPaletteState {
   disconnect() {
     this.connected = false;
     this.initialInput = undefined;
-    this.takeInitialInput = undefined;
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
+    this.stopInputFocus = undefined;
     this.inputElement = undefined;
     this.open = false;
     this.gateway.dispose();
@@ -239,23 +265,19 @@ export class CommandPaletteState {
     this.onDraftInitialized();
     this.composing = false;
     this.mentionInput = undefined;
-    this.takeInitialInput = typeof input === "function" ? input : undefined;
-    this.initialInput =
-      typeof input === "function"
-        ? undefined
-        : (input ?? {
-            value: this.draft.message,
-            selectionStart: this.draft.message.length,
-            selectionEnd: this.draft.message.length,
-            selectionDirection: "none",
-            returnFocus,
-          });
-    if (this.initialInput) {
+    this.initialInput = input ?? {
+      value: this.draft.message,
+      selectionStart: this.draft.message.length,
+      selectionEnd: this.draft.message.length,
+      selectionDirection: "none",
+      returnFocus,
+    };
+    if (typeof this.initialInput !== "function") {
       this.draft.setMessage(this.initialInput.value);
     }
     this.activeId = null;
     this.filter = "all";
-    this.scheduleSessionSearch(this.draft.message);
+    this.scheduleSessionSearch(this.draft.message, false, false);
     this.changed();
   }
 
@@ -271,17 +293,23 @@ export class CommandPaletteState {
       this.activeId = null;
       this.clearCatalogSearch();
     }
+    if (
+      gateway?.snapshot.phase === "connected" &&
+      gateway.snapshot.hello &&
+      !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null)
+    ) {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+    }
     this.presentationScope = scope;
   }
 
   readonly togglePalette = () => {
-    if (this.open) {
-      if (!this.draft.submitting) {
-        this.closePalette();
-      }
-      return;
+    if (!this.open) {
+      this.openPalette();
+    } else if (!this.draft.submitting) {
+      this.closePalette();
     }
-    this.openPalette();
   };
 
   private closePalette() {
@@ -289,7 +317,6 @@ export class CommandPaletteState {
     this.composing = false;
     this.mentionInput = undefined;
     this.initialInput = undefined;
-    this.takeInitialInput = undefined;
     this.open = false;
     this.draft.close();
     this.clearSessionSearch();
@@ -303,9 +330,11 @@ export class CommandPaletteState {
     if (previous && previous !== this.inputElement) {
       return;
     }
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
-    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus = this.inputElement
+      ? listen(this.inputElement, "focus", this.adoptInitialInput)
+      : undefined;
     // The dialog may have focused the field before its committed ref arrived.
     this.adoptInitialInput();
   };
@@ -315,9 +344,9 @@ export class CommandPaletteState {
     if (!this.open || !element?.isConnected || document.activeElement !== element) {
       return;
     }
-    if (this.takeInitialInput) {
-      const take = this.takeInitialInput;
-      this.takeInitialInput = undefined;
+    if (typeof this.initialInput === "function") {
+      const take = this.initialInput;
+      this.initialInput = undefined;
       const input = take();
       if (!input) {
         this.closePalette();
@@ -368,7 +397,7 @@ export class CommandPaletteState {
   private clearSessionSearch() {
     this.invalidateSessionSearch();
     this.sessionItems = [];
-    this.sessionSearchPending = false;
+    this.sessionSearchRead = undefined;
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
     this.archivedTranscriptsExcluded = 0;
@@ -377,6 +406,8 @@ export class CommandPaletteState {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelItems = [];
+    this.settledModels = this.modelReader.snapshot;
     this.catalogLoad = undefined;
     this.catalogItems = [];
     this.pluginIcons.reset();
@@ -427,11 +458,16 @@ export class CommandPaletteState {
         gateway.snapshot.client === client
       ) {
         this.catalogItems = items;
-        this.pluginIcons.reconcileKeys(
-          new Set(
-            items.flatMap((item) => (item.hasPluginIcon && item.pluginId ? [item.pluginId] : [])),
-          ),
+        const eligible = new Set(
+          items.flatMap((item) => (item.hasPluginIcon && item.pluginId ? [item.pluginId] : [])),
         );
+        this.pluginIcons.reconcileKeys(eligible);
+        for (const readId of this.pluginIconTiles) {
+          const pluginId = readId();
+          if (eligible.has(pluginId)) {
+            this.pluginIcons.load(pluginId);
+          }
+        }
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
         this.changed();
       }
@@ -440,11 +476,15 @@ export class CommandPaletteState {
     return promise;
   }
 
-  private scheduleSessionSearch(query: string, immediate = false) {
+  private scheduleSessionSearch(
+    query: string,
+    immediate = false,
+    mentionOpen = this.mentionMenu.open,
+  ) {
     // Retire in-flight results immediately, but keep the settled search visible
     // until the typing burst ends. The view disables selection during this pause.
     this.invalidateSessionSearch();
-    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
+    if (this.promptMode || mentionOpen || this.draft.mentions.length > 0) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
       this.clearSessionSearch();
@@ -462,22 +502,18 @@ export class CommandPaletteState {
       return;
     }
     const applySearch = () => {
-      this.clearSessionSearch();
       if (this.searchQuery !== query) {
+        this.clearSessionSearch();
         this.activeId = null;
       }
       this.searchQuery = query;
       if (search.length < SESSION_SEARCH_MIN_CHARS) {
         return;
       }
-      this.sessionSearchPending = Boolean(
-        this.props.onSelectSession && this.context?.sessions && this.gateway.connected,
-      );
       void this.ensureCatalogItems();
       if (this.props.onSelectSession) {
-        void this.searchSessions(search);
-      } else {
-        this.sessionSearchPending = false;
+        this.sessionSearchRead = { promise: this.searchSessions(search) };
+        this.changed();
       }
     };
     if (immediate) {
@@ -491,10 +527,10 @@ export class CommandPaletteState {
     const { sessions, gateway } = this.context;
     const client = gateway.snapshot.client;
     if (!sessions || gateway?.snapshot.phase !== "connected" || !client) {
-      this.sessionSearchPending = false;
       return;
     }
     const requestId = ++this.sessionSearchId;
+    this.sessionSearchFailed = false;
     const scope = gatewayPresentationScope(gateway);
     const isCurrent = () =>
       requestId === this.sessionSearchId &&
@@ -546,7 +582,6 @@ export class CommandPaletteState {
       }
     } finally {
       if (isCurrent()) {
-        this.sessionSearchPending = false;
         this.changed();
       }
     }
@@ -583,7 +618,6 @@ export class CommandPaletteState {
       event?.inputType === "insertFromDrop"
     ) {
       this.mentionMenu.close();
-      this.notifyMentionChange();
       return;
     }
     this.mentionMenu.update(
@@ -596,9 +630,10 @@ export class CommandPaletteState {
     );
   }
 
-  readProps(): CommandPaletteProps {
-    const models = this.modelReader.snapshot;
+  readProps() {
+    const models = this.settledModels;
     return {
+      ...this.props,
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.draft.message,
@@ -610,7 +645,7 @@ export class CommandPaletteState {
       mentionHost: this.mentionHost,
       onMentionChange: this.notifyMentionChange,
       composing: this.composing,
-      onBeforeInput: (event) => {
+      onBeforeInput: (event: InputEvent) => {
         const input = this.inputElement;
         this.mentionInput = input
           ? {
@@ -630,12 +665,16 @@ export class CommandPaletteState {
       },
       onCompositionEnd: () => {
         this.composing = false;
+        const wasOpen = this.mentionMenu.open;
         this.updateMentionMenu();
-        this.scheduleSessionSearch(this.draft.message);
+        // The menu callback handles closes; closed menus still need the IME refresh.
+        if (!wasOpen) {
+          this.scheduleSessionSearch(this.draft.message);
+        }
       },
       activeId: this.activeId,
       filter: this.filter,
-      onFilterChange: (filter) => {
+      onFilterChange: (filter: PaletteFilter) => {
         this.filter = filter;
         this.activeId = null;
         this.changed();
@@ -646,7 +685,10 @@ export class CommandPaletteState {
         this.context?.agentSelection.state.selectedId ??
         resolveUiSelectedGlobalAgentId(this.context?.gateway.snapshot ?? {}),
       sessionItems: this.sessionItems,
-      modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
+      remoteSearchOffline:
+        !this.gateway.connected && Boolean(normalizeOptionalString(this.searchQuery)),
+      modelSearchError:
+        this.gateway.connected && this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
       catalogItems: [
         ...getStaticCommandPaletteCatalogItems(
@@ -654,9 +696,9 @@ export class CommandPaletteState {
           this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...getCommandPaletteModelItems(models),
+        ...this.modelItems,
       ],
-      sessionSearchPending: this.sessionSearchPending,
+      sessionSearchRead: this.sessionSearchRead,
       catalogSearchPending: Boolean(
         normalizeOptionalString(this.searchQuery) &&
         !this.promptMode &&
@@ -666,10 +708,8 @@ export class CommandPaletteState {
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,
       archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
-      desktopAvailable: this.props.desktopAvailable,
-      custodianAvailable: this.props.custodianAvailable,
       onToggle: this.togglePalette,
-      onQueryChange: (query, event) => {
+      onQueryChange: (query: string, event: InputEvent) => {
         this.draft.setMessage(
           query,
           updateHumanMentions(this.draft.message, query, this.draft.mentions, this.mentionInput),
@@ -677,16 +717,20 @@ export class CommandPaletteState {
         this.mentionInput = undefined;
         this.updateMentionMenu(event);
       },
-      onActiveIdChange: (id) => {
+      onActiveIdChange: (id: string) => {
         this.activeId = id;
         this.changed();
       },
-      onNavigate: this.props.onNavigate,
-      onSelectSession: this.props.onSelectSession,
-      onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
-      onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
-      onPluginIconVisible: (pluginId) => this.pluginIcons.load(pluginId),
+      onPluginIconError: (pluginId: string) => this.pluginIcons.handleError(pluginId),
+      registerPluginIcon: (readId: () => string) => {
+        this.pluginIconTiles.add(readId);
+        const pluginId = readId();
+        if (this.catalogItems.some((item) => item.pluginId === pluginId && item.hasPluginIcon)) {
+          this.pluginIcons.load(pluginId);
+        }
+        return () => this.pluginIconTiles.delete(readId);
+      },
       onInputRef: this.handleInputRef,
       draft: this.draft,
     };

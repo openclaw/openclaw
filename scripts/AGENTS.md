@@ -19,6 +19,8 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 - macOS-only Bash scripts: `#!/bin/bash`, Bash 3.2-compatible syntax. Invoke directly or with `/bin/bash`, including fixtures. Add new entrypoints to `nativeScripts` in `test/scripts/build-and-run-mac.test.ts`.
 - Portable Bash entrypoints using heredocs/here-strings (including sourced helpers): copy the Darwin Bash 5.3+ re-exec guard from `test/scripts/build-and-run-mac.test.ts` before those operations (prevents heredoc pipe deadlocks) and add the file to `portableScripts`. stdin/sourced installers: request `/bin/bash` when replay impossible.
 - Tests: run through `scripts/run-vitest.mjs` or root `pnpm test ...`; bare `vitest ...` starts local watch mode unless `run` or `--run` explicit.
+- Changes to `scripts/lib/` planners need the affected planner tests and the tooling test typecheck leaf: `node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental`. `pnpm tsgo:scripts` does not typecheck their test callers.
+- macOS CI workflow changes: run all `test/scripts/ci-workflow*.test.ts`, including failure-collection cases in `ci-workflow-complete.test.ts`, plus `ci-swift-cache-lifetime.test.ts` and `macos-native-test-launch.test.ts`; the workflow guards also exercise native runtime artifact packing and restoration. Validate workflows with `scripts/check-workflows.mts`.
 - Lint (one/few files): direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>`, not sharded `pnpm lint`.
 
 ## TypeScript Syntax
@@ -39,4 +41,4 @@ Own local tooling, script wrappers, generated-artifact helper rules.
 
 - Fs-safe dependency trouble: follow [on-demand vendoring instructions](vendor-fs-safe.md); vendor contents local, registry dependencies default.
 - Trusted normal checkout missing dependencies: `pnpm install --frozen-lockfile`, retry once before diagnosing code defect.
-- Formatting: `pnpm format` defaults to oxfmt; `OPENCLAW_FORMAT_TOOL=bun` opts into the pinned fork. CI checks oxfmt/Bun parity. Generated-artifact gates retain oxfmt; see [caller inventory](README.md#formatting-and-lint-selection). Typechecking: repository `tsgo` lanes. Scope: `pnpm changed:lanes --json`; targeted tests/checks. Avoiding worktree reconciliation: `node scripts/run-vitest.mjs` with ready dependencies.
+- Formatting: `pnpm format` defaults locally to the pinned Bun fork, with an oxfmt fallback; `OPENCLAW_FORMAT_TOOL=oxfmt` forces oxfmt. CI checks oxfmt/Bun parity. Generated-artifact gates retain oxfmt; see [caller inventory](README.md#formatting-and-lint-selection). Typechecking: repository `tsgo` lanes. Scope: `pnpm changed:lanes --json`; targeted tests/checks. Avoiding worktree reconciliation: `node scripts/run-vitest.mjs` with ready dependencies.

@@ -6,7 +6,10 @@ import { resolveGatewayService, type GatewayService } from "../../daemon/service
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
-import { resolveUpdateStateContentVersion } from "../../infra/update-candidate-state.versions.js";
+import {
+  resolveUpdateStateContentVersion,
+  resolveUpdateStateTargetVersion,
+} from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
@@ -126,7 +129,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
             ? launchAgentRecovery.message
             : launchAgentRecovery.detail,
       },
-      { env },
+      params.updateRun,
     );
   }
   if (launchAgentRecovery.status !== "recovered") {
@@ -283,7 +286,13 @@ export async function admitInstalledGatewayRecovery(
       assertCurrent();
       return databases.flatMap((database) => {
         const observed = resolveUpdateStateContentVersion(database);
-        const expected = database.path === sharedPath ? candidate.state : candidate.agent;
+        const expected = resolveUpdateStateTargetVersion(database.path, {
+          sharedPath,
+          candidateSchemaVersions: candidate,
+        });
+        if (expected === undefined) {
+          throw new Error(`Candidate schema version is unavailable for ${database.path}.`);
+        }
         return observed !== null && observed !== expected
           ? [{ ...database, observed, expected }]
           : [];
@@ -362,12 +371,21 @@ export async function admitInstalledGatewayRecovery(
     result.reason = "post-update-failed";
   }
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
+  // Health observation alone cannot distinguish an untouched installation from
+  // forward recovery. Preserve this owner's admission for later repair guidance.
+  result.steps.push({
+    name: "installed gateway recovery admission",
+    command: "admit installed gateway recovery",
+    cwd: root,
+    durationMs: 0,
+    exitCode: 0,
+  });
   if (params.opts.run) {
     recordUpdateRunDiagnostics(
       params.opts.run.runId,
       { recovery: result.recovery },
       (message) => defaultRuntime.error(message),
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   return true;

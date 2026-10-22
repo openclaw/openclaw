@@ -46,7 +46,6 @@ import { closeTalkClientGatewayControlSession } from "../client-gateway-control.
 import { cleanupTalkConnection } from "../session-registry.js";
 import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 import { talkClientHandlers } from "./client.js";
-export { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
 
 const nativeUpstream = await vi.hoisted(async () => {
   const { createNativeSocketFixture } = await import("./client-native-socket.test-support.js");

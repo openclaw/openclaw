@@ -76,7 +76,7 @@ type MediaAuthorization = {
   topicConfig?: TelegramTopicConfig;
 };
 
-export type TelegramMediaGroupInput = MediaAuthorization & {
+type TelegramMediaGroupInput = MediaAuthorization & {
   ctx: TelegramContext;
   msg: Message;
   storeAllowFrom: string[];

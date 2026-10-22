@@ -1,7 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
+import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
@@ -16,17 +16,24 @@ import {
   submitQuestionPrompt,
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
+import { terminalAnswer } from "../chat/components/chat-question-summary.tsx";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
+
+const questionIdHandlers = new WeakMap<HTMLElement, () => void>();
 
 function createQuestionPage(
   context: ApplicationContext,
@@ -74,34 +81,35 @@ function createQuestionPage(
   });
   applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {
+    questionIdHandlers.delete(host);
     stopGateway();
     stopGatewayEvents();
     operationGeneration += 1;
     clientOwner = null;
     disposeQuestionPromptState(questionState);
   });
-  // Gateway requests, browser title, and return focus follow the current question ID.
-  createEffect(
-    () => props.questionId,
-    (id, previous) => {
-      if (previous === undefined || id === previous) {
+  // Native ID receipts retire operations before another question can dispatch.
+  questionIdHandlers.set(host, () => {
+    const id = questionId();
+    const generation = ++operationGeneration;
+    rememberPanelFocus();
+    // Keep successive native writes in one turn on a single lookup.
+    queueMicrotask(() => {
+      if (operationGeneration !== generation) {
         return;
       }
-      operationGeneration += 1;
-      rememberPanelFocus();
       setRequestError(id ? null : "unavailable");
       setLoading(Boolean(id));
       if (id && clientOwner) {
         void loadQuestion(clientOwner, id);
       }
-    },
-  );
+    });
+  });
   const title = () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`;
   createDocumentTitle(title);
-  createEffect(title, () => {
-    if (questionPanelHadFocus && !questionPanel?.isConnected) {
-      heading?.focus({ preventScroll: true });
-    }
+  createPendingFocus(title, {
+    requested: () => questionPanelHadFocus && !questionPanel?.isConnected,
+    focus: () => heading?.focus({ preventScroll: true }),
   });
 
   function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
@@ -247,25 +255,6 @@ function createQuestionPage(
 }
 
 function QuestionSummary(props: { prompt: QuestionPrompt }) {
-  const answer = (question: QuestionPrompt["questions"][number]) => {
-    const prompt = props.prompt;
-    if (prompt.status === "cancelled") {
-      return t("chat.questions.skipped");
-    }
-    if (prompt.status === "expired") {
-      return t("chat.questions.expired");
-    }
-    if (prompt.status === "unavailable") {
-      return t("chat.questions.unavailable");
-    }
-    if (question.isSecret) {
-      return t("chat.questions.answered");
-    }
-    return (
-      prompt.answers?.answers[question.questionId]?.join(", ") ||
-      t(prompt.answeredElsewhere ? "chat.questions.answeredElsewhere" : "chat.questions.answered")
-    );
-  };
   return (
     <div class="chat-question-summary" aria-label={t("chat.questions.summaryLabel")}>
       <For each={props.prompt.questions} keyed={(question) => question.questionId}>
@@ -274,7 +263,7 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
             <div class="chat-question-summary__prompt">{question().question}</div>
             <div class="chat-question-summary__line">
               <strong>{question().header}:</strong>
-              <span>{answer(question())}</span>
+              <span>{terminalAnswer(props.prompt, question())}</span>
             </div>
           </div>
         )}
@@ -364,7 +353,10 @@ function QuestionPageContent(
 defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
   (props, host) => QuestionPageContent(props, host),
-  { properties: { questionId: { default: "", attribute: "question-id" } } },
+  {
+    properties: { questionId: { default: "", attribute: "question-id" } },
+    propertyChanged: (host) => questionIdHandlers.get(host)?.(),
+  },
 );
 
 declare global {

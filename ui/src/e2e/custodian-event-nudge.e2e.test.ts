@@ -31,7 +31,11 @@ beforeEach(() => {
 function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
     ...scenario,
-    featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+    featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", "openclaw.chat.history"],
+    methodResponses: {
+      "openclaw.chat.history": { turns: [] },
+      ...scenario.methodResponses,
+    },
   });
 }
 function wizardReply(reply: string, step: WizardStep) {

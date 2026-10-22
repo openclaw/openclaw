@@ -1,5 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 const WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
@@ -142,25 +142,9 @@ export type WindowsGatewayFirewallDiagnostic = {
   details: string[];
 };
 
-type WindowsGatewayFirewallCommandResult = {
-  code: number | null;
-  stdout: string;
-  stdoutTruncatedBytes?: number;
-  stderrTruncatedBytes?: number;
-};
-
-type WindowsGatewayFirewallCommandRunner = (
-  argv: string[],
-  opts: { timeoutMs: number; maxOutputBytes?: number },
-) => Promise<WindowsGatewayFirewallCommandResult>;
-
 type InspectWindowsGatewayFirewallParams = {
   bind: string | undefined;
   port: number;
-  mode?: "quick";
-  platform?: NodeJS.Platform;
-  runCommandWithTimeout?: WindowsGatewayFirewallCommandRunner;
-  timeoutMs?: number;
 };
 
 type FirewallStatePayload = {
@@ -201,14 +185,10 @@ type QuickFirewallPayload = {
   LocalRules?: unknown;
 };
 
-async function runBestEffortCommand(
-  runCommandWithTimeout: WindowsGatewayFirewallCommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<string | null> {
+async function runBestEffortCommand(argv: string[]): Promise<string | null> {
   try {
     const result = await runCommandWithTimeout(argv, {
-      timeoutMs,
+      timeoutMs: WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
       maxOutputBytes: DEFAULT_OUTPUT_BYTES,
     });
     if ((result.stdoutTruncatedBytes ?? 0) > 0 || (result.stderrTruncatedBytes ?? 0) > 0) {
@@ -541,8 +521,7 @@ function firewallInspectionFailed(message: string): WindowsGatewayFirewallDiagno
 export async function inspectWindowsGatewayFirewall(
   params: InspectWindowsGatewayFirewallParams,
 ): Promise<WindowsGatewayFirewallDiagnostic> {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return {
       applies: false,
       severity: "info",
@@ -552,20 +531,14 @@ export async function inspectWindowsGatewayFirewall(
     };
   }
 
-  const runCommandWithTimeout = params.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
-  const timeoutMs = params.timeoutMs ?? WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
-  const quickJson = await runBestEffortCommand(
-    runCommandWithTimeout,
-    [
-      getWindowsPowerShellExePath(),
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      buildWindowsQuickFirewallCommand(params.port),
-    ],
-    timeoutMs,
-  );
+  const quickJson = await runBestEffortCommand([
+    getWindowsPowerShellExePath(),
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    buildWindowsQuickFirewallCommand(params.port),
+  ]);
   if (quickJson === null) {
     return firewallInspectionFailed(
       "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
@@ -601,10 +574,8 @@ export async function inspectWindowsGatewayFirewall(
 
 export function formatWindowsGatewayFirewallGuidance(params: {
   bind: string | undefined;
-  platform?: NodeJS.Platform;
 }): string[] {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return [];
   }
   return [

@@ -1,4 +1,3 @@
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import * as commandAuthNative from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
@@ -14,56 +13,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { discordSetupPlugin } from "../channel.setup.js";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
-import * as nativeCommandRuntime from "./native-command.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
-import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
-
-type InteractionParams = Parameters<typeof createDiscordProviderInteractionSurface>[0];
 
 const spec = (name: string): NativeCommandSpec => ({ name, description: name, acceptsArgs: false });
 const names = (specs: readonly { name: string }[]) => specs.map(({ name }) => name);
 const skill = (name: string) => ({ name, skillName: name, description: name });
 const paddingSkills = (prefix: string, count: number) =>
   Array.from({ length: count }, (_, index) => skill(`${prefix}-${index}`));
-
-function createInteractionHarness(
-  commandSpecs: NativeCommandSpec[],
-  channelRuntime?: InteractionParams["channelRuntime"],
-  voiceEnabled = true,
-) {
-  const createNativeCommand = vi
-    .spyOn(nativeCommandRuntime, "createDiscordNativeCommand")
-    .mockImplementation(
-      ({ command }) =>
-        ({ name: command.name }) as ReturnType<
-          typeof nativeCommandRuntime.createDiscordNativeCommand
-        >,
-    );
-  const surface = createDiscordProviderInteractionSurface({
-    cfg: {},
-    discordConfig: {
-      agentComponents: { enabled: false },
-      execApprovals: { enabled: false },
-    },
-    accountId: "default",
-    token: "token",
-    commandSpecs,
-    nativeEnabled: true,
-    voiceEnabled,
-    groupPolicy: "open",
-    sessionPrefix: "discord:slash",
-    ephemeralDefault: true,
-    threadBindings: createNoopThreadBindingManager("default"),
-    voiceManagerRef: { current: null },
-    guildEntries: undefined,
-    allowFrom: [],
-    dmPolicy: "open",
-    runtime: createRuntimeSpies(),
-    channelRuntime,
-  });
-  return { createNativeCommand, surface };
-}
 
 type SkillCommands = Awaited<ReturnType<typeof commandAuthNative.prepareSkillCommandsForAgents>>;
 
@@ -177,16 +133,6 @@ it.each(["plugin", "skill"])("retains voice ownership against a %s named vc", as
   }
   expect(resolved.skillCommands).toEqual(vcSkillCommands);
   expect(harness.error).not.toHaveBeenCalled();
-  const { createNativeCommand, surface } = createInteractionHarness(resolved.commandSpecs);
-  expect(createNativeCommand).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ command: resolved.commandSpecs[0] }),
-  );
-  expect(names(surface.commands)).toEqual(["built-in", "vc"]);
-  expect(surface.commands[1]?.serialize().options?.map((option) => option.name)).toEqual([
-    "join",
-    "leave",
-    "status",
-  ]);
 });
 
 it("deduplicates provider-renamed primary specs before Discord cap planning", async () => {
@@ -235,19 +181,4 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
     expect.objectContaining({ description: "Control text-to-speech (TTS)." }),
   ]);
   expect(runtime.log).not.toHaveBeenCalled();
-});
-it("binds native slash commands to the owning Gateway dispatcher", () => {
-  const channelRuntime = createPluginRuntimeMock().channel;
-  const { createNativeCommand, surface } = createInteractionHarness(
-    [spec("normal")],
-    channelRuntime,
-    false,
-  );
-
-  expect(names(surface.commands)).toEqual(["normal"]);
-  const commandOptions = createNativeCommand.mock.calls[0]?.[0];
-  expect(commandOptions?.dispatchReplyFromConfig).toBe(
-    channelRuntime.reply.dispatchReplyFromConfig,
-  );
-  expect(commandOptions?.buildContext).toBe(channelRuntime.inbound.buildContext);
 });

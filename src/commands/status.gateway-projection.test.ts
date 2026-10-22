@@ -24,9 +24,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("./status.agent-local.js", () => ({
-  collectStatusLocalSnapshot: mocks.localAgents,
-}));
+// mock-isolation: Assert Gateway projection avoids local agent discovery.
+vi.mock("./status.agent-local.js", () => ({ collectStatusLocalSnapshot: mocks.localAgents }));
 // mock-isolation: Gateway projection tests must not read local session databases.
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: mocks.localSummary,
@@ -49,9 +48,8 @@ vi.mock("./status.update.js", () => ({
     packageManager: "unknown",
   }),
 }));
-vi.mock("../gateway/probe.js", () => ({
-  probeGateway: mocks.probeGateway,
-}));
+// mock-isolation: Supply reachable/offline Gateway facts without network access.
+vi.mock("../gateway/probe.js", () => ({ probeGateway: mocks.probeGateway }));
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
   waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
 }));
@@ -66,18 +64,22 @@ beforeEach(() => {
     url: "ws://127.0.0.1:18789",
     connectLatencyMs: 1,
     error: null,
-    close: null,
     auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
     status: null,
-    health: null,
     presence: [],
-    configSnapshot: null,
   });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+const scan = () =>
+  scanStatusJsonFast(createStatusGatewayProbeBudget(), {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  });
 
 it.each([
   { withProjection: false, remote: false, readinessElapsedMs: 0, withChannelSummary: false },
@@ -121,14 +123,9 @@ it.each([
                 },
               }
             : {}),
-          heartbeat: { defaultAgentId: "alpha", agents: [] },
           channelSummary: withChannelSummary ? ["Telegram: configured"] : [],
-          queuedSystemEvents: [],
           sessions: {
-            paths: [],
             count: 7,
-            defaults: { model: null, contextTokens: null },
-            recent: [],
             byAgent: [
               { agentId: "alpha", path: "[redacted]", count: 3, recent: [] },
               { agentId: "beta", path: "[redacted]", count: 4, recent: [] },
@@ -136,22 +133,6 @@ it.each([
           },
         };
         mocks.callGateway.mockResolvedValue(summary);
-        mocks.localAgents.mockResolvedValue({
-          defaultId: null,
-          publish: () => ({
-            defaultId: null,
-            ownership: "explicit",
-            selectionRequired: true,
-            agents: [],
-            totalSessions: 99,
-            bootstrapPendingCount: 0,
-          }),
-          sessionStores: undefined,
-        });
-        mocks.localSummary.mockResolvedValue({
-          ...summary,
-          sessions: { ...summary.sessions, count: 99 },
-        });
 
         const clock = vi.spyOn(performance, "now");
         if (readinessElapsedMs) {
@@ -164,21 +145,19 @@ it.each([
             return { ok: true, connectLatencyMs: 1, error: null, status: null, presence: [] };
           });
         }
-        const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        });
+        const result = await scan();
 
         expect(mocks.fullConfigReads).toBe(0);
         expect(mocks.localAgents).not.toHaveBeenCalled();
         expect(mocks.localSummary).not.toHaveBeenCalled();
         expect(result.summary.sessions).toEqual(summary.sessions);
-        expect(result.agentStatus.totalSessions).toBe(7);
         expect(result.summary).not.toHaveProperty("cliProjection");
-        expect(result.agentStatus.bootstrapPendingCount).toBeNull();
-        expect(result.agentStatus.defaultId).toBeNull();
-        expect(result.agentStatus.ownership).toBe(withProjection ? "explicit" : null);
+        expect(result.agentStatus).toMatchObject({
+          totalSessions: 7,
+          bootstrapPendingCount: null,
+          defaultId: null,
+          ownership: withProjection ? "explicit" : null,
+        });
         expect(result.cfg.update?.channel).toBe(withProjection && !remote ? "beta" : undefined);
         expect(result.agentStatus.agents[0]?.name).toBe(withProjection ? "Alpha" : undefined);
         expect(
@@ -210,11 +189,7 @@ it("marks channelSummary uncollected when Gateway status projection fails", asyn
       });
       mocks.callGateway.mockRejectedValue(new Error("status rpc failed"));
 
-      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      });
+      const result = await scan();
 
       expect(result.gatewayReachable).toBe(true);
       expect(result.summary.channelSummary).toEqual([]);
@@ -260,11 +235,7 @@ it("keeps offline config diagnostics and local collection", async () => {
       });
       mocks.localSummary.mockResolvedValue({ sessions: { count: 4 }, heartbeat: { agents: [] } });
 
-      const result = await scanStatusJsonFast(createStatusGatewayProbeBudget(), {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      });
+      const result = await scan();
 
       expect(mocks.fullConfigReads).toBe(1);
       expect(mocks.localAgents).toHaveBeenCalledOnce();

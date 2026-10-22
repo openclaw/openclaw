@@ -8,6 +8,8 @@ import type {
   SessionSourceCheck,
 } from "../config/sessions/session-source-authority.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
+import type { AgentApprovalEventData } from "../infra/agent-events.types.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -239,7 +241,11 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   /** Gateway-owned start-or-steer decision for this turn. */
-  messageInjectionDisposition?: "none" | "accepted" | "rejected";
+  messageInjectionDisposition?:
+    | "none"
+    | "accepted"
+    | "rejected"
+    | "collaborative-steering-disabled";
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
@@ -409,34 +415,20 @@ export type GetReplyOptions = {
     source?: string;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when an approval becomes pending or resolves. */
-  onApprovalEvent?: (payload: {
-    phase?: string;
-    kind?: string;
-    status?: string;
-    title?: string;
-    itemId?: string;
-    toolCallId?: string;
-    approvalId?: string;
-    approvalSlug?: string;
-    command?: string;
-    host?: string;
-    reason?: string;
-    scope?: "turn" | "session";
-    message?: string;
-  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onApprovalEvent?: (
+    payload: Partial<Omit<AgentApprovalEventData, "phase" | "kind" | "status">> & {
+      phase?: string;
+      kind?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when command output streams or completes. */
-  onCommandOutput?: (payload: {
-    itemId?: string;
-    phase?: string;
-    title?: string;
-    toolCallId?: string;
-    name?: string;
-    output?: string;
-    status?: string;
-    exitCode?: number | null;
-    durationMs?: number;
-    cwd?: string;
-  }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  onCommandOutput?: (
+    payload: Partial<Omit<AgentCommandOutputEventFields, "phase" | "status">> & {
+      phase?: string;
+      status?: string;
+    },
+  ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a patch completes with a file summary. */
   onPatchSummary?: (payload: {
     itemId?: string;

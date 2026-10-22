@@ -13,12 +13,13 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { createReplyOperation, isSessionRunActive } from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -140,6 +141,16 @@ async function createAdmissionFixture() {
   return { context, entry, sessionKey, sessionId, storePath };
 }
 
+function nativeRun(overrides: Partial<Parameters<typeof attachActiveEmbeddedRun>[1]> = {}) {
+  return {
+    queueMessage: vi.fn(async () => {}),
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: vi.fn(),
+    ...overrides,
+  };
+}
+
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
@@ -148,12 +159,7 @@ describe("prepared reply transcript identity", () => {
     async (mode, { signal }) => {
       const { context, sessionId, storePath } = await createAdmissionFixture();
       const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
-      const native = {
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: vi.fn(),
-      };
+      const native = nativeRun();
       const interrupted = createDeferred();
       const effect = await beginSessionEffect({
         scope: storePath,
@@ -254,16 +260,12 @@ describe("prepared reply transcript identity", () => {
     });
     const preempted = createDeferred();
     const cleanup = createDeferred();
-    const native = {
-      queueMessage: vi.fn(async () => {}),
-      isStreaming: () => true,
-      isCompacting: () => false,
+    const native = nativeRun({
       preemptByVisibleTurn: vi.fn(() => {
         preempted.resolve();
         return true;
       }),
-      abort: vi.fn(),
-    };
+    });
     const registration = attachActiveEmbeddedRun(
       sessionId,
       native,
@@ -323,13 +325,10 @@ describe("prepared reply transcript identity", () => {
           routeThreadId: scope === storePath ? "selected-thread" : "foreign-thread",
           resetTriggered: false,
         });
-        const native = {
-          queueMessage: vi.fn(async () => {}),
-          isStreaming: () => true,
-          isCompacting: () => false,
+        const native = nativeRun({
           preemptByVisibleTurn: vi.fn(() => false),
           abort: vi.fn(() => interrupted.resolve()),
-        };
+        });
         attachActiveEmbeddedRun(sessionId, native, sessionKey, undefined, "main", operation);
         return { operation, native, target };
       };
@@ -451,14 +450,11 @@ describe("prepared reply transcript identity", () => {
       });
       const preemptByVisibleTurn = vi.fn(() => false);
       const abort = vi.fn();
-      const native = {
+      const native = nativeRun({
         runId: `declined-heartbeat-${mode}`,
-        queueMessage: vi.fn(async () => {}),
-        isStreaming: () => true,
-        isCompacting: () => false,
         preemptByVisibleTurn,
         abort,
-      };
+      });
       attachActiveEmbeddedRun(sessionId, native, sessionKey, undefined, "main", operation);
       const input = reserveSessionControllerSource(sessionKey, { target, policy: { mode } });
       try {

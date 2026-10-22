@@ -19,15 +19,13 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  getSessionControllerOperation,
-  waitForReplyRunSuccessorAdmission,
-} from "../../sessions/session-controller.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
@@ -56,16 +54,10 @@ function admit(params: Omit<Parameters<typeof admitReplyTurn>[0], "kind" | "rese
   return admitReplyTurn({ kind: "visible", resetTriggered: false, ...params });
 }
 
-function makeTarget(
-  state: OpenClawTestState,
-  name: string,
-  agentId = "main",
-  seed = true,
-  options: { sessionId?: string } = {},
-) {
+function makeTarget(state: OpenClawTestState, name: string, agentId = "main", seed = true) {
   const storePath = path.join(state.sessionsDir(agentId), "agent.sqlite");
   const sessionKey = `agent:${agentId}:${name}`;
-  const sessionId = options.sessionId ?? `${name}-session`;
+  const sessionId = `${agentId}-${name}-session`;
   if (seed) {
     replaceSessionEntrySync({ storePath, sessionKey }, { sessionId, updatedAt: 1 });
   }
@@ -393,14 +385,10 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
   "keeps successors behind physical claim release after %s during executor drain with a full idle cache",
   async (ending) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const activeTarget = makeTarget(state, "completion-close", "main", true, {
-        sessionId: "completion-active-session",
-      });
+      const activeTarget = makeTarget(state, "completion-close");
       const { storePath: activePath, sessionKey: activeKey } = activeTarget;
       const idleTargets = Array.from({ length: 4 }, (_, index) =>
-        makeTarget(state, "completion-idle", `other-${index}`, true, {
-          sessionId: `completion-idle-session-${index}`,
-        }),
+        makeTarget(state, "completion-idle", `other-${index}`),
       );
       for (const { storePath } of [activeTarget, ...idleTargets]) {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);

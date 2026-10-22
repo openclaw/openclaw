@@ -29,8 +29,9 @@ import {
   type ChatAbortTargetState,
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
@@ -50,7 +51,12 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh" | "state_contention" | "stop";
+  kind?:
+    | "auth_refresh"
+    | "state_contention"
+    | "stop"
+    | "chatgpt_business_usage_limit"
+    | "chatgpt_consumer_usage_limit";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -194,13 +200,45 @@ export function adoptStartedChatRun(
   }
 }
 
+/** The run sessions.create acknowledged for the retained first prompt. Read it
+ *  before transcript hydration or admission: a cached receipt retires the prompt. */
+export function readAcknowledgedInitialRun(host: Parameters<typeof adoptStartedChatRun>[0]) {
+  const initial = host.chatSubmissions?.readInitial(
+    host.sessionKey,
+    host.client ?? null,
+    host.currentSessionId,
+  );
+  return initial?.pending
+    ? {
+        id: initial.pendingRunId,
+        startedAt: initial.message.timestamp,
+        sessionId: initial.sessionId,
+      }
+    : undefined;
+}
+
+/** Adopt it like a chat.send ACK so the working claw never waits for roster events.
+ *  Hydration may bind the pane to a replacement physical session; skip that run then. */
+export function adoptAcknowledgedInitialRun(
+  host: Parameters<typeof adoptStartedChatRun>[0],
+  run: ReturnType<typeof readAcknowledgedInitialRun>,
+): void {
+  if (
+    run &&
+    !host.chatRunId &&
+    (!run.sessionId || !host.currentSessionId || run.sessionId === host.currentSessionId)
+  ) {
+    adoptStartedChatRun(host, run.id, run.startedAt);
+  }
+}
+
 export function setChatRunError(
   state: { chatRunError?: ChatRunError | null },
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
-  mutateChatRunState(state, () => {
+  chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
     state.chatRunError = {
       ...(kind ? { kind } : {}),
@@ -366,6 +404,10 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
+  chatOutboxOwner(host).admissions.cancelRequests(
+    host,
+    resolveUiConversationIdentity(host, host.sessionKey),
+  );
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =
@@ -503,8 +545,7 @@ function reconcileSessionRows(
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
-  return mutateChatRunState(
-    host,
+  return chatRunPresentation(host).batch(
     () => applyChatRunLifecycle(host, options),
     options.publishRunState === false ? false : "immediate",
   );
@@ -569,7 +610,7 @@ function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions
     clearChatRunStatus(host);
   }
   if (options.publishRunState !== false) {
-    publishChatRunState(host);
+    chatRunPresentation(host).publish();
   }
 }
 
@@ -630,7 +671,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     },
     Date.now(),
   );
-  publishChatRunState(host);
+  chatRunPresentation(host).publish();
   return true;
 }
 

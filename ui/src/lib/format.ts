@@ -23,7 +23,6 @@ type FormatTimeAgoOptions = {
 };
 
 type FormatRelativeTimestampOptions = {
-  dateFallback?: boolean;
   fallback?: string;
   suffix?: boolean;
 };
@@ -102,17 +101,6 @@ export function formatRelativeTimestamp(
       return formatUnit({ value, unit });
     }
     return isPast ? t("common.justNow") : formatRelative(value, unit);
-  }
-
-  if (options.dateFallback && unit === "day" && value > 7) {
-    try {
-      return new Intl.DateTimeFormat(i18n.getLocale(), {
-        month: "short",
-        day: "numeric",
-      }).format(new Date(timestampMs));
-    } catch {
-      // Finite timestamps can still be outside JavaScript's date range.
-    }
   }
 
   const signedValue = isPast ? -value : value;

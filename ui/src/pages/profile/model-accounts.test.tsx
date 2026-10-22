@@ -19,6 +19,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 
 const connectedResult: UsersAuthConnectStatusResult = {
@@ -151,16 +152,12 @@ async function mountAccounts(
     hello: { auth: { role: "operator", scopes } },
     selfUser: { id: "profile-1", name: "Ada" },
   } as ApplicationGatewaySnapshot;
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const listeners = new Set<() => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const context = {
     gateway: {
       get snapshot() {
         return snapshot;
-      },
-      subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
       },
       subscribeEvents(listener: (event: GatewayEventFrame) => void) {
         eventListeners.add(listener);
@@ -169,7 +166,15 @@ async function mountAccounts(
     },
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const view = mountSolid(() => <ModelAccounts identityId="profile-1" profileId="profile-1" />, {
+  let profileId = "profile-1";
+  const target: ModelAccountsTargetSource = {
+    read: () => ({ gateway: snapshot, identityId: "profile-1", profileId }),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const view = mountSolid(() => <ModelAccounts target={target} />, {
     wrapper: provider.wrapper,
   });
   const accounts = view.container;
@@ -179,6 +184,12 @@ async function mountAccounts(
   return {
     accounts,
     unmount: view.unmount,
+    setProfileId(value: string) {
+      profileId = value;
+      for (const listener of listeners) {
+        listener();
+      }
+    },
     request,
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
@@ -212,7 +223,7 @@ async function mountAccounts(
           : {}),
       };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
     emitEvent(event: GatewayEventFrame) {
@@ -223,7 +234,7 @@ async function mountAccounts(
     emitSnapshot(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {
-        listener(snapshot);
+        listener();
       }
     },
   };
@@ -373,27 +384,37 @@ it("loads retained accounts one page at a time without dropping earlier choices"
   });
 });
 
-it("discards an inventory reply from the previous connection", async () => {
-  const harness = await mountAccounts(async () => {
-    throw new Error("Unexpected account mutation");
-  });
-  const old = createDeferred<UsersListModelAccountsResult>();
-  harness.request.mockImplementationOnce(async () => old.promise);
-  button(harness.accounts, ".profile-auth-accounts-refresh").click();
-  harness.emit("reconnecting");
-  harness.emit("connected");
-  old.resolve({
-    profileId: "profile-1",
-    accounts: [connectedAccount],
-    links: connectedResult.links,
-  });
-  await vi.advanceTimersByTimeAsync(0);
-  flush();
-  expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  await waitForSolid(() =>
-    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
-  );
-});
+it.each(["connection", "profile"] as const)(
+  "discards an inventory reply from the previous %s",
+  async (scope) => {
+    const harness = await mountAccounts(async () => {
+      throw new Error("Unexpected account mutation");
+    });
+    const old = createDeferred<UsersListModelAccountsResult>();
+    harness.request.mockImplementationOnce(async () => old.promise);
+    button(harness.accounts, ".profile-auth-accounts-refresh").click();
+    if (scope === "connection") {
+      harness.emit("reconnecting");
+      harness.emit("connected");
+    } else {
+      harness.setProfileId("profile-2");
+    }
+    expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
+      profileId: scope === "connection" ? "profile-1" : "profile-2",
+    });
+    old.resolve({
+      profileId: "profile-1",
+      accounts: [connectedAccount],
+      links: connectedResult.links,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    );
+  },
+);
 
 it("lets an admin link and unlink an existing model account", async () => {
   const harness = await mountAccounts(

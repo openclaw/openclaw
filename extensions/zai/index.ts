@@ -27,7 +27,6 @@ import {
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
-import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import {
   applyZaiConnectionConfig,
@@ -158,7 +157,7 @@ async function runZaiApiKeyAuth(
   const modelIdOverride = detected?.modelId;
   const nextEndpoint = detected?.endpoint ?? endpoint ?? (await promptForZaiEndpoint(ctx));
   const preset = {
-    ...(nextEndpoint ? { endpoint: nextEndpoint } : {}),
+    endpoint: nextEndpoint,
     ...(modelIdOverride ? { modelId: modelIdOverride } : {}),
   };
   return {
@@ -286,7 +285,14 @@ export default defineSingleProviderPluginEntry({
     isCacheTtlEligible: () => true,
   },
   register(api) {
-    api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "zai",
+      capabilities: ["image"],
+      defaultModels: { image: "glm-4.6v" },
+      autoPriority: { image: 60 },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
     api.registerVideoGenerationProvider(buildZaiVideoGenerationProvider());
   },
 });

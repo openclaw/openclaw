@@ -39,6 +39,7 @@ export function useGatewayPage(options: GatewayPageBindingOptions) {
       revision();
       return binding.epoch;
     },
+    readEpoch: () => binding.epoch,
     capture: () => binding.capture(),
     isCurrent: (scope: Parameters<GatewayPageBinding["isCurrent"]>[0]) => binding.isCurrent(scope),
     invalidate: () => binding.invalidate(),

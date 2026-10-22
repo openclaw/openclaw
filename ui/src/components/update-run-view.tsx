@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun, updateRunStepOwner } from "../app/update-run-projection.ts";
@@ -89,22 +89,16 @@ export function UpdateRunView(props: { run: UpdateRunRecord | null; connected: b
   const identity = () => props.run?.runId;
   const logFollow = useStreamAutoFollow({
     container: () => details,
+    content: () => props.run,
     identity,
     enabled: () => true,
   });
   const stepsFollow = useStreamAutoFollow({
     container: () => steps,
+    content: () => props.run,
     identity,
     enabled: () => Boolean(steps?.parentElement?.hasAttribute("open")),
   });
-  createEffect(
-    () => props.run,
-    (run, previous) => {
-      const changedRun = run?.runId !== previous?.runId;
-      logFollow.schedule(changedRun);
-      stepsFollow.schedule(changedRun);
-    },
-  );
   const view = createMemo(() => {
     i18nRevision();
     return props.run ? projectUpdateRun(props.run, props.connected) : null;

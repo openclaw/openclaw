@@ -487,9 +487,17 @@ describe("Report action from the authoritative update ledger", () => {
     ["check", "core/doctor/private-customer-check", "[redacted-check]"],
     ["code", "private-customer-code", "[redacted-code]"],
     ["pluginId", "private-customer-plugin", "[redacted-plugin]"],
-    ["path", "hooks.internal.entries.private-customer-key.enabled", "hooks.internal.entries.*"],
-    ["path", "gateway.auth.identityScopes.private-customer-key", "gateway.*"],
-    ["path", "tools.byProvider.private-customer-key.profile", "tools.*"],
+    [
+      "path",
+      "hooks.internal.entries.private-customer-key.enabled",
+      "hooks.internal.entries.<id>.enabled",
+    ],
+    [
+      "path",
+      "gateway.auth.identityScopes.private-customer-key",
+      "gateway.auth.identityScopes.<id>",
+    ],
+    ["path", "tools.byProvider.private-customer-key.profile", "tools.byProvider.<id>.profile"],
   ] as const)(
     "keeps private %s %s local when publishing a report",
     async (field, value, marker) => {

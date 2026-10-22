@@ -46,45 +46,18 @@ describe("concrete config path readers and mutation guards", () => {
 
 describe("config path own-property traversal", () => {
   it.each([
-    { parent: ["agents", "defaults", "model"], member: "fallbacks", value: ["openai/gpt-4o"] },
-    {
-      parent: ["agents", "defaults", "utilityModel"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "utilityModel"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "defaults", "subagents", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "subagents", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["tools", "exec", "reviewer", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    {
-      parent: ["agents", "entries", "worker", "tools", "exec", "reviewer", "model"],
-      member: "fallbacks",
-      value: ["openai/gpt-4o"],
-    },
-    { parent: ["agents", "defaults", "pdfModel"], member: "timeoutMs", value: 5000 },
-    { parent: ["agents", "defaults", "mediaModels", "video"], member: "timeoutMs", value: 5000 },
-  ])("keeps a shorthand primary when setting $parent.$member", ({ parent, member, value }) => {
+    ["agents.defaults.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.utilityModel", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.utilityModel", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.subagents.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.subagents.model", "fallbacks", ["openai/gpt-4o"]],
+    ["tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.pdfModel", "timeoutMs", 5000],
+    ["agents.defaults.mediaModels.video", "timeoutMs", 5000],
+  ] as const)("keeps a shorthand primary when setting %s.%s", (path, member, value) => {
+    const parent = path.split(".");
     const root: Record<string, unknown> = {};
     setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
     setConfigValueAtPath(root, [...parent, member], value);
@@ -94,18 +67,19 @@ describe("config path own-property traversal", () => {
     });
   });
 
-  it.each([
-    { parent: ["agents", "defaults", "utilityModel"] },
-    { parent: ["agents", "entries", "worker", "utilityModel"] },
-  ])("keeps utility routing disabled when adding fallbacks at $parent", ({ parent }) => {
-    const root: Record<string, unknown> = {};
-    setConfigValueAtPath(root, parent, "");
-    setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
-    expect(getConfigValueAtPath(root, parent)).toEqual({
-      primary: "",
-      fallbacks: ["local/backup"],
-    });
-  });
+  it.each(["agents.defaults.utilityModel", "agents.entries.worker.utilityModel"])(
+    "keeps utility routing disabled when adding fallbacks at %s",
+    (path) => {
+      const parent = path.split(".");
+      const root: Record<string, unknown> = {};
+      setConfigValueAtPath(root, parent, "");
+      setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
+      expect(getConfigValueAtPath(root, parent)).toEqual({
+        primary: "",
+        fallbacks: ["local/backup"],
+      });
+    },
+  );
 
   it.each([
     { member: "fallbacks", value: ["backup"] },
@@ -151,50 +125,45 @@ describe("config path own-property traversal", () => {
     expect(prototypeBranch).toEqual({ leaf: "prototype" });
   });
 
+  function inheritedProperty(key: string, kind: "setter" | "non-writable", value: unknown) {
+    const setter = vi.fn();
+    const prototype = {};
+    Object.defineProperty(
+      prototype,
+      key,
+      kind === "setter"
+        ? { configurable: true, set: setter }
+        : { configurable: true, value, writable: false },
+    );
+    return { setter, object: Object.create(prototype) as Record<string, unknown> };
+  }
+  function expectOwnProperty(object: object, key: string, value: unknown) {
+    expect(Object.getOwnPropertyDescriptor(object, key)).toMatchObject({
+      configurable: true,
+      enumerable: true,
+      value,
+      writable: true,
+    });
+  }
+
   for (const inheritedKind of ["setter", "non-writable"] as const) {
     it(`creates an own parent over an inherited ${inheritedKind} property`, () => {
-      const setter = vi.fn();
-      const prototype = {};
-      Object.defineProperty(
-        prototype,
-        "branch",
-        inheritedKind === "setter"
-          ? { configurable: true, set: setter }
-          : { configurable: true, value: { leaf: "prototype" }, writable: false },
-      );
-      const root = Object.create(prototype) as Record<string, unknown>;
+      const { setter, object: root } = inheritedProperty("branch", inheritedKind, {
+        leaf: "prototype",
+      });
 
       expect(() => setConfigValueAtPath(root, ["branch", "leaf"], "own")).not.toThrow();
       expect(setter).not.toHaveBeenCalled();
-      expect(Object.getOwnPropertyDescriptor(root, "branch")).toMatchObject({
-        configurable: true,
-        enumerable: true,
-        value: { leaf: "own" },
-        writable: true,
-      });
+      expectOwnProperty(root, "branch", { leaf: "own" });
     });
 
     it(`creates an own leaf over an inherited ${inheritedKind} property`, () => {
-      const setter = vi.fn();
-      const prototype = {};
-      Object.defineProperty(
-        prototype,
-        "leaf",
-        inheritedKind === "setter"
-          ? { configurable: true, set: setter }
-          : { configurable: true, value: "prototype", writable: false },
-      );
-      const parent = Object.create(prototype) as Record<string, unknown>;
+      const { setter, object: parent } = inheritedProperty("leaf", inheritedKind, "prototype");
       const root = { parent };
 
       expect(() => setConfigValueAtPath(root, ["parent", "leaf"], "own")).not.toThrow();
       expect(setter).not.toHaveBeenCalled();
-      expect(Object.getOwnPropertyDescriptor(parent, "leaf")).toMatchObject({
-        configurable: true,
-        enumerable: true,
-        value: "own",
-        writable: true,
-      });
+      expectOwnProperty(parent, "leaf", "own");
     });
   }
 });

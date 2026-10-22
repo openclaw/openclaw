@@ -156,6 +156,31 @@ afterEach(() => {
 });
 
 describe("xai web search config resolution", () => {
+  it("reuses answers only for the agent's resolved credential", async () => {
+    resolveAuth.mockImplementation(async ({ agentDir }: { agentDir?: string }) =>
+      profileAuth(agentDir === "fixture-agent-a" ? "fixture-key-a" : "fixture-key-b"),
+    );
+    const mockFetch = installXaiWebSearchFetch().mockImplementation(async (_url, init) =>
+      xaiAnswerResponse(
+        new Headers(init?.headers).get("Authorization") === "Bearer fixture-key-a"
+          ? "Account A answer"
+          : "Account B answer",
+      ),
+    );
+    const query = "credential-scoped Grok cache regression";
+    const first = await search(query, { config: {}, agentDir: "fixture-agent-a" });
+    const other = await search(query, { config: {}, agentDir: "fixture-agent-b" });
+    const repeated = await search(query, { config: {}, agentDir: "fixture-agent-a" });
+
+    expect(first.content).toContain("Account A answer");
+    expect(other.content).toContain("Account B answer");
+    expect(repeated).toMatchObject({ cached: true, content: first.content });
+    expect(authorizationHeaders(mockFetch)).toEqual([
+      "Bearer fixture-key-a",
+      "Bearer fixture-key-b",
+    ]);
+  });
+
   it("advertises xAI auth profiles in runtime and setup contracts", () => {
     expect(createXaiWebSearchProvider().authProviderId).toBe("xai");
     expect(createXaiWebSearchContractProvider().authProviderId).toBe("xai");

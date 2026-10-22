@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
+import { createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -17,7 +17,6 @@ import { openExternalUrlSafe, resolveSafeExternalUrl } from "../../../lib/open-e
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { browserTabTweet } from "./browser-tab-tweet.ts";
 import "../../../styles/session-menu.css";
 import "./browser-tab-card.css";
@@ -26,10 +25,11 @@ type BrowserTabCardProps = {
   context?: ApplicationContext;
   preview?: Extract<ToolPreview, { kind: "browser-tab" }>;
   revision?: string;
-  latest: boolean;
+  latest?: boolean;
 };
 
-function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<BrowserTabCardProps>) {
+export function BrowserTabCardHost(props: BrowserTabCardProps) {
+  let host!: HTMLElement;
   const application = useOptionalApplication();
   const menuId = createUniqueId();
   const sources = createMemo(() => {
@@ -47,20 +47,19 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     return props.context ?? application;
   };
   let active = true;
-  const canLoadPagePreview = (current: ApplicationContext | undefined) => {
-    return Boolean(
-      current?.config.current.automaticallyFetchFavicons &&
-      canCallGatewayMethod(current.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
-        requireAdvertisement: false,
-      }),
-    );
-  };
   const pageTarget = createMemo(
     () => {
       const current = context();
-      const client = current?.gateway.snapshot.client;
+      const snapshot = current?.gateway.snapshot;
       const url = props.preview?.url;
-      return canLoadPagePreview(current) && client && url ? { client, url } : undefined;
+      return current?.config.current.automaticallyFetchFavicons &&
+        snapshot?.client &&
+        url &&
+        canCallGatewayMethod(snapshot, "controlUi.linkPreview", "operator.read", {
+          requireAdvertisement: false,
+        })
+        ? { client: snapshot.client, url }
+        : undefined;
     },
     {
       equals: (before, after) => before?.client === after?.client && before?.url === after?.url,
@@ -77,16 +76,14 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       )
     );
   });
-  // Screenshot refreshes keep image failures latched; a new page target may retry them.
-  const [failedImages, setFailedImages] = createSignal<{
-    target: ReturnType<typeof pageTarget>;
-    urls: ReadonlySet<string>;
-  }>((previous) => {
-    const target = pageTarget();
-    return target && target !== previous?.target
-      ? { target, urls: new Set<string>() }
-      : (previous ?? { target, urls: new Set<string>() });
-  });
+  // Screenshot refreshes and unavailable targets retain failures; a new target retries them.
+  const [failedImages, setFailedImages] = createStore<Record<string, boolean>>((draft) => {
+    if (pageTarget()) {
+      for (const url of Object.keys(draft)) {
+        delete draft[url];
+      }
+    }
+  }, {});
   const thumbnailTarget = createMemo(
     () => {
       const current = context();
@@ -141,13 +138,13 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   });
   const opensExternally = () => context()?.theme.settings.openLinksExternally === true;
   const openExternal = () => {
-    const url = resolveSafeExternalUrl(host.preview?.url ?? "", window.location.href);
+    const url = resolveSafeExternalUrl(props.preview?.url ?? "", window.location.href);
     if (url && !postNativeExternalLink(url)) {
       openExternalUrlSafe(url);
     }
   };
   const openPanel = () => {
-    const browserTab = readBrowserTabTarget(host.preview);
+    const browserTab = readBrowserTabTarget(props.preview);
     if (browserTab) {
       host.dispatchEvent(
         new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
@@ -160,12 +157,12 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
   };
   const open = () => (opensExternally() ? openExternal() : openPanel());
   const onMenuSelect = (value: string) => {
-    const url = host.preview?.url;
+    const url = props.preview?.url;
     if (!url) {
       return;
     }
     if (value === "copy-url") {
-      void copyToClipboard(url, () => active && host.preview?.url === url);
+      void copyToClipboard(url, () => active && props.preview?.url === url);
     } else if (value === "open-new-tab") {
       openExternal();
     } else if (value === "open-within-openclaw") {
@@ -202,32 +199,10 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
     if (!preview) {
       return undefined;
     }
-    const current = context();
-    const snapshot = current?.gateway.snapshot;
-    const target = thumbnailTarget();
-    const currentImage =
-      props.latest &&
-      snapshot &&
-      isBrowserPanelAvailable(snapshot) &&
-      target?.client === snapshot.client &&
-      target?.key === JSON.stringify([browserTabKey(preview), props.revision])
-        ? thumbnail()?.()
-        : undefined;
-    const pageRequest = pageTarget();
-    const page =
-      canLoadPagePreview(current) &&
-      pageRequest?.client === snapshot?.client &&
-      pageRequest?.url === preview.url
-        ? pagePreview()?.()
-        : undefined;
-    const image =
-      currentImage && !failedImages().urls.has(currentImage) ? currentImage : page?.imageDataUrl;
-    let pageHost = preview.url;
-    try {
-      pageHost = new URL(preview.url ?? "").host || preview.url;
-    } catch {
-      /* Internal URLs keep their supplied label. */
-    }
+    const currentImage = thumbnail()?.();
+    const page = pagePreview()?.();
+    const image = currentImage && !failedImages[currentImage] ? currentImage : page?.imageDataUrl;
+    const pageHost = URL.parse(preview.url)?.host || preview.url;
     const title = preview.title?.trim() || page?.title || pageHost || t("browser.title");
     return {
       preview,
@@ -245,15 +220,14 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
       src={src}
       alt=""
       onError={() =>
-        setFailedImages((images) => ({
-          ...images,
-          urls: new Set([...images.urls, src]),
-        }))
+        setFailedImages((images) => {
+          images[src] = true;
+        })
       }
     />
   );
   return (
-    <>
+    <openclaw-browser-tab-card ref={(element) => (host = element)}>
       {data() && (
         <div class={["card", { tweet: Boolean(data()!.tweet) }]}>
           {data()!.tweet && (
@@ -280,7 +254,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
               )}
             </>
           )}
-          {data()!.image && !failedImages().urls.has(data()!.image!) && (
+          {data()!.image && !failedImages[data()!.image!] && (
             <button
               type="button"
               class={["shot", { social: data()!.image !== data()!.currentImage }]}
@@ -298,8 +272,7 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
             ) : (
               <>
                 <span class="icon" aria-hidden="true">
-                  {data()!.page?.faviconDataUrl &&
-                  !failedImages().urls.has(data()!.page!.faviconDataUrl!) ? (
+                  {data()!.page?.faviconDataUrl && !failedImages[data()!.page!.faviconDataUrl!] ? (
                     renderImage(data()!.page!.faviconDataUrl!)
                   ) : (
                     <Icon name="globe" />
@@ -335,23 +308,13 @@ function BrowserTabCard(props: BrowserTabCardProps, host: SolidBridgeElement<Bro
           </div>
         </div>
       )}
-    </>
+    </openclaw-browser-tab-card>
   );
 }
-export const BrowserTabCardHost = defineSolidBridge<BrowserTabCardProps>(
-  "openclaw-browser-tab-card",
-  BrowserTabCard,
-  {
-    properties: {
-      context: { default: undefined, attribute: false },
-      preview: { default: undefined, attribute: false },
-      revision: { default: undefined, attribute: false },
-      latest: { default: false },
-    },
-  },
-);
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-browser-tab-card": SolidBridgeElement<BrowserTabCardProps>;
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-browser-tab-card": HTMLAttributes<HTMLElement>;
+    }
   }
 }

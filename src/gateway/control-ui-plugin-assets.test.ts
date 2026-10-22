@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { TLSSocket } from "node:tls";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -41,6 +42,10 @@ import {
   sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
+import { pluginsControlUiHandlers } from "./server-methods/plugins-control-ui.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -69,6 +74,21 @@ function cookies(response: Response) {
 function expectBody(response: Response, source: string) {
   expect(response.res.statusCode).toBe(200);
   expect(response.end.mock.calls[0]?.[0]?.toString()).toBe(source);
+}
+
+function expectUncached(response: Response, statusCode: number, context?: string) {
+  expect(response.res.statusCode, context).toBe(statusCode);
+  expect(responseHeader(response, "cache-control"), context).toBe("no-store");
+}
+
+function publishOwner(
+  fixture: ReturnType<typeof activateFixture>,
+  records = [fixture.record, createPluginRecord({ id: "unrelated" })],
+) {
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(...records);
+  registry.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
+  setActivePluginRegistry(registry);
 }
 
 function expectCatalogFailure(
@@ -206,6 +226,59 @@ it("omits settings-only presentations from activation while keeping ordinary plu
   };
   expect((await listControlUiPluginCatalog()).plugins).toEqual([]);
   expect(listControlUiPluginActivations({})).toEqual([]);
+});
+
+it("records valid receipts in a mixed batch only from a live Control UI connection", async () => {
+  activateFixture();
+  const [entry] = (await listControlUiPluginCatalog()).plugins;
+  const report = activation(entry!.revision);
+  const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
+    connId: "activation-browser",
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+    },
+  };
+  let connected = false;
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getClientConnIds = (filter) =>
+    new Set(connected && (!filter || filter(client)) ? [client.connId!] : []);
+  const call = async (method: string, params: Record<string, unknown>) => {
+    const respond = vi.fn<RespondFn>();
+    await pluginsControlUiHandlers[method]!({
+      req: { type: "req", id: "activation-report", method, params },
+      params,
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => true,
+    });
+    return respond.mock.calls[0]!;
+  };
+  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+  connected = true;
+  client.connect.client.id = GATEWAY_CLIENT_IDS.CLI;
+  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(false);
+  expect(listControlUiPluginActivations(client)).toEqual([]);
+  client.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
+  const [ok, , error] = await call("plugins.controlUi.report", {
+    reports: [{ ...report, pluginId: "retired-ui" }, report],
+  });
+  expect(ok).toBe(false);
+  expect(error).toMatchObject({
+    code: "INVALID_REQUEST",
+    details: { rejectedPluginIds: ["retired-ui"] },
+  });
+  expect((await call("plugins.controlUi.status", {}))[1]).toEqual({
+    clients: [{ connId: client.connId, activations: [report] }],
+  });
+  expect((await call("plugins.controlUi.report", { reports: [report] }))[0]).toBe(true);
 });
 
 it("hot-applies Custom plugin UI admission without replacing the backend plugin", async () => {
@@ -529,9 +602,7 @@ it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserv
     expect(head.res.statusCode).toBe(200);
     expect(head.getBody()).toBe("");
     expect(responseHeader(head, "cache-control")).toBe(immutableCache);
-    const unsupported = await read(entry.entryUrl, "POST");
-    expect(unsupported.res.statusCode).toBe(405);
-    expect(unsupported.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expectUncached(await read(entry.entryUrl, "POST"), 405);
 
     const nextSource = 'export default { id: "native-ui", version: 2 };';
     fixture.write("index.js", nextSource);
@@ -665,10 +736,7 @@ it("retains advertised revisions and receipts only for the exact backend owner",
   const browser = {};
   const report = activation(second.plugins[0]!.revision);
   expect(reportControlUiPluginActivation(browser, report)).toBe(true);
-  const retained = createEmptyPluginRegistry();
-  retained.plugins.push(fixture.record, createPluginRecord({ id: "unrelated" }));
-  retained.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
-  setActivePluginRegistry(retained);
+  publishOwner(fixture);
 
   await withAssetServer(async (server) => {
     const cookie = cookieForGrant();
@@ -690,10 +758,7 @@ it("retains advertised revisions and receipts only for the exact backend owner",
     expect(listControlUiPluginActivations(browser)).toEqual([report]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(true);
 
-    const replacement = createEmptyPluginRegistry();
-    replacement.plugins.push(createPluginRecord({ ...fixture.record }));
-    replacement.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
-    setActivePluginRegistry(replacement);
+    publishOwner(fixture, [createPluginRecord({ ...fixture.record })]);
     await expectStatus(read(), 404);
     expect(listControlUiPluginActivations(browser)).toEqual([]);
     expect(reportControlUiPluginActivation(browser, report)).toBe(false);
@@ -733,10 +798,7 @@ it("refuses reloads past 64 MiB without evicting advertised assets", async () =>
   let refused = false;
   for (let version = 1; version <= maxChanges; version++) {
     if (version === Math.floor(maxChanges / 2)) {
-      const retained = createEmptyPluginRegistry();
-      retained.plugins.push(fixture.record, createPluginRecord({ id: "unrelated" }));
-      retained.controlUiDescriptors.push(...fixture.registry.controlUiDescriptors);
-      setActivePluginRegistry(retained);
+      publishOwner(fixture);
     }
     const source = `export default { version: ${version} };`.padEnd(sourceBytes);
     fixture.write("index.js", source);
@@ -784,18 +846,14 @@ it("requires owner-bound read grants and never serves source files, maps, or esc
     ];
     const read = (url: string) => fetchAsset(server, url, { headers: { cookie } });
     for (const headers of unauthorizedHeaders) {
-      const denied = await fetchAsset(server, entry.entryUrl, { headers });
-      expect(denied.res.statusCode).toBe(401);
-      expect(responseHeader(denied, "cache-control")).toBe("no-store");
+      expectUncached(await fetchAsset(server, entry.entryUrl, { headers }), 401);
     }
     await expectStatus(
       fetchAsset(server, entry.entryUrl, { authorization: "Bearer test-token" }),
       200,
     );
     for (const invalidRevision of ["latest", "", "0".repeat(64)]) {
-      const missing = await read(entry.entryUrl.replace(entry.revision, invalidRevision));
-      expect(missing.res.statusCode).toBe(404);
-      expect(responseHeader(missing, "cache-control")).toBe("no-store");
+      expectUncached(await read(entry.entryUrl.replace(entry.revision, invalidRevision)), 404);
     }
     for (const suffix of [
       "source.ts",
@@ -805,9 +863,7 @@ it("requires owner-bound read grants and never serves source files, maps, or esc
       "%252e%252e/server.js",
       "missing.js",
     ]) {
-      const missing = await read(prefix + suffix);
-      expect(missing.res.statusCode, suffix).toBe(404);
-      expect(responseHeader(missing, "cache-control"), suffix).toBe("no-store");
+      expectUncached(await read(prefix + suffix), 404, suffix);
     }
   });
 });

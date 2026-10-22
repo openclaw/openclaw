@@ -3,6 +3,7 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import {
   isSyntheticSourceReplyTurn,
@@ -12,6 +13,7 @@ import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawn
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveCronSessionWorkspaceOwnershipError } from "../../cron/run-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -23,9 +25,11 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { updateSessionControllerSourcePolicy } from "../../sessions/session-controller.mailbox.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import { hasControlCommand } from "../command-detection.js";
 import {
+  isExplicitFollowupCommandTurn,
   isNativeCommandTurn,
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
@@ -33,6 +37,7 @@ import {
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { applySessionHints } from "./body.js";
@@ -310,7 +315,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   const commandTurn = resolveCommandTurnContext(ctx);
-  const canInterpretCommands = ctx.CommandInterpretationSuppressed !== true;
+  const canInterpretCommands =
+    ctx.CommandInterpretationSuppressed !== true && !isExplicitFollowupCommandTurn(ctx);
   const isRegisteredWholeMessageCommand =
     isWholeMessageCommand && (hasControlCommand(rawBodyTrimmed, cfg) || isResetOrNewCommand);
   const isActiveCommandTurn =
@@ -343,6 +349,28 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
   });
+  if (opts?.scheduledAutomation) {
+    opts.operatorAuthority?.assertCurrent();
+    opts.abortSignal?.throwIfAborted();
+    opts.queuedFollowupAbortSignal?.throwIfAborted();
+    opts.replyOperation?.abortSignal.throwIfAborted();
+    opts.internalEventExecution?.assertCurrent?.();
+    opts.scheduledAutomation.assertCurrent();
+    if (!sessionKey) {
+      throw new Error("A scheduled session turn requires its admitted session key");
+    }
+    const ownershipError = resolveCronSessionWorkspaceOwnershipError({
+      cfg,
+      agentId,
+      sessionKey,
+      admissionSource: opts.scheduledAutomation.admissionSource,
+      ownerSessionKey: opts.scheduledAutomation.job.owner?.sessionKey,
+      hasWorkspaceBinding: Boolean(sessionWorkspaceOverride || sessionEntry?.worktree),
+    });
+    if (ownershipError) {
+      throw new Error(ownershipError);
+    }
+  }
   const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =
     isBareSessionReset && workspaceDir
@@ -388,6 +416,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }));
   }
 
+  const requestGitCredit =
+    !isHeartbeat && !isInternalEvent
+      ? await resolveRequestGitCoauthorPrompt({
+          config: cfg,
+          agentId,
+          sessionKey,
+          requesterProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
+        })
+      : undefined;
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContextSessionCtx = isNewSession
     ? {
@@ -551,7 +588,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]
         : []),
     ];
-    const currentInboundContext: CurrentInboundPromptContext | undefined =
+    let currentInboundContext: CurrentInboundPromptContext | undefined =
       !isBareSessionReset && currentInboundContextText
         ? {
             text: currentInboundContextText,
@@ -561,6 +598,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
             ...(activeGoalContext ? { injectedGoalContexts: [activeGoalContext] } : {}),
           }
         : undefined;
+    if (requestGitCredit) {
+      currentInboundContext = appendCurrentInboundContext(currentInboundContext, [
+        { kind: "runtime-instruction", text: requestGitCredit },
+      ]);
+    }
 
     return {
       effectiveBaseBody,
@@ -596,7 +638,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     const annotateBody = (body: string) =>
       annotateInterSessionPromptText(prependMediaNote(body), sessionCtx.InputProvenance);
     return {
-      mediaNote,
       inboundMediaIndexes: generatedMedia.mediaIndexes,
       ...(media.length > 0 ? { media } : {}),
       prefixedCommandBody: annotateBody(additions.prefixedBody ?? base.effectiveBaseBody),
@@ -605,7 +646,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
         inboundEventKind === "room_event"
           ? base.transcriptBody
           : prependMediaNote(base.transcriptBody),
-      ...base,
+      transcriptBody: base.transcriptBody,
       currentInboundContext: sourceContext.length
         ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
         : base.currentInboundContext,

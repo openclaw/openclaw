@@ -1,14 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
@@ -38,6 +28,7 @@ import {
   createChatProviderReview,
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -45,7 +36,6 @@ import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
-  const viewOwner = getOwner();
   for (const owner of [
     runtime.tasks,
     runtime.publication,
@@ -62,6 +52,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.boardPresentation,
     runtime.pendingPanelToggles,
     runtime.workspaceConflicts,
+    runtime.mobilePresentation,
   ]) {
     projectChatFields(owner);
   }
@@ -69,6 +60,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);
@@ -109,10 +101,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   };
 
   onSettled(() => {
-    if (!runtime.isConnected) {
-      // Startup creates projections that belong to this retained view, outside the settled callback.
-      runWithOwner(viewOwner, () => runtime.start());
-    }
     setReady(true);
   });
   onCleanup(() => {
@@ -126,8 +114,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     void waitForCommit();
     focusPending ||= runtime.focusComposer !== previousFocusComposer;
     previousFocusComposer = runtime.focusComposer;
-    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
-    untrack(() => runtime.chatState.prepareRender());
+    // Other source frames may show a buffered stream before its normal RAF publishes it.
+    runtime.chatState.captureRenderChanges();
     // Target/activation checks make reconciliation idempotent; apply layout before sampling it.
     runtime.synchronizeInputs({});
   }
@@ -145,6 +133,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
 
   function MountedPane() {
+    if (!runtime.isConnected) {
+      // The ready gate defers connection until settlement; its projections belong to this view.
+      runtime.start();
+    }
     const context = runtime.context;
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
     const repository = createMemo(() => {
@@ -160,9 +152,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const gateway = projectGateway(context.gateway);
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
-    const state = runtime.readState();
+    const state = runtime.state;
     const realtime = createMemo(() => {
-      const owner = runtime.realtimeTalk;
+      const owner = runtime.state?.realtimeTalk;
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
@@ -213,16 +205,13 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
           a.target?.agentId === b.target?.agentId,
       },
     );
-    // Seed the watch from the same memo identity its first effect will publish.
-    const progress = projectProgressCard(untrack(progressScope));
+    const progress = projectProgressCard(progressScope);
     const cacheProgress = () => {
       const { target, store, options } = runtime.readProgressCardScope();
       if (target && options.admitAutomaticRead()) {
         runtime.cacheProgressCard(target, store.get(target));
       }
     };
-    // Bind the imperative store watch to the current connection and conversation.
-    createEffect(progressScope, (next) => progress.replaceSource(next));
     onSettled(() => {
       // Parking may stop rendering, but reset/delete events must still retire card lifetimes.
       const stop = progress.subscribe(cacheProgress);
@@ -257,6 +246,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createParkedProjection(
       () => {
         relativeTime();
+        gateway.read();
         publication()?.read();
         repository()?.read();
         parentSession.read();
@@ -278,8 +268,12 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     );
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readState(),
+      readState: () => runtime.state,
     });
+    const questions = createComposerQuestions(
+      runtime.presentationId,
+      () => frame().layout?.primary.chat ?? null,
+    );
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
       () => ({ frame: frame(), presented: runtime.presented }),
@@ -307,7 +301,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
         prop:sessionKey={runtime.sessionKey}
       >
-        <PaneLayout layout={frame().layout} />
+        <PaneLayout layout={frame().layout} questions={questions} />
         <ChatProviderReviewDialog owner={providerReview} />
         <Show when={frame().capabilityDialogs}>
           {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}

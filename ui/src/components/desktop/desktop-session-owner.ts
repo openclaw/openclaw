@@ -41,7 +41,6 @@ type DesktopStartup = {
 /** Synchronous admission for desktop inventory, availability, and session targets. */
 export class DesktopSessionOwner {
   private refreshId = 0;
-  private availabilityRequestId = 0;
   private desktopSource: NodeAvailability | null = null;
   private availabilitySnapshot: NodeAvailability | null = null;
   private startup: DesktopStartup | undefined;
@@ -234,7 +233,6 @@ export class DesktopSessionOwner {
   clearDesktopSource(): void {
     this.desktopSource = null;
     this.availabilitySnapshot = null;
-    this.availabilityRequestId += 1;
   }
 
   get desktopAvailability(): DesktopAvailability | undefined {
@@ -261,12 +259,10 @@ export class DesktopSessionOwner {
       return;
     }
     const environmentId = `node:${nodeId}`;
-    const requestId = ++this.availabilityRequestId;
     const isCurrent = () =>
       this.context.isConnected &&
       this.context.available &&
       client === this.context.client &&
-      requestId === this.availabilityRequestId &&
       environmentId === this.availabilityTarget;
     try {
       const environment = await client.request<EnvironmentSummary>("environments.status", {

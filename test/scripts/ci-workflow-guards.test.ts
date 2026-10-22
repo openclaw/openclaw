@@ -840,7 +840,7 @@ AFTER_CD
   });
 
   it("serializes the shared Swift package suite on hosted macOS retries", () => {
-    const macosSwift = readCiWorkflow().jobs["macos-swift"];
+    const macosSwift = readCiWorkflow().jobs["macos-swift-packages"];
 
     expect(macosSwift.env.OPENCLAWKIT_TEST_EXECUTION).toContain("github.run_attempt > 1");
     const openClawKitTests = requiredWorkflowStep(macosSwift.steps, "OpenClawKit tests");
@@ -4202,7 +4202,7 @@ ${step.run}`,
     );
     const install = requiredWorkflowStep(steps, "Install actionlint");
 
-    expect(setupGo.with).toEqual({ "go-version": "1.27.1", cache: false });
+    expect(setupGo.with).toEqual({ "go-version": "1.27.2", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expectIncludes(install.run, [
       `ACTIONLINT_REVISION="${revision}"`,
@@ -4349,6 +4349,176 @@ ${buildScript}`,
     }
   });
 
+  it("reuses the exact Linux runtime without installing or building every workspace", async () => {
+    const workflow = readCiWorkflow();
+    const steps = workflow.jobs["macos-swift"].steps;
+    const install = requiredWorkflowStep(steps, "Install native asset dependencies");
+    const download = requiredWorkflowStep(steps, "Download runtime for native policy tests");
+    const prepare = requiredWorkflowStep(steps, "Prepare native test CLI");
+    const producer = requiredWorkflowStep(
+      workflow.jobs["build-artifacts"].steps,
+      "Upload runtime for native policy tests",
+    );
+    const native = workflow.jobs["macos-swift"];
+    const packages = workflow.jobs["macos-swift-packages"];
+    expect(native.needs).toEqual(["preflight", "build-artifacts"]);
+    expect(packages.needs).toEqual(["preflight"]);
+    expect(packages.strategy.matrix.phase).toEqual(["packages"]);
+    expect(packages.steps).toEqual(native.steps);
+    expect(packages["timeout-minutes"]).toBe(30);
+    for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
+      const context = {
+        eventName: "schedule" as const,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: { run_macos_swift: "true" },
+        additionalNeeds: { "build-artifacts": { result, outputs: {} } },
+      };
+      expect(evaluateWorkflowCondition(native.if, context)).toBe(
+        result === "success" || result === "skipped",
+      );
+      expect(evaluateWorkflowCondition(packages.if, context)).toBe(true);
+    }
+    expect(steps.some((step: WorkflowStep) => step.name === "Wait for native policy runtime")).toBe(
+      false,
+    );
+    const build = requiredWorkflowStep(steps, "Build Swift tests");
+    expect(build.run).toContain("--build-tests");
+    expect(build.run).not.toContain("macos-native-runtime");
+    expect(download.with).toMatchObject({
+      "artifact-ids": "${{ env.NATIVE_RUNTIME_ARTIFACT_ID }}",
+      "merge-multiple": true,
+    });
+    expect(workflow.jobs["build-artifacts"].outputs.native_runtime_artifact_id).toBe(
+      "${{ steps.native_runtime_upload.outputs.artifact-id }}",
+    );
+    // Failed-only reruns consume the successful producer's retained output ID.
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowExpression(native.env.NATIVE_RUNTIME_ARTIFACT_ID, {
+          eventName: "schedule",
+          runAttempt,
+          additionalNeeds: {
+            "build-artifacts": { result: "success", outputs: { native_runtime_artifact_id: "42" } },
+          },
+        }),
+      ).toBe("42");
+    }
+    expect(producer.with.name).toBe(
+      "macos-native-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}",
+    );
+    expect(prepare.env.TARGET_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
+    expect(steps.indexOf(install)).toBeLessThan(steps.indexOf(prepare));
+    expect(steps.indexOf(download)).toBeLessThan(steps.indexOf(prepare));
+    expect(steps.indexOf(prepare)).toBeLessThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Swift test")),
+    );
+    const { packNativeRuntime } = await import("../../scripts/macos-native-runtime-artifact.mjs");
+    const revision = "a".repeat(40);
+    for (const [phase, hasOwner, revisionMatches] of [
+      ["tests", true, true],
+      ["tests", true, false],
+      ["tests", false, false],
+      ["release", true, false],
+      ["packages", true, false],
+    ] as const) {
+      const root = tempDirs.make("native-cli-preparation-");
+      const bin = path.join(root, "bin");
+      const calls = path.join(root, "calls");
+      const githubPath = path.join(root, "github-path");
+      const owner = "apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift";
+      mkdirSync(bin);
+      mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+      copyFileSync(
+        new URL("../../scripts/macos-native-runtime-artifact.mjs", import.meta.url),
+        path.join(root, ".ci-harness/scripts/macos-native-runtime-artifact.mjs"),
+      );
+      writeFileSync(
+        path.join(root, "openclaw.mjs"),
+        "process.stdout.write(JSON.stringify(process.argv.slice(2)));",
+      );
+      const built = path.join(root, "built");
+      mkdirSync(path.join(built, "dist"), { recursive: true });
+      mkdirSync(path.join(built, "packages/protocol/dist"), { recursive: true });
+      mkdirSync(path.join(built, "node_modules"));
+      writeFileSync(path.join(built, "dist/build-info.json"), JSON.stringify({ commit: revision }));
+      writeExecutable(path.join(built, "dist/executable.js"), ["#!/bin/sh", "exit 0"]);
+      writeFileSync(path.join(built, "packages/protocol/dist/index.js"), "export {};\n");
+      writeFileSync(path.join(built, "node_modules/linux-only"), "not portable");
+      const excluded = [
+        "dist/extensions",
+        "dist/control-ui",
+        "dist/worker",
+        "dist-runtime/extensions",
+      ];
+      for (const directory of excluded) {
+        mkdirSync(path.join(built, directory), { recursive: true });
+        writeFileSync(path.join(built, directory, "unneeded.node"), "not needed by policy");
+      }
+      packNativeRuntime(built, path.join(root, ".artifacts/macos-native-runtime"), revision);
+      if (hasOwner) {
+        mkdirSync(path.dirname(path.join(root, owner)), { recursive: true });
+        writeFileSync(path.join(root, owner), "");
+      }
+      writeExecutable(path.join(bin, "pnpm"), [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+      ]);
+      const preparesCli = evaluateWorkflowCondition(prepare.if, {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: { phase },
+        steps: {
+          "native-runtime-download": {
+            outcome: phase === "tests" && hasOwner ? "success" : "skipped",
+            outputs: {},
+          },
+        },
+        fileHashes: { [owner]: hasOwner ? "present" : "" },
+      });
+      expect(preparesCli).toBe(phase === "tests" && hasOwner);
+      const result = runWorkflowShellScript(
+        `${install.run}\n${preparesCli ? prepare.run : ""}\nprintf ready`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            MACOS_NATIVE_PHASE: phase,
+            PNPM_CALLS: calls,
+            GITHUB_PATH: githubPath,
+            TARGET_SHA: revisionMatches ? revision : "b".repeat(40),
+          },
+        },
+      );
+      const prepareFails = preparesCli && !revisionMatches;
+      expect(result.status, result.stderr).toBe(prepareFails ? 1 : 0);
+      expect(result.stdout).toBe(prepareFails ? "" : "ready");
+      const commands = readFileSync(calls, "utf8").trim().split("\n");
+      expect(commands[0]).toContain("install --frozen-lockfile --prefer-offline --optional");
+      expect(commands[0]).toContain("--filter @openclaw/mermaid-renderer...");
+      expect(commands[0]).toContain("--filter @openclaw/gateway-protocol...");
+      expect(commands[0]?.includes("--filter openclaw...")).toBe(preparesCli);
+      expect(commands).toHaveLength(1);
+      if (preparesCli && revisionMatches) {
+        const preparedBin = readFileSync(githubPath, "utf8").trim();
+        const args = ["--profile", "native-test", "approvals", "native", "--stdin", "--json"];
+        const invocation = spawnSync(path.join(preparedBin, "openclaw"), args, {
+          encoding: "utf8",
+        });
+        expect(invocation.status, invocation.stderr).toBe(0);
+        expect(JSON.parse(invocation.stdout)).toEqual(args);
+        expect(statSync(path.join(root, "dist/executable.js")).mode & 0o111).not.toBe(0);
+        expect(existsSync(path.join(root, "packages/protocol/dist/index.js"))).toBe(true);
+        expect(existsSync(path.join(root, "node_modules"))).toBe(false);
+        for (const directory of excluded) {
+          expect(existsSync(path.join(root, directory)), directory).toBe(false);
+        }
+      }
+    }
+  });
+
   it("uses native macOS Swift tests and retains failures after completing every profile", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
@@ -4445,7 +4615,8 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
 `,
         { mode: 0o755 },
       );
-      const result = runWorkflowShellScript(testStep.run, {
+      const buildStep = requiredWorkflowStep(macosSwift.steps, "Build Swift tests");
+      const result = runWorkflowShellScript(`${buildStep.run}\n${testStep.run}`, {
         cwd: root,
         env: {
           ...process.env,
@@ -5922,9 +6093,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
       "if [ ! -f scripts/check-session-accessor-boundary.mts ]",
-    );
-    expect(readTrackedText("scripts/ci-additional-checks.sh")).not.toContain(
-      "if [ ! -f scripts/check-session-transcript-reader-boundary.mts ]",
     );
     const checkLint = workflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",

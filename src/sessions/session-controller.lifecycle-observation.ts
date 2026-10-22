@@ -106,6 +106,8 @@ export function consumeSessionEffectHandoff(
   }
   return undefined;
 }
+
+/** @internal Exposed for unit tests only. */
 export function cancelSessionEffectHandoff(handoffId: string): boolean {
   for (const effect of allEffects()) {
     if (effect.handoffs.delete(handoffId.trim())) {

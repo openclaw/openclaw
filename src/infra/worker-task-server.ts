@@ -15,7 +15,7 @@ import {
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission-context.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
@@ -60,7 +60,7 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
   let databaseAdmissionPort: MessagePort | undefined;
   let databaseAdmissionDeadlineAtMs: number | undefined;
   let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
-  let closeMemorySamples: (() => void) | undefined;
+  let memorySamples: ReturnType<typeof serveWorkerMemorySamples> | undefined;
   const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const run = async () => {
       const port = databaseAdmissionPort;
@@ -129,12 +129,14 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
+        if (sampleMemory && !memorySamples) {
+          memorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        // Carry demand on the task itself so even its first synchronous work is observed.
+        memorySamples?.setTaskMetrics(context.collectWorkerMetrics === true);
         databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
@@ -150,10 +152,11 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
           scheduleWorkerIdleGc();
         }
       },
+      collectTaskDiagnostics: () => memorySamples?.collectTask(),
       onRetire() {
         cancelWorkerIdleGc();
         try {
-          closeMemorySamples?.();
+          memorySamples?.close();
         } finally {
           // Exchanges are synchronous; the runtime already joined task cleanup and resource receipts.
           databaseAdmissionPort?.close();

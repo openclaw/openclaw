@@ -10,7 +10,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createQuestionPromptState, listQuestionPrompts } from "../../app/question-prompt.ts";
+import { createQuestionPromptState } from "../../app/question-prompt.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
@@ -20,6 +20,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   readSessionProgressCard,
   sessionProgressCardsForGateway,
@@ -38,31 +39,32 @@ import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
-  CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
+import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
 import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { createChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
 import type {
   ChatTypingActorState,
   ChatTypingActorView,
   ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import type { ChatPaneHeaderAction } from "./components/chat-pane-header.types.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { createChatTranscript } from "./components/chat-transcript-controller.ts";
+import type { ComposerActivityLayout } from "./components/chat-transcript-layout-owner.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -79,6 +81,7 @@ export type ChatPaneInputChanges = {
 
 /** Synchronous pane facts and domain resources; Solid owns publication and commits. */
 export abstract class ChatPaneStateOwner {
+  protected readonly mobileScrollFades = createMobileSheetScrollFades();
   readonly presentation = {
     active: false,
     presented: true,
@@ -88,7 +91,50 @@ export abstract class ChatPaneStateOwner {
   updateComplete: Promise<boolean> = Promise.resolve(true);
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
+  headerElement: HTMLElement | null = null;
+  historySentinel: HTMLElement | null = null;
+  transcriptAnnouncement: HTMLElement | null = null;
+  composerShell: HTMLElement | null = null;
+  composerFloat: HTMLElement | null = null;
+  private composerActivityLayout: ComposerActivityLayout | null = null;
+  protected readonly onActivityPillsLayout = (layout: ComposerActivityLayout, detached = false) => {
+    if (detached && this.composerActivityLayout?.strip !== layout.strip) {
+      return;
+    }
+    this.composerActivityLayout = detached ? null : layout;
+    this.transcript.syncViewportGeometry();
+  };
+  private registerPaneElement(
+    key:
+      | "headerElement"
+      | "historySentinel"
+      | "transcriptAnnouncement"
+      | "composerShell"
+      | "composerFloat",
+  ) {
+    return (element: HTMLElement) => {
+      this[key] = element;
+      if (key === "composerFloat") {
+        this.transcript.syncViewportGeometry();
+      }
+      return () => {
+        if (this[key] === element) {
+          this[key] = null;
+          if (key === "composerFloat") {
+            this.transcript.syncViewportGeometry();
+          }
+        }
+      };
+    };
+  }
+  protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
+  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
+  protected readonly registerTranscriptAnnouncement =
+    this.registerPaneElement("transcriptAnnouncement");
+  protected readonly registerComposerShell = this.registerPaneElement("composerShell");
+  protected readonly registerComposerFloat = this.registerPaneElement("composerFloat");
 
+  protected abstract get usesMobileHost(): boolean;
   abstract synchronizeInputs(changes: ChatPaneInputChanges): void;
   abstract afterRender(focusComposerChanged: boolean): void;
   private paneLifecycleRoot: Element | null = null;
@@ -104,7 +150,7 @@ export abstract class ChatPaneStateOwner {
     }
     if (state.chatStreamRenderFrame != null) {
       // Publish before the browser suspends animation frames; the hidden view stays parked.
-      publishChatRunState(state);
+      chatRunPresentation(state).publish();
     }
     const liveDraft = getChatComposerState(this.presentationId).composerTextarea?.value;
     const draftChanged = liveDraft !== undefined && liveDraft !== state.chatMessage;
@@ -121,7 +167,7 @@ export abstract class ChatPaneStateOwner {
     }
     this.paneLifecycleRoot =
       this.element.closest("openclaw-app-shell") ?? this.element.parentElement;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.chatState.addCleanup(listen(document, "visibilitychange", this.handleVisibilityChange));
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
@@ -144,20 +190,11 @@ export abstract class ChatPaneStateOwner {
         this.refreshSwarmRoster();
       }) ?? (() => {}),
     );
-    this.element.addEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
-    );
     this.paneLifecycleRoot?.dispatchEvent(new Event(CHAT_PANE_LIFECYCLE_CHANGED_EVENT));
   }
 
   dispose() {
-    this.element.removeEventListener(
-      CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
-      this.synchronizeForegroundTranscript,
-    );
     this.context?.connectionBootstrap.setForegroundPane(this, null);
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     this.chatState.dispose();
     this.isConnected = false;
     this.transcript.dispose();
@@ -310,6 +347,10 @@ export abstract class ChatPaneStateOwner {
     this.headerSessionMutationAbortController.abort();
     this.headerSessionMutationAbortController = new AbortController();
   }
+  protected retireHeaderSessionDrafts(): void {
+    this.headerSessionDraftAbortController.abort();
+    this.headerSessionDraftAbortController = new AbortController();
+  }
   draft?: string = undefined;
   focusComposer = false;
   dashboardExpanded = false;
@@ -371,6 +412,8 @@ export abstract class ChatPaneStateOwner {
   readonly composerCapabilities = new ChatComposerCapabilityHost();
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
+    getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
+    getComposerActivityLayout: () => (this.usesMobileHost ? this.composerActivityLayout : null),
     onViewportResize: () => this.chatState.handleTranscriptResize(),
     canFollowEnd: () => this.state !== undefined && canAutoFollowChat(this.state),
     onReaderScroll: (towardEnd) => this.state && handleChatScrollTakeover(this.state, towardEnd),
@@ -384,10 +427,7 @@ export abstract class ChatPaneStateOwner {
   }
 
   readonly questionPromptState = createQuestionPromptState();
-  protected get questionPrompts() {
-    return listQuestionPrompts(this.questionPromptState);
-  }
-  protected state: ChatPageHost | undefined;
+  state: ChatPageHost | undefined;
 
   protected ownsChatSnapshot(target: Parameters<typeof resolveChatSnapshotKey>[1]): boolean {
     const state = this.state;
@@ -465,6 +505,7 @@ export abstract class ChatPaneStateOwner {
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
+  protected headerSessionDraftAbortController = new AbortController();
 
   readonly headerPresentation: {
     renameValue: string;

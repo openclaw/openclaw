@@ -70,7 +70,13 @@ export async function runEmbeddedAttemptExecutionPhase(
       onRejectedProviderReplayRepaired: () => {
         repairedRejectedProviderReplay = true;
       },
-      onIdleTimeout: (error) => idleTimeoutTriggerRef.current?.(error),
+      onIdleTimeout: (error) => {
+        // Compaction owns request failures and fallback; the stream watchdog
+        // already aborted that request. Keep its enclosing turn live.
+        if (!activeSession.isCompacting) {
+          idleTimeoutTriggerRef.current?.(error);
+        }
+      },
       diagnosticOwner,
     });
   input.setup.prepStages.mark("stream-setup");
@@ -153,7 +159,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     recoverStalledModelCall: () =>
       isModelCallActive() &&
       interruptIdleRequest(
-        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+        Object.assign(
+          new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+          { code: "OPENCLAW_SESSION_WATCHDOG" },
+        ),
       ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);

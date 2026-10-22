@@ -8,7 +8,7 @@ import {
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   createSessionTranscriptFtsInserter,
@@ -247,7 +247,7 @@ export function prepareSessionTranscriptProjection(
   db: EngineConnection,
   sessionId: string,
 ): PreparedSessionTranscriptProjection | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const source = readProjectionSource(db, sessionId);

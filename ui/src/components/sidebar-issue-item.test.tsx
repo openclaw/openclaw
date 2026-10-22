@@ -6,9 +6,10 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT } from "../app/native-link-routing.ts";
 import { createApplicationOverlays } from "../app/overlays.ts";
-import type { ConfirmAndStartUpdateParams } from "../app/update-confirmation.ts";
 import { updateRunHarness } from "../app/update-run.test-support.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -92,6 +93,7 @@ describe("renderSidebarMentionItem", () => {
       mention,
       context: { basePath: "/team" },
       dismissing: false,
+      canDismiss: true,
       onDismiss: vi.fn(),
       onNavigate: vi.fn(),
       ...overrides,
@@ -149,26 +151,22 @@ describe("renderSidebarMentionItem", () => {
     expect(onNavigate).toHaveBeenCalledOnce();
   });
 
-  it("disables repeated dismissal while leaving the session link usable", () => {
-    const { onNavigate, onDismiss } = renderMention({ dismissing: true });
-    const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
-    expect(dismiss).toMatchObject({ disabled: true });
-    dismiss.click();
-    expect(onDismiss).not.toHaveBeenCalled();
+  it.each([{ dismissing: true }, { canDismiss: false }])(
+    "disables unavailable dismissal while leaving the session link usable (%j)",
+    (state) => {
+      const { onNavigate, onDismiss } = renderMention(state);
+      const dismiss = container.querySelector<HTMLButtonElement>("[data-mention-id] button")!;
+      expect(dismiss).toMatchObject({ disabled: true });
+      dismiss.click();
+      expect(onDismiss).not.toHaveBeenCalled();
 
-    find("summary")!.click();
-    find("a[href]")!.click();
-    expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
-  });
+      find("summary")!.click();
+      find("a[href]")!.click();
+      expect(onNavigate).toHaveBeenCalledExactlyOnceWith("chat", navigation);
+    },
+  );
 });
 
-type UpdateCard = HTMLElement & {
-  updateComplete: Promise<boolean>;
-  prepareRetry: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>;
-  canUpdate: boolean;
-  canNativeUpdate: boolean;
-  onCheckStatus?: () => Promise<boolean>;
-};
 function updateFixture(
   request: Parameters<typeof updateRunHarness>[0],
   hello: Partial<NonNullable<ApplicationContext["gateway"]["snapshot"]["hello"]>> = {},
@@ -197,7 +195,7 @@ function renderUpdate(
       watchUpdateProgress: undefined,
     }),
   );
-  return container.querySelector<UpdateCard>("openclaw-sidebar-update-card")!;
+  return container.querySelector<HTMLElement>("openclaw-sidebar-update-card")!;
 }
 const freshStatusCall = ["update.status", { refreshCheckout: true }, { timeoutMs: null }] as const;
 describe("renderSidebarUpdateSurface", () => {
@@ -210,10 +208,18 @@ describe("renderSidebarUpdateSurface", () => {
     async (revokeAccess) => {
       const entered = createDeferred();
       const response = createDeferred<unknown>();
-      const request = vi.fn(async () => {
-        entered.resolve();
-        return response.promise;
+      const run = createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: Date.now(),
       });
+      const request = vi
+        .fn(async () => {
+          entered.resolve();
+          return response.promise;
+        })
+        .mockResolvedValueOnce({ lastRun: run });
       const harness = updateFixture(request);
       const fresh = {
         channel: "dev",
@@ -224,13 +230,19 @@ describe("renderSidebarUpdateSurface", () => {
         upstreamRef: "origin/main",
         commitsBehind: 9,
       };
-      let preparing: Promise<unknown> | undefined;
+      const restoreDialog = installDialogPolyfill();
       try {
+        await vi.waitFor(() => expect(harness.overlays.snapshot.updateRun?.runId).toBe(run.runId));
         const card = renderUpdate(harness.context);
-        await card.updateComplete;
+        card.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
+        const { modal } = await getRenderedModalDialog(document.body);
         render(null);
         expect(card.isConnected).toBe(false);
-        preparing = card.prepareRetry();
+        const retry = [...modal.querySelectorAll("button")].find(
+          (button) => button.textContent?.trim() === "Retry update",
+        );
+        expect(retry).toBeDefined();
+        retry!.click();
         await entered.promise;
         if (revokeAccess) {
           harness.update({
@@ -241,16 +253,30 @@ describe("renderSidebarUpdateSurface", () => {
           });
         }
         response.resolve({ updateAvailable: fresh });
-        const target = await preparing;
         if (revokeAccess) {
-          expect(target).toBeNull();
+          await vi.waitFor(() =>
+            expect(modal.textContent).toContain(
+              "Status could not be refreshed. Check your connection and try again.",
+            ),
+          );
+          expect(modal.querySelector(".update-confirmation-details")).toBeNull();
         } else {
-          expect(target).toMatchObject({ updateAvailable: fresh });
+          await vi.waitFor(() => expect(modal.textContent).toContain("cccccccc"));
+          expect(modal.textContent).toContain("9 commits behind");
         }
         expect(request).toHaveBeenCalledWith(...freshStatusCall);
+        expect(request).not.toHaveBeenCalledWith(
+          "update.run",
+          expect.anything(),
+          expect.anything(),
+        );
       } finally {
         response.resolve({ updateAvailable: fresh });
-        await preparing;
+        await vi.dynamicImportSettled();
+        document
+          .querySelector("openclaw-modal-dialog")
+          ?.dispatchEvent(new CustomEvent("modal-cancel"));
+        restoreDialog();
       }
     },
   );
@@ -268,16 +294,25 @@ describe("renderSidebarUpdateSurface", () => {
         features: { methods: [method] },
       });
       const card = renderUpdate(harness.context, vi.fn());
-      await card.updateComplete;
-      expect(card).toMatchObject({ canUpdate: false, canNativeUpdate });
-      expect(Boolean(card.onCheckStatus)).toBe(canCheck);
+      vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage: vi.fn() } } });
+      window.dispatchEvent(new Event(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+      flush();
+      expect(
+        card.querySelector(".sidebar-update-card__action")?.getAttribute("aria-disabled"),
+      ).toBe(canNativeUpdate ? null : "true");
+      vi.stubGlobal("webkit", undefined);
+      window.dispatchEvent(new Event(NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT));
+      flush();
+      expect(
+        card.querySelector(".sidebar-update-card__action")?.getAttribute("aria-disabled"),
+      ).toBe("true");
       const details = card.querySelector("details")!;
       const expanded = new Promise<void>((resolve) => {
         details.addEventListener("toggle", () => resolve(), { once: true });
       });
       details.open = true;
       await expanded;
-      await card.updateComplete;
+      flush();
       if (canCheck) {
         expect(request).toHaveBeenCalledWith(...freshStatusCall);
       } else {
@@ -317,8 +352,8 @@ describe("renderSidebarUpdateSurface", () => {
         ),
       };
       const dismiss = vi.fn();
-      const card = renderUpdate(context, () => dismiss(dismissal));
-      await card.updateComplete;
+      renderUpdate(context, () => dismiss(dismissal));
+      flush();
       expect(container.textContent).toContain(state === "visible" ? "OpenClaw updated" : "3.0.0");
       find(".sidebar-issues-panel__dismiss")!.click();
       expect(dismiss).toHaveBeenCalledExactlyOnceWith(expected);

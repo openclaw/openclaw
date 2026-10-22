@@ -27,7 +27,7 @@ import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
@@ -44,7 +44,6 @@ import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
-  type SystemAgentConfiguredRouteDeps,
 } from "./inference-route.js";
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 type SystemAgentConfiguredRouteIdentity = DistributiveOmit<
@@ -107,8 +106,6 @@ export type SystemAgentVerifiedInferenceBinding = Readonly<{
     skipLocalCredential?: true;
   }>;
 }>;
-
-export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps;
 
 /** Exact child harness artifact every verified embedded OpenClaw call must carry. */
 export function resolveSystemAgentExpectedAgentHarnessRuntimeArtifact(
@@ -364,10 +361,8 @@ async function projectVerifiedExecutionFingerprint(
   config: OpenClawConfig,
   route: SystemAgentVerifiedExecutionRoute,
   ownerPluginIds: readonly string[],
-  deps: SystemAgentVerifiedInferenceDeps,
 ) {
   const projection = await projectInferenceRoute(config, route.agentId, {
-    ...deps,
     modelTarget: route.modelTarget,
   });
   const { authProfileId: _authProfileId, ...routeIdentity } = projection.route ?? {};
@@ -589,9 +584,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   configuredRoute: SystemAgentConfiguredRoute;
   executionRoute: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const deps = params.deps ?? {};
   const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
@@ -711,7 +704,6 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       params.configuredRoute.sourceConfig,
       execution,
       ownerPluginIds,
-      deps,
     ),
     ownerPluginIds,
     ownerPluginArtifacts,
@@ -738,11 +730,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
 /** Re-hash plugin-owned runtime files only at a persistent side-effect boundary. */
 export async function hasCurrentSystemAgentOwnerPluginArtifacts(
   binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
+  capturedSnapshot?: ConfigFileSnapshot,
 ): Promise<boolean> {
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const snapshot =
+    capturedSnapshot ?? (await (await import("../config/config.js")).readConfigFileSnapshot());
   if (!snapshot.exists || !snapshot.valid) {
     return false;
   }
@@ -773,11 +764,8 @@ export async function hasCurrentSystemAgentOwnerPluginArtifacts(
  */
 export async function resolveSystemAgentVerifiedInferenceState(
   binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedInferenceState | null> {
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const snapshot = await (await import("../config/config.js")).readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
     return null;
   }
@@ -785,7 +773,7 @@ export async function resolveSystemAgentVerifiedInferenceState(
   const currentRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     binding.execution.agentId,
-    deps,
+    undefined,
     snapshot,
   );
   if (
@@ -812,7 +800,6 @@ export async function resolveSystemAgentVerifiedInferenceState(
       config,
       currentExecution,
       currentOwnerPluginIds,
-      deps,
     );
   } catch {
     return null;
@@ -871,8 +858,7 @@ export async function resolveSystemAgentVerifiedInferenceState(
 
 export async function resolveSystemAgentVerifiedInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
 ): Promise<SystemAgentVerifiedExecutionRoute | null> {
-  return (await resolveSystemAgentVerifiedInferenceState(binding, deps))?.route ?? null;
+  return (await resolveSystemAgentVerifiedInferenceState(binding))?.route ?? null;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

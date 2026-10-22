@@ -40,6 +40,7 @@ export function registerThreadWebSearchBindingTests({
     const { sessionFile, workspaceDir } = createPaths();
     const params = createParams(sessionFile, workspaceDir);
     params.model = createCodexTestModel("codex");
+    params.preparedWebSearchPolicy = { allowed: true, persistentAllowed: true };
     setCodexTestToolFactory(params, () => []);
 
     const fixture = await createSequentialLifecycleHarness(() => threadStartResult("thread-1"));

@@ -1,4 +1,4 @@
-import path from "node:path";
+import { resolvePluginPortRoots } from "./plugin-port-roots.js";
 import type { DatabasePortProvider } from "./port-descriptor.js";
 
 export const workboardPortProvider: DatabasePortProvider = {
@@ -9,13 +9,5 @@ export const workboardPortProvider: DatabasePortProvider = {
     return loadDescriptor();
   },
   matchesSqlite: (tables) => tables.has("workboard_schema_migrations"),
-  resolveRoots(context) {
-    return context.plugins.plugins
-      .filter((plugin) => plugin.id === "workboard")
-      .flatMap((plugin) =>
-        (plugin.backupResources ?? [])
-          .filter((resource) => resource.scope === "state" && resource.disposition === "include")
-          .map((resource) => path.join(context.stateDir, resource.relativePath)),
-      );
-  },
+  resolveRoots: (context) => resolvePluginPortRoots(context, "workboard"),
 };

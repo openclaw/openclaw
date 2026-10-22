@@ -76,7 +76,7 @@ export function startOpenClawStateReadOperation(
   let borrowed: ReturnType<typeof retainOpenClawStateDatabaseForIndependentRead>;
   let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
   let preparation: RetainedSqliteSnapshotPreparation | undefined;
-  let retirement: RetainedOperation<void> | undefined;
+  let retirement: Promise<void> | undefined;
   let preparationClose: RetainedOperation<void> | undefined;
   let snapshotCleanup: RetainedOperation<boolean> | undefined;
   let startSnapshotCleanup: (() => RetainedOperation<boolean>) | undefined;
@@ -99,7 +99,7 @@ export function startOpenClawStateReadOperation(
     }
     retirement ??= transport.startClose();
     try {
-      await retirement.result;
+      await retirement;
     } catch (error) {
       retirement = undefined;
       throw error;
@@ -153,7 +153,10 @@ export function startOpenClawStateReadOperation(
   const resource: ReadResource = {
     async close() {
       controller.abort(new Error("Shared-state read admission closed"));
-      preparationClose ??= preparation?.startClose();
+      // Pending preparation must stop, but a published snapshot still belongs to its reader.
+      if (!prepared) {
+        preparationClose ??= preparation?.startClose();
+      }
       await closeTransport();
       // The public result reports query failures; shutdown still joins native cleanup.
       await producer.catch(() => undefined);
@@ -218,7 +221,7 @@ export function startOpenClawStateReadOperation(
       },
       authority,
     );
-    return consume(await read.result);
+    return consume(await read);
   }
 
   async function run(): OpenClawStateReadCompletion {
@@ -267,7 +270,7 @@ export function startOpenClawStateReadOperation(
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       const sourceIdentity = { key: context.admission.identity.key };
       const validation = selectedTransport.startValidateFresh(context, authority);
-      await validation.result;
+      await validation;
       if (selection.snapshotPreparation === "awaited") {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,

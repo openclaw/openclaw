@@ -1,11 +1,19 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
@@ -29,7 +37,11 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
 }
 it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
   const element = await mount();
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   element.props = {
     ...element.props!,
     pullRequests: [
@@ -56,7 +68,11 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   const pullRequests = element.props!.pullRequests;
   element.props = { ...element.props!, pullRequests: [] };
   await element.updateComplete;
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   expect(element.querySelector(".chat-details-session > summary")).toBeNull();
   const openChanges = vi.fn();
   element.props = { ...element.props!, onOpenSessionDiff: openChanges };
@@ -72,12 +88,53 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   expect(openChanges).toHaveBeenCalledOnce();
   element.props = { ...element.props!, onOpenSessionDiff: undefined };
   await element.updateComplete;
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   element.props = { ...element.props!, pullRequests };
   await element.updateComplete;
   expect(
     element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')?.open,
   ).toBe(true);
+});
+it("keeps compaction busy until the owning request settles and uses the current callback", async () => {
+  const pending = createDeferred();
+  const compact = vi.fn(() => pending.promise);
+  const element = await mount({
+    selectedSession: {
+      key: "agent:main:details",
+      kind: "direct",
+      totalTokens: 50000,
+      contextTokens: 100000,
+    },
+    onCompact: compact,
+  });
+  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
+  disclosure.open = true;
+  disclosure.dispatchEvent(new Event("toggle"));
+  flush();
+  const button = element.querySelector<HTMLButtonElement>(".chat-context__compact")!;
+  try {
+    button.click();
+    await waitForSolid(() => {
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toContain("Compacting");
+    });
+    expect(compact).toHaveBeenCalledOnce();
+    button.click();
+    expect(compact).toHaveBeenCalledOnce();
+  } finally {
+    pending.resolve();
+  }
+  await waitForSolid(() => expect(button.disabled).toBe(false));
+  const replacement = vi.fn(async () => {});
+  element.props = { ...element.props!, onCompact: replacement };
+  await element.updateComplete;
+  button.click();
+  await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
+  expect(compact).toHaveBeenCalledOnce();
 });
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
@@ -144,14 +201,26 @@ it("uses the current PR renderer and preserves CI session identity and branch di
       },
     ],
   });
-  expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title");
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title"),
+  );
   const link = element.querySelector(".chat-pr__link")!;
-  for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
-    expect(link.getAttribute("title")).toContain(fact);
-    expect(link.getAttribute("aria-description")).toContain(fact);
-  }
+  expect(link.getAttribute("href")).toBe("https://github.com/example/project/pull/7");
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
+  expect(automation).toHaveProperty("presented", false);
+  element.querySelector<HTMLButtonElement>(".chat-pr__actions button")!.click();
+  flush();
+  const menu = element.querySelector(".chat-pr__actions")!;
+  for (const fact of ["example/project", "#7", "Open", "+84", "−41"]) {
+    expect(menu.textContent).toContain(fact);
+  }
+  await waitForSolid(() =>
+    expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
+  );
+  menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
+  flush();
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
   expect(automation).toHaveProperty("presented", true);
   const branch = {
     owner: "example",
@@ -183,6 +252,9 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
+  await waitForSolid(() =>
+    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
@@ -194,6 +266,157 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+});
+
+it("renders unknown without invented zero counts and keeps the All changes action usable", async () => {
+  const open = vi.fn();
+  const element = await mount({ onOpenSessionDiff: open });
+  const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+  expect(button.textContent).toContain("—");
+  expect(button.textContent).not.toContain("0 files");
+  button.click();
+  expect(open).toHaveBeenCalledOnce();
+});
+
+it("admits only the latest visible native summary inputs and retires detached work", async () => {
+  vi.useFakeTimers();
+  const result = { files: [{ path: "accepted.ts" }], additions: 3, deletions: 1 };
+  const first = createDeferred<typeof result>();
+  const retired = createDeferred<typeof result>();
+  let requestedAt = 0;
+  const diff = vi.fn<(params: unknown) => Promise<typeof result>>().mockImplementation(() => {
+    requestedAt = Date.now();
+    return Promise.resolve(result);
+  });
+  diff.mockReturnValueOnce(first.promise);
+  const request = createGatewayRequestMock((method, params) =>
+    method === "sessions.diff"
+      ? diff(params)
+      : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+  );
+  const { gateway, publish } = createApplicationGateway();
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const element = document.createElement("openclaw-chat-details-session");
+  onTestFinished(async () => {
+    element.remove();
+    await Promise.resolve();
+    vi.useRealTimers();
+  });
+  const select = (id: string) => {
+    element.props = {
+      sessionKey: `agent:main:${id}`,
+      currentAgentId: "main",
+      selectedSession: { key: `agent:main:${id}`, kind: "direct", sessionId: id },
+      messages: [],
+      pullRequestsGateway: gateway,
+      onOpenSessionDiff: () => {},
+    };
+  };
+  select("hidden");
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).not.toHaveBeenCalled();
+
+  element.presented = true;
+  select("intermediate");
+  select("first");
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: "agent:main:first",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+    poll: true,
+  });
+  select("accepted");
+  first.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+3"),
+  );
+  expect(diff).toHaveBeenCalledTimes(2);
+  expect(diff).toHaveBeenLastCalledWith({
+    sessionKey: "agent:main:accepted",
+    agentId: "main",
+    scope: "all",
+    summaryOnly: true,
+    poll: true,
+  });
+
+  const button = element.querySelector(".chat-details__all-changes");
+  element.remove();
+  document.body.append(element);
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(element.querySelector(".chat-details__all-changes")).toBe(button);
+  expect(diff).toHaveBeenCalledTimes(2);
+
+  element.props = { ...element.props!, runActive: true };
+  await vi.advanceTimersByTimeAsync(requestedAt + 4_999 - Date.now());
+  expect(diff).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(diff).toHaveBeenCalledTimes(3);
+  element.presented = false;
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(3);
+
+  diff.mockReturnValueOnce(retired.promise);
+  element.presented = true;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(diff).toHaveBeenCalledTimes(4);
+  element.remove();
+  await Promise.resolve();
+  retired.resolve({ ...result, additions: 999 });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(diff).toHaveBeenCalledTimes(4);
+});
+
+it("shows abbreviated colored deltas with exact accessible totals, partial and stale states", async () => {
+  vi.useFakeTimers();
+  const request = vi
+    .fn<(method: string) => Promise<unknown>>()
+    .mockImplementation(async (method: string) =>
+      method === "sessions.diff"
+        ? { files: [{ path: "app.ts" }], additions: 12_480, deletions: 61, truncated: true }
+        : { jobs: [], total: 0, hasMore: false, nextOffset: null, snapshotRevision: "1" },
+    );
+  // SAFETY: These components only read the supplied connection and subscription surface.
+  const gateway = {
+    snapshot: { client: { request }, phase: "connected", hello: null },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  } as unknown as ApplicationGateway;
+  try {
+    const element = await mount({ onOpenSessionDiff: vi.fn(), pullRequestsGateway: gateway });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForSolid(() =>
+      expect(element.querySelector(".chat-details__change-files")?.textContent).toContain("1 file"),
+    );
+    const button = element.querySelector<HTMLButtonElement>(".chat-details__all-changes")!;
+    expect(element.querySelector(".chat-details__change-lines--add")?.textContent).toBe("+12.5K");
+    expect(element.querySelector(".chat-details__change-lines--del")?.textContent).toBe("−61");
+    expect(button.getAttribute("aria-description")).toContain("+12480 lines, −61 lines");
+    expect(button.textContent).toContain("partial");
+    request.mockRejectedValue(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("stale"));
+    expect(button.textContent).toContain("+12.5K");
+    expect(button.getAttribute("aria-description")).toContain("Last-known changes");
+    request.mockResolvedValue({ files: [], additions: 0, deletions: 0 });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForSolid(() => expect(button.textContent).toContain("0 files"));
+    expect(button.textContent).toContain("+0");
+    expect(button.textContent).toContain("−0");
+    expect(
+      element.querySelector(".chat-details__change-lines--add, .chat-details__change-lines--del"),
+    ).toBeNull();
+    element.remove();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("groups every direct subagent with counts, live activity first, and a bounded preview", async () => {
@@ -244,6 +467,9 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
+  await waitForSolid(() =>
+    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   const shownKeys = () =>
@@ -292,6 +518,9 @@ it("shows finished subagents after the parent stops waiting and omits the group 
   const group = element.querySelector('[data-details-group="subagents"]')!;
   expect(group.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done");
   expect(group.querySelector(".chat-details__more")).toBeNull();
+  await waitForSolid(() =>
+    expect(group.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = group.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.querySelector(".chat-subagent-activity__status")?.textContent).toBe("Completed");
@@ -301,10 +530,8 @@ it("shows finished subagents after the parent stops waiting and omits the group 
 });
 
 it("shows live environment and context facts while preserving disclosure intent", async () => {
-  const openFiles = vi.fn();
   const element = await mount({
     detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
-    onOpenWorkspace: openFiles,
     selectedSession: {
       key: "agent:main:details",
       kind: "direct",
@@ -317,12 +544,11 @@ it("shows live environment and context facts while preserving disclosure intent"
       outputTokens: 450,
     },
   });
-  expect(element.textContent).toContain("Design workstation");
-  expect(element.textContent).toContain("project");
-  expect(element.textContent).not.toContain("/workspace/project");
-  expect(element.textContent).toContain("demo-model");
-  expect(element.querySelector('[aria-label="Copy path"]')).not.toBeNull();
-  expect(element.querySelector('[aria-label="Copy branch name"]')).not.toBeNull();
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.textContent).toContain("feature/details");
+  expect(environment.textContent).not.toContain("Design workstation");
+  expect(environment.textContent).not.toContain("/workspace/project");
+  expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
   const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
   expect(context.querySelector("summary")?.textContent).toContain("50%");
   context.open = true;
@@ -337,27 +563,114 @@ it("shows live environment and context facts while preserving disclosure intent"
   await element.updateComplete;
   expect(context.open).toBe(true);
   expect(context.querySelector("summary")?.textContent).toContain("~25%");
-  element
-    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
-    .click();
-  expect(openFiles).toHaveBeenCalledOnce();
-  element.presented = false;
-  await element.updateComplete;
-  element
-    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
-    .click();
-  expect(openFiles).toHaveBeenCalledOnce();
 });
 
 it.each([
   "/home/private-user/.openclaw/workspace/",
   "C:\\Users\\private-user\\.openclaw\\workspace\\",
 ])("keeps an unlabelled workspace's private parent path out of Details: %s", async (root) => {
-  const element = await mount({ detailsWorkspace: { root, label: null } });
-  const environment = element.querySelector(".chat-details__environment")!;
-  expect(environment.textContent).toContain("workspace");
+  const element = await mount({
+    detailsWorkspace: { root, label: null, branch: "feature/details" },
+  });
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.textContent).toContain("feature/details");
   expect(environment.textContent).not.toContain(root);
   expect(environment.textContent).not.toContain("private-user");
-  expect(environment.querySelector(".chat-details__row")?.getAttribute("title")).toBe("workspace");
-  expect(environment.querySelector('[aria-label="Copy path"]')).not.toBeNull();
+  const openProject = vi.fn();
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsEnvironmentMobile, {
+      details: { selectedSession: undefined, detailsWorkspace: { root, label: null } },
+      presented: true,
+      onOpenProject: openProject,
+    }),
+  );
+  const project = view.container.querySelector<HTMLButtonElement>("button")!;
+  expect(project.textContent).toBe("workspace");
+  expect(view.container.textContent).not.toContain(root);
+  expect(view.container.textContent).not.toContain("private-user");
+  for (const metadata of [
+    ...environment.querySelectorAll("[title], [aria-label]"),
+    ...view.container.querySelectorAll("[title], [aria-label]"),
+  ]) {
+    expect(metadata.getAttribute("title") ?? "").not.toContain("private-user");
+    expect(metadata.getAttribute("aria-label") ?? "").not.toContain("private-user");
+  }
+  project.click();
+  expect(openProject).toHaveBeenCalledOnce();
+});
+
+it("demands mobile changes only while presented and retires native navigation callbacks when hidden", () => {
+  const request = vi.fn();
+  const openMachine = vi.fn();
+  const openChanges = vi.fn();
+  const [presented, setPresented] = createSignal(true);
+  const [session, setSession] = createSignal<GatewaySessionRow>({
+    key: "agent:main:details",
+    kind: "direct",
+    execNode: "Gateway machine",
+  });
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsEnvironmentMobile, {
+      details: {
+        get selectedSession() {
+          return session();
+        },
+        detailsWorkspace: { root: "/workspace/project", label: null, branch: "feature/details" },
+      },
+      get presented() {
+        return presented();
+      },
+      onRequestUncommitted: request,
+      onOpenMachine: openMachine,
+      onOpenUncommitted: openChanges,
+      uncommitted: {
+        sessionKey: "agent:main:details",
+        baseRef: "HEAD",
+        branch: "feature/details",
+        files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+        additions: 3,
+        deletions: 1,
+      },
+    }),
+  );
+  flush();
+  expect(request).toHaveBeenCalledOnce();
+  expect(view.container.textContent).not.toContain("Gateway machine");
+  setSession({
+    key: "agent:main:details",
+    kind: "direct",
+    placement: {
+      state: "active",
+      generation: 1,
+      createdAtMs: 100_000,
+      updatedAtMs: 300_000,
+      stateChangedAtMs: 300_000,
+      environmentId: "worker:device",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "a".repeat(64),
+      workspaceBaseManifestRef: "base-manifest",
+      remoteWorkspaceDir: "/worker/repo",
+      runner: { kind: "device", status: "available" },
+    },
+  });
+  flush();
+  const buttons = Array.from(view.container.querySelectorAll<HTMLButtonElement>("button"));
+  const machine = buttons.find((button) => button.textContent === "worker:device")!;
+  const changes = buttons.find((button) => button.textContent?.includes("Changes"))!;
+  expect(changes.textContent).toContain("+3");
+  expect(changes.textContent).toContain("−1");
+  machine.click();
+  changes.click();
+  expect(openMachine).toHaveBeenCalledOnce();
+  expect(openChanges).toHaveBeenCalledOnce();
+  setPresented(false);
+  flush();
+  machine.click();
+  changes.click();
+  expect(request).toHaveBeenCalledOnce();
+  expect(openMachine).toHaveBeenCalledOnce();
+  expect(openChanges).toHaveBeenCalledOnce();
+  setPresented(true);
+  flush();
+  expect(request).toHaveBeenCalledTimes(2);
 });

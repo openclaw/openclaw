@@ -1,6 +1,5 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
@@ -25,7 +24,7 @@ type PdfPreviewProps = {
 };
 
 /** Owns the bounded, browser-native PDF surface for same-origin attachments. */
-function PdfPreview(props: PdfPreviewProps) {
+export function ChatPdfPreview(props: PdfPreviewProps) {
   const [preview, setPreview] = createSignal<{
     status: "loading" | "ready" | "error";
     url?: string;
@@ -128,59 +127,38 @@ function PdfPreview(props: PdfPreviewProps) {
   };
   onSettled(() => revokePreview);
   return (
-    <div class="sidebar-pdf-preview" aria-label={props.label}>
-      <Show when={source()} keyed>
-        {readPreview}
-      </Show>
-      <div class="sidebar-pdf-preview__surface">
-        <Show when={preview().status !== "loading"} fallback={<AttachmentPreviewSkeleton />}>
-          <Show
-            when={preview().status === "ready" && preview().url}
-            fallback={
-              <div class="sidebar-attachment-preview__unavailable" role="alert">
-                {t("chat.attachments.previewUnavailable")}
-                <CompactAttachmentCard
-                  kind="document"
-                  label={props.label}
-                  mimeType={props.mimeType}
-                  sizeBytes={props.sizeBytes}
-                  downloadHref={safeAttachmentHref(props.src) ?? undefined}
-                />
-              </div>
-            }
-          >
-            <iframe
-              class="sidebar-pdf-preview__frame"
-              title={props.label}
-              src={preview().url}
-              referrerpolicy="no-referrer"
-            />
-          </Show>
+    <openclaw-chat-pdf-preview style={{ display: "contents" }}>
+      <div class="sidebar-pdf-preview" aria-label={props.label}>
+        <Show when={source()} keyed>
+          {readPreview}
         </Show>
+        <div class="sidebar-pdf-preview__surface">
+          <Show when={preview().status !== "loading"} fallback={<AttachmentPreviewSkeleton />}>
+            <Show
+              when={preview().status === "ready" && preview().url}
+              fallback={
+                <div class="sidebar-attachment-preview__unavailable" role="alert">
+                  {t("chat.attachments.previewUnavailable")}
+                  <CompactAttachmentCard
+                    kind="document"
+                    label={props.label}
+                    mimeType={props.mimeType}
+                    sizeBytes={props.sizeBytes}
+                    downloadHref={safeAttachmentHref(props.src) ?? undefined}
+                  />
+                </div>
+              }
+            >
+              <iframe
+                class="sidebar-pdf-preview__frame"
+                title={props.label}
+                src={preview().url}
+                referrerpolicy="no-referrer"
+              />
+            </Show>
+          </Show>
+        </div>
       </div>
-    </div>
+    </openclaw-chat-pdf-preview>
   );
-}
-
-export const ChatPdfPreview = defineSolidBridge<PdfPreviewProps>(
-  "openclaw-chat-pdf-preview",
-  (props, host) => {
-    host.style.display = "contents";
-    return <PdfPreview {...props} />;
-  },
-  {
-    properties: {
-      src: { default: "" },
-      sourceIdentity: { default: "" },
-      label: { default: "" },
-      mimeType: { default: "" },
-      sizeBytes: { default: undefined, type: Number },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-chat-pdf-preview": SolidBridgeElement<PdfPreviewProps>;
-  }
 }

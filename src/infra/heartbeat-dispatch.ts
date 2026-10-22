@@ -39,7 +39,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { readExecRequestOwners } from "./exec-request-context.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
-import { isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
+import { isCronSystemEvent, isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
@@ -67,6 +67,7 @@ import { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
+  adoptSelectedSystemEventEntries,
   consumeSelectedSystemEventEntries,
   holdSystemEventDelivery,
   peekDeliverableSystemEventEntries,
@@ -251,6 +252,14 @@ async function prepareHeartbeatDispatchReply(
       }
     }
     if (consume && settleEvents && preflight.shouldInspectPendingEvents) {
+      if (prepared.hasCronEvents && !prepared.hasExecCompletion && outcome.kind !== "failure") {
+        // Only the reminders included in this completed turn were adopted. Noise and
+        // reminders deferred behind an exec prompt must not acknowledge Cron receipts.
+        adoptSelectedSystemEventEntries(
+          queueKey,
+          prepared.inspectedSystemEventsToConsume.filter(isCronSystemEvent),
+        );
+      }
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
         ...prepared.deferredGenericEvents,

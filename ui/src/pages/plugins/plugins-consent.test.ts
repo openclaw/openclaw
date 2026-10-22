@@ -3,10 +3,22 @@
 import { createRoot, onCleanup } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventListener,
+} from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import type { PluginInstallRequest, PluginListResult } from "../../lib/plugins/index.ts";
+import type {
+  PluginInstallRequest,
+  PluginListResult,
+  PluginMutationResult,
+} from "../../lib/plugins/index.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { PluginRowMessage } from "./plugin-row-message.tsx";
 import { createPluginsConsent } from "./plugins-consent.ts";
@@ -34,6 +46,7 @@ function createConsentHarness(
   let messages: Record<string, PluginRowMessage> = {};
   const busy = new Set<string>();
   const context = createContext(applicationGateway, refreshConfig);
+  const applyMutationResult = vi.fn();
   const refreshCatalog = async () => {
     let next: PluginListResult;
     try {
@@ -71,7 +84,7 @@ function createConsentHarness(
       getMessages: () => messages,
       clearPageNotice: () => {},
       closeDetails: () => {},
-      applyMutationResult: vi.fn(),
+      applyMutationResult,
       refreshCatalogAfterMutation: refreshCatalog,
       onChange: () => {},
     });
@@ -83,6 +96,7 @@ function createConsentHarness(
       return messages;
     },
     refreshCatalog,
+    applyMutationResult,
     dispose,
   };
 }
@@ -111,6 +125,82 @@ const runtimeFailure = {
   committed: false,
 };
 const persistence = { operation: "install", pluginId: available.id };
+
+it("correlates concurrent install progress and retires listeners on success and failure", async () => {
+  const listeners = new Set<GatewayEventListener>();
+  const firstResponse = deferred<PluginMutationResult>();
+  const secondResponse = deferred<PluginMutationResult>();
+  let nextRequest = 0;
+  const request = createGatewayRequestMock(async (method, _params, options) => {
+    if (method === "plugins.install") {
+      const index = nextRequest++;
+      options?.onSent?.(`request-${index}`);
+      return index === 0 ? firstResponse.promise : secondResponse.promise;
+    }
+    if (method === "plugins.list") {
+      return createResult(available);
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  client.addEventListener = (listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const fixture = createConsentHarness(client, createResult(available), async () => undefined);
+  const firstIdentity = "npm:one";
+  const secondIdentity = "npm:two";
+  const one = fixture.consent.install({ source: "npm", spec: "one" }, firstIdentity);
+  const two = fixture.consent.install({ source: "npm", spec: "two" }, secondIdentity);
+  const emit = (requestId: string, status = "started") => {
+    for (const listener of listeners) {
+      listener({
+        type: "event",
+        event: "plugins.install.progress",
+        payload: { requestId, activityId: "activity", stage: "dependencies", status },
+      });
+    }
+  };
+  try {
+    emit("request-1");
+    expect(fixture.consent.read().installProgress.get(firstIdentity)?.activities).toEqual([]);
+    expect(fixture.consent.read().installProgress.get(secondIdentity)?.activities).toEqual([
+      {
+        requestId: "request-1",
+        activityId: "activity",
+        stage: "dependencies",
+        status: "started",
+      },
+    ]);
+    emit("request-0");
+    emit("request-0", "invented");
+    expect(fixture.consent.read().installProgress.get(firstIdentity)?.activities).toEqual([
+      {
+        requestId: "request-0",
+        activityId: "activity",
+        stage: "dependencies",
+        status: "started",
+      },
+    ]);
+    const result: PluginMutationResult = {
+      ok: true,
+      plugin: createPlugin({ id: "one" }),
+      restartRequired: false,
+    };
+    firstResponse.resolve(result);
+    await one;
+    expect(fixture.applyMutationResult).toHaveBeenCalledWith(result);
+    emit("request-0", "completed");
+    expect(fixture.consent.read().installProgress.has(firstIdentity)).toBe(false);
+    expect(listeners.size).toBe(1);
+    secondResponse.reject(new Error("registry unavailable"));
+    await two;
+    expect(fixture.messages[secondIdentity]?.text).toContain("registry unavailable");
+    expect(listeners.size).toBe(0);
+  } finally {
+    fixture.dispose();
+  }
+});
 
 it("blocks repeat install when saved-state reads fail, then reconciles aliases and later removal", async () => {
   let inventoryFails = true;

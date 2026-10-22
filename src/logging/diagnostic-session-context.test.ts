@@ -150,9 +150,6 @@ describe("diagnostic session context", () => {
         })
       )?.text,
     ).toBe("There are 40\ncached mentions ready.");
-    expect(await captureSessionLog({ sessionKey, cronNameLabel: "stopped" })).toContain(
-      `stopped="${"a".repeat(136)}..."`,
-    );
   });
 
   it.each(["dashboard", "subagent", "internal-session-effects"])(

@@ -5,6 +5,11 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import {
+  buildAgentRunBlockedUserMessage,
+  runBeforeAgentRunGate,
+} from "../../harness/before-agent-run.js";
 import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import {
@@ -18,10 +23,10 @@ import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
+  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
-import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -43,6 +48,7 @@ import {
   isChatGPTV2CompactionEligible,
 } from "./chatgpt-v2-compaction.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
@@ -256,24 +262,50 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
-    const beforeAgentRunOutcome =
-      attempt.operation === "settled-tool-finalization"
-        ? undefined
-        : await runEmbeddedAttemptBeforeAgentRun({
-            attempt,
-            activeSession,
-            hookContext: hookCtx,
-            hookMessages: hookMessagesForCurrentPrompt,
-            hookRunner,
-            modelPrompt: promptForModel,
-            sessionManager,
-            systemPrompt: systemPromptForHook,
-            withOwnedTranscriptWrite,
-          });
-    if (beforeAgentRunOutcome) {
-      input.state.beforeAgentRunBlockedBy = beforeAgentRunOutcome.blockedBy;
-      setFailure(beforeAgentRunOutcome.promptError, "hook:before_agent_run");
-      skipPromptSubmission = true;
+    if (attempt.operation !== "settled-tool-finalization") {
+      const block = await runBeforeAgentRunGate(
+        hookRunner,
+        {
+          prompt: promptForModel,
+          systemPrompt: systemPromptForHook,
+          messages: hookMessagesForCurrentPrompt,
+          channelId: hookCtx.channelId,
+          accountId: attempt.agentAccountId,
+          senderId: attempt.senderId ?? undefined,
+          senderIsOwner: attempt.senderIsOwner,
+        },
+        hookCtx,
+      );
+      if (block) {
+        const redactedUserMessage = buildAgentRunBlockedUserMessage(attempt.runId, block);
+        if (
+          !sessionMessagesContainIdempotencyKey(
+            activeSession.messages,
+            redactedUserMessage.idempotencyKey,
+          )
+        ) {
+          try {
+            await withOwnedTranscriptWrite(() =>
+              withSessionManagerAppend(sessionManager, async () => {
+                await sessionManager.appendMessageAsync(redactedUserMessage);
+                sessionManager.flushPendingPersistence();
+              }),
+            );
+            activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+              sessionManager.buildSessionContext().messages,
+            );
+          } catch (err) {
+            log.warn(
+              `before_agent_run block: failed to persist redacted user message: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+        input.state.beforeAgentRunBlockedBy = block.blockedBy;
+        setFailure(new Error(block.message), "hook:before_agent_run");
+        skipPromptSubmission = true;
+      }
     }
 
     if (!skipPromptSubmission) {
@@ -503,7 +535,9 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates || toolResultPromptProjectionState.frozen.size > 0)
+            (inHistorySystemUpdates ||
+              sessionPromptState.pendingToolSurface ||
+              toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
               runAbortController.signal.throwIfAborted();
@@ -511,11 +545,11 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              if (sessionRuntime.prepareSystemPromptUpdate) {
-                await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
-                  sessionManager.appendCustomEntryAsync(customType, data),
-                );
-              }
+              const appendEntry = (customType: string, data: unknown) =>
+                sessionManager.appendCustomEntryAsync(customType, data);
+              await (sessionRuntime.prepareSystemPromptUpdate
+                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
+                : persistSessionToolSurface(sessionPromptState, appendEntry));
             });
           }
         },

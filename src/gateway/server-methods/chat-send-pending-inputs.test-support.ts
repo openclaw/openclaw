@@ -72,6 +72,7 @@ export function useBrowserFollowupFixture() {
   return async function createBrowserFollowupFixture(
     options: {
       active?: boolean;
+      sessionKey?: string;
       createdActor?: SessionCreatedActor;
       sandbox?: "required";
       preserveContent?: boolean;
@@ -90,7 +91,9 @@ export function useBrowserFollowupFixture() {
     const memoryIncognito = options.storage === "memory";
     const scope = {
       agentId: "main",
-      sessionKey: memoryIncognito ? "agent:main:dashboard:incognito-custody" : "agent:main:main",
+      sessionKey: memoryIncognito
+        ? "agent:main:dashboard:incognito-custody"
+        : (options.sessionKey ?? "agent:main:main"),
       sessionId: "cloud-session",
       storePath,
     };
@@ -103,7 +106,7 @@ export function useBrowserFollowupFixture() {
     };
     await writeSessionStore({
       entries: {
-        ...(!memoryIncognito ? { main: entry } : {}),
+        ...(!memoryIncognito ? { [scope.sessionKey]: entry } : {}),
         unrelated: {
           sessionId: "unrelated-browser-session",
           updatedAt: Date.now(),

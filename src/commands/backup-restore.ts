@@ -3,6 +3,7 @@ import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
+import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -143,8 +144,10 @@ async function restorePostgresExports(
   recoveryConfigPath: string | undefined,
   recoveryConfigContextPath: string | undefined,
   archiveRoot: string,
+  publishCompanions?: () => void,
 ): Promise<void> {
   if (candidates.length === 0) {
+    publishCompanions?.();
     return;
   }
   if (!recoveryConfigPath) {
@@ -213,6 +216,8 @@ async function restorePostgresExports(
             afterPublish: (guard) => guard.assertTargetMatchesExpectedContent(assertCurrent),
           });
         }
+        assertCurrent();
+        publishCompanions?.();
         for (const { directoryPath } of postgres) {
           for (const name of ["manifest.json", "anchor.sqlite", "database.sqlite"]) {
             await fs.unlink(path.join(targetPath, directoryPath, name));
@@ -283,6 +288,7 @@ export async function backupRestoreCommand(
     databaseRestoreCandidates,
     recoveryConfigPath,
     recoveryConfigContextPath,
+    manifest,
   } = await prepareBackupArchive(options.archive);
   assertRestoreCapacity(targetPath, regularFileExtractionBytes);
   const target = await prepareRestoreTarget(targetPath);
@@ -294,6 +300,7 @@ export async function backupRestoreCommand(
       hardlinkTargets,
       new Set(symbolicLinks.map(({ entryPath }) => entryPath)),
     );
+    const restoreClientCredentials = prepareRestoredClientCredentials({ manifest, targetPath });
     // Materialize all parents before links: filesystem aliases then collide with
     // directories instead of letting an earlier link redirect a later write.
     for (const { entryPath } of symbolicLinks) {
@@ -308,6 +315,7 @@ export async function backupRestoreCommand(
       recoveryConfigPath,
       recoveryConfigContextPath,
       verified.archiveRoot,
+      restoreClientCredentials,
     );
   } catch (extractionError) {
     try {

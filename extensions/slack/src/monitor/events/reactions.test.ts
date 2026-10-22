@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSlackCommonEvents } from "../events.js";
 import {
   createSlackSystemEventTestHarness,
-  type SlackSystemEventHandler as ReactionHandler,
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
@@ -16,15 +15,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
     options: Record<string, unknown>,
   ) => reactionQueueMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
-
-type ReactionRunInput = {
-  handler?: "added" | "removed";
-  overrides?: SlackSystemEventTestOverrides;
-  event?: Record<string, unknown>;
-  body?: unknown;
-  trackEvent?: () => void;
-  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
-};
 
 function buildReactionEvent(overrides?: { user?: string; channel?: string }) {
   return {
@@ -40,7 +30,7 @@ function buildReactionEvent(overrides?: { user?: string; channel?: string }) {
   };
 }
 
-function buildEnterpriseListenerArgs(teamId: string) {
+function buildEnterpriseListenerArgs(teamId?: string) {
   return {
     body: { api_app_id: "A_GRID", event_id: `Ev-reaction-${teamId}` },
     context: {
@@ -52,46 +42,26 @@ function buildEnterpriseListenerArgs(teamId: string) {
   };
 }
 
-function createReactionHandlers(params: {
-  overrides?: SlackSystemEventTestOverrides;
-  trackEvent?: () => void;
-  shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
-}) {
-  const harness = createSlackSystemEventTestHarness(params.overrides);
-  if (params.shouldDropMismatchedSlackEvent) {
-    harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
+function createReactionHarness(overrides?: SlackSystemEventTestOverrides, enterprise = false) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  const trackEvent = vi.fn();
+  if (enterprise) {
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
   }
   registerSlackCommonEvents({
     ctx: harness.ctx,
     handleSlackMessage: vi.fn(),
-    trackEvent: params.trackEvent,
+    trackEvent,
   });
-  return {
-    added: harness.getHandler("reaction_added") as ReactionHandler | null,
-    removed: harness.getHandler("reaction_removed") as ReactionHandler | null,
-  };
-}
-
-function requireReactionHandler(handler: ReactionHandler | null, name: string): ReactionHandler {
+  const handler = harness.getHandler("reaction_added");
   if (!handler) {
-    throw new Error(`expected Slack ${name} reaction handler`);
+    throw new Error("expected Slack added reaction handler");
   }
-  return handler;
-}
-
-async function executeReactionCase(input: ReactionRunInput = {}) {
-  reactionQueueMock.mockClear();
-  const handlers = createReactionHandlers({
-    overrides: input.overrides,
-    trackEvent: input.trackEvent,
-    shouldDropMismatchedSlackEvent: input.shouldDropMismatchedSlackEvent,
-  });
-  const handlerName = input.handler ?? "added";
-  const handler = requireReactionHandler(handlers[handlerName], handlerName);
-  await handler({
-    event: (input.event ?? buildReactionEvent()) as Record<string, unknown>,
-    body: input.body ?? { event_id: "Ev-reaction-default" },
-  });
+  return { ...harness, handler, trackEvent };
 }
 
 describe("Slack reactions events", () => {
@@ -99,94 +69,65 @@ describe("Slack reactions events", () => {
     reactionQueueMock.mockClear();
   });
 
-  const cases: Array<{ name: string; input: ReactionRunInput; expectedCalls: number }> = [
+  const cases: Array<{
+    name: string;
+    overrides: SlackSystemEventTestOverrides;
+    event?: Record<string, unknown>;
+    expectedCalls: number;
+  }> = [
     {
       name: "blocks channel reaction events for users outside channel users allowlist",
-      input: {
-        overrides: {
-          dmPolicy: "open",
-          channelType: "channel",
-          channelUsers: ["U_OWNER"],
-        },
-        event: buildReactionEvent({ channel: "C1", user: "U_ATTACKER" }),
-      },
+      overrides: { channelType: "channel", channelUsers: ["U_OWNER"] },
+      event: buildReactionEvent({ channel: "C1", user: "U_ATTACKER" }),
       expectedCalls: 0,
     },
     {
       name: "blocks reactions when reaction notifications are off",
-      input: { overrides: { dmPolicy: "open", reactionMode: "off" } },
+      overrides: { reactionMode: "off" },
       expectedCalls: 0,
     },
     {
       name: "blocks own-mode reactions on messages not authored by the bot",
-      input: {
-        overrides: { dmPolicy: "open", reactionMode: "own" },
-        event: {
-          ...buildReactionEvent(),
-          item_user: "U_OTHER",
-        },
-      },
+      overrides: { reactionMode: "own" },
+      event: { ...buildReactionEvent(), item_user: "U_OTHER" },
       expectedCalls: 0,
     },
     {
       name: "allows own-mode reactions on messages authored by the bot",
-      input: {
-        overrides: { dmPolicy: "open", reactionMode: "own" },
-        event: {
-          ...buildReactionEvent(),
-          item_user: "U_BOT",
-        },
-      },
+      overrides: { reactionMode: "own" },
+      event: { ...buildReactionEvent(), item_user: "U_BOT" },
       expectedCalls: 1,
     },
     {
       name: "blocks reactions from senders outside the reaction allowlist",
-      input: {
-        overrides: {
-          dmPolicy: "open",
-          reactionMode: "allowlist",
-          reactionAllowlist: ["U2"],
-        },
-        event: buildReactionEvent({ user: "U1" }),
-      },
+      overrides: { reactionMode: "allowlist", reactionAllowlist: ["U2"] },
       expectedCalls: 0,
     },
     {
       name: "blocks allowlist-mode reactions when the reaction allowlist is empty",
-      input: {
-        overrides: {
-          dmPolicy: "open",
-          reactionMode: "allowlist",
-          reactionAllowlist: [],
-        },
-        event: buildReactionEvent({ user: "U1" }),
-      },
+      overrides: { reactionMode: "allowlist", reactionAllowlist: [] },
       expectedCalls: 0,
     },
     {
       name: "allows reactions from senders inside the reaction allowlist",
-      input: {
-        overrides: {
-          dmPolicy: "open",
-          reactionMode: "allowlist",
-          reactionAllowlist: ["U1"],
-        },
-        event: buildReactionEvent({ user: "U1" }),
-      },
+      overrides: { reactionMode: "allowlist", reactionAllowlist: ["U1"] },
       expectedCalls: 1,
     },
   ];
 
-  it.each(cases)("$name", async ({ input, expectedCalls }) => {
-    await executeReactionCase(input);
+  it.each(cases)("$name", async ({ overrides, event, expectedCalls }) => {
+    await createReactionHarness(overrides).handler({
+      event: event ?? buildReactionEvent(),
+      body: { event_id: "Ev-reaction-default" },
+    });
     expect(reactionQueueMock).toHaveBeenCalledTimes(expectedCalls);
   });
 
   it("does not track mismatched events", async () => {
-    const trackEvent = vi.fn();
-    await executeReactionCase({
-      trackEvent,
-      shouldDropMismatchedSlackEvent: () => true,
+    const { ctx, handler, trackEvent } = createReactionHarness();
+    ctx.shouldDropMismatchedSlackEvent = () => true;
+    await handler({
+      event: buildReactionEvent(),
       body: { api_app_id: "A_OTHER" },
     });
 
@@ -194,72 +135,36 @@ describe("Slack reactions events", () => {
   });
 
   it("keeps enterprise reaction events isolated by listener workspace", async () => {
-    const trackEvent = vi.fn();
-    const harness = createSlackSystemEventTestHarness();
-    harness.ctx.installationIdentity = {
-      kind: "enterprise",
-      apiAppId: "A_GRID",
-      enterpriseId: "E_GRID",
-    };
-    const resolveChannelName = vi.fn(harness.ctx.resolveChannelName);
-    const resolveUserName = vi.fn(harness.ctx.resolveUserName);
-    const resolveSessionKey = vi.fn(
-      async (input: Parameters<typeof harness.ctx.resolveSlackSystemEventRoute>[0]) => ({
-        agentId: "main",
-        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
-      }),
-    );
-    harness.ctx.resolveChannelName = resolveChannelName;
-    harness.ctx.resolveUserName = resolveUserName;
-    harness.ctx.resolveSlackSystemEventRoute = resolveSessionKey;
-    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
-    const handler = requireReactionHandler(
-      harness.getHandler("reaction_added") as ReactionHandler | null,
-      "added",
-    );
+    const { ctx, handler, trackEvent } = createReactionHarness(undefined, true);
+    const resolveChannelName = vi.spyOn(ctx, "resolveChannelName");
+    const resolveUserName = vi.spyOn(ctx, "resolveUserName");
+    vi.spyOn(ctx, "resolveSlackSystemEventRoute").mockImplementation(async (input) => ({
+      agentId: "main",
+      sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+    }));
 
-    for (const teamId of ["T111", "T222"]) {
+    for (const [index, teamId] of ["T111", "T222"].entries()) {
       await handler({
         event: buildReactionEvent(),
         ...buildEnterpriseListenerArgs(teamId),
       });
+      expect(reactionQueueMock).toHaveBeenNthCalledWith(index + 1, expect.any(String), {
+        sessionKey: `session:${teamId}`,
+        contextKey: `slack:reaction:${teamId}:added:D1:123.456:U1:thumbsup:Ev-reaction-${teamId}`,
+      });
+      expect(resolveChannelName).toHaveBeenCalledWith("D1", expect.objectContaining({ teamId }));
     }
-
-    expect(reactionQueueMock).toHaveBeenNthCalledWith(1, expect.any(String), {
-      sessionKey: "session:T111",
-      contextKey: "slack:reaction:T111:added:D1:123.456:U1:thumbsup:Ev-reaction-T111",
-    });
     expect(trackEvent).toHaveBeenCalledTimes(2);
-    expect(reactionQueueMock).toHaveBeenNthCalledWith(2, expect.any(String), {
-      sessionKey: "session:T222",
-      contextKey: "slack:reaction:T222:added:D1:123.456:U1:thumbsup:Ev-reaction-T222",
-    });
-    expect(resolveChannelName).toHaveBeenCalledWith(
-      "D1",
-      expect.objectContaining({ teamId: "T111" }),
-    );
-    expect(resolveChannelName).toHaveBeenCalledWith(
-      "D1",
-      expect.objectContaining({ teamId: "T222" }),
-    );
     expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T111" }));
   });
 
   it("allows an unscoped org user reaction policy across Enterprise workspaces", async () => {
-    const harness = createSlackSystemEventTestHarness({
-      dmPolicy: "open",
-      reactionMode: "allowlist",
-      reactionAllowlist: ["W01234567"],
-    });
-    harness.ctx.installationIdentity = {
-      kind: "enterprise",
-      apiAppId: "A_GRID",
-      enterpriseId: "E_GRID",
-    };
-    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx });
-    const handler = requireReactionHandler(
-      harness.getHandler("reaction_added") as ReactionHandler | null,
-      "added",
+    const { handler } = createReactionHarness(
+      {
+        reactionMode: "allowlist",
+        reactionAllowlist: ["W01234567"],
+      },
+      true,
     );
 
     for (const teamId of ["T111", "T222"]) {
@@ -273,27 +178,11 @@ describe("Slack reactions events", () => {
   });
 
   it("rejects enterprise reaction events without validated listener scope", async () => {
-    const trackEvent = vi.fn();
-    const harness = createSlackSystemEventTestHarness();
-    harness.ctx.installationIdentity = {
-      kind: "enterprise",
-      apiAppId: "A_GRID",
-      enterpriseId: "E_GRID",
-    };
-    registerSlackCommonEvents({ handleSlackMessage: vi.fn(), ctx: harness.ctx, trackEvent });
-    const handler = requireReactionHandler(
-      harness.getHandler("reaction_added") as ReactionHandler | null,
-      "added",
-    );
+    const { handler, trackEvent } = createReactionHarness(undefined, true);
 
     await handler({
       event: buildReactionEvent(),
-      body: { api_app_id: "A_GRID" },
-      context: {
-        isEnterpriseInstall: true,
-        enterpriseId: "E_GRID",
-      } as AllMiddlewareArgs["context"],
-      client: { token: "listener" } as AllMiddlewareArgs["client"],
+      ...buildEnterpriseListenerArgs(),
     });
 
     expect(trackEvent).not.toHaveBeenCalled();

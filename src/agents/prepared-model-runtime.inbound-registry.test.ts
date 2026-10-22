@@ -25,6 +25,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -243,19 +244,12 @@ describe("prepared reply dispatch runtime", () => {
     const config = { agents: { defaults: { model: "custom/model" } } };
     const registries = new Map(
       ["first-harness", "second-harness"].map((runtime) => {
-        const registry = createEmptyPluginRegistry();
-        registry.agentHarnesses.push({
-          pluginId: runtime,
-          source: "test",
-          harness: {
-            id: runtime,
-            label: runtime,
-            supports: () => ({ supported: true }),
-            runAttempt: async () => {
-              throw new Error("unused");
-            },
+        const registry = harnessRegistry(runtime, {
+          runAttempt: async () => {
+            throw new Error("unused");
           },
         });
+        registry.agentHarnesses[0]!.source = "test";
         return [runtime, registry] as const;
       }),
     );

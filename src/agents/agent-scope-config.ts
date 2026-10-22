@@ -15,6 +15,7 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
@@ -52,7 +53,6 @@ export type AgentSelectionContext = {
 export class AgentSelectionRequiredError extends Error {
   readonly code = "AGENT_SELECTION_REQUIRED";
   readonly agentIds: string[];
-  readonly surface: string;
   readonly hint: string;
 
   constructor(agentIds: string[], context?: AgentSelectionContext) {
@@ -63,7 +63,6 @@ export class AgentSelectionRequiredError extends Error {
     super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
     this.name = "AgentSelectionRequiredError";
     this.agentIds = agentIds;
-    this.surface = surface;
     this.hint = hint;
   }
 }
@@ -163,14 +162,20 @@ const agentRosterFacts = new WeakMap<
 
 /** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
-  const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch =
-    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-  try {
-    return callback();
-  } finally {
-    activeAgentRosterFactsBatch = parent;
-  }
+  return runWithMainThreadTask(
+    getMainThreadTaskName() ?? "gateway",
+    () => {
+      const parent = activeAgentRosterFactsBatch;
+      activeAgentRosterFactsBatch =
+        parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+      try {
+        return callback();
+      } finally {
+        activeAgentRosterFactsBatch = parent;
+      }
+    },
+    "agent-roster",
+  );
 }
 
 function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {

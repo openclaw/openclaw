@@ -172,7 +172,9 @@ describe("nested tool activity ownership", () => {
             await Promise.all([held, execution]);
           }
           await parent.release();
-          expect(await prepared.readActivities()).toHaveLength(owner === "current" ? 1 : 0);
+          expect(await prepared.readActivities()).toHaveLength(
+            owner === "current" || owner === "committed-abort" ? 1 : 0,
+          );
           expect(SessionManager.open(target).getEntries()).toHaveLength(
             originalEntries.length + (owner === "current" || owner === "committed-abort" ? 1 : 0),
           );

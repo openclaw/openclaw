@@ -50,6 +50,7 @@ async function withQuestion(
   const run = createQueueTestRun({ prompt: "Continue" });
   Object.assign(run.run, {
     messageProvider: "whatsapp",
+    senderId: "+1000",
     agentAccountId: "default",
     chatType: "direct",
   });
@@ -167,6 +168,7 @@ it.each([
           ctx: buildTestCtx({
             SessionKey: sessionKey,
             AccountId: "default",
+            SenderId: "+1000",
             MessageSid: messageId,
             OriginatingChannel: "whatsapp",
             OriginatingTo: "whatsapp:+1000",

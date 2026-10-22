@@ -106,19 +106,6 @@ export function captureSessionWorkRunInterruptions(params: {
   });
 }
 
-export function getSessionWorkAdmissionOwnerRelease(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  owner: symbol;
-  phase?: "acquired";
-}) {
-  return releaseEffects(
-    [...selectedEffects([targetFrom(params)])].filter(
-      (effect) => effect.owner === params.owner && (!params.phase || effect.phase === params.phase),
-    ),
-  );
-}
-
 export function getCompetingSessionWorkAdmissionRelease(params: {
   scope: string;
   identities: Iterable<string | undefined>;
@@ -195,6 +182,20 @@ export function captureGatewaySessionWorkAdmissionInterruption(
         }
       });
       return {
+        inspectPending: () => {
+          const pending = effects.filter((effect) => effect.phase !== "released");
+          const first = pending[0];
+          return {
+            effects: pending.length,
+            phase: first?.phase,
+            sessionKey: first?.ref.target.sessionKey,
+            runId: first ? getSessionEffectRun(first)?.runId : undefined,
+            interrupted: first ? Boolean(first.interrupted) : undefined,
+            sourcePhase: first?.sourceInput?.phase,
+            operationPhase: first?.ref.operation?.phase,
+            settling: first?.isSettling?.(),
+          };
+        },
         released: Promise.allSettled(cancellations).then((results) => {
           const failures = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],

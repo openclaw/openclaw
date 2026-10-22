@@ -69,6 +69,36 @@ Stopping with `/stop`, deleting, resetting, or archiving a session cancels only 
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
 
+## Creators and assigned owners
+
+New delegated sessions and automations retain the verified human who initiated
+the work as their creator. This is normal behavior; no Labs switch is required.
+The assigned owner remains separate: reassignment alone does not transfer
+creator rights for sharing, public-link management, archive, or restore. Existing
+creator/admin authorization rules still apply. Existing records are not
+retroactively reassigned.
+
+A selected tool user supplies execution authority, not evidence that they
+initiated the task. Autonomous work without a retained human stays
+agent/system-created. Creator attribution affects discovery, creator controls,
+and the personal-profile fallback when no human owner is assigned; it does not
+change the executing agent, model/tool permissions, or required sandbox identity.
+
+Public links still require explicit publication. Attribution does not publish
+sessions automatically, change their anonymous read-only view, or expose private
+isolation metadata. Content exclusions, revocation, and future-message behavior
+are unchanged.
+
+Attribution is stored alongside the original actor inside the existing creation
+record. Original actor fields and database schema versions are unchanged. A
+compatible older runtime ignores the additional attribution and uses its original
+creator rules; it retains the record when writing sessions, so returning to this
+runtime restores the attributed creator without changing sandbox identity.
+Retain the ordinary [rollback safeguards](/install/updating/rollback-and-recovery):
+this feature does not make unrelated database-format changes readable by older
+binaries. An incompatible binary remains blocked rather than silently restoring
+an old backup and losing later writes.
+
 ## Automatic session names
 
 Interactive chat sessions without an explicit name generate a topic title in the
@@ -216,12 +246,13 @@ Sessions are reused until you reset them manually or opt into an automatic reset
   metadata writes.
 - **Idle reset** (`mode: "idle"`) - opt into a new session after `session.reset.idleMinutes`
   of inactivity. Idle freshness is based on the last real user/channel
-  interaction, so heartbeat, cron, and exec system events do not keep the
-  session alive.
+  interaction, including browser Talk consults. Heartbeat, cron, and exec system
+  events do not keep the session alive.
 - **Manual reset** - type `/new` or `/reset` in chat. `/new <model>` also
   switches the model.
 
 When both daily and idle resets are configured, whichever expires first wins.
+The message that triggers an automatic reset continues in the new conversation.
 Heartbeat, cron, exec, and other system-event turns may write session metadata,
 but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
@@ -307,9 +338,20 @@ recorded permissions against current profile, role, access-grant, and device
 policy. A Control UI administrator can therefore continue authorized automation
 work after a restart without losing `operator.admin`. Recovery cannot gain scopes
 the original caller lacked, and revocation still stops the recovered run.
+Callers with `operator.sessions.write` can resume their own interrupted turns
+without needing the broader `operator.write` scope. If the original grant has
+been revoked, recovery records an interruption and a notice in the session
+instead of repeatedly retrying the same input. Send a new authenticated message
+after access is restored to continue.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
+
+The reserved device-less backend helper connection is a local control-plane path,
+not a durable operator identity. Use an identified operator client, such as the
+TUI or Control UI, for user-owned work that must resume automatically. Paired
+clients must retain the original device-token generation: reissuing that token
+under a different authentication path can prevent recovery even for the same user.
 
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
@@ -326,11 +368,16 @@ available for a fresh authenticated message; recovery never substitutes system
 authority. Temporary startup, binding, or access-policy availability failures keep
 their recovery claims and retry.
 
-If a delegated turn's sender authority cannot be reconstructed, automatic recovery
-stops with a recorded reason and a visible notice in the transcript or original
-channel. The notice offers **Resume** in WebChat. The click supplies current operator
-authority and continues the saved task in the same session. A saved
-delegation alone does not authorize replay after restart.
+If a delegated turn's sender authority cannot be reconstructed and no pending
+reply, harness completion, or independent run remains owed, recovery ends only that
+turn. One local interruption notice and terminal source receipt prevent replay;
+the same session and transcript remain available for a fresh authenticated message.
+Recovery does not send the notice to an external channel. Saved delegation alone
+does not authorize replay after restart.
+
+Turns with remaining custody retain the existing recovery block. **Resume** in
+WebChat supplies current operator authority to continue the saved task in the same
+session after its outstanding delivery settles.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
@@ -360,6 +407,11 @@ required restart-safe tools, WebChat offers **Resume in new session** instead.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.
+
+A canonical Main session archived specifically by restart recovery can also be
+reset. Reset retains its physical session identity and transcript while starting a
+fresh model context; it does not replay the interrupted task. Other archived
+sessions must be restored before reset.
 
 ## Where state lives
 

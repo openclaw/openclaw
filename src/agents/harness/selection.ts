@@ -57,6 +57,7 @@ import {
   prepareHarnessFinalizationParams,
   withoutPluginHarnessPrivateState,
 } from "./plugin-private-state.js";
+import { resolveAgentHarnessQueueInputAdapter } from "./registry.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -229,6 +230,11 @@ export async function runAgentHarnessAttempt(
         }
       : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  // Capture this registration before any awaited preparation; IDs and dispatch methods
+  // do not establish that an external sink understands separate question permission.
+  const queueInputAdapter = selection.builtIn
+    ? "human-and-question-permission"
+    : resolveAgentHarnessQueueInputAdapter(harness);
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
   const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
   assertHarnessModelPolicySupport(harness, params);
@@ -394,6 +400,10 @@ export async function runAgentHarnessAttempt(
                 nativePermissionsConsented,
                 pluginAttempt.setInputAttachmentReadAllowed,
                 attemptParams.runtimePluginToolGrant !== undefined,
+                // Pending native supervision has no model identity to prepare against yet.
+                nativeSessionRuntime?.auth === "native"
+                  ? (nativeSessionRuntime.modelRef ?? null)
+                  : undefined,
               );
           const effectiveAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
@@ -408,7 +418,7 @@ export async function runAgentHarnessAttempt(
           return import("./tool-authority.runtime.js").then(
             ({ withPreparedEmbeddedRunToolAuthority }) =>
               withPreparedEmbeddedRunToolAuthority(
-                internalParams,
+                { ...internalParams, queueInputAdapter },
                 effectiveAttemptParams,
                 selection.builtIn
                   ? undefined

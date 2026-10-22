@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -9,6 +10,7 @@ import {
 import { readStoredQuestionDrafts } from "./chat-async-questions.test-support.ts";
 import {
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -29,6 +31,18 @@ const questionMessage = {
     questions: [{ title, options: ["Engineers", "Everyone"] }],
   },
 };
+
+function createQuestionCapture(scope: string) {
+  const artifactDir = captureUiProofEnabled ? createControlUiE2eArtifactDir(scope) : undefined;
+  return async (page: Page, fileName: string) => {
+    if (artifactDir) {
+      await page.screenshot({
+        path: path.join(artifactDir, fileName),
+        animations: "disabled",
+      });
+    }
+  };
+}
 
 suite.define(() => {
   it("keeps an admitted optional answer with its original outbox owner after reconnect", async () => {
@@ -157,9 +171,6 @@ suite.define(() => {
             messageSeq: 4,
             message: nextRequest,
           });
-          if (recovery) {
-            await page.locator(".chat-system-events__summary").click();
-          }
           await expectBrowser(
             page
               .locator(".chat-thread-inner")
@@ -319,6 +330,7 @@ suite.define(() => {
         await assertDock();
         await expectBrowser(panel).toContainText("1 unanswered question");
         await panel.getByRole("button", { name: "Expand question" }).click();
+        await expectBrowser(panel).not.toHaveClass(/chat-question-panel--collapsed/);
         await assertDock();
         await page.setViewportSize({ width: 1440, height: 1200 });
         await expect
@@ -371,13 +383,8 @@ suite.define(() => {
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.locator(".chat-thread").getByText(title, { exact: true }).waitFor();
-        const artifactDir = createControlUiE2eArtifactDir(
-          `async-question-${active ? "active" : "idle"}`,
-        );
-        await page.screenshot({
-          path: path.join(artifactDir, "initial.png"),
-          animations: "disabled",
-        });
+        const capture = createQuestionCapture(`async-question-${active ? "active" : "idle"}`);
+        await capture(page, "initial.png");
         const card = page.locator(".agent-chat__question-dock openclaw-chat-question-panel");
         await expect.poll(() => card.count()).toBe(1);
         await card.getByRole("radio", { name: /Engineers/ }).waitFor();
@@ -466,10 +473,7 @@ suite.define(() => {
           expect(await expand.textContent()).toContain(followUpTitle);
           expect(await card.getByRole("textbox").count()).toBe(0);
         }
-        await page.screenshot({
-          path: path.join(artifactDir, "minimized.png"),
-          animations: "disabled",
-        });
+        await capture(page, "minimized.png");
         await expand.click();
         expect(await freeText.inputValue()).toBe(
           "Include one practical example.\nKeep the next steps separate.",
@@ -477,10 +481,7 @@ suite.define(() => {
         await card.getByRole("button", { name: "Back", exact: true }).click();
         expect(await custom.inputValue()).toBe("/stop is an example for the whole team");
         await card.getByRole("button", { name: "Next", exact: true }).click();
-        await page.screenshot({
-          path: path.join(artifactDir, "question.png"),
-          animations: "disabled",
-        });
+        await capture(page, "question.png");
         await card.getByRole("button", { name: "Submit", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         const params = requireRecord(request.params);
@@ -517,10 +518,7 @@ suite.define(() => {
             }),
           ).toHaveCount(1);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await page.screenshot({
-            path: path.join(artifactDir, "submitted-after-reload.png"),
-            animations: "disabled",
-          });
+          await capture(page, "submitted-after-reload.png");
         }
       } finally {
         await suite.closeBrowserContext(context);
@@ -657,7 +655,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         historyMessages: [deliveryQuestion],
       });
-      const artifactDir = createControlUiE2eArtifactDir(`async-question-delivery-${confirmation}`);
+      const capture = createQuestionCapture(`async-question-delivery-${confirmation}`);
       const answer = confirmation === "discard" ? "Engineers" : "The customer support team";
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -677,10 +675,7 @@ suite.define(() => {
           .locator(".chat-thread .chat-question-summary")
           .filter({ hasText: title });
         await expectBrowser(summary).toContainText("Sending answer");
-        await page.screenshot({
-          path: path.join(artifactDir, "sending.png"),
-          animations: "disabled",
-        });
+        await capture(page, "sending.png");
         await gateway.resolveDeferred("chat.send", {
           __mockError: { code: "UNAVAILABLE", message: "Synthetic send rejection" },
         });
@@ -693,10 +688,7 @@ suite.define(() => {
         await retry.waitFor();
         await expectBrowser(summary).toContainText("Answer not sent");
         await expectBrowser(summary).toContainText("Synthetic send rejection");
-        await page.screenshot({
-          path: path.join(artifactDir, "failed.png"),
-          animations: "disabled",
-        });
+        await capture(page, "failed.png");
         expect(await failedSend.getAttribute("title")).toBe("Synthetic send rejection");
         const queued = await readOutboxQueue(page);
         expect(queued).toHaveLength(1);
@@ -770,10 +762,7 @@ suite.define(() => {
           ).toBeVisible();
           await expectBrowser(summary).toContainText("Answer not sent");
           await failedSend.getByRole("button", { name: "Discard", exact: true }).click();
-          await page.screenshot({
-            path: path.join(artifactDir, "discard-after-completion.png"),
-            animations: "disabled",
-          });
+          await capture(page, "discard-after-completion.png");
           await expectBrowser(card).toBeVisible();
           await expectBrowser(card.getByRole("radio", { name: /Engineers/ })).toHaveAttribute(
             "aria-checked",
@@ -816,10 +805,7 @@ suite.define(() => {
         } else {
           await expectBrowser(summary).toContainText("Sending answer");
         }
-        await page.screenshot({
-          path: path.join(artifactDir, "retrying.png"),
-          animations: "disabled",
-        });
+        await capture(page, "retrying.png");
         await gateway.resolveDeferred("chat.send");
         if (confirmation !== "legacy") {
           await expectBrowser(summary).toContainText("Awaiting delivery confirmation");
@@ -837,10 +823,7 @@ suite.define(() => {
           expect(await userMessages.count()).toBe(1);
           expect(await readOutboxQueue(page)).toEqual([]);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await page.screenshot({
-            path: path.join(artifactDir, "sent-after-reload.png"),
-            animations: "disabled",
-          });
+          await capture(page, "sent-after-reload.png");
           return;
         }
         const runId = String(requireRecord(retried.params).idempotencyKey);
@@ -861,7 +844,7 @@ suite.define(() => {
           message: savedAnswer,
         });
         await expectBrowser(summary).toContainText("Answer sent");
-        await page.screenshot({ path: path.join(artifactDir, "sent.png"), animations: "disabled" });
+        await capture(page, "sent.png");
         await failedSend.waitFor({ state: "detached" });
         expect(await userMessages.count()).toBe(1);
         expect(await card.getByRole("button", { name: "Submit", exact: true }).count()).toBe(0);

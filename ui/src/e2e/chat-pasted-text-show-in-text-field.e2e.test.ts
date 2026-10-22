@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -87,6 +89,46 @@ async function paste(composer: Locator) {
 }
 
 suite.define(() => {
+  it.each([
+    { route: "chat", selector: ".agent-chat__composer-combobox textarea" },
+    { route: "new", selector: ".new-session-page__message" },
+  ])(
+    "keeps a long native paste inline only in an empty $route composer",
+    async ({ route, selector }) => {
+      await suite.withPage(contextOptions, async ({ page }) => {
+        const gateway = await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}${route}`);
+        const composer = page.locator(selector);
+        await composer.waitFor({ state: "visible" });
+        await composer.fill("");
+        await page.evaluate((text) => navigator.clipboard.writeText(text), pastedText);
+        await composer.focus();
+        await page.keyboard.press("Control+V");
+        await page.waitForFunction((inputSelector) => {
+          const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
+          return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
+        }, selector);
+        const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
+          animations: "disabled",
+        });
+        await writeFile(path.join(suite.artifactDir, `${route}-empty-long-paste.png`), frame.png);
+        await expect.poll(() => composer.inputValue()).toBe(pastedText);
+        expect(
+          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+        ).toBe(0);
+
+        await composer.fill("Keep this draft");
+        await page.keyboard.press("Control+V");
+        await button(page, pastedTextLabel).waitFor();
+        expect(await composer.inputValue()).toBe("Keep this draft");
+        await button(page, "Show in text field").click();
+        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      });
+    },
+  );
+
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     const options = { ...contextOptions, viewport: { width, height: 900 } };
     await suite.withPage(options, async ({ page }) => {
@@ -145,6 +187,23 @@ suite.define(() => {
       }
       const restore = button(pastedCard, "Show in text field");
       await restore.focus();
+      // A background session refresh must not replace the focused restore control.
+      const sessionRow = await gateway.getSessionRow("agent:main:main");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...sessionRow,
+        key: "agent:main:main",
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        label: "Refreshed paste session",
+        updatedAt: Date.now(),
+      });
+      await page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .getByText("Refreshed paste session", { exact: true })
+        .filter({ visible: true })
+        .first()
+        .waitFor();
+      expect(await restore.evaluate((node) => document.activeElement === node)).toBe(true);
       await page.keyboard.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
       expect(
@@ -178,7 +237,9 @@ suite.define(() => {
       expect(response?.headers()["content-security-policy"]).toBe(gatewayCsp);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
+      await composer.fill("Review the attachment");
       await paste(composer);
+      await composer.fill("");
       const chip = button(page, pastedTextLabel);
       await chip.focus();
       await page.keyboard.press("Enter");
@@ -211,7 +272,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
+      await composer.fill("Review the attachment");
       await paste(composer);
+      await composer.fill("");
       const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
       await waitForCommittedComposerDraft(page, scopeKey, "", 1);
       const fileName = await page.evaluate(

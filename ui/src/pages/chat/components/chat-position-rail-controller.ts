@@ -1,4 +1,5 @@
 import { createMemo, flush, onCleanup, refresh } from "solid-js";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import {
   syncPositionRailPreview,
@@ -20,9 +21,6 @@ import {
   type TranscriptViewportMeasurement,
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
-
-const MESSAGE_SELECTOR = ".chat-bubble[data-entry-id]";
-const PROVISIONAL_MESSAGE_SELECTOR = ".chat-bubble[data-message-id]:not([data-entry-id])";
 
 type RailInteraction = {
   hoveredId: string | null;
@@ -47,7 +45,8 @@ export function createPositionRail(props: PositionRailParams) {
   let session: ChatTranscriptSession | null = null;
   let interactionState = initialInteraction();
   let previewElement: HTMLElement | undefined;
-  let previewWindow: Window | null = null;
+  let previewDescription: (() => string) | undefined;
+  let stopPreviewKeydown: (() => void) | undefined;
   let scrollElement: HTMLElement | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let observationPending = false;
@@ -55,6 +54,7 @@ export function createPositionRail(props: PositionRailParams) {
   let layoutFrame: number | undefined;
   let currentActiveId: string | undefined;
   let markerIds: string[] = [];
+  let markerSource: ChatPositionIndex["markers"] | undefined;
   let markerIndexes = new Map<string, number>();
   let renderedIndexes: number[] = [];
   let viewportHeight: number | undefined;
@@ -73,8 +73,9 @@ export function createPositionRail(props: PositionRailParams) {
   const markerElements = new Map<string, HTMLElement>();
   let transcriptElement: HTMLElement | undefined;
   let intersectionObserver: IntersectionObserver | undefined;
-  let mutationObserver: MutationObserver | undefined;
   let stopTranscriptScroll: (() => void) | undefined;
+  let stopNativeScroll: (() => void) | undefined;
+  let stopMessageElements: (() => void) | undefined;
   const observedMessages = new Map<Element, { id: string; messageId: string; visible: boolean }>();
   let visibleIds = new Set<string>();
   let initialVisibilityPending = true;
@@ -181,7 +182,7 @@ export function createPositionRail(props: PositionRailParams) {
       refreshingWindow = true;
       try {
         void refresh(view);
-        // Keyboard navigation commits the retained target before focusing it.
+        // Native keyboard focus needs the virtualized rail target committed synchronously.
         flush();
       } finally {
         refreshingWindow = false;
@@ -206,11 +207,12 @@ export function createPositionRail(props: PositionRailParams) {
     }
   }
 
-  function createMarkerRef(id: string) {
-    onCleanup(() => markerElements.delete(id));
-    return (element: HTMLButtonElement) => {
+  function bindMarker(id: string, element?: HTMLButtonElement) {
+    if (element) {
       markerElements.set(id, element);
-    };
+    } else {
+      markerElements.delete(id);
+    }
   }
 
   function focusMarker(id: string): void {
@@ -224,12 +226,13 @@ export function createPositionRail(props: PositionRailParams) {
   function disconnectVisibility() {
     stopTranscriptScroll?.();
     stopTranscriptScroll = undefined;
+    stopNativeScroll?.();
+    stopNativeScroll = undefined;
+    stopMessageElements?.();
+    stopMessageElements = undefined;
     scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
     intersectionObserver?.disconnect();
-    mutationObserver?.disconnect();
-    transcriptElement?.removeEventListener("scroll", observeLayout);
     intersectionObserver = undefined;
-    mutationObserver = undefined;
     transcriptElement = undefined;
     reader = { followingResize: false, followActive: reader.followActive };
     observedMessages.clear();
@@ -253,7 +256,7 @@ export function createPositionRail(props: PositionRailParams) {
         disconnectVisibility();
       }
       transcriptElement = root;
-      root.addEventListener("scroll", observeLayout, { passive: true });
+      stopNativeScroll = listen(root, "scroll", observeLayout, { passive: true });
       stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
         if (observation.type === "offset") {
           // The reading position can cross a landmark without changing the
@@ -286,42 +289,10 @@ export function createPositionRail(props: PositionRailParams) {
         },
         { root, threshold: [0, Number.EPSILON, 1] },
       );
-      // The transcript owns bubble nodes; virtualization replaces them independently.
-      // Streaming descendants keep the same observed bubble targets.
-      const isPositionTarget = (element: Element) =>
-        element.matches(MESSAGE_SELECTOR) ||
-        (element.matches(PROVISIONAL_MESSAGE_SELECTOR) &&
-          markerIdsByMessageId.has(element.getAttribute("data-message-id")!));
-      mutationObserver = new MutationObserver((records) => {
-        if (
-          records.some((record) => {
-            if (record.target instanceof Element && record.target.closest(".chat-position-rail")) {
-              return false;
-            }
-            return (
-              record.type === "attributes" ||
-              [...record.addedNodes, ...record.removedNodes].some(
-                (node) =>
-                  node instanceof Element &&
-                  (isPositionTarget(node) ||
-                    [
-                      ...node.querySelectorAll(
-                        `${MESSAGE_SELECTOR}, ${PROVISIONAL_MESSAGE_SELECTOR}`,
-                      ),
-                    ].some(isPositionTarget)),
-              )
-            );
-          })
-        ) {
-          targetsChanged = true;
-          scheduleLayout();
-        }
-      });
-      mutationObserver.observe(root, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["data-entry-id", "data-message-id"],
+      // Bubble refs publish virtualization changes; token paints keep their targets.
+      stopMessageElements = session?.messageElements.subscribe(() => {
+        targetsChanged = true;
+        scheduleLayout();
       });
       targetsChanged = true;
     }
@@ -329,10 +300,11 @@ export function createPositionRail(props: PositionRailParams) {
       return;
     }
     targetsChanged = false;
-    const targets = new Set([
-      ...root.querySelectorAll(MESSAGE_SELECTOR),
-      ...root.querySelectorAll(PROVISIONAL_MESSAGE_SELECTOR),
-    ]);
+    const targets = new Set<Element>(
+      [...(session?.messageElements.elements.values() ?? [])].filter((element) =>
+        root.contains(element),
+      ),
+    );
     const messageIdFor = (element: Element) =>
       element.getAttribute("data-entry-id") ?? element.getAttribute("data-message-id");
     for (const [element, message] of observedMessages) {
@@ -470,6 +442,7 @@ export function createPositionRail(props: PositionRailParams) {
     syncPositionRailPreview(
       previewElement,
       markerElements.get(previewId ?? ""),
+      previewDescription?.() ?? "",
       ((markerIndexes.get(previewId ?? "") ?? 0) + 0.5) * MARKER_HEIGHT - viewportOffset,
       height,
     );
@@ -532,15 +505,19 @@ export function createPositionRail(props: PositionRailParams) {
     refreshWindow();
   };
 
-  const bindPreview = (element?: Element) => {
-    previewWindow?.removeEventListener("keydown", dismissPreview);
+  const bindPreview = (element?: Element, description?: () => string) => {
+    stopPreviewKeydown?.();
+    stopPreviewKeydown = undefined;
     previewElement = element instanceof HTMLElement ? element : undefined;
+    previewDescription = description;
     // Solid refs run before the preview leaves its inert template document.
     // The mounted rail supplies the actual event window.
-    previewWindow = element ? (scrollElement?.ownerDocument.defaultView ?? null) : null;
+    const previewWindow = element ? scrollElement?.ownerDocument.defaultView : null;
     scheduleLayout();
     // Focused markers handle Escape before the window fallback dismisses hover-only previews.
-    previewWindow?.addEventListener("keydown", dismissPreview);
+    if (previewWindow) {
+      stopPreviewKeydown = listen(previewWindow, "keydown", dismissPreview);
+    }
   };
 
   function readView(params: PositionRailParams): PositionRailViewParams | undefined {
@@ -583,8 +560,9 @@ export function createPositionRail(props: PositionRailParams) {
       }
     }
 
-    const ids = markers.map((marker) => marker.id);
-    if (!transcriptArraysEqual(ids, markerIds)) {
+    if (markers !== markerSource) {
+      markerSource = markers;
+      const ids = markers.map((marker) => marker.id);
       pendingProjectionChange ||= markerIds.some((id, index) => id !== ids[index]);
       markerIds = ids;
       markerIndexes = new Map(ids.map((id, index) => [id, index]));
@@ -626,6 +604,7 @@ export function createPositionRail(props: PositionRailParams) {
     return {
       assistant,
       markers,
+      liveMarkers: positions.liveMarkers,
       renderedIndexes,
       activeId: currentActiveId,
       visibleIds,
@@ -634,7 +613,7 @@ export function createPositionRail(props: PositionRailParams) {
       previewId: interaction.dismissed
         ? undefined
         : (interaction.hoveredId ?? interaction.focusedId),
-      createMarkerRef,
+      bindMarker,
       bindScroller,
       bindPreview,
       onScroll: observeLayout,

@@ -1,4 +1,5 @@
 import { t } from "../i18n/index.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
@@ -36,7 +37,7 @@ export function renderMarkdownFileTooltip(container: HTMLElement, path: string) 
     status.textContent =
       copied === undefined ? "" : t(copied ? "common.copied" : "common.copyFailed");
   };
-  button.addEventListener("click", () => {
+  const stopClick = listen(button, "click", () => {
     const currentGeneration = generation;
     let fallbackStarted = false;
     copyMarkdownText(
@@ -88,5 +89,8 @@ export function renderMarkdownFileTooltip(container: HTMLElement, path: string) 
     attributeFilter: ["open"],
     attributeOldValue: true,
   });
-  return () => observer.disconnect();
+  return () => {
+    stopClick();
+    observer.disconnect();
+  };
 }

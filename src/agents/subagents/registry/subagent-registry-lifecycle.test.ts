@@ -47,10 +47,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
-  buildAnnounceIdFromChildRun,
-  buildAnnounceIdempotencyKey,
-} from "../../announce-idempotency.js";
-import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
@@ -75,7 +71,6 @@ import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { resolveSubagentKillTargetState } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import { registerRequesterDatabaseAdmissionTests } from "./subagent-registry-lifecycle-admission.test-support.js";
 import {
   registerDetachedCleanupAuthorityTest,
@@ -100,7 +95,12 @@ import {
   type LifecycleFixtureWrite,
   type RunEntryOverrides,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
+import {
+  buildExpectedAnnounceIdempotencyKey,
+  registerDeliveryMirrorCases,
+} from "./subagent-registry-lifecycle-delivery-mirror.test-support.js";
 import { registerLifecycleDeliveryReceiptCases } from "./subagent-registry-lifecycle-delivery.test-support.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -330,15 +330,6 @@ function makeRunModeCleanupEntry(
   });
 }
 
-function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
-  return buildAnnounceIdempotencyKey(
-    buildAnnounceIdFromChildRun({
-      childSessionKey: entry.childSessionKey,
-      childRunId: entry.runId,
-    }),
-  );
-}
-
 function createLifecycleController(params: Parameters<typeof createLifecycleControllerFixture>[0]) {
   return createLifecycleControllerFixture(params, {
     callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
@@ -403,61 +394,6 @@ function createCaptureFixture(entry = createRunEntry()) {
   const runs = new Map([[entry.runId, entry]]);
   const controller = createLifecycleController({ entry, runs, captureSubagentCompletionReply });
   return { entry, runs, captured, captureSubagentCompletionReply, controller };
-}
-
-async function runNoReplyMirrorScenario(params: {
-  timestamp: number;
-  text?: string;
-  idempotencyKey?: string;
-  idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
-}): Promise<SubagentRunRecord> {
-  // A failed direct announce can still be mirrored from the requester history;
-  // the idempotency key prevents stale or unrelated assistant text from winning.
-  const entry = createRunEntry({
-    endedAt: 4_000,
-    expectsCompletionMessage: true,
-    retainAttachmentsOnKeep: true,
-  });
-  const text = params.text ?? "final completion reply";
-  const idempotencyKey =
-    params.idempotencyKeyForEntry?.(entry) ??
-    params.idempotencyKey ??
-    `${buildExpectedAnnounceIdempotencyKey(entry)}:internal-source-reply:0`;
-  const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
-    async (announceParams) => {
-      await announceParams.onDeliveryResult?.({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      });
-      return "retryable" as const;
-    },
-  );
-  gatewayMocks.callGateway.mockResolvedValueOnce({
-    messages: [
-      {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        content: text,
-        timestamp: params.timestamp,
-        idempotencyKey,
-      },
-    ],
-  });
-
-  await createLifecycleController({
-    entry,
-    captureSubagentCompletionReply: vi.fn(async () => text),
-    beforeWrite: vi.fn(),
-    runSubagentAnnounceFlow,
-  }).completeSubagentRun(
-    makeSubagentCompletion(entry, {
-      triggerCleanup: true,
-      terminalReply: { disposition: "visible", text },
-    }),
-  );
-  return entry;
 }
 
 describe("subagent registry lifecycle hardening", () => {
@@ -1805,7 +1741,7 @@ describe("subagent registry lifecycle hardening", () => {
         return "Earlier unbounded result.";
       });
     const controller = createLifecycleController({ entry, captureSubagentCompletionReply });
-    const warn = vi.fn();
+    using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const runtime = createSubagentRegistryCompletionRuntime({
       runs: controller.options.runs,
       resumed: new Set(),
@@ -1813,7 +1749,6 @@ describe("subagent registry lifecycle hardening", () => {
       completeSubagentRun: controller.completeSubagentRun,
       scheduleSweep: vi.fn(),
       resumeRun: vi.fn(),
-      warn,
     });
     const completion = runtime.completeSubagentRunWithRecovery(
       makeSubagentCompletion(entry, { endedAt: 6_000, terminalReply: undefined }),
@@ -2982,9 +2917,9 @@ describe("subagent registry lifecycle hardening", () => {
       expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
       expect.any(Function),
     );
-    expect(runs.has(entry.runId)).toBe(true);
+    const retained = loadSubagentRegistryFromSqlite().get(entry.runId);
     expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("raw collector result");
+    expect(retained?.completion?.resultText).toBe("raw collector result");
     expect(readLifecycleRun(entry).completion?.required).toBe(false);
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
     expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
@@ -3823,73 +3758,12 @@ describe("subagent registry lifecycle hardening", () => {
     },
   );
 
-  it.each([
-    { source: "current" },
-    { source: "long reply" },
-    { source: "message tool" },
-    { source: "child run" },
-    { source: "stale" },
-    { source: "sibling" },
-  ])("credits only current-run requester delivery mirrors ($source)", async ({ source }) => {
-    const delivered = source !== "stale" && source !== "sibling";
-    const entry = await runNoReplyMirrorScenario({
-      timestamp: source === "stale" ? 1_999 : 12_345,
-      text: source === "long reply" ? "long completion reply ".repeat(500) : undefined,
-      idempotencyKeyForEntry: (candidate) => {
-        if (source === "child run") {
-          return `${candidate.runId}:message-tool:1`;
-        }
-        if (source === "sibling") {
-          return `${buildAnnounceIdempotencyKey(
-            buildAnnounceIdFromChildRun({
-              childSessionKey: "agent:main:subagent:sibling",
-              childRunId: "run-sibling",
-            }),
-          )}:internal-source-reply:0`;
-        }
-        return `${buildExpectedAnnounceIdempotencyKey(candidate)}:${source === "message tool" ? "message-tool:" : ""}internal-source-reply:0`;
-      },
-    });
-    await waitForLifecycleState(() =>
-      expect(
-        delivered
-          ? readLifecycleRun(entry).cleanupCompletedAt
-          : readLifecycleRun(entry).delivery?.suspendedAt,
-      ).toBeTypeOf("number"),
-    );
-    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: entry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
-      timeoutMs: 5_000,
-    });
-    expect(readLifecycleRun(entry).delivery).toMatchObject({
-      status: delivered ? "delivered" : "suspended",
-      deliveredAt: delivered ? 12_345 : undefined,
-      announcedAt: delivered ? 12_345 : undefined,
-      lastError: delivered ? undefined : "completion agent did not produce a visible reply",
-    });
-    if (delivered) {
-      expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
-      expect(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
-      expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
-    } else {
-      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
-        subagent: expect.objectContaining({
-          runId: entry.runId,
-          childSessionKey: entry.childSessionKey,
-          completion: expect.objectContaining({ resultText: "final completion reply" }),
-        }),
-        reason: "completion agent did not produce a visible reply",
-        suspendedReason: "expiry",
-      });
-      expect(helperMocks.logAnnounceGiveUp).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: entry.runId,
-          requesterSessionKey: entry.requesterSessionKey,
-        }),
-        "expiry",
-      );
-    }
+  registerDeliveryMirrorCases({
+    createLifecycleController,
+    waitForLifecycleState,
+    callGateway: gatewayMocks.callGateway,
+    blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
+    logAnnounceGiveUp: helperMocks.logAnnounceGiveUp,
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
@@ -4128,10 +4002,9 @@ describe("requester settle wake trigger", () => {
         plugins: { slots: { contextEngine: "cleanup-owned" } },
       });
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
-      const warn = vi.fn();
+      using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
       const cleanup = createSubagentRegistryContextCleanup({
         isEndedHookOwnerCurrent: () => false,
-        warn,
       });
       const entry = makeRunModeCleanupEntry("closed-cleanup-caller", { generation: 1 });
       const runs = new Map([[entry.runId, entry]]);
@@ -4208,7 +4081,6 @@ describe("requester settle wake trigger", () => {
         await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         vi.mocked(getRuntimeConfig).mockReset();
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-        resetSubagentRegistryRuntimeLoadersForTests();
         await resetContextEngineRuntimeQuarantineForTests();
         resetGatewayWorkAdmission();
       }

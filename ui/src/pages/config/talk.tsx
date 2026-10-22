@@ -5,7 +5,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createMemo, Errored, Loading, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
@@ -46,9 +46,15 @@ export type TalkCatalogState =
 type TalkViewProps = {
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
-  voiceWake?: { state: VoiceWakeEditorState; onInput: (text: string) => void; onRetry: () => void };
+  voiceWake?: {
+    readState: () => VoiceWakeEditorState;
+    scope?: object | null;
+    onInput: (text: string) => void;
+    onRetry: () => void;
+  };
   selection: TalkRealtimeSelection;
   catalog: TalkCatalogState;
+  catalogScope?: object | null;
   modelDefaultPending?: boolean;
   configBusy: boolean;
   onProviderChange: (providerId: string | null) => void;
@@ -122,7 +128,7 @@ export function effectiveTalkValues(
 }
 
 function StatusRow(props: TalkViewProps) {
-  const status = createMemo(() => {
+  const status = () => {
     const catalog = props.catalog;
     if (catalog.kind !== "ready") {
       return {
@@ -139,7 +145,7 @@ function StatusRow(props: TalkViewProps) {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
     };
-  });
+  };
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
@@ -331,6 +337,18 @@ function ModelFamilyRow(props: TalkViewProps) {
   );
 }
 
+function TalkCatalogRows(props: TalkViewProps) {
+  return (
+    <>
+      <StatusRow {...props} />
+      <ProviderRow {...props} />
+      <ModelRow {...props} />
+      <VoiceRow {...props} />
+      <ModelFamilyRow {...props} />
+    </>
+  );
+}
+
 export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
@@ -338,7 +356,8 @@ export function Talk(props: TalkViewProps) {
         <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
         {props.voiceWake && (
           <VoiceWakeEditor
-            state={props.voiceWake.state}
+            readState={props.voiceWake.readState}
+            scope={props.voiceWake.scope}
             onInput={props.voiceWake.onInput}
             onRetry={props.voiceWake.onRetry}
           />
@@ -347,11 +366,16 @@ export function Talk(props: TalkViewProps) {
           title={t("talkPage.voiceSection.title")}
           description={t("talkPage.voiceSection.description")}
         >
-          <StatusRow {...props} />
-          <ProviderRow {...props} />
-          <ModelRow {...props} />
-          <VoiceRow {...props} />
-          <ModelFamilyRow {...props} />
+          <Errored
+            fallback={(_error) => <TalkCatalogRows {...props} catalog={{ kind: "unavailable" }} />}
+          >
+            <Loading
+              on={props.catalogScope}
+              fallback={<TalkCatalogRows {...props} catalog={{ kind: "loading" }} />}
+            >
+              <TalkCatalogRows {...props} />
+            </Loading>
+          </Errored>
         </SettingsSection>
       </SettingsPage>
       {props.editor}

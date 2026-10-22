@@ -121,7 +121,6 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       requesterSessionKey: sessionKey,
       taskKind: "image_generation",
       status: "running",
-      createdAt: Date.now(),
     });
     const controller = new AbortController();
     const input = createSettleFixture({

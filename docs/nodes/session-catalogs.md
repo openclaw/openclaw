@@ -24,6 +24,10 @@ host is pending. Providers own their
 host snapshot freshness and invalidation. Other providers remain usable. Late results refresh the page for the next list;
 existing host progress updates remain supported.
 
+If a late progress update fails while its subscriber is active, the Gateway logs
+`Session catalog progress update failed; refresh the catalog to retry.` Refresh
+the catalog to request the current rows again. Disconnecting intentionally ends updates.
+
 These fallback pages are bounded in memory and invalidated by configuration or
 provider registration changes and catalog archive operations. Every delivery
 rechecks current visibility and local session identity. The one-second budget
@@ -87,8 +91,9 @@ Import preserves the catalog's projected transcript text, not the original nativ
 files or raw provider records. Each import retains up to 50,000 transcript items
 or 64 MiB of projected history, whichever comes first, starting with the most
 recent history. Provider truncation and the existing per-item text limit still
-apply. If the history ceiling omits older items,
-the result has `complete: false` and the CLI warns that the copy is incomplete.
+apply. Pagination also stops on a repeated continuation cursor or after 50,000
+page requests. If these bounds omit older items, the result has `complete: false`
+and the CLI warns that the copy is incomplete.
 `importedItems` counts newly appended source items; `totalItems` counts source
 items read during this import, including items already preserved. Claude and
 Codex supply stable item IDs; for catalogs whose items lack IDs, re-import

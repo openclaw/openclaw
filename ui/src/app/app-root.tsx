@@ -1,4 +1,4 @@
-import "../lib/toast-host.ts";
+import "../lib/toast-host.tsx";
 import type { ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import { render, type JSX as SolidJSX } from "@solidjs/web";
 import {
@@ -9,11 +9,8 @@ import {
   Switch,
   createMemo,
   createSignal,
-  getOwner,
   lazy,
-  onCleanup,
   onSettled,
-  runWithOwner,
 } from "solid-js";
 import "../components/link-reader-hovercard-registration.ts";
 import { LazyElementStateView, LazyViewError } from "../components/solid/lazy-view-error.tsx";
@@ -28,7 +25,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -37,7 +34,10 @@ import type { FocusDashboardRouteState } from "./app-root-focus.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { ShellLoader } from "./app-shell-loader.tsx";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import type { SolidReadinessShell } from "./control-ui-readiness-solid.ts";
+import type {
+  createSolidControlUiReadiness,
+  SolidReadinessShell,
+} from "./control-ui-readiness-solid.ts";
 import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
@@ -75,9 +75,11 @@ export function mountOpenClawApp(host: HTMLElement, runtime = bootstrapApplicati
 
 function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.Element {
   const context = runtime.context;
-  const rootOwner = getOwner();
   let readiness: ControlUiReadiness | undefined;
   let readinessLoad: Promise<void> | undefined;
+  const [readinessRequest, setReadinessRequest] = createSignal<{
+    create: typeof createSolidControlUiReadiness;
+  }>();
   let shell: SolidReadinessShell | undefined;
   let login: HTMLElement | undefined;
   let terminalElement: (HTMLElement & { readonly available?: boolean }) | undefined;
@@ -86,11 +88,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
   const selection = projectAgentSelection(context.agentSelection);
-  const router = projectSource(context.router, {
-    read: (source) => source.getState(),
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
+  const router = projectOwner(context.router, (source) => source.getState());
   const theme = projectTheme(context.theme);
   const snapshot = () => gateway.read().snapshot;
   const connected = () => snapshot().phase === "connected";
@@ -128,9 +126,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     runtime.cancelPendingGatewayConnection();
     setPendingGatewayUrl(null);
   };
-  const [focusDashboardRoute, setFocusDashboardRoute] = createSignal<FocusDashboardRouteState>({
-    kind: "loading",
-  });
+  const focusDashboardRoute = Promise.withResolvers<FocusDashboardRouteState>();
   let active = true;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
@@ -146,20 +142,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   const lazyCustomElements = createLazyCustomElementRequests(lazyHost, closeDocument);
   const lazyState = projectOwner(lazyCustomElements, (owner) => owner.visibleState);
   const loginLoadState = projectOwner(loginGateLoader, (owner) => owner.visibleState);
-  const disconnectViewport = connectShellViewport();
-  const disconnectTooltips = installTitleTooltips(host.ownerDocument);
-  const embedHost = nativeEmbedHost();
-  host.ownerDocument.documentElement.classList.toggle("openclaw-native-embed", embedHost !== null);
-  host.toggleAttribute(
-    "data-native-titlebar",
-    embedHost?.platform === "macos" &&
-      embedHost.formFactor === "desktop" &&
-      embedHost.surface === "conversation",
-  );
-  if (embedHost) {
-    void import("../styles/native-embed.css");
-  }
-  void import("../components/session-progress-hovercard-registration.ts");
 
   const initialConnectPending = () =>
     runtime.documentMode === null &&
@@ -197,31 +179,20 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
       readinessLoad = import("./control-ui-readiness-solid.ts")
         .then(({ createSolidControlUiReadiness }) => {
           if (active) {
-            readiness = runWithOwner(rootOwner, () =>
-              createSolidControlUiReadiness(host, runtime, trackRoot, () => ({
-                login,
-                shell,
-                terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
-              })),
-            );
+            setReadinessRequest({ create: createSolidControlUiReadiness });
           }
         })
-        .catch((error: unknown) => {
-          if (active) {
-            readinessLoad = undefined;
-            console.error("[openclaw] automation readiness could not load", error);
-          }
-        });
+        .catch(readinessFailed);
     }
     return readiness?.hook;
   };
-  const window = host.ownerDocument.defaultView;
-  if (window) {
-    Object.defineProperty(window, "openclawControlUi", {
-      configurable: true,
-      get: loadReadiness,
-    });
+  function readinessFailed(error: unknown): void {
+    if (active) {
+      readinessLoad = undefined;
+      console.error("[openclaw] automation readiness could not load", error);
+    }
   }
+  const window = host.ownerDocument.defaultView;
   // The lazy observer reads these current facts only after automation requests it.
   function trackRoot(): void {
     gateway.revision();
@@ -236,13 +207,35 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     loginPassword();
     loginShowGatewaySecret();
     pendingGatewayUrl();
-    focusDashboardRoute();
     config.revision();
     theme.preferences.revision();
     theme.appliedPalette.revision();
   }
 
   onSettled(() => {
+    const disconnectViewport = connectShellViewport();
+    const disconnectTooltips = installTitleTooltips(host.ownerDocument);
+    const embedHost = nativeEmbedHost();
+    host.ownerDocument.documentElement.classList.toggle(
+      "openclaw-native-embed",
+      embedHost !== null,
+    );
+    host.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
+    );
+    if (embedHost) {
+      void import("../styles/native-embed.css");
+    }
+    void import("../components/session-progress-hovercard-registration.ts");
+    if (window) {
+      Object.defineProperty(window, "openclawControlUi", {
+        configurable: true,
+        get: loadReadiness,
+      });
+    }
     if (focusTarget) {
       const element = {
         terminal: TERMINAL_PANEL_ELEMENT,
@@ -277,30 +270,27 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           }
           const result = await loadFocusDashboard(context, focusTarget, focusDashboardAbort.signal);
           if (!focusDashboardAbort.signal.aborted) {
-            setFocusDashboardRoute(result);
+            focusDashboardRoute.resolve(result);
           }
         }
       })
       .catch((error: unknown) => console.error("[openclaw] application start failed", error));
-  });
-  onCleanup(() => {
-    active = false;
-    readiness?.disconnect();
-    if (
-      window &&
-      Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
-    ) {
-      delete window.openclawControlUi;
-    }
-    for (const projection of [gateway, config, selection, router, theme, translations]) {
-      projection.dispose();
-    }
-    disconnectViewport();
-    disconnectTooltips();
-    focusDashboardAbort.abort();
-    lazyCustomElements.abandon();
-    loginGateLoader.abandon();
-    runtime.stop();
+    return () => {
+      active = false;
+      readiness?.disconnect();
+      if (
+        window &&
+        Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get === loadReadiness
+      ) {
+        delete window.openclawControlUi;
+      }
+      disconnectViewport();
+      disconnectTooltips();
+      focusDashboardAbort.abort();
+      lazyCustomElements.abandon();
+      loginGateLoader.abandon();
+      runtime.stop();
+    };
   });
 
   function Escape(escapeProps: { label: string }): SolidJSX.Element {
@@ -503,10 +493,14 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           prop:client={snapshot().client}
           prop:context={context}
           prop:gateway={context.gateway}
+          prop:lookupSidebarRow={(sessionKey: string) =>
+            shell?.navigationSidebar.findSidebarHovercardRowByKey?.(sessionKey)
+          }
         >
           <ShellLoader
             onShell={(owner) => {
               shell = owner;
+              runtime.setShell(owner);
               readiness?.invalidate();
             }}
             runtime={runtime}
@@ -520,6 +514,20 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   }
   return (
     <ApplicationProvider value={context} host={host}>
+      <Show when={readinessRequest()} keyed>
+        {(request) => {
+          try {
+            readiness = request.create(host, runtime, trackRoot, () => ({
+              login,
+              shell,
+              terminal: shell?.element.isConnected ? shell.terminalPanel : terminalElement,
+            }));
+          } catch (error) {
+            readinessFailed(error);
+          }
+          return null;
+        }}
+      </Show>
       <openclaw-tooltip-provider>
         <Switch>
           <Match when={runtime.focusLocation?.status === "unsupported"}>
@@ -553,7 +561,8 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             >
               <Loading fallback={<Splash />}>
                 <FocusDashboard
-                  route={focusDashboardRoute()}
+                  route={focusDashboardRoute.promise}
+                  onReady={() => readiness?.invalidate()}
                   snapshot={snapshot()}
                   sessions={context.sessions}
                   onClose={closeDocument}

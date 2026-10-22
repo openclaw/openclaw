@@ -30,32 +30,16 @@ export function ActivityOperation(props: ActivityOperationProps) {
       }}
       hasChildren={props.group.children.length > 0}
     >
-      <ActivityOperationChildren
-        groups={props.group.children}
-        options={props.options}
-        contexts={props.contexts}
-        expanded={expanded()}
-      />
+      <Show when={expanded()}>
+        <For
+          each={props.group.children}
+          keyed={(group) => group.card.callId ?? props.contexts.get(group.card)!.disclosureId}
+        >
+          {(group) => (
+            <ActivityOperation group={group()} options={props.options} contexts={props.contexts} />
+          )}
+        </For>
+      </Show>
     </ChatToolCard>
-  );
-}
-
-function ActivityOperationChildren(props: {
-  groups: ToolCallGroup<ToolCard>[];
-  options: ActivityOperationProps["options"];
-  contexts: ActivityOperationProps["contexts"];
-  expanded: boolean;
-}) {
-  return (
-    <Show when={props.expanded}>
-      <For
-        each={props.groups}
-        keyed={(group) => group.card.callId ?? props.contexts.get(group.card)!.disclosureId}
-      >
-        {(group) => (
-          <ActivityOperation group={group()} options={props.options} contexts={props.contexts} />
-        )}
-      </For>
-    </Show>
   );
 }

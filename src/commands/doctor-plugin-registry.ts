@@ -8,19 +8,22 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { writeJsonTarget } from "../infra/json-file.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { tryReadJsonObjectSync as readJsonObject } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   removePluginInstallRecordFromRecords,
-  type InstalledPluginIndexRecordStoreOptions,
+  withoutPluginInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import type { InstalledPluginIndexStoreOptions } from "../plugins/installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
   type InstalledPluginIndex,
+  type LoadInstalledPluginIndexParams,
 } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
@@ -32,6 +35,7 @@ import {
   listStaleLocalBundledPluginInstallRecords,
   type StaleLocalBundledPluginInstallRecord,
 } from "../plugins/stale-local-bundled-plugin-install-records.js";
+import { normalizeOptionalTrimmedStringRecord } from "../shared/collection-input.js";
 import { shortenHomePath } from "../utils.js";
 import {
   listStaleManagedNpmInstallGenerations,
@@ -50,13 +54,11 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   InvalidPluginInstallRecordStateError,
   migrateOfficialPluginInstallProvenance,
-  migratePluginRegistryForDoctor,
   preflightPluginRegistryDoctorMigration,
-  type PluginRegistryDoctorMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
 
-type PluginRegistryDoctorRepairParams = Omit<PluginRegistryDoctorMigrationParams, "config"> &
-  InstalledPluginIndexRecordStoreOptions & {
+type PluginRegistryDoctorRepairParams = Omit<LoadInstalledPluginIndexParams, "config"> &
+  InstalledPluginIndexStoreOptions & {
     config: OpenClawConfig;
     prompter: Pick<DoctorPrompter, "shouldRepair">;
   };
@@ -95,22 +97,8 @@ type PluginRegistryHealthIssue =
     }
   | StaleManagedNpmInstallGenerationIssue;
 
-function readJsonObject(filePath: string): Record<string, unknown> | null {
-  const parsed = tryReadJsonSync(filePath);
-  return isRecord(parsed) ? parsed : null;
-}
-
 function readStringMap(value: unknown): Record<string, string> {
-  if (!isRecord(value)) {
-    return {};
-  }
-  const result: Record<string, string> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === "string" && raw.trim()) {
-      result[key] = raw.trim();
-    }
-  }
-  return result;
+  return (isRecord(value) ? normalizeOptionalTrimmedStringRecord(value) : undefined) ?? {};
 }
 
 function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
@@ -579,11 +567,15 @@ async function inspectOrRepairPluginRegistryState(
   let index: InstalledPluginIndex;
   const rebuilding = preflight.action !== "skip-existing";
   if (rebuilding) {
-    const result = await migratePluginRegistryForDoctor({ ...params, installRecords });
-    if (!result.migrated) {
-      return { config: params.config };
-    }
-    index = result.current;
+    index = {
+      ...loadInstalledPluginIndex({
+        ...params,
+        config: withoutPluginInstallRecords(params.config),
+        installRecords,
+      }),
+      refreshReason: "migration",
+    };
+    await writePersistedInstalledPluginIndex(index, params);
   } else {
     index = await refreshPluginRegistry({ ...params, reason: "migration", installRecords });
   }

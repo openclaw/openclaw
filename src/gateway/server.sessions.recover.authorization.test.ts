@@ -3,7 +3,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   captureGatewayDeviceRevocation,
@@ -62,7 +61,6 @@ function isRecoverPayload(value: unknown): value is RecoverPayload {
 
 afterEach(() => {
   operatorRunCaptures.clear();
-  closeOpenClawStateDatabaseForTest();
 });
 
 async function seedRecoverableSession(params: {

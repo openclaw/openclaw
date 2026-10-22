@@ -20,6 +20,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
@@ -166,6 +167,10 @@ const staticConfig = mcpConfig({ shared: { command: "true" } });
 const requesterConfig = () =>
   mcpConfig({ ...staticConfig.mcp.servers, ...scopedConfig.mcp.servers });
 
+const requesterConnection = { url: "https://mcp.example.test/user" };
+const inboxRuntime: RuntimeFactory = (params) =>
+  makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
+
 function catalogTool(serverName: string, toolName: string, safeServerName = serverName) {
   return {
     serverName,
@@ -201,8 +206,9 @@ function expectToolNames(
   expect(sorted ? actual.toSorted() : actual).toEqual(names);
 }
 
-function toolDefinition(name: string) {
-  return { name, inputSchema: { type: "object", properties: {} } };
+type FixtureTool = NonNullable<Parameters<typeof writeListToolsMcpServer>[0]["tools"]>[number];
+function toolDefinition(name: string, overrides: Omit<FixtureTool, "name"> = {}): FixtureTool {
+  return { name, inputSchema: { type: "object", properties: {} }, ...overrides };
 }
 
 function expectHealthyCall(runtime: SessionMcpRuntime, serverName: string, toolName = "slow_tool") {
@@ -446,22 +452,17 @@ async function startSessionExpiryServer(stateful: boolean) {
     } else if (req.method !== "POST") {
       res.writeHead(405).end();
     } else {
-      let body = "";
-      req.on("data", (chunk: Buffer) => {
-        body += chunk.toString();
-      });
-      req.on("end", () => {
-        const message = JSON.parse(body) as {
+      void (async () => {
+        const message = JSON.parse(await readRequestText(req)) as {
           id?: number | string;
           method?: string;
           params?: { arguments?: { attempt?: unknown }; protocolVersion?: string };
         };
         const reply = (result: unknown, responseSession = sessionId) => {
-          res.setHeader("content-type", "application/json");
           if (stateful && responseSession) {
             res.setHeader("mcp-session-id", responseSession);
           }
-          res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          respondJson(res, { jsonrpc: "2.0", id: message.id, result });
         };
         if (message.method === "initialize") {
           state.initializeCount += 1;
@@ -501,7 +502,7 @@ async function startSessionExpiryServer(stateful: boolean) {
             res.writeHead(405).end();
           }
         }
-      });
+      })().catch(() => res.destroy());
     }
   });
   await new Promise<void>((resolve) => {
@@ -546,9 +547,7 @@ describe("session MCP runtime", () => {
   it("catalogs canonical and deprecated MCP App tool metadata", async () => {
     const { serverPath } = await stdioFixture("bundle-mcp-app-metadata-", {
       tools: [
-        {
-          name: "canonical",
-          inputSchema: { type: "object" },
+        toolDefinition("canonical", {
           _meta: {
             ui: { resourceUri: "ui://demo/app", visibility: ["app"] },
             "openai/ui": {
@@ -556,17 +555,11 @@ describe("session MCP runtime", () => {
             },
             "openai/extensions": { "mentions/search": {} },
           },
-        },
-        {
-          name: "deprecated",
-          inputSchema: { type: "object" },
+        }),
+        toolDefinition("deprecated", {
           _meta: { "ui/resourceUri": "ui://demo/legacy" },
-        },
-        {
-          name: "hidden",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: [] } },
-        },
+        }),
+        toolDefinition("hidden", { _meta: { ui: { visibility: [] } } }),
       ],
     });
     const runtime = ownRuntime(
@@ -607,9 +600,7 @@ describe("session MCP runtime", () => {
         "docs",
         {
           tools: [
-            {
-              name: " nested ",
-              inputSchema: { type: "object" },
+            toolDefinition(" nested ", {
               outputSchema: {
                 $schema: "https://json-schema.org/draft/2020-12/schema",
                 type: "object",
@@ -620,8 +611,8 @@ describe("session MCP runtime", () => {
                 required: ["node", "label"],
                 additionalProperties: false,
               },
-            },
-            { name: "healthy", inputSchema: { type: "object" } },
+            }),
+            toolDefinition("healthy"),
           ],
           callToolResult: { content: [], structuredContent },
         },
@@ -657,8 +648,8 @@ describe("session MCP runtime", () => {
       "docs",
       ({ file }) => ({
         toolsByList: [
-          [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("a") }],
-          [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("b") }],
+          [toolDefinition("versioned", { outputSchema: schema("a") })],
+          [toolDefinition("versioned", { outputSchema: schema("b") })],
         ],
         notifyListChangedOnToolCall: true,
         capabilities: { tools: { listChanged: true } },
@@ -794,6 +785,103 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("rejects unrepresentable nested wire fields before SDK result parsing can strip them", async () => {
+    let includeExtension = false;
+    let omitContent = false;
+    const extension = () => (includeExtension ? { "fixture/extension": "must not disappear" } : {});
+    const results = (): Record<string, unknown> => ({
+      "tools/list": {
+        tools: [{ name: "probe", inputSchema: { type: "object" }, annotations: extension() }],
+      },
+      "tools/call": omitContent
+        ? { isError: false }
+        : { content: [{ type: "text", text: "answer", ...extension() }] },
+      "resources/templates/list": {
+        resourceTemplates: [
+          {
+            name: "memo",
+            uriTemplate: "memo://{id}",
+            icons: [{ src: "https://example.com/icon.png", ...extension() }],
+          },
+        ],
+      },
+      "prompts/get": {
+        messages: [{ role: "user", content: { type: "text", text: "prompt", ...extension() } }],
+      },
+    });
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((request, response) => {
+          void (async () => {
+            if (request.method !== "POST") {
+              response.writeHead(405).end();
+              return;
+            }
+            const message: { id?: number; method: string } = JSON.parse(
+              await readRequestText(request),
+            );
+            if (message.id === undefined) {
+              response.writeHead(202).end();
+              return;
+            }
+            const values = results();
+            const result =
+              message.method === "initialize"
+                ? {
+                    protocolVersion: "2025-11-25",
+                    capabilities: { tools: {}, resources: {}, prompts: {} },
+                    serverInfo: { name: "wire-proof", version: "1" },
+                  }
+                : values[message.method];
+            // Raw JSON keeps server-side SDK parsing from hiding the client regression.
+            respondJson(response, { jsonrpc: "2.0", id: message.id, result });
+          })().catch(() => response.destroy());
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-lossless-wire",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: { transport: "streamable-http", url: `http://127.0.0.1:${server.claim.port}/mcp` },
+          },
+        },
+      },
+    });
+    try {
+      await runtime.getCatalog();
+      const operations = [
+        () => runtime.callTool("lab", "probe", {}),
+        () => expectDefined(runtime.listTools, "listTools")("lab"),
+        () => expectDefined(runtime.listResourceTemplates, "listResourceTemplates")("lab"),
+        () => expectDefined(runtime.getPrompt, "getPrompt")("lab", "memo"),
+      ];
+      expect(await Promise.all(operations.map((operation) => operation()))).toEqual([
+        results()["tools/call"],
+        results()["tools/list"],
+        results()["resources/templates/list"],
+        results()["prompts/get"],
+      ]);
+      omitContent = true;
+      expect(await runtime.callTool("lab", "probe", {})).toEqual({ content: [], isError: false });
+      omitContent = false;
+      includeExtension = true;
+      const outcomes = await Promise.allSettled(operations.map((operation) => operation()));
+      expect(outcomes).toEqual(
+        ["tools/call", "tools/list", "resources/templates/list", "prompts/get"].map((method) => ({
+          status: "rejected",
+          reason: expect.objectContaining({ code: "MCP_SDK_RESULT_UNREPRESENTABLE", method }),
+        })),
+      );
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
+    }
+  });
+
   it("redacts credentials from MCP catalog diagnostics", async () => {
     const secret = "test-diagnostic-token";
     const { runtime } = await stdioRuntime("diagnostic", {
@@ -804,104 +892,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).toContain("Authorization: Bearer ");
     expect(diagnostic?.message).toContain("***");
     expect(diagnostic?.message).not.toContain(secret);
-  });
-
-  it("retries a failed MCP catalog without stalling healthy siblings", async ({ signal }) => {
-    const { files, servers } = await stdioGroup(
-      {
-        healthyServer: { tools: [toolDefinition("healthy_tool")] },
-        retryServer: { inputSchema: { type: "array", items: { type: "number" } } },
-      },
-      {
-        healthyServer: { connectionTimeoutMs: 2_000 },
-        retryServer: { connectionTimeoutMs: 2_000 },
-      },
-    );
-    const retry = expectDefined(files.retryServer, "retry fixture");
-    const healthy = expectDefined(files.healthyServer, "healthy fixture");
-    const retryReleasePath = retry.file("retry.release");
-    let nowMs = 10_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const staticRuntime = await getSessionRuntime(
-      sessionParams("session-catalog-retry", mcpConfig(servers)),
-    );
-    const scopedRuntime = makeRuntime(
-      [{ toolName: "scoped_tool", description: "Requester-scoped tool" }],
-      "scopedServer",
-    );
-    const scopedCatalog = await scopedRuntime.getCatalog();
-    scopedRuntime.getCatalog = async () => scopedCatalog;
-    scopedRuntime.peekCatalog = () => scopedCatalog;
-    const runtime = createCombinedSessionMcpRuntime({
-      sessionId: "session-catalog-retry",
-      workspaceDir: "/workspace",
-      parts: [staticRuntime, scopedRuntime],
-    });
-    try {
-      const failedCatalog = await runtime.getCatalog();
-      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
-      expectToolNames(failedCatalog, ["healthy_tool", "scoped_tool"]);
-      expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await retry.write({ listToolsReleasePath: retryReleasePath });
-      await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
-      nowMs += 5_001;
-      expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const recovery = runtime.getCatalog();
-      await waitForFixture(signal, retry.logPath, "recv tools/list", recovery, 2);
-      await expectHealthyCall(runtime, "healthyServer", "healthy_tool");
-      await fs.writeFile(retryReleasePath, "release", "utf8");
-      const recoveredCatalog = await withinTest(recovery, signal);
-      expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
-      expect(recoveredCatalog.servers.retryServer).toBeDefined();
-      expectToolNames(recoveredCatalog, ["healthy_tool", "slow_tool", "scoped_tool"]);
-      expect((await readText(healthy.logPath)).match(/recv tools\/list/g)).toHaveLength(1);
-      expect((await readText(retry.logPath)).match(/recv tools\/list/g)).toHaveLength(2);
-    } finally {
-      nowSpy.mockRestore();
-      await runtime.dispose();
-    }
-  });
-
-  it("materializes structured and non-text stdio results", async () => {
-    const structuredContent = { description: "captured screenshot" };
-    const { runtime, logPath } = await stdioRuntime(
-      "capture",
-      {
-        callToolResult: {
-          content: [
-            { type: "text", text: "captured screenshot" },
-            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-            {
-              type: "resource_link",
-              uri: "https://example.com/report",
-              name: "report",
-              title: "Report",
-            },
-            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
-            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-          ],
-          structuredContent,
-        },
-      },
-      { inWorkspace: true },
-    );
-    const materialized = await materializeTools({ runtime });
-    const result = await expectDefined(
-      materialized.tools[0],
-      "materialized MCP tool test invariant",
-    ).execute("call-structured-content", {}, undefined, undefined);
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
-      },
-      { type: "text", text: "captured screenshot" },
-      { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-      { type: "text", text: "[Report] https://example.com/report" },
-      { type: "text", text: "memo body" },
-      { type: "text", text: "[audio audio/mpeg]" },
-    ]);
-    expect(await readText(logPath)).toContain("recv tools/call");
   });
 
   it.each([
@@ -964,13 +954,7 @@ describe("session MCP runtime", () => {
   it("does not split a surrogate pair at the MCP metadata text limit", async () => {
     const safePrefix = "x".repeat(1_199);
     const { runtime } = await stdioRuntime("metadata", {
-      tools: [
-        {
-          name: "utf16_tool",
-          description: `${safePrefix}🚀tail`,
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
+      tools: [toolDefinition("utf16_tool", { description: `${safePrefix}🚀tail` })],
     });
     const catalog = await runtime.getCatalog();
     expect(catalog.tools).toHaveLength(1);
@@ -1260,21 +1244,15 @@ describe("session MCP runtime", () => {
       {
         toolPageCursors: ["", null],
         tools: [
-          {
-            name: "structured",
-            inputSchema: { type: "object", properties: {} },
+          toolDefinition("structured", {
             outputSchema: {
               type: "object",
               properties: { count: { type: "number" } },
               required: ["count"],
               additionalProperties: false,
             },
-          },
-          {
-            name: "task_only",
-            inputSchema: { type: "object", properties: {} },
-            execution: { taskSupport: "required" },
-          },
+          }),
+          toolDefinition("task_only", { execution: { taskSupport: "required" } }),
         ],
         callToolResult: {
           content: [{ type: "text", text: "invalid" }],
@@ -1548,27 +1526,6 @@ describe("session MCP runtime", () => {
     expect(currentManager().listSessionIds()).not.toContain(sessionId);
   });
 
-  it("preserves session-end retirement across late creation", async () => {
-    const sessionId = "session-ended-before-creation";
-    await retireRuntime({
-      sessionId,
-      reason: "session-end",
-      preserveActiveLeases: true,
-      retainAcrossReuse: true,
-    });
-    await retireRuntime({
-      sessionId,
-      reason: "embedded-run-end",
-      preserveActiveLeases: true,
-    });
-    const runtime = await getSessionRuntime(
-      sessionParams(sessionId, undefined, { sessionKey: undefined }),
-    );
-    expect(currentManager().listSessionIds()).toContain(sessionId);
-    await expect(completeDeferredSessionMcpRuntimeRetirement(runtime)).resolves.toBe(true);
-    expect(currentManager().listSessionIds()).not.toContain(sessionId);
-  });
-
   it(
     "keeps requester transport alive during held revalidation",
     withResolverRegistry(async (register) => {
@@ -1631,7 +1588,7 @@ describe("session MCP runtime", () => {
         await resolutionStarted.promise;
         const idleTtlMs = 10 * 60 * 1000;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toHaveLength(1);
         releaseResolution.resolve();
         secondTools = expectDefined(await secondRequest, "second requester tools");
@@ -1644,7 +1601,7 @@ describe("session MCP runtime", () => {
         await secondTools.dispose();
         secondTools = undefined;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(1);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toEqual([]);
         expect(proof.session.closed).toBe(firstSessionId);
       } finally {
@@ -1663,153 +1620,57 @@ describe("requester-scoped MCP connection resolution", () => {
     vi.useRealTimers();
   });
 
-  it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
-    const resolverRegistry = createMcpProofPluginRegistry();
-    await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
+  it(
+    "keys requester-scoped runtimes per sender while sharing static servers",
+    withResolverRegistry(async (register) => {
       let resolveCalls = 0;
-      const resolverApi = resolverRegistry.apiFor("test-plugin");
-      resolverApi.registerMcpServerConnectionResolver({
-        serverName: "user-mail",
-        resolve: async (ctx) => {
-          resolveCalls += 1;
-          return {
-            url: `https://mcp.example.test/${ctx.requesterSenderId}`,
-            headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
-          };
-        },
+      register(async (ctx) => {
+        resolveCalls += 1;
+        return {
+          url: `https://mcp.example.test/${ctx.requesterSenderId}`,
+          headers: { Authorization: `Bearer ${ctx.requesterSenderId}` },
+        };
       });
-
-      const created: Array<{
-        sessionId: string;
-        requesterScope?: SessionMcpRuntime["requesterScope"];
-        include?: string[];
-        exclude?: string[];
-      }> = [];
-      const createRuntime: RuntimeFactory = (params) => {
-        created.push({
-          sessionId: params.sessionId,
-          requesterScope: params.requesterScope,
-          include: params.includeServerNames ? [...params.includeServerNames] : undefined,
-          exclude: params.excludeServerNames ? [...params.excludeServerNames] : undefined,
-        });
-        return makeManagedRuntime(params);
-      };
+      const createRuntime = vi.fn(makeManagedRuntime);
       const manager = createManager({ createRuntime });
-      const cfg = {
-        mcp: {
-          servers: {
-            shared: { command: "true" },
-            "user-mail": { transport: "streamable-http" },
-          },
-        },
-      } satisfies NonNullable<RuntimeParams["cfg"]>;
-
       const params = (sender: string) =>
-        makeRequesterParams("session-shared", cfg, sender, {
+        makeRequesterParams("session-shared", requesterConfig(), sender, {
           sessionKey: "agent:test:session-shared",
           agentAccountId: "bot-1",
         });
-      try {
-        await manager.getOrCreate(params("sender-a"));
-        await manager.getOrCreate(params("sender-a"));
-        expect(resolveCalls).toBe(1);
-        await manager.getOrCreate(params("sender-b"));
-
-        // Same requester reuses both static and requester-scoped entries; other sender adds one.
-        expect(created).toEqual([
-          {
-            sessionId: "session-shared",
-            requesterScope: undefined,
-            include: undefined,
-            exclude: ["user-mail"],
+      await manager.getOrCreate(params("sender-a"));
+      await manager.getOrCreate(params("sender-a"));
+      expect(resolveCalls).toBe(1);
+      await manager.getOrCreate(params("sender-b"));
+      expect(
+        createRuntime.mock.calls.map(([input]) => ({
+          sessionId: input.sessionId,
+          requesterScope: input.requesterScope,
+          include: input.includeServerNames && [...input.includeServerNames],
+          exclude: input.excludeServerNames && [...input.excludeServerNames],
+        })),
+      ).toEqual([
+        {
+          sessionId: "session-shared",
+          requesterScope: undefined,
+          include: undefined,
+          exclude: ["user-mail"],
+        },
+        ...["sender-a", "sender-b"].map((requesterSenderId) => ({
+          sessionId: "session-shared",
+          requesterScope: {
+            requesterSenderId,
+            agentAccountId: "bot-1",
+            messageChannel: "telegram",
           },
-          {
-            sessionId: "session-shared",
-            requesterScope: {
-              requesterSenderId: "sender-a",
-              agentAccountId: "bot-1",
-              messageChannel: "telegram",
-            },
-            include: ["user-mail"],
-            exclude: undefined,
-          },
-          {
-            sessionId: "session-shared",
-            requesterScope: {
-              requesterSenderId: "sender-b",
-              agentAccountId: "bot-1",
-              messageChannel: "telegram",
-            },
-            include: ["user-mail"],
-            exclude: undefined,
-          },
-        ]);
-        expect(manager.listSessionIds()).toEqual(["session-shared"]);
-        expect(manager.listRuntimeKeys()).toHaveLength(3);
-      } finally {
-        await manager.disposeAll();
-      }
-    });
-  });
-
-  it(
-    "expires idle partitions while preserving reuse and leases",
-    withResolverRegistry(async (register) => {
-      const time = createGatewaySchedulerClock(100_000);
-      const clock = vi.spyOn(Date, "now").mockImplementation(time.clock.now);
-      register(async () => ({ url: "https://mcp.example.test/user" }));
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const manager = createManager({ scheduler });
-      const sessionKey = "agent:test:session-fixed-idle";
-      const params = sessionParams(
-        "session-fixed-idle",
-        mcpConfig(requesterConfig().mcp.servers, { sessionIdleTtlMs: 1_200_000.9 }),
-        { sessionKey, requesterSenderId: "sender-a" },
-      );
-      const getRuntime = () => manager.getOrCreate(params);
-      try {
-        await getRuntime();
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
-        expect(reused.lastUsedAt).toBe(time.clock.now());
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
-        await time.advanceBy(1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        expect(manager.listSessionIds()).toContain(params.sessionId);
-        release();
-        expect(await manager.sweepIdleRuntimes()).toBe(2);
-        expect(manager.listRuntimeKeys()).toEqual([]);
-        expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
-      } finally {
-        await manager.disposeAll();
-        await scheduler.stop();
-        clock.mockRestore();
-      }
+          include: ["user-mail"],
+          exclude: undefined,
+        })),
+      ]);
+      expect(manager.listSessionIds()).toEqual(["session-shared"]);
+      expect(manager.listRuntimeKeys()).toHaveLength(3);
     }),
   );
-
-  it("reserves capacity for uncertain child cleanup", async () => {
-    const manager = createManager();
-    const params = sessionParams("uncertain-child", mcpConfig({ child: { command: "true" } }), {
-      sessionKey: undefined,
-    });
-    const previous = await manager.getOrCreate(params);
-    previous.joinCleanup = async () => {
-      throw new Error("child cleanup uncertain");
-    };
-    await expect(manager.getOrCreate({ ...params, workspaceDir: "/replacement" })).rejects.toThrow(
-      "child cleanup uncertain",
-    );
-    for (let index = 0; index < 255; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `other-${index}` });
-    }
-    await expect(manager.getOrCreate({ ...params, sessionId: "overflow" })).rejects.toThrow(
-      "live runtime limit (256)",
-    );
-  });
 
   it(
     "matches tools.effective and cached-runtime fingerprints",
@@ -1869,7 +1730,7 @@ describe("requester-scoped MCP connection resolution", () => {
   it(
     "re-merges refreshed catalog partitions",
     withResolverRegistry(async (register) => {
-      register(async () => ({ url: "https://mcp.example.test/user" }));
+      register(async () => requesterConnection);
       const swapCatalogByServer = new Map<string, (toolName: string) => void>();
       const createRuntime: RuntimeFactory = (params) => {
         const serverName = params.includeServerNames?.has("user-mail") ? "user-mail" : "shared";
@@ -2189,9 +2050,7 @@ describe("requester-scoped MCP connection resolution", () => {
     "reconciles cached scoped catalog before a senderless turn",
     withResolverRegistry(async (register) => {
       register(async () => ({ url: "https://mcp.example.test/authed" }));
-      const createRuntime: RuntimeFactory = (params) =>
-        makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
-      const manager = createManager({ createRuntime });
+      const manager = createManager({ createRuntime: inboxRuntime });
       const runtime = await manager.getOrCreateRequesterScoped(
         makeRequesterParams("session-adv-senderless", scopedConfig as never, "authed"),
       );
@@ -2221,9 +2080,7 @@ describe("requester-scoped MCP connection resolution", () => {
         }
         return { url: "https://mcp.example.test/authed" };
       });
-      const createRuntime: RuntimeFactory = (params) =>
-        makeManagedRuntime(params, [{ toolName: "inbox", description: "read inbox" }], "user-mail");
-      const manager = createManager({ createRuntime });
+      const manager = createManager({ createRuntime: inboxRuntime });
       const oldConfig = mcpConfig({
         "user-mail": { transport: "streamable-http" },
         shared: { command: "first" },

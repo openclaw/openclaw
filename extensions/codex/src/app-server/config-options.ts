@@ -504,6 +504,10 @@ export function codexAppServerStartOptionsKey(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    managedGitConfigParameters: hashSecretForKey(
+      options.managedGitConfigParameters,
+      "managedGitConfigParameters",
+    ),
     authProfileId: params.authProfileId ?? null,
     authBindingFingerprint: params.authBindingFingerprint ?? null,
     agentDir: params.agentDir ?? null,

@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -15,7 +19,7 @@ import {
 } from "../agents/cli-runner/prepare.test-support.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../agents/harness/gateway-question.test-support.js";
-import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-tool.test-support.js";
+import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -30,6 +34,7 @@ import {
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
+import { setMinimalCliPrepareDeps } from "./mcp-http.test-support.js";
 import * as toolResolution from "./tool-resolution.js";
 
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
@@ -94,20 +99,12 @@ beforeEach(({ signal }) => {
       },
     ],
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  setMinimalCliPrepareDeps(setCliRunnerPrepareTestDeps);
 });
 
 afterEach(async () => {
   // A timed-out fixture must finish before shared state belongs to the next test.
   await Promise.allSettled(fixtureRuns);
-  resetPendingAskUserQuestionsForTest();
   resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.restoreAllMocks();
@@ -125,7 +122,10 @@ async function withCliQuestionLoopback(
       await withQuestionGateway(async (gateway) => {
         const config: OpenClawConfig = {
           ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-          agents: { defaults: { workspace: dir }, entries: { main: {} } },
+          agents: {
+            defaults: { workspace: dir, model: "test-cli/test-model" },
+            entries: { main: {} },
+          },
           plugins: { enabled: false },
           tools: { profile: "full" },
         };
@@ -158,6 +158,13 @@ function createQuestionFixture(
   runtime: { port: number; ownerToken: string },
   signal: AbortSignal,
 ) {
+  const operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "question-owner",
+    scopes: ["operator.admin"],
+    gatewayAccessGrant: null,
+    modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
+    assertCurrent: () => signal.throwIfAborted(),
+  });
   const toolCalls: Promise<unknown>[] = [];
   const resolveTools = toolResolution.resolveGatewayScopedTools;
   const resolutions = vi
@@ -209,12 +216,16 @@ function createQuestionFixture(
       ) => {
         signal.throwIfAborted();
         const source = new AbortController();
-        const admission = prepareSystemAgentRunAdmission(
-          config,
-          runId,
-          "main",
-          "mcp-question-test",
-        );
+        const admission = prepareAgentRunAdmission({
+          cfg: config,
+          operatorAuthority,
+          facts: {
+            runId,
+            agentId: "main",
+            ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+        });
         admissionCleanups.push(() => admission.close());
         const originalToolsAllow = ["ask_user"];
         const context = await cli.prepare({
@@ -225,6 +236,8 @@ function createQuestionFixture(
           timeoutMs: 60_000,
           abortSignal: AbortSignal.any([signal, source.signal]),
           messageProvider: "webchat",
+          operatorProfileId: operatorAuthority.profileId,
+          requesterModel: { provider: "test-cli", model: "test-model" },
           senderIsOwner: true,
           toolsAllow: originalToolsAllow,
         });
@@ -267,7 +280,7 @@ function createQuestionFixture(
         claimPendingAgentQuestionAnswerFromCaller({
           sessionKey,
           text: "Staging",
-          caller: overlay,
+          caller: { ...overlay, operatorAuthority },
           persist,
           assertSourceCurrent: () => {},
         }),

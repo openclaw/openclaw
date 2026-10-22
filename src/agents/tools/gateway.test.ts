@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
   GatewayRequestContext,
@@ -79,6 +80,7 @@ function runAsCaller<T>(run: () => Promise<T>, localEmbedded = false) {
   authorities.push(authority);
   const context = {
     getRuntimeConfig: () => mocks.config,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     trackExecution: (work: () => Promise<void>) => work(),
     ...(localEmbedded ? { localEmbedded: true } : {}),
   } as GatewayRequestContext;

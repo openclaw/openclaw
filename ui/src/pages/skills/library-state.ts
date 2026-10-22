@@ -15,11 +15,15 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
 import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
-import { observeSkillState } from "./observe-state.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
+type LibraryListOutcome = {
+  list: SkillsLibraryListResult | null;
+  error: string | null;
+};
 export type LibraryDraft = {
   importedFiles?: boolean;
   entry: SkillLibraryEntry | null;
@@ -56,8 +60,9 @@ export function createSkillLibrary(
   config: () => ApplicationConfigCapability | undefined = () => undefined,
 ) {
   // Drafts and write admission stay synchronous; Solid only observes the owner.
-  const observation = observeSkillState<{
+  const observation = observeState<{
     list: SkillsLibraryListResult | null;
+    listRead: { completion: Promise<LibraryListOutcome> } | null;
     view: LibraryView | null;
     loading: boolean;
     busy: boolean;
@@ -69,6 +74,7 @@ export function createSkillLibrary(
     importSelection: File[];
   }>({
     list: null,
+    listRead: null,
     view: null,
     loading: false,
     busy: false,
@@ -118,19 +124,22 @@ export function createSkillLibrary(
     return canWrite() && (observation.read().draft?.entry?.canEdit ?? true);
   }
 
-  async function load() {
+  async function load(snapshot = gateway.snapshot) {
     const connection = gateway.capture();
     if (
       !connection ||
       data.loading ||
-      !canCallGatewayMethod(gateway.snapshot, "skills.library.list", "operator.read", {
+      !canCallGatewayMethod(snapshot, "skills.library.list", "operator.read", {
         requireAdvertisement: false,
       })
     ) {
       return;
     }
+    const { promise, resolve } = Promise.withResolvers<LibraryListOutcome>();
+    data.listRead = { completion: promise };
     data.loading = true;
     data.error = null;
+    let failure: string | null = null;
     try {
       const result = await connection.client.request<SkillsLibraryListResult>(
         "skills.library.list",
@@ -143,11 +152,15 @@ export function createSkillLibrary(
       data.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
       if (gateway.isCurrent(connection)) {
-        data.error = formatUiError(error);
+        failure = formatUiError(error);
+        data.error = failure;
       }
     } finally {
       if (gateway.isCurrent(connection)) {
         data.loading = false;
+        resolve({ list: data.list, error: failure });
+      } else {
+        resolve({ list: null, error: null });
       }
     }
   }
@@ -222,12 +235,19 @@ export function createSkillLibrary(
     canCreate,
     canEdit,
     load,
+    ensureLoaded(snapshot: ApplicationGatewaySnapshot | null) {
+      if (!data.list && !data.loading && !data.error) {
+        void load(snapshot);
+      }
+    },
     create,
     invalidateRequests() {
+      data.listRead = null;
       data.loading = false;
       data.busy = false;
     },
     reset() {
+      data.listRead = null;
       clearFeedback();
       data.list = null;
       data.view = null;

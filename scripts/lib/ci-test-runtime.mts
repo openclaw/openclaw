@@ -94,6 +94,8 @@ const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
+  // The macOS directory watch helper serves Node's libuv watchers only.
+  "src/infra/directory-watch-host.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",

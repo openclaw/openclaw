@@ -9,7 +9,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { deriveMeetingTranscriptSessionColumns } from "../../transcripts/store-columns.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
@@ -20,38 +19,22 @@ import {
 
 const testState = useTranscriptTestState();
 const note = "Keep the captured notes.";
+async function reopenDatabase() {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+}
 
 function createHarness() {
   const { stateDir, store } = testState();
   const databaseOptions = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-  const provider: TranscriptSourceProvider = {
+  registerTranscriptTestProvider({
     id: "room-audio",
     name: "Room Audio",
     sourceKinds: ["live-audio", "posthoc-transcript"],
     importTranscript: async () => [{ text: note }],
-  };
-  registerTranscriptTestProvider(provider);
-  const tool = createTranscriptsTool({ stateDir, caller: { kind: "operator", source: "local" } });
-  return {
-    databaseOptions,
-    store,
-    tool,
-  };
-}
-
-async function importTranscript(harness: ReturnType<typeof createHarness>, sessionId: string) {
-  const result = await harness.tool.execute("import", {
-    action: "import",
-    sessionId,
-    providerId: "room-audio",
-    transcript: note,
   });
-  const handle = asOptionalRecord(result.details)?.sessionId;
-  if (typeof handle !== "string") {
-    throw new Error("Expected a transcript session handle");
-  }
-  expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
-  return handle;
+  const tool = createTranscriptsTool({ caller: { kind: "operator", source: "local" } });
+  return { databaseOptions, store, tool };
 }
 
 describe("transcripts bounded export names", () => {
@@ -59,10 +42,16 @@ describe("transcripts bounded export names", () => {
     const harness = createHarness();
     const ids = ["?", "!"].map((suffix) => "notes-" + "x".repeat(900) + suffix);
     for (const sessionId of ids) {
-      await importTranscript(harness, sessionId);
+      const result = await harness.tool.execute("import", {
+        action: "import",
+        sessionId,
+        providerId: "room-audio",
+        transcript: note,
+      });
+      expect(typeof asOptionalRecord(result.details)?.sessionId).toBe("string");
+      expect(asOptionalRecord(result.details)?.summaryExportError).toBeUndefined();
     }
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
     const entries = await harness.store.listSessionEntries();
     expect(new Set(entries.map((entry) => entry.selector)).size).toBe(2);
     expect(entries.every((entry) => path.basename(entry.sessionDir).startsWith("notes-"))).toBe(
@@ -70,10 +59,8 @@ describe("transcripts bounded export names", () => {
     );
     for (const entry of entries) {
       const artifacts = await harness.store.materializeSessionArtifacts(entry.selector, "all");
-      expect(
-        JSON.parse(await fs.readFile(artifacts.metadataPath, "utf8")).sessionId ===
-          entry.session.sessionId,
-      ).toBe(true);
+      const metadata = JSON.parse(await fs.readFile(artifacts.metadataPath, "utf8"));
+      expect(metadata.sessionId).toBe(entry.session.sessionId);
     }
   });
 
@@ -88,10 +75,7 @@ describe("transcripts bounded export names", () => {
     const selector = `2026-07-01/${sessionId}`;
     await store.listSessionEntries();
     const { db } = openOpenClawStateDatabase(databaseOptions);
-    const queries =
-      getNodeSqliteKysely<Pick<DB, "meeting_transcript_sessions" | "meeting_transcript_summaries">>(
-        db,
-      );
+    const queries = getNodeSqliteKysely<DB>(db);
     // Pre-fix admission could persist an overlong projection before an export failed.
     const sourceJson = JSON.stringify(session.source);
     executeSqliteQuerySync(
@@ -126,18 +110,14 @@ describe("transcripts bounded export names", () => {
         .set({ markdown })
         .where("session_id", "=", sessionId),
     );
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
 
     await store.writeSession({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await reopenDatabase();
     const entry = await store.readSessionEntry(sessionId);
-    expect(entry?.session.sessionId === sessionId).toBe(true);
-    expect(entry?.session.startedAt).toBe(session.startedAt);
-    expect(entry?.session.stoppedAt).toBe("2026-07-01T11:00:00.000Z");
+    expect(entry?.session).toMatchObject({ ...session, stoppedAt: "2026-07-01T11:00:00.000Z" });
     expect(entry!.selector).toBe(`2026-07-01/${path.basename(entry!.sessionDir)}`);
-    expect((await store.readSession(entry!.selector))?.sessionId === sessionId).toBe(true);
+    expect((await store.readSession(entry!.selector))?.sessionId).toBe(sessionId);
     expect(await store.readSummary(session)).toEqual({ summary, markdown });
     expect(
       (await store.readUtterancesForSession(session)).map((utterance) => utterance.text),
@@ -148,7 +128,7 @@ describe("transcripts bounded export names", () => {
     const reopened = openOpenClawStateDatabase(databaseOptions).db;
     const row = executeSqliteQuerySync(
       reopened,
-      getNodeSqliteKysely<Pick<DB, "meeting_transcript_sessions">>(reopened)
+      getNodeSqliteKysely<DB>(reopened)
         .selectFrom("meeting_transcript_sessions")
         .select(["session_slug", "export_key"])
         .where("session_id", "=", sessionId),

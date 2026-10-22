@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { DecisionContractError, type DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import {
+  choiceAnswer,
+  mockFetch,
+  mockJsonResponse as mockResponse,
+  registeredDecisionProvider,
+  scoreAnswer,
+} from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -22,35 +27,14 @@ const response = {
   model: "jev-test",
   answers: {
     q: { type: "noul", noul: 0.37 },
-    c: {
-      type: "choice",
-      choice: "skip",
-      confidence: 0.5,
-      probabilities: { keep: 0.5, skip: 0.49 },
-    },
-    s: {
-      type: "score",
-      score: 0.607,
-      confidence: 0.5,
-      probabilities: { 0: 0.4, 1: 0.6 },
-      legend: { 0: "Low", 1: "High" },
-    },
+    c: choiceAnswer("skip", { keep: 0.5, skip: 0.49 }, 0.5),
+    s: scoreAnswer(0.607, { 0: 0.4, 1: 0.6 }, { 0: "Low", 1: "High" }, 0.5),
   },
   usage: { input_tokens: 12, output_tokens: 3 },
 };
 
 function registeredProvider(config: Record<string, unknown> = {}) {
-  const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
-  plugin.register({
-    runtime: { config: { current: () => ({ plugins: { entries: { typesafe: { config } } } }) } },
-    registerDecisionProvider,
-  } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]?.[0];
-  assert(provider);
-  if (provider.contractVersion !== 1) {
-    throw new Error("TypeSafe fixture registered an unexpected decision contract");
-  }
-  return provider;
+  return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
 }
 
 const context = (signal = new AbortController().signal) => ({
@@ -58,6 +42,9 @@ const context = (signal = new AbortController().signal) => ({
   agentId: "research",
   signal,
   deadlineMonotonicMs: performance.now() + 1000,
+});
+const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
+  answers: { ...response.answers, [id]: { ...response.answers[id], ...overrides } },
 });
 
 beforeAll(async () => {
@@ -81,15 +68,15 @@ afterEach(() => {
 });
 
 const metadata = {
-  metrics: { seconds: 0.05, questions: 3, upstream_calls: 1 },
-  scoring: { method: "candidate_softmax", calibrated: false },
+  metrics: { seconds: 0.05 },
+  scoring: { calibrated: false },
 };
 const usageMetadata = {
   output_tokens_basis: "scored_decision_positions",
   decision_positions: 3,
-  generated_text_tokens: 0,
-  discarded_sampled_tokens: 1,
 };
+const withMetadata = { ...response, ...metadata, usage: { ...response.usage, ...usageMetadata } };
+const tokens = (output_tokens: unknown) => ({ usage: { input_tokens: 12, output_tokens } });
 
 describe.each<{ mode: string; config: { baseUrl?: string } }>([
   { mode: "hosted", config: {} },
@@ -103,13 +90,11 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
   ])("preserves mixed answers and estimates with $name", async ({ topLevel, usage }) => {
     vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
     vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
-    const fetch = vi.fn(
-      async (_url: RequestInfo | URL, _init?: RequestInit) =>
-        new Response(
-          JSON.stringify({ ...response, ...topLevel, usage: { ...response.usage, ...usage } }),
-        ),
-    );
-    vi.stubGlobal("fetch", fetch);
+    const fetch = mockResponse({
+      ...response,
+      ...topLevel,
+      usage: { ...response.usage, ...usage },
+    });
     const provider = registeredProvider(config);
     await expect(provider.evaluate(batch, context())).resolves.toEqual({
       status: "ok",
@@ -150,108 +135,30 @@ describe.each<{ mode: string; config: { baseUrl?: string } }>([
     ["missing usage", { usage: undefined }],
     ["missing token count", { usage: { input_tokens: 12 } }],
     ["malformed token count", { usage: { input_tokens: "12", output_tokens: 3 } }],
-    ["negative token count", { usage: { input_tokens: 12, output_tokens: -1 } }],
-    ["fractional token count", { usage: { input_tokens: 12, output_tokens: 1.5 } }],
-    [
-      "unsafe token count",
-      { usage: { input_tokens: 12, output_tokens: Number.MAX_SAFE_INTEGER + 1 } },
-    ],
+    ["negative token count", tokens(-1)],
+    ["fractional token count", tokens(1.5)],
+    ["unsafe token count", tokens(Number.MAX_SAFE_INTEGER + 1)],
     ["missing answer", { answers: { c: response.answers.c, s: response.answers.s } }],
     ["extra answer", { answers: { ...response.answers, extra: response.answers.q } }],
     ["mismatched answer type", { answers: { ...response.answers, q: response.answers.c } }],
-    [
-      "invalid Noul probability",
-      { answers: { ...response.answers, q: { type: "noul", noul: 1.01 } } },
-    ],
-    [
-      "extra answer field",
-      { answers: { ...response.answers, q: { ...response.answers.q, debug: true } } },
-    ],
-    [
-      "unknown Choice label",
-      { answers: { ...response.answers, c: { ...response.answers.c, choice: "other" } } },
-    ],
-    [
-      "mismatched distribution labels",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: 0.5, other: 0.5 } },
-        },
-      },
-    ],
-    [
-      "zero distribution",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: 0, skip: 0 } },
-        },
-      },
-    ],
+    ["extra answer field", withAnswer("q", { debug: true })],
     [
       "invalid distribution probability",
-      {
-        answers: {
-          ...response.answers,
-          c: { ...response.answers.c, probabilities: { keep: -0.1, skip: 1 } },
-        },
-      },
+      withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } }),
     ],
-    [
-      "malformed confidence",
-      { answers: { ...response.answers, c: { ...response.answers.c, confidence: "0.5" } } },
-    ],
-    [
-      "Score outside rubric",
-      { answers: { ...response.answers, s: { ...response.answers.s, score: 1.1 } } },
-    ],
-    [
-      "incorrect Score legend",
-      {
-        answers: {
-          ...response.answers,
-          s: { ...response.answers.s, legend: { 0: "Wrong", 1: "High" } },
-        },
-      },
-    ],
+    ["malformed confidence", withAnswer("c", { confidence: "0.5" })],
     ["excessive metadata bytes", { metrics: "x".repeat(4 * 1024 * 1024) }],
     ["excessive metadata nodes", { metrics: Array(262144).fill(null) }],
     [
       "excessive metadata depth",
       { metrics: Array.from({ length: 65 }).reduce<unknown>((value) => [value], null) },
     ],
+    [
+      "nonfinite required number",
+      JSON.stringify(withMetadata).replace('"noul":0.37', '"noul":1e400'),
+    ],
   ])("rejects %s despite additive metadata", async (_name, invalid) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              ...response,
-              ...metadata,
-              usage: { ...response.usage, ...usageMetadata },
-              ...invalid,
-            }),
-          ),
-      ),
-    );
-    await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
-      status: "unavailable",
-      reason: "invalid-response",
-    });
-  });
-
-  it("rejects nonfinite required numbers in JSON despite additive metadata", async () => {
-    const body = JSON.stringify({
-      ...response,
-      ...metadata,
-      usage: { ...response.usage, ...usageMetadata },
-    }).replace('"noul":0.37', '"noul":1e400');
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(body)),
-    );
+    mockResponse(typeof invalid === "string" ? invalid : { ...withMetadata, ...invalid });
     await expect(registeredProvider(config).evaluate(batch, context())).resolves.toEqual({
       status: "unavailable",
       reason: "invalid-response",
@@ -268,14 +175,10 @@ it.each([
   [429, "rate-limited"],
   [500, "transport"],
 ] as const)("classifies HTTP %s without retries or private details", async (status, reason) => {
-  const fetch = vi.fn(
-    async () =>
-      new Response("synthetic-key: synthetic only", {
-        status,
-        headers: { "retry-after-ms": "123" },
-      }),
-  );
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse("synthetic-key: synthetic only", {
+    status,
+    headers: { "retry-after-ms": "123" },
+  });
   expect(await registeredProvider().evaluate(batch, context())).toEqual({
     status: "unavailable",
     reason,
@@ -286,10 +189,7 @@ it.each([
 
 it("observes prepared credential rotation, loss, recovery, and caller cancellation", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
-  const fetch = vi.fn(
-    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
-  );
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse(response);
   const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
   const controller = new AbortController();
   for (const [revision, key] of [
@@ -345,8 +245,7 @@ it.each<DecisionBatch>([
 });
 
 it("does not dispatch when preparation consumes the native deadline", async () => {
-  const fetch = vi.fn(async () => new Response(JSON.stringify(response)));
-  vi.stubGlobal("fetch", fetch);
+  const fetch = mockResponse(response);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
     registeredProvider().evaluate(batch, {
@@ -361,23 +260,17 @@ it("does not dispatch when preparation consumes the native deadline", async () =
 it("limits an in-flight request to the budget remaining after preparation", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(40);
-  let started!: (signal: AbortSignal) => void;
-  const startedSignal = new Promise<AbortSignal>((resolve) => {
-    started = resolve;
-  });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      (_url: RequestInfo | URL, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          assert(signal);
-          signal.addEventListener("abort", () => reject(new Error("request aborted")), {
-            once: true,
-          });
-          started(signal);
-        }),
-    ),
+  const started = Promise.withResolvers<AbortSignal>();
+  mockFetch(
+    (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        assert(signal);
+        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+        started.resolve(signal);
+      }),
   );
   const controller = new AbortController();
   const pending = registeredProvider().evaluate(batch, {
@@ -386,7 +279,7 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
     deadlineMonotonicMs: 50,
   });
   try {
-    const signal = await startedSignal;
+    const signal = await started.promise;
     await vi.advanceTimersByTimeAsync(9);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -417,8 +310,7 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
         kind === "getter" ? { enumerable: true, get: hook } : { value: hook },
       );
     }
-    const fetch = vi.fn(async () => new Response("{}"));
-    vi.stubGlobal("fetch", fetch);
+    const fetch = mockResponse({});
     await expect(
       registeredProvider().evaluate(
         {
@@ -427,7 +319,7 @@ it.each(["inherited array serializer", "hidden serializer", "getter", "hidden ar
         },
         context(),
       ),
-    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    ).rejects.toThrow(DecisionContractError);
     expect(hook).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   },

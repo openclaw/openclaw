@@ -1,6 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { assertChromeMcpCdpTransportAllowed } from "./cdp-reachability-policy.js";
 import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js";
 import { appendCdpPath } from "./cdp.js";
@@ -106,11 +105,7 @@ export function createProfileSelectionOps({
     const candidateTabs = (tabs: BrowserTab[]) =>
       capabilities.supportsPerTabWs ? tabs.filter((tab) => Boolean(tab.wsUrl)) : tabs;
     const canResolveSelection = (tabs: BrowserTab[]) => {
-      const desiredTargetId =
-        targetId ??
-        openedTab?.targetId ??
-        normalizeOptionalString(runtime.lastTargetId) ??
-        undefined;
+      const desiredTargetId = targetId ?? openedTab?.targetId ?? runtime.lastTargetId ?? undefined;
       if (!desiredTargetId) {
         return tabs.length > 0;
       }
@@ -169,7 +164,7 @@ export function createProfileSelectionOps({
         : new Error(formatErrorMessage(lastListError));
     }
 
-    const stickyTargetId = normalizeOptionalString(runtime.lastTargetId);
+    const stickyTargetId = runtime.lastTargetId ?? undefined;
     // Sticky selection is an identity promise: a missing target requires a fresh
     // explicit choice. Without one, prefer page tabs over background targets.
     const chosen = targetId

@@ -201,7 +201,9 @@ describe("MCP App UI resources", () => {
     const releases = Array.from({ length: 4 }, () => acquireMcpAppViewRequest(view, "read", now));
     expect(() => acquireMcpAppViewRequest(view, "read", now)).toThrow("concurrency limit");
     releases[0]?.();
+    releases[0]?.();
     const release = acquireMcpAppViewRequest(view, "read", now);
+    expect(() => acquireMcpAppViewRequest(view, "read", now)).toThrow("concurrency limit");
     release();
     releases.slice(1).forEach((entry) => entry());
   });

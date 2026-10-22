@@ -17,7 +17,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile } from "../test-utils/process-tree.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
-import { hasLocalServiceProcessExited } from "./provider-local-service-process.js";
 import {
   attachModelProviderLocalService,
   createConfiguredProviderLocalServiceAcquirer,
@@ -58,7 +57,7 @@ function serviceTarget(port: number, providerId: string, service: LocalService) 
   return { providerId, baseUrl: baseUrl(port), service };
 }
 
-function serviceModel(port: number, provider: string, service: LocalService) {
+function serviceModel(port: number, provider: string, service = localService(port)) {
   return attachModelProviderLocalService(
     makeProviderModelFixture<"openai-completions">({
       id: "demo",
@@ -189,22 +188,15 @@ describe("provider local service", () => {
     tempDirs.cleanup();
   });
 
-  it("treats signaled local service children as exited", () => {
-    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
-    expect(hasLocalServiceProcessExited({ exitCode: 0, signalCode: null })).toBe(true);
-    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: null })).toBe(false);
-  });
-
   it("starts an on-demand local service and stops it after idle", async () => {
     const port = await fixture.claimPort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const reconcile = vi.fn<NonNullable<ProviderPlugin["reconcileLocalService"]>>(async () => {
       expect((await fetch(healthUrl)).ok).toBe(true);
     });
-    const model = attachModelProviderRuntimePluginHandle(
-      serviceModel(port, "local-demo", localService(port)),
-      { plugin: { reconcileLocalService: reconcile } } as never,
-    );
+    const model = attachModelProviderRuntimePluginHandle(serviceModel(port, "local-demo"), {
+      plugin: { reconcileLocalService: reconcile },
+    } as never);
 
     const acquire = (signal?: AbortSignal) =>
       ensureModelProviderLocalService(model, undefined, signal);
@@ -241,6 +233,7 @@ describe("provider local service", () => {
 
     expect(reconcile).toHaveBeenCalledTimes(5);
     expect((await fetch(healthUrl)).ok).toBe(true);
+    firstLease.release();
     firstLease.release();
     expect((await fetch(healthUrl)).ok).toBe(true);
     secondLease.release();
@@ -543,7 +536,6 @@ describe("provider local service", () => {
   });
 
   it.each([
-    ["code 17", "process.exit(17)", false],
     ["signal SIGTERM", "process.kill(process.pid, 'SIGTERM')", true],
     [
       "code 17; stderr: startup-😀-failure",

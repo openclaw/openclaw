@@ -1,9 +1,7 @@
-// Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { OPENCODE_GO_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -134,6 +132,14 @@ export default defineSingleProviderPluginEntry({
     isModernModelRef: () => true,
   },
   register(api) {
-    api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "opencode-go",
+      capabilities: ["image"],
+      defaultModels: {
+        image: "kimi-k2.7-code",
+      },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
   },
 });

@@ -19,7 +19,9 @@ import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empt
 import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 import { PluginApprovalResolutions } from "../../../../src/plugins/types.js";
 
-type BrokerEvent = Parameters<Parameters<EmbeddedPluginApprovalBroker["subscribe"]>[0]>[0];
+type BrokerEvent = Parameters<
+  NonNullable<ConstructorParameters<typeof EmbeddedPluginApprovalBroker>[0]>
+>[0];
 
 const AGENT_ID = "qa-agent";
 const SESSION_KEY = "agent:qa-agent:approval";
@@ -42,10 +44,9 @@ describe("agent tool safety approvals", () => {
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     setEmbeddedMode(true);
-    broker = new EmbeddedPluginApprovalBroker();
     brokerEvents = [];
+    broker = new EmbeddedPluginApprovalBroker((event) => brokerEvents.push(event));
     resolutions = [];
-    broker.subscribe((event) => brokerEvents.push(event));
     setEmbeddedPluginApprovalBroker(broker);
 
     const registry = createEmptyPluginRegistry();

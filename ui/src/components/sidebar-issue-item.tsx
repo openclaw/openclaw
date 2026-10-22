@@ -21,8 +21,8 @@ import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { SidebarDismissButton, SidebarNotificationCard } from "./sidebar-notification-card.tsx";
 import { SidebarUpdateCard } from "./sidebar-update-card.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import { askBrandLabel } from "./theme-brand-label.ts";
-import "./viewer-facepile.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
@@ -37,6 +37,7 @@ export function renderSidebarMentionItem(params: {
   mention: MentionInboxItem;
   context: Pick<ApplicationContext, "basePath">;
   dismissing: boolean;
+  canDismiss: boolean;
   onDismiss: () => void;
   onNavigate: ApplicationContext["navigate"];
 }) {
@@ -72,15 +73,10 @@ export function renderSidebarMentionItem(params: {
             title={mention().sessionTitle}
             detail={label()}
             timestampMs={mention().createdAt}
-            icon={
-              <openclaw-viewer-avatar
-                prop:user={sender()}
-                prop:markAsViewer={false}
-                variant="footer"
-              />
-            }
+            icon={<ViewerAvatar user={sender()} markAsViewer={false} variant="footer" />}
             onDismiss={params.onDismiss}
             dismissing={params.dismissing}
+            dismissDisabled={!params.canDismiss}
             body={
               <>
                 {mention().excerpt ? (
@@ -137,6 +133,7 @@ export function renderSidebarApprovalItem(params: {
     <SidebarApprovalRow
       approval={params.approval}
       busy={snapshot().approvalBusy}
+      connected={params.context.gateway.snapshot.phase === "connected"}
       canGrant={snapshot().approvalCanGrant}
       error={snapshot().approvalErrors.get(params.approval.id) ?? null}
       openSessionHref={sessionTarget()?.href}

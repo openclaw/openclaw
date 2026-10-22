@@ -1,5 +1,6 @@
-import { createMemo, createStore, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
@@ -9,6 +10,7 @@ import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import {
@@ -79,17 +81,14 @@ function ChatAudioPlayerContent(
   const sourceState = projectOwner(sourceController, (owner) => owner);
   const cancelPendingResume = () => sourceController.cancelPendingResume();
   let mediaElement: HTMLAudioElement | null = null;
-  let waveformElement: HTMLElement | null = null;
-  let waveformResizeObserver: ResizeObserver | null = null;
   let releaseWaveformBlob: (() => void) | undefined;
   let waveformController: AbortController | null = null;
   let waveformAttempted = false;
   let waveformVisible = false;
   let active = true;
-  let sourceSyncQueued = false;
   function handleInputsChanged(key: keyof ChatAudioPlayerProps): void {
     if (key === "sizeBytes" || key === "serverDurationMs") {
-      queueSourceSync();
+      sourceController.queueSync(syncSource);
       return;
     }
     if (key !== "src" && key !== "sourceIdentity" && key !== "playback" && key !== "authToken") {
@@ -117,18 +116,7 @@ function ChatAudioPlayerContent(
         releaseChatAudioPlayback(mediaElement);
       }
     }
-    queueSourceSync();
-  }
-  function queueSourceSync(): void {
-    if (sourceSyncQueued) {
-      return;
-    }
-    sourceSyncQueued = true;
-    // Native callers assign related properties together; consume their complete source once.
-    queueMicrotask(() => {
-      sourceSyncQueued = false;
-      syncSource();
-    });
+    sourceController.queueSync(syncSource);
   }
   onSettled(() => {
     inputHandlers.set(host, handleInputsChanged);
@@ -144,22 +132,6 @@ function ChatAudioPlayerContent(
   const setMedia = (element: HTMLAudioElement) => {
     mediaElement = element;
     syncSource();
-  };
-
-  const setWaveform = (waveform: HTMLDivElement) => {
-    waveformResizeObserver?.disconnect();
-    waveformResizeObserver = null;
-    waveformElement = waveform;
-    updateWaveformWidth(waveform.getBoundingClientRect().width);
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    waveformResizeObserver = new ResizeObserver(([entry]) => {
-      if (entry && waveformElement === entry.target) {
-        updateWaveformWidth(entry.contentRect.width);
-      }
-    });
-    waveformResizeObserver.observe(waveform);
   };
 
   function updateWaveformWidth(width: number): void {
@@ -449,13 +421,25 @@ function ChatAudioPlayerContent(
       />
     );
     const Waveform = () => {
-      onCleanup(() => {
-        waveformResizeObserver?.disconnect();
-        waveformResizeObserver = null;
-        waveformElement = null;
+      const waveformRef = elementRef((waveform: HTMLDivElement) => {
+        updateWaveformWidth(waveform.getBoundingClientRect().width);
+        if (typeof ResizeObserver === "undefined") {
+          return undefined;
+        }
+        let current: HTMLDivElement | null = waveform;
+        const observer = new ResizeObserver(([entry]) => {
+          if (entry && current === entry.target) {
+            updateWaveformWidth(entry.contentRect.width);
+          }
+        });
+        observer.observe(waveform);
+        return () => {
+          observer.disconnect();
+          current = null;
+        };
       });
       return (
-        <div class="chat-audio-player__waveform" ref={setWaveform}>
+        <div class="chat-audio-player__waveform" ref={[waveformRef]}>
           <svg
             viewBox={`0 0 ${displayedPeaks().length} 24`}
             preserveAspectRatio="none"
@@ -489,11 +473,14 @@ function ChatAudioPlayerContent(
     );
   };
   const Player = () => {
+    const copyRef = attachmentContextCopyRef(() =>
+      props.voiceNote ? null : { name: props.label, href: downloadHref() },
+    );
     const viewport = createChatAttachmentViewportRef(() => {
       waveformVisible = true;
       void prepareWaveformAudio().catch(() => undefined);
     });
-    onCleanup(() => {
+    const playerRef = elementRef<HTMLDivElement>(() => () => {
       waveformVisible = false;
       waveformController?.abort();
       waveformController = null;
@@ -514,7 +501,7 @@ function ChatAudioPlayerContent(
           "chat-assistant-attachment-card chat-assistant-attachment-card--audio",
           { "chat-assistant-attachment-card--voice-note": props.voiceNote },
         ]}
-        ref={viewport}
+        ref={[viewport, copyRef, playerRef]}
         data-openable={!props.voiceNote && props.onExpand ? "" : undefined}
         onClick={(event) =>
           openAttachmentCardFromClick(event, props.voiceNote ? undefined : props.onExpand)

@@ -10,9 +10,12 @@ import {
   SettingsStatus,
   SettingsToggle,
 } from "../../components/solid/settings-ui.tsx";
+import { registerLogsEnglish } from "../../i18n/locales/en-logs.ts";
 import { createMsFormatter } from "../../lib/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LOG_LEVELS, type LogEntry, type LogLevel } from "./log-lines.ts";
+
+registerEnglishCatalog(registerLogsEnglish);
 
 export type LogsProps = {
   loading: boolean;
@@ -64,9 +67,8 @@ export function LogsView(props: LogsProps) {
       formatTime: createMsFormatter({ timeStyle: "short" }),
     };
   });
-  const exportFileLabel = createMemo(() =>
-    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible",
-  );
+  const exportFileLabel = () =>
+    needle() || LOG_LEVELS.some((level) => !props.levelFilters[level]) ? "filtered" : "visible";
 
   // Keep the fill-height flex chain from the workspace through the log stream.
   return (

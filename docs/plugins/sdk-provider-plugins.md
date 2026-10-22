@@ -64,6 +64,31 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Read a selected personal account
+
+`isUserModelAuthProfileId` and `withPersonalAuthProfileStore` from
+`openclaw/plugin-sdk/provider-auth-runtime` route an explicitly selected personal
+account through its credential owner. The ID predicate recognizes a storage
+locator; it does not authorize access.
+
+Inside the store callback, await `owner.read()` to prepare the selected credential.
+Before using that credential or disclosing an account-specific result, compare it
+with `owner.readCurrentCredential()`. This synchronous check uses owner-published
+facts without SQL. Reconnects, ownership changes, and unresolved writes invalidate
+the retained authority. Keep the asynchronous operation inside the callback and
+retain the caller's current-client and cancellation checks at each external effect.
+
+For an agent or shared auth store, `withAuthProfileStoreAtEffect` on the same
+runtime surface retains the admitted read sources for its callback. It requires
+a live shared-state owner. Each read groups the selected sources into one worker
+request. Await
+`reader.read()` at disclosure to read current worker-owned rows, then compare the
+selected credential or account with the prepared request. This read bypasses
+runtime snapshots and the row cache. Call `reader.assertCurrent()` immediately
+before the effect to reject intervening owner writes without SQL. Keep caller
+authorization and cancellation checks there too; a prepared store alone does not
+authorize disclosure. The reader expires when the callback returns.
+
 ## Loopback OAuth callbacks
 
 Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
@@ -626,12 +651,39 @@ MiMo reasoning replay and final-answer handling. Without the flag, a replacement
 stream keeps the existing behavior of taking ownership of those compatibility
 policies. Returning the original stream or no wrapper also preserves them.
 
+Providers routing OpenAI Responses through a proxy can opt into
+`buildProviderStreamFamilyHooks("openai-responses-service-tier")` from
+`openclaw/plugin-sdk/provider-stream-family`. Apply it only after qualifying the
+upstream as OpenAI and the selected API as `openai-responses`, not merely because
+an endpoint is OpenAI-compatible. The family shares native Fast/Standard and
+service-tier precedence, samples timed Auto once per request, and preserves
+explicit payload tiers, provider identity, credentials, and cancellation. It does
+not attach native OpenAI headers or unrelated Responses defaults.
+
+ClawRouter qualifies these routes from the OpenAI provider's Responses catalog
+entries and preserves exact `pricing.serviceTiers[].id` values in private route
+metadata. Its lightweight picker policy and runtime hook share those facts: Fast
+requires advertised `priority`, and explicit Ultrafast requires `ultrafast`.
+Missing tier metadata never enables Fast by model name. Pricing tiers describe
+model capability, not key entitlement; the service remains authoritative and
+returns an unallowed-tier error without silently downgrading the request.
+
 Bundled adapters share `wrapProviderPayloadHook` and `mapAssistantMessageStream`
 through the existing private `provider-stream-shared` seam. Payload composition
 runs defaults before the caller hook and wire constraints after its result settles;
 each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
+
+`applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
+policy with pass-through adapters through that private seam. Callers qualify
+the endpoint and normalize vendor-prefixed model IDs before applying it.
+
+Bundled transports use `recordSuppressedReasoning` from that same private seam
+when a model marked `reasoning: false` returns thought fields. It records only
+their presence and returns an error for a completed response with no visible
+answer or tool call. Transports publish that error through their ordinary error
+terminal; the host owns per-session warning limits and status hints.
 
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and

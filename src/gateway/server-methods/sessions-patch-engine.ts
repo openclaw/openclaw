@@ -10,10 +10,7 @@ import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/sessio
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import {
-  captureSessionTarget,
-  runSessionMutation,
-} from "../../sessions/session-controller.lifecycle.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -47,7 +44,7 @@ import {
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
-import { runSessionPatchGroups } from "./sessions-patch-groups.js";
+import * as patchGroups from "./sessions-patch-groups.js";
 import * as modelSelection from "./sessions-patch-model-selection.js";
 import {
   prepareSessionPatchReplacement,
@@ -279,15 +276,7 @@ export async function executeSessionPatchMutations(params: {
       );
       timing?.mark("lifecycleAdmission");
       await runSessionMutation({
-        targets: activePrepared.map((target) =>
-          captureSessionTarget({
-            storeScope: target.storePath,
-            sessionKey: target.canonicalKey,
-            aliases: target.lifecycleIdentities,
-            incarnation: target.initialEntry?.sessionId,
-            agentId: target.targetAgentId,
-          }),
-        ),
+        ...patchGroups.resolveSessionPatchLifecycleTargets(activePrepared),
         prepare: async () => {
           for (const target of activePrepared) {
             target.archivePreparation?.drain.handoffToMutation();
@@ -297,7 +286,7 @@ export async function executeSessionPatchMutations(params: {
         run: async () => {
           timing?.mark();
           try {
-            await runSessionPatchGroups(activePrepared, async (group) => {
+            await patchGroups.runSessionPatchGroups(activePrepared, async (group) => {
               const first = group[0]!;
               const storage = preparation.storage.get(first.index);
               const groupTiming = params.diagnostics?.scope("snapshot");

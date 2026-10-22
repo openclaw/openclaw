@@ -29,7 +29,7 @@ export function makeChatPageHost({
   const host = createPageState(
     context,
     { afterCommit: () => () => {} },
-    { dispatchEvent: () => true, querySelector: () => null },
+    { dispatchEvent: () => true },
   );
   Object.assign(host, { client, hello, connected: true }, overrides);
   return Object.assign(host, { request });

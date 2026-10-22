@@ -5,7 +5,6 @@ import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
-  type SecretInput,
 } from "openclaw/plugin-sdk/secret-input";
 import {
   canonicalizeMainSessionAlias,
@@ -282,7 +281,6 @@ const VoiceCallConfigSchema = z
     callbacks: CallCallbacksConfigSchema,
     voicemail: CallVoicemailConfigSchema,
 
-    /** Maximum call duration in seconds */
     maxDurationSeconds: z.number().int().positive().default(300),
 
     /**
@@ -350,13 +348,6 @@ type VoiceCallEffectiveConfigResult = {
   config: VoiceCallConfig;
   numberRouteKey?: string;
 };
-type DeepPartial<T> = T extends SecretInput
-  ? T
-  : T extends Array<infer U>
-    ? DeepPartial<U>[]
-    : T extends object
-      ? { [K in keyof T]?: DeepPartial<T[K]> }
-      : T;
 const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 function defaultRealtimeStreamPathForServePath(servePath: string): string {
@@ -412,17 +403,6 @@ export function resolveVoiceCallStreamExposurePaths(
   return exposurePaths;
 }
 
-function normalizeVoiceCallTtsConfig(
-  defaults: VoiceCallTtsConfig,
-  overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
-): VoiceCallTtsConfig {
-  if (!defaults && !overrides) {
-    return undefined;
-  }
-
-  return TtsConfigSchema.parse(mergeDeep(defaults ?? {}, overrides ?? {}));
-}
-
 function resolveVoiceCallNumberRouteKey(
   config: Pick<VoiceCallConfig, "numbers">,
   phone: string | undefined,
@@ -469,12 +449,17 @@ export function resolveVoiceCallEffectiveConfig(
     return { config };
   }
 
+  const defaultTts = config.tts;
+  const routeTts = route.tts;
   return {
     numberRouteKey,
     config: {
       ...config,
       ...route,
-      tts: normalizeVoiceCallTtsConfig(config.tts, route.tts),
+      tts:
+        !defaultTts && !routeTts
+          ? undefined
+          : TtsConfigSchema.parse(mergeDeep(defaultTts ?? {}, routeTts ?? {})),
     },
   };
 }
@@ -535,10 +520,37 @@ export function resolveVoiceCallSessionKey(params: {
 }): string {
   const explicit = params.explicitSessionKey?.trim();
   if (explicit || params.config.sessionScope === "main") {
-    return resolveVoiceCallAgentSessionKey({
-      config: params.config,
-      sessionKey: explicit || "main",
-      coreSession: params.coreSession,
+    // Resolve persisted or integration-provided keys into the configured agent namespace.
+    const sessionKey = (explicit || "main").trim();
+    if (!sessionKey) {
+      throw new Error("Voice Call session key cannot be empty");
+    }
+    const lower = sessionKey.toLowerCase();
+    const agentId = normalizeAgentId(params.config.agentId);
+    if (lower === "global" || lower === "unknown") {
+      return lower;
+    }
+    const parsedInput = parseAgentSessionKey(sessionKey);
+    let normalizedScopedKey: string;
+    if (
+      parsedInput &&
+      normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
+      parsedInput.agentId === agentId
+    ) {
+      normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
+    } else {
+      // Voice Call's configured agent owns both the store and runtime. Foreign or
+      // malformed agent-shaped input is an opaque integration key, not a route.
+      const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
+      if (!wrappedInput) {
+        throw new Error("Voice Call session key could not be normalized");
+      }
+      normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
+    }
+    return canonicalizeMainSessionAlias({
+      cfg: { session: params.coreSession },
+      agentId,
+      sessionKey: normalizedScopedKey,
     });
   }
   // Startup migration promotes unambiguous shipped `voice:*` rows;
@@ -553,54 +565,10 @@ export function resolveVoiceCallSessionKey(params: {
   ).toLowerCase();
 }
 
-/** Resolve persisted or integration-provided keys into the configured agent namespace. */
-function resolveVoiceCallAgentSessionKey(params: {
-  config: Pick<VoiceCallConfig, "agentId">;
-  sessionKey: string;
-  coreSession?: VoiceCallCoreSessionConfig;
-}): string {
-  const sessionKey = params.sessionKey.trim();
-  if (!sessionKey) {
-    throw new Error("Voice Call session key cannot be empty");
-  }
-  const lower = sessionKey.toLowerCase();
-  const agentId = normalizeAgentId(params.config.agentId);
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  const parsedInput = parseAgentSessionKey(sessionKey);
-  let normalizedScopedKey: string;
-  if (
-    parsedInput &&
-    normalizeAgentId(parsedInput.agentId) === parsedInput.agentId &&
-    parsedInput.agentId === agentId
-  ) {
-    normalizedScopedKey = `agent:${parsedInput.agentId}:${parsedInput.rest}`;
-  } else {
-    // Voice Call's configured agent owns both the store and runtime. Foreign or
-    // malformed agent-shaped input is an opaque integration key, not a route.
-    const wrappedInput = parseAgentSessionKey(`agent:${agentId}:${sessionKey}`);
-    if (!wrappedInput) {
-      throw new Error("Voice Call session key could not be normalized");
-    }
-    normalizedScopedKey = `agent:${agentId}:${wrappedInput.rest}`;
-  }
-  return canonicalizeMainSessionAlias({
-    cfg: { session: params.coreSession },
-    agentId,
-    sessionKey: normalizedScopedKey,
-  });
-}
-
 export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig {
   const resolved = {
     ...config,
     tunnel: { ...config.tunnel },
-    realtime: {
-      ...config.realtime,
-      streamPath:
-        config.realtime.streamPath ?? defaultRealtimeStreamPathForServePath(config.serve.path),
-    },
   };
 
   if (resolved.provider === "telnyx") {

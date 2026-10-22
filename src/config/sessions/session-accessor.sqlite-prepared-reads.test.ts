@@ -6,12 +6,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
-import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { sessionParticipantsSchemaSql } from "../../state/openclaw-agent-session-participants-schema.js";
 import { sessionEntrySnapshotsSchemaSql } from "../../state/openclaw-agent-session-snapshots-schema.js";
+import { getExactSessionEntryQueries } from "./session-accessor.sqlite-entry-query.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -241,6 +242,44 @@ it("reuses detached entry and participant facts until the transaction changes", 
   }
   expect(read()?.entry.participants?.[0]?.identity.id).toBe("participant-0");
 });
+
+it.each(["row", "canonical"] as const)(
+  "bounds retained %s snapshot bytes while preserving oversized and updated reads",
+  (method) => {
+    const database = createDatabase();
+    const { db, keys, transact } = database;
+    const key = keys[0];
+    const queries = getExactSessionEntryQueries(db);
+    const read = () =>
+      runSqliteReadOperationSync(db, () => queries[method](key, "full"))?.skills_snapshot_json;
+    const replacePrompt = (prompt: string) =>
+      transact(() =>
+        writeSessionEntrySnapshots(database, key, [
+          { field: "skillsSnapshot", valueJson: JSON.stringify({ prompt, skills: [] }) },
+        ]),
+      );
+    const oversized = "\u0100".repeat(600_000);
+    replacePrompt(oversized);
+    expect(JSON.parse(read()!).prompt).toBe(oversized);
+    const reads = trackSqliteStatementExecutions(db, ["entries"], (sql) =>
+      sql.includes('from "session_nodes"') ? "entries" : null,
+    );
+    using _ = { [Symbol.dispose]: reads.restore };
+    for (let count = 1; count <= 2; count++) {
+      expect(JSON.parse(read()!).prompt).toBe(oversized);
+      expect(reads.counts.entries).toBe(count);
+    }
+    replacePrompt("small current prompt");
+    // A different projection observes the revision before the original shape is revisited.
+    runSqliteReadOperationSync(db, () => queries.row(key, "list"));
+    expect(JSON.parse(read()!).prompt).toBe("small current prompt");
+    const afterRefresh = reads.counts.entries;
+    expect(JSON.parse(read()!).prompt).toBe("small current prompt");
+    expect(reads.counts.entries).toBe(afterRefresh);
+    runSqliteReadOperationSync(db, () => queries.row(keys[1], "list"));
+    expect(JSON.parse(read()!).prompt).toBe("small current prompt");
+  },
+);
 
 it("refreshes warm entry and participant facts after worker receipts and connection reopen", async () => {
   const filename = path.join(tempDirs.make("session-row-freshness-"), "agent.sqlite");

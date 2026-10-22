@@ -387,6 +387,9 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     get toolAuthorityFingerprint() {
       return toolAuthority.toolAuthorityFingerprint;
     },
+    get requesterPrincipalKey() {
+      return toolAuthority.requesterPrincipalKey;
+    },
     get personalToolParticipants() {
       return toolAuthority.personalToolParticipants;
     },
@@ -473,6 +476,10 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     bindToolAuthoritySnapshotAsync: toolAuthority.bindToolAuthoritySnapshotAsync,
     projectToolAuthorityFingerprint: toolAuthority.projectToolAuthorityFingerprint,
     projectToolAuthorityFingerprintAsync: toolAuthority.projectToolAuthorityFingerprintAsync,
+    projectRequesterToolAuthorityFingerprint:
+      toolAuthority.projectRequesterToolAuthorityFingerprint,
+    projectRequesterToolAuthorityFingerprintAsync:
+      toolAuthority.projectRequesterToolAuthorityFingerprintAsync,
     bindToolAuthorityRoute: toolAuthority.bindToolAuthorityRoute,
     bindToolAuthorityRouteAsync: toolAuthority.bindToolAuthorityRouteAsync,
     updateSessionId(nextSessionId) {
@@ -558,32 +565,36 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       recordActivity();
       toolAuthority.bindBackendFingerprint(handle.toolAuthorityFingerprint);
       recordOperationBackendRunId(operation, handle.runId);
-      owner.attachment = {
-        operation,
-        backend: handle,
-        projectSessionActive:
-          owner.attachment?.operation === operation
-            ? owner.attachment.projectSessionActive
-            : undefined,
-      };
+      const backend = { handle };
+      if (owner.attachment?.operation === operation) {
+        owner.attachment.backend = backend;
+      } else {
+        owner.attachment = { operation, backend };
+      }
       notifyBackendReady();
       if (controller.signal.aborted) {
         handle.cancel("superseded");
       }
     },
     detachBackend(handle) {
-      if (owner.active === operation && owner.attachment?.backend === handle) {
-        owner.attachment.backend = undefined;
-        if (
-          !("handle" in owner.attachment) &&
-          owner.attachment.projectSessionActive === undefined
-        ) {
+      const attachment = owner.attachment;
+      if (owner.active === operation && attachment?.backend?.handle === handle) {
+        // Recovery keeps this logical owner but replaces its attempt. New input
+        // must wait for that owner's next backend, not reuse the old readiness.
+        backendReady.resolve();
+        if (!ended() && !state.abortFrozen && !state.cleared) {
+          backendReady = createDeferredCore();
+          backendReadyByOperation.set(operation, backendReady.promise);
+        }
+        attachment.backend = undefined;
+        if (!("handle" in attachment) && attachment.projectSessionActive === undefined) {
           owner.attachment = undefined;
         }
       }
     },
     freezeAbort() {
       apply({ type: "freeze" });
+      backendReady.resolve();
       detachUpstreamAbort();
       watchdog.beginFinalization();
     },
@@ -596,6 +607,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       if (state === before) {
         return false;
       }
+      backendReady.resolve();
       toolAuthority.close();
       phaseWait?.close();
       watchdog.beginTerminal();
@@ -632,7 +644,11 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       apply({ type: "freeze" });
       setResult({ kind: "failed", code: "run_stalled" });
       detachUpstreamAbort();
-      abortInternally(createAbortError("Reply operation stalled"));
+      abortInternally(
+        Object.assign(createAbortError("Reply operation stalled"), {
+          code: "OPENCLAW_SESSION_WATCHDOG",
+        }),
+      );
       try {
         backend?.cancel("superseded");
       } finally {

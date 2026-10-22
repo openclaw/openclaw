@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -51,12 +50,8 @@ import {
 import * as readWorker from "./openclaw-state-read-worker.js";
 
 let taskCount = 0;
-const releaseFixtures: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const release of releaseFixtures.splice(0)) {
-      release();
-    }
     await closeState();
     resetState();
     vi.restoreAllMocks();
@@ -72,35 +67,16 @@ beforeEach(() => {
   mock.prepareInherited.mockReset();
   mock.pool.mockReset().mockImplementation(() =>
     createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
-      startTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
-        const inContext = AsyncLocalStorage.snapshot();
-        const completion = createRetainedOperation<OpenClawStateReadReply>(() => {
-          if (completion.operation.read().status !== "pending") {
-            return;
-          }
-          const request = typeof input === "function" ? input() : input;
-          if (request instanceof Promise) {
-            throw new Error("This worker fixture requires synchronous admission");
-          }
-          expect(request.command.type).toBe("admit");
-          completion.resolve({ ok: true, type: "admit" });
-        });
-        const cleanup = createRetainedOperation<void>(() => {
-          completion.operation.service();
-          if (completion.operation.read().status === "pending") {
-            return;
-          }
-          cleanup.resolve(undefined);
-        });
-        const task = { ...completion.operation, release: () => cleanup.operation };
+      runTask(input: WorkerTaskInput<OpenClawStateReadRequest>) {
         taskCount++;
-        releaseFixtures.push(() =>
-          inContext(() => {
-            task.service();
-            task.release().service();
-          }),
-        );
-        return task;
+        return {
+          result: (async (): Promise<OpenClawStateReadReply> => {
+            const request = typeof input === "function" ? await input() : input;
+            expect(request.command.type).toBe("admit");
+            return { ok: true, type: "admit" };
+          })(),
+          close: async () => {},
+        };
       },
     }),
   );

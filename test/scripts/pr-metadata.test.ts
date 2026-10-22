@@ -25,6 +25,13 @@ const repoName = repository.nameWithOwner;
 const enterprise = "github.enterprise.invalid";
 const repoEndpoint = (suffix = "") => `repos/${repoName}${suffix}`;
 const repoCommand = "pr_gh_plain repo view --json url";
+const assignContributor = "pr_gh_plain pr edit 42 --add-assignee contributor";
+const restRepository = {
+  id: repository.databaseId,
+  full_name: repository.nameWithOwner,
+  html_url: repository.url,
+  node_id: repository.id,
+};
 const authorCommand = (host = "github.com") =>
   `printf "%s\\n" "$FAKE_GH_FIXTURE" | jq .authorSources | pr_gh commit-authors ${repoName} ${host}`;
 const quotaDetail =
@@ -137,6 +144,10 @@ function expectJson(result: MetadataResult, expected: unknown, status = 0) {
 
 function expectCall(result: MetadataResult, ...args: string[]) {
   expect(result.calls).toContainEqual(args);
+}
+
+function expectAssignedRepository(result: MetadataResult, url = repository.url) {
+  expectCall(result, "pr", "edit", "42", "--add-assignee", "contributor", "--repo", url);
 }
 
 const pullEndpoint = repoEndpoint("/pulls/42");
@@ -804,12 +815,7 @@ it.each([false, true])("preserves cleanup-failed results: %s", (failed) => {
     stderr: "",
     stdout: failed
       ? "HTTP 503: No server is currently available\n"
-      : JSON.stringify({
-          id: 1,
-          full_name: "base-owner/base-repo",
-          html_url: "https://github.com/base-owner/base-repo",
-          node_id: "R_base",
-        }) + "\n",
+      : JSON.stringify(restRepository) + "\n",
   });
   expectPayload(result, Buffer.from("payload"), true);
 });
@@ -830,11 +836,11 @@ it.each(
       defaultRepoURL: repoURL,
       protectedGh: true,
     },
-    `pr_gh_plain repo view --json url${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor`,
+    `${repoCommand}${explicit}; ${assignContributor}`,
   );
   expectJson(result, { url: repoURL });
   expectCall(result, ...revalidatedCall(repoEndpoint(), enterpriseHost));
-  expectCall(result, "pr", "edit", "42", "--add-assignee", "contributor", "--repo", repoURL);
+  expectAssignedRepository(result, repoURL);
   expect(result.calls).toContainEqual(
     selection === "--repo" ? ["browse", "--repo", "base-owner/base-repo"] : ["browse"],
   );
@@ -1099,9 +1105,7 @@ it.each([
   ["pr_gh repo view --json unsupported", "Unsupported REST repository metadata field: unsupported"],
 ])("rejects invalid JSON field selection: %s", (command, diagnostic) => {
   const result = readPrMetadata({}, command);
-  expect(result.status).toBe(1);
-  expect(result.stdout).toBe("");
-  expect(result.stderr).toBe(`${diagnostic}\n`);
+  expectResult(result, 1, { stdout: "", stderr: `${diagnostic}\n` });
 });
 
 it("preserves canonical repository identities for differently cased callers", () => {
@@ -1112,13 +1116,7 @@ it("preserves canonical repository identities for differently cased callers", ()
     },
     "pr_gh_plain repo-authority Base-Owner/Base-Repo GitHub.com",
   );
-  expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({
-    id: 1,
-    node_id: "R_base",
-    full_name: repository.nameWithOwner,
-    html_url: repository.url,
-  });
+  expectJson(result, restRepository);
 });
 
 it("accepts canonical repository casing when adopting an explicit qualified observation", () => {
@@ -1126,8 +1124,7 @@ it("accepts canonical repository casing when adopting an explicit qualified obse
     { ghRepo: "https://GITHUB.COM/base-owner/base-repo" },
     'pr_observe 42; printf "%s\\n" "$PR_REPOSITORY_URL"',
   );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe("https://github.com/base-owner/base-repo\n");
+  expectResult(result, 0, { stdout: `${repository.url}\n` });
   expect(result.calls).toHaveLength(1);
 });
 
@@ -1142,26 +1139,16 @@ it.each(["selected gh", "selected Git"])(
         probeGit: !selectedGh,
         defaultRepoURL: "https://github.com/base-owner/base-repo",
       },
-      `${selectedGh ? "pr_gh_plain repo view --json url" : "pr_meta_json 42"}; pr_gh_plain pr edit 42 --add-assignee contributor`,
+      `${selectedGh ? repoCommand : "pr_meta_json 42"}; ${assignContributor}`,
     );
     expect(result.status, result.stderr).toBe(0);
     if (selectedGh) {
-      expect(JSON.parse(result.stdout)).toEqual({
-        url: "https://github.com/base-owner/base-repo",
-      });
+      expectJson(result, { url: repository.url });
     } else {
       expect(JSON.parse(result.stdout).url).toBe("https://github.com/base-owner/base-repo/pull/42");
     }
     expect(result.calls.filter((args) => args[0] === "browse")).toEqual([["browse"], ["browse"]]);
-    expect(result.calls).toContainEqual([
-      "pr",
-      "edit",
-      "42",
-      "--add-assignee",
-      "contributor",
-      "--repo",
-      "https://github.com/base-owner/base-repo",
-    ]);
+    expectAssignedRepository(result);
   },
 );
 it.each([
@@ -1172,9 +1159,7 @@ it.each([
   },
 ])("filters view JSON through the shell: $command", ({ command, expected }) => {
   const result = readPrMetadata({}, command);
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe(`${expected}\n`);
-  expect(result.stderr).toBe("");
+  expectResult(result, 0, { stdout: `${expected}\n`, stderr: "" });
 });
 it.each(["environment", "explicit", "explicit-git-suffix"])(
   "preserves the %s repository override before gh's default",
@@ -1188,10 +1173,9 @@ it.each(["environment", "explicit", "explicit-git-suffix"])(
         ghRepo: explicit ? "ignored/repo" : "base-owner/base-repo",
         defaultRepoURL: "https://github.com/ignored/default",
       },
-      `pr_gh pr view 42 --json number,headRefOid${explicit}; pr_gh_plain pr edit 42 --add-assignee contributor${explicit}`,
+      `${viewPull("number,headRefOid")}${explicit}; ${assignContributor}${explicit}`,
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ number: 42, headRefOid: head });
+    expectJson(result, { number: 42, headRefOid: head });
     expect(result.calls.filter((args) => args[0] === "browse")).toEqual(
       explicit ? [] : [["browse"], ["browse"]],
     );
@@ -1202,13 +1186,11 @@ it.each([
   {
     shape: "renamed",
     files: [
-      {
+      restFile({
         filename: "src/renamed.ts",
         previous_filename: "src/previous.ts",
         status: "renamed",
-        additions: 0,
-        deletions: 0,
-      },
+      }),
     ],
     expected: [{ path: "src/renamed.ts", changeType: "RENAMED", additions: 0, deletions: 0 }],
   },

@@ -10,10 +10,10 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
+const httpRequests = channel("http.server.request.start");
 
 export function observeMcpAppHttpResponses(gatewayPort: number) {
   const responses: ServerResponse[] = [];
-  const requests = channel("http.server.request.start");
   const onRequest = (message: unknown) => {
     // SAFETY: Node publishes these exact objects before the real HTTP request handler runs.
     const { request, response } = message as {
@@ -28,8 +28,8 @@ export function observeMcpAppHttpResponses(gatewayPort: number) {
       responses.push(response);
     }
   };
-  requests.subscribe(onRequest);
-  return { responses, stop: () => requests.unsubscribe(onRequest) };
+  httpRequests.subscribe(onRequest);
+  return { responses, stop: () => httpRequests.unsubscribe(onRequest) };
 }
 
 export function observeMcpAppRequests(page: Page) {
@@ -190,7 +190,6 @@ window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => 
     { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
     "",
     "",
-    undefined,
     { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
   );
   gateway.start();
@@ -439,8 +438,8 @@ export async function writeFixtureServer(
   fixtureControlPath: string,
   fixtureEventsPath: string,
 ): Promise<void> {
-  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const sdkMcpServerPath = require.resolve("@modelcontextprotocol/server");
+  const sdkStdioServerPath = require.resolve("@modelcontextprotocol/server/stdio");
   await fs.writeFile(
     serverPath,
     `#!/usr/bin/env node
@@ -482,55 +481,55 @@ class ObservedStdioTransport extends StdioServerTransport {
 }
 const appUri = "ui://conformance/app";
 const server = new McpServer({ name: "mcp-app-conformance", version: "1.0.0" });
-const show = server.tool("show", "Show the conformance app", async () => ({
+const show = server.registerTool("show", { description: "Show the conformance app" }, async () => ({
   content: [{ type: "text", text: "initial-result" }],
   structuredContent: { value: "initial-result" },
 }));
 show.update({ _meta: { ui: { resourceUri: appUri } } });
-const appOnly = server.tool("app_companion", "App-only companion", async (extra) => {
-  const request = requests.get(extra.requestId);
+const appOnly = server.registerTool("app_companion", { description: "App-only companion" }, async ({ mcpReq }) => {
+  const request = requests.get(mcpReq.id);
   const config = control();
   const callDelayMs = config.callDelayMs ?? 0;
   const invocation = ++invocations;
-  const detail = { invocation, requestId: extra.requestId, scenario: request?.scenario };
+  const detail = { invocation, requestId: mcpReq.id, scenario: request?.scenario };
   const onAbort = () => record("tool-cancellation-observed", detail);
-  extra.signal.addEventListener("abort", onAbort, { once: true });
+  mcpReq.signal.addEventListener("abort", onAbort, { once: true });
   record("tool-start", detail);
   try {
     // Noncooperative work models an effect cancellation cannot undo.
     if (config.releasePath) {
       while (!existsSync(config.releasePath)) await delay(25);
     } else {
-      await delay(callDelayMs, undefined, config.cooperative ? { signal: extra.signal } : undefined);
+      await delay(callDelayMs, undefined, config.cooperative ? { signal: mcpReq.signal } : undefined);
     }
-    record("tool-complete", { ...detail, aborted: extra.signal.aborted });
+    record("tool-complete", { ...detail, aborted: mcpReq.signal.aborted });
   } catch (error) {
-    if (extra.signal.aborted) record("tool-stopped", detail);
+    if (mcpReq.signal.aborted) record("tool-stopped", detail);
     throw error;
   } finally {
-    extra.signal.removeEventListener("abort", onAbort);
+    mcpReq.signal.removeEventListener("abort", onAbort);
   }
   return {
     content: [{ type: "text", text: "companion-called" }],
     structuredContent: { value: "companion-called", invocation },
   };
 });
-const arm = server.tool("arm_refresh", "Arm fixture catalog response delay", async (extra) => {
-  const scenario = requests.get(extra.requestId)?.scenario;
+const arm = server.registerTool("arm_refresh", { description: "Arm fixture catalog response delay" }, async ({ mcpReq }) => {
+  const scenario = requests.get(mcpReq.id)?.scenario;
   delayNextList = true;
   await server.server.sendToolListChanged();
-  record("notification-sent", { scenario, requestId: extra.requestId });
+  record("notification-sent", { scenario, requestId: mcpReq.id });
   return { content: [{ type: "text", text: "armed" }] };
 });
 arm.update({ _meta: { ui: { visibility: ["app"] } } });
 appOnly.update({ _meta: { ui: { visibility: ["app"] } } });
-const cleanupSave = server.tool("cleanup_save", "Save App state before unmount", async (extra) => {
-  const scenario = requests.get(extra.requestId)?.scenario;
-  record("cleanup-save", { scenario, requestId: extra.requestId });
+const cleanupSave = server.registerTool("cleanup_save", { description: "Save App state before unmount" }, async ({ mcpReq }) => {
+  const scenario = requests.get(mcpReq.id)?.scenario;
+  record("cleanup-save", { scenario, requestId: mcpReq.id });
   return { content: [{ type: "text", text: "saved" }], structuredContent: { value: "saved" } };
 });
 cleanupSave.update({ _meta: { ui: { visibility: ["app"] } } });
-const modelOnly = server.tool("model_only", "Model-only tool", async () => ({
+const modelOnly = server.registerTool("model_only", { description: "Model-only tool" }, async () => ({
   content: [{ type: "text", text: "model-called" }],
 }));
 modelOnly.update({ _meta: { ui: { visibility: ["model"] } } });

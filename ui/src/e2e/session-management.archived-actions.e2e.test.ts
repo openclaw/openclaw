@@ -1,8 +1,13 @@
+import type { Locator } from "playwright";
 import { it, expect } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { closeChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  closeChatDetails,
+  openChatDetails,
+  openChatPublication,
+} from "./chat-details.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
@@ -17,6 +22,26 @@ const branches = (current: string, other: string) => ({
     { active: false, headline: "Other branch", leafEntryId: other, messageCount: 1 },
   ],
 });
+
+async function expectVersionAuthority(activePane: Locator, mobile: boolean, disabled: boolean) {
+  if (!mobile) {
+    const trigger = activePane.locator(".chat-pane__branches-trigger");
+    await ui.visible(trigger, 10_000);
+    await expect.poll(() => trigger.isDisabled()).toBe(disabled);
+    return;
+  }
+  const details = await openChatDetails(activePane);
+  await details.locator('[data-details-destination="versions"]').click();
+  const versions = details.locator('.chat-mobile-details-page[data-details-page="versions"]');
+  const other = versions.getByRole("radio", { name: /^Other branch/u });
+  await other.waitFor();
+  await expect.poll(() => other.getAttribute("aria-disabled")).toBe(String(disabled));
+  if (disabled) {
+    await other.press("Enter");
+    await expect.poll(() => other.getAttribute("aria-checked")).toBe("false");
+  }
+  await closeChatDetails(activePane);
+}
 
 suite.define(() => {
   it("waits for lifecycle actionability before activating a self-removing control once", () =>
@@ -98,9 +123,7 @@ suite.define(() => {
       });
       await ui.visible(userBubble, 10_000);
       expect(await userBubble.getAttribute("data-entry-id")).toBe("archive-action-user");
-      const branchTrigger = activePane.locator(".chat-pane__branches-trigger");
-      await ui.visible(branchTrigger, 10_000);
-      expect(await branchTrigger.isDisabled()).toBe(false);
+      await expectVersionAuthority(activePane, viewport.label === "mobile", false);
 
       await gateway.waitForRequest(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
@@ -119,8 +142,8 @@ suite.define(() => {
           },
         },
       });
-      await openDetailsPullRequests(activePane);
-      await ui.button(activePane, "Publish PR", false).waitFor();
+      const publication = await openChatPublication(activePane);
+      await ui.button(publication, "Publish PR", false).waitFor();
       await closeChatDetails(activePane);
 
       await userBubble.click({ button: "right" });
@@ -158,9 +181,9 @@ suite.define(() => {
       await expect
         .poll(() => transcript.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await expect.poll(() => branchTrigger.isDisabled()).toBe(true);
-      const archivedPullRequests = await openDetailsPullRequests(activePane);
-      await ui.expectCount(ui.button(archivedPullRequests, "Publish PR", false), 0);
+      await expectVersionAuthority(activePane, viewport.label === "mobile", true);
+      const archivedPublication = await openChatPublication(activePane);
+      await ui.expectCount(ui.button(archivedPublication, "Publish PR", false), 0);
       await closeChatDetails(activePane);
 
       await userBubble.evaluate((element) => {
@@ -245,7 +268,13 @@ suite.define(() => {
         .poll(() => selectedRow.getAttribute("class"))
         .toContain("sidebar-recent-session--active");
       await ui.visible(selectedRow.locator(".sidebar-session__archive-glyph"));
-      await ui.expectCount(page.getByText("Archived planning", { exact: true }), 2);
+      await ui.visible(selectedRow.getByText("Archived planning", { exact: true }));
+      await ui.visible(
+        activePane.getByRole("button", {
+          name: "Actions for Archived planning",
+          exact: true,
+        }),
+      );
 
       const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await ui.visible(archivedNotice, 10_000);

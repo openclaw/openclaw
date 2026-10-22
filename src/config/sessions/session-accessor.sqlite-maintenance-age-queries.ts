@@ -104,8 +104,7 @@ export const readSessionMaintenanceAgeQueries = createSqliteQueryCache((database
         ),
     ),
     activity: prepareSqliteQueryIterator(database, () => ordered.selectAll("age_rows")),
-    dashboards: prepareSqliteQueryIterator(database, () => dashboards),
     // Raw edits remain marked until the canonical owner validates their key/row shape.
-    uncertified: prepareSqliteQueryIterator(database, () => uncertified),
+    dashboards: prepareSqliteQueryIterator(database, () => dashboards.unionAll(uncertified)),
   };
 });

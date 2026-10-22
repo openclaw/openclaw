@@ -1,5 +1,4 @@
 import { createMemo, For } from "solid-js";
-import type { BackgroundPreference } from "../../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsRow,
@@ -7,45 +6,26 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { createAppearanceBackground } from "./appearance-background-state.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
-export type AppearanceBackgroundView = {
-  preference: BackgroundPreference;
-  imageUrl: string | null;
-  hasImage: boolean;
-  busy: boolean;
-  uploadAllowed: boolean;
-  scopeHint: string;
-  message: {
-    kind: "error" | "status";
-    text: string;
-  } | null;
-  onSource: (source: BackgroundPreference["source"]["kind"]) => void;
-  onChange: (patch: Partial<BackgroundPreference>) => void;
-  onChooseImage: () => void;
+type BackgroundView = ReturnType<ReturnType<typeof createAppearanceBackground>["viewProps"]>;
+export type AppearanceBackgroundView = Omit<BackgroundView, "onRetry"> & {
   fileRef?: (element: HTMLInputElement) => void;
-  onRemoveImage: () => void;
-  onFile: (file: File) => void;
-  onPreviewStart: (event: PointerEvent) => void;
-  onPreviewInput: () => void;
-  onPreviewEnd: (event: PointerEvent) => void;
-  onPreviewKey: (event: KeyboardEvent) => void;
-  onPreviewCancel: () => void;
-  onRetry?: () => void;
+  onRetry?: BackgroundView["onRetry"];
 };
 export function AppearanceBackground(props: AppearanceBackgroundView) {
   const preference = createMemo(() => props.preference);
   const disabled = createMemo(() => props.busy || preference().source.kind === "none");
-  const presentation = createMemo(() => preference().presentation ?? "faded");
+  const presentation = () => preference().presentation ?? "faded";
   const visibility = createMemo(() => Math.round(preference().visibility * 100));
-  const placementHint = createMemo(() =>
+  const placementHint = () =>
     preference().source.kind === "none"
       ? "noneHint"
       : !preference().showOnNewSession && !preference().showInSessions
         ? "placementOffHint"
         : preference().visibility === 0
           ? "visibilityZeroHint"
-          : undefined,
-  );
+          : undefined;
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.background} class="settings-section">
       <div class="settings-section__header">

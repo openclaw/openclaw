@@ -18,6 +18,10 @@ import {
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { expectSchemaVersion } from "./openclaw-state-schema-version-assert.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -75,6 +79,7 @@ function legacyTaskDatabase(previousVersion: 22 | 23, refusePublication = false)
   mkdirSync(path.dirname(pathname), { recursive: true });
   using db = new DatabaseSync(pathname);
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  addPreCutoverClientCredentialTablesForTest(db);
   for (const [name] of replacementIndexes) {
     db.exec(`DROP INDEX IF EXISTS ${name}`);
   }
@@ -127,9 +132,13 @@ it.each([
   "migrates v$previousVersion via $owner, preserving tasks and cron writes",
   async ({ owner, previousVersion }) => {
     const { options, retained } = legacyTaskDatabase(previousVersion);
-    if (owner === "doctor") {
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-    }
+    await withStateMigrationBackupForTest(options, () => {
+      if (owner === "doctor") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      } else {
+        openOpenClawStateDatabase(options);
+      }
+    });
     const { db } = openOpenClawStateDatabase(options);
     expectSchemaVersion(db);
     expect(retainedTaskState(db)).toEqual(retained);
@@ -182,7 +191,9 @@ it.each([
 
 it("rolls back task index replacement when schema publication fails", async () => {
   const { options, pathname, retained } = legacyTaskDatabase(23, true);
-  expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
+  await withStateMigrationBackupForTest(options, () => {
+    expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
+  });
   await closeOpenClawStateDatabaseAsync();
   using db = new DatabaseSync(pathname, { readOnly: true });
   expectSchemaVersion(db, 23);

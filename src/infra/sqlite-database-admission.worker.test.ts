@@ -15,7 +15,6 @@ import {
   readSqliteDatabaseAdmissions,
   readSqliteDatabaseWriteRevision,
   readSqliteDatabaseScopedWriteToken,
-  retireSqliteDatabaseWriteScopes,
   publishSqliteDatabaseAdmission,
   getSqliteDatabaseAdmission,
 } from "./sqlite-database-admission.js";
@@ -274,11 +273,13 @@ it("settles scoped writes without host metadata round trips after peer registrat
     expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
     expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
 
-    // The writer's retired cell must invalidate the host's replacement incarnation too.
+    // Pressure evicts the writer's cell; settlement must invalidate its replacement too.
     let replacement: string | undefined;
     expect(
       await writeAfterPublication(6, "second", () => {
-        retireSqliteDatabaseWriteScopes(database, ["second"]);
+        for (let index = 0; index < 160; index++) {
+          readSqliteDatabaseScopedWriteToken(database, `${index}:${"x".repeat(4096)}`);
+        }
         replacement = readSqliteDatabaseScopedWriteToken(database, "second");
       }),
     ).toEqual({ lookupMessages: 0 });

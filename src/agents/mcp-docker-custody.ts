@@ -3,7 +3,7 @@ import { watch, type FSWatcher } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { z } from "zod";
@@ -463,9 +463,8 @@ export async function prepareMcpDockerLaunch(
               changed();
             });
             while (!id) {
-              const event = new Promise<void>((resolve) => {
-                onChange = resolve;
-              });
+              const { promise: event, resolve } = Promise.withResolvers<void>();
+              onChange = resolve;
               if (watchError) {
                 throw watchError;
               }

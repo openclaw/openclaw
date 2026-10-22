@@ -207,14 +207,14 @@ async function expectClaudeCatalogQuiescent<Spy extends { mockClear: () => void 
 async function writeProject(params: {
   home: string;
   project?: string;
-  entries: Array<Record<string, unknown>>;
+  entries?: Array<Record<string, unknown>>;
   transcripts: Record<string, Array<Record<string, unknown>>>;
 }): Promise<void> {
   const projectDir = path.join(params.home, ".claude", "projects", params.project ?? "-workspace");
   await fs.mkdir(projectDir, { recursive: true });
   await fs.writeFile(
     path.join(projectDir, "sessions-index.json"),
-    JSON.stringify({ version: 1, entries: params.entries }),
+    JSON.stringify({ version: 1, entries: params.entries ?? [] }),
   );
   await Promise.all(
     Object.entries(params.transcripts).map(([sessionId, rows]) =>
@@ -226,6 +226,23 @@ async function writeProject(params: {
   );
 }
 
+function indexedEntry(home: string, sessionId: string, extra: Record<string, unknown> = {}) {
+  return { sessionId, fullPath: projectFile(home, `${sessionId}.jsonl`), ...extra };
+}
+
+function writeIndexedSession(
+  home: string,
+  sessionId: string,
+  entry: Record<string, unknown>,
+  text = "hello",
+) {
+  return writeProject({
+    home,
+    entries: [indexedEntry(home, sessionId, entry)],
+    transcripts: { [sessionId]: [message(sessionId, "user", text, 1)] },
+  });
+}
+
 async function writeDesktopMetadata(
   home: string,
   name: string,
@@ -233,12 +250,7 @@ async function writeDesktopMetadata(
 ): Promise<void> {
   const dir = path.join(
     home,
-    "Library",
-    "Application Support",
-    "Claude",
-    "claude-code-sessions",
-    "account",
-    "workspace",
+    "Library/Application Support/Claude/claude-code-sessions/account/workspace",
   );
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, `local_${name}.json`), JSON.stringify(metadata));
@@ -256,18 +268,12 @@ async function writeIndexedDesktopSession(
   },
 ): Promise<void> {
   const { sessionId, localSessionId, metadataName, title, prompt, metadata } = params;
-  await writeProject({
+  await writeIndexedSession(
     home,
-    entries: [
-      {
-        sessionId,
-        fullPath: projectFile(home, `${sessionId}.jsonl`),
-        projectPath: "/work/openclaw",
-        isSidechain: false,
-      },
-    ],
-    transcripts: { [sessionId]: [message(sessionId, "user", prompt, 1)] },
-  });
+    sessionId,
+    { projectPath: "/work/openclaw", isSidechain: false },
+    prompt,
+  );
   await writeDesktopMetadata(home, metadataName, {
     sessionId: localSessionId,
     cliSessionId: sessionId,
@@ -393,14 +399,7 @@ async function writeDesktopGroupStore(
   groupName: string,
   localSessionId: string,
 ): Promise<void> {
-  const dir = path.join(
-    home,
-    "Library",
-    "Application Support",
-    "Claude",
-    "Local Storage",
-    "leveldb",
-  );
+  const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "000001.ldb"),
@@ -412,14 +411,7 @@ async function writeDesktopGroupStoreEntries(
   home: string,
   entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
 ): Promise<void> {
-  const dir = path.join(
-    home,
-    "Library",
-    "Application Support",
-    "Claude",
-    "Local Storage",
-    "leveldb",
-  );
+  const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(levelDbDataBlock(entries), 0));
 }
@@ -463,6 +455,7 @@ function message(
   type: "user" | "assistant",
   text: string | Record<string, unknown>[],
   index: number,
+  extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
     type,
@@ -475,16 +468,16 @@ function message(
       content: typeof text === "string" ? [{ type: "text", text }] : text,
       ...(type === "assistant" ? { model: "claude-opus-4-8" } : {}),
     },
+    ...extra,
   };
 }
 
 function sdkCliMessage(sessionId: string, text: string): Record<string, unknown> {
-  return {
-    ...message(sessionId, "user", text, 1),
+  return message(sessionId, "user", text, 1, {
     entrypoint: "sdk-cli",
     cwd: `/work/${sessionId}`,
     version: "2.1.204",
-  };
+  });
 }
 
 async function writeUnindexedCliSessions(
@@ -495,7 +488,6 @@ async function writeUnindexedCliSessions(
   await writeProject({
     home,
     project,
-    entries: [],
     transcripts: Object.fromEntries(
       Object.entries(sessions).map(([sessionId, text]) => [
         sessionId,
@@ -514,13 +506,11 @@ async function writeLongPagedTranscript(params: {
   await writeProject({
     home: params.home,
     entries: [
-      {
-        sessionId: params.sessionId,
-        fullPath: projectFile(params.home, `${params.sessionId}.jsonl`),
+      indexedEntry(params.home, params.sessionId, {
         summary: "Transcript",
         modified: "2026-07-04T00:00:00.000Z",
         isSidechain: false,
-      },
+      }),
     ],
     transcripts: {
       [params.sessionId]: params.truncated
@@ -668,12 +658,7 @@ describe("Claude session catalog", () => {
     await writeProject({
       home,
       entries: [
-        {
-          sessionId,
-          fullPath: projectFile(home, `${sessionId}.jsonl`),
-          summary: "Source session",
-          projectPath: "/work/source",
-        },
+        indexedEntry(home, sessionId, { summary: "Source session", projectPath: "/work/source" }),
       ],
       transcripts: {
         [sessionId]: [
@@ -818,18 +803,12 @@ describe("Claude session catalog", () => {
   ) {
     const home = await createHome();
     process.env.HOME = home;
-    await writeProject({
+    await writeIndexedSession(
       home,
-      entries: [
-        {
-          sessionId,
-          fullPath: projectFile(home, `${sessionId}.jsonl`),
-          summary: "Bound session",
-          projectPath: "/work/source",
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
-    });
+      sessionId,
+      { summary: "Bound session", projectPath: "/work/source" },
+      "source prompt",
+    );
     const provider = captureCatalogProvider({
       config: { current: () => ({}) },
       agent: {
@@ -1079,36 +1058,26 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     await writeProject({
       home,
-      entries: [
-        {
-          sessionId: "cli-session",
-          fullPath: projectFile(home, "cli-session.jsonl"),
-          summary: "CLI title",
-          modified: "2026-07-01T00:00:00.000Z",
-          projectPath: "/work/cli",
+      entries: (
+        [
+          ["cli-session", "CLI title", "01", "/work/cli"],
+          ["desktop-session", "Index title", "02", "/work/desktop"],
+          ["archived-session", "Archived", "03"],
+        ] satisfies Array<[string, string, string, string?]>
+      ).map(([id, summary, day, projectPath]) =>
+        indexedEntry(home, id, {
+          summary,
+          modified: `2026-07-${day}T00:00:00.000Z`,
           isSidechain: false,
-        },
-        {
-          sessionId: "desktop-session",
-          fullPath: projectFile(home, "desktop-session.jsonl"),
-          summary: "Index title",
-          modified: "2026-07-02T00:00:00.000Z",
-          projectPath: "/work/desktop",
-          isSidechain: false,
-        },
-        {
-          sessionId: "archived-session",
-          fullPath: projectFile(home, "archived-session.jsonl"),
-          summary: "Archived",
-          modified: "2026-07-03T00:00:00.000Z",
-          isSidechain: false,
-        },
-      ],
-      transcripts: {
-        "cli-session": [message("cli-session", "user", "CLI", 1)],
-        "desktop-session": [message("desktop-session", "user", "Desktop", 1)],
-        "archived-session": [message("archived-session", "user", "Archived", 1)],
-      },
+          ...(projectPath ? { projectPath } : {}),
+        }),
+      ),
+      transcripts: Object.fromEntries(
+        ["CLI", "Desktop", "Archived"].map((text) => {
+          const id = `${text.toLowerCase()}-session`;
+          return [id, [message(id, "user", text, 1)]];
+        }),
+      ),
     });
     await writeDesktopMetadata(home, "active", {
       sessionId: "local-active",
@@ -1190,12 +1159,7 @@ describe("Claude session catalog", () => {
 
     const groupFile = path.join(
       home,
-      "Library",
-      "Application Support",
-      "Claude",
-      "Local Storage",
-      "leveldb",
-      "000001.ldb",
+      "Library/Application Support/Claude/Local Storage/leveldb/000001.ldb",
     );
     const fixedGroupTime = new Date("2026-07-20T12:00:00.000Z");
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
@@ -1215,7 +1179,7 @@ describe("Claude session catalog", () => {
       localSessionId,
     );
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
-    expect((await listClaudeSessions(home, { forceRefresh: true }))[0]?.customGroup).toBe(
+    expect((await listClaudeSessions(home, { forceRefresh: true })).records[0]?.customGroup).toBe(
       "Changed",
     );
     const armingSpies = (["lstat", "readdir"] as const).map((method) => vi.spyOn(fs, method));
@@ -1328,59 +1292,50 @@ describe("Claude session catalog", () => {
         "sidechain-session": [message("sidechain-session", "user", "sidechain", 1)],
         "unindexed-session": [message("unindexed-session", "user", "unindexed", 1)],
         "cli-session": [
-          {
-            ...message(
-              "cli-session",
-              "user",
-              "<local-command-caveat>CLI metadata</local-command-caveat>",
-              1,
-            ),
-            entrypoint: "cli",
-            isMeta: true,
-          },
-          {
-            ...message("cli-session", "user", "Interactive CLI prompt", 1),
+          message(
+            "cli-session",
+            "user",
+            "<local-command-caveat>CLI metadata</local-command-caveat>",
+            1,
+            { entrypoint: "cli", isMeta: true },
+          ),
+          message("cli-session", "user", "Interactive CLI prompt", 1, {
             entrypoint: "cli",
             cwd: "/work/cli",
             version: "2.1.216",
-          },
+          }),
         ],
-        "sdk-cli-session": [
-          {
-            ...message("sdk-cli-session", "user", "Headless CLI prompt", 1),
-            entrypoint: "sdk-cli",
-            cwd: "/work/sdk",
-            version: "2.1.204",
-          },
-        ],
-        "cli-sidechain-session": [
-          {
-            ...message("cli-sidechain-session", "user", "interactive sidechain", 1),
-            entrypoint: "cli",
-            isSidechain: true,
-          },
-        ],
-        "discovered-sidechain": [
-          {
-            ...message("discovered-sidechain", "user", "headless sidechain", 1),
-            entrypoint: "sdk-cli",
-            isSidechain: true,
-          },
-        ],
-        "sdk-ts-session": [
-          {
-            ...message("sdk-ts-session", "user", "Bidirectional stream-json prompt", 1),
-            entrypoint: "sdk-ts",
-            cwd: "/work/sdk-ts",
-            version: "2.1.263",
-          },
-        ],
-        "foreign-entrypoint-session": [
-          {
-            ...message("foreign-entrypoint-session", "user", "Unrelated tool session", 1),
-            entrypoint: "some-other-tool",
-          },
-        ],
+        ...Object.fromEntries(
+          (
+            [
+              [
+                "sdk-cli-session",
+                "Headless CLI prompt",
+                { entrypoint: "sdk-cli", cwd: "/work/sdk", version: "2.1.204" },
+              ],
+              [
+                "cli-sidechain-session",
+                "interactive sidechain",
+                { entrypoint: "cli", isSidechain: true },
+              ],
+              [
+                "discovered-sidechain",
+                "headless sidechain",
+                { entrypoint: "sdk-cli", isSidechain: true },
+              ],
+              [
+                "sdk-ts-session",
+                "Bidirectional stream-json prompt",
+                { entrypoint: "sdk-ts", cwd: "/work/sdk-ts", version: "2.1.263" },
+              ],
+              [
+                "foreign-entrypoint-session",
+                "Unrelated tool session",
+                { entrypoint: "some-other-tool" },
+              ],
+            ] satisfies Array<[string, string, Record<string, unknown>]>
+          ).map(([id, text, extra]) => [id, [message(id, "user", text, 1, extra)]]),
+        ),
       },
     });
     await fs.writeFile(
@@ -1388,21 +1343,13 @@ describe("Claude session catalog", () => {
       `${JSON.stringify(message(escapedId, "user", "outside", 1))}\n`,
     );
     await fs.symlink(externalPath, escapedPath);
-    await writeDesktopMetadata(home, "sidechain", {
-      cliSessionId: "sidechain-session",
-      title: "Desktop sidechain",
-      isArchived: false,
-    });
-    await writeDesktopMetadata(home, "cli-sidechain", {
-      cliSessionId: "cli-sidechain-session",
-      title: "Interactive Desktop sidechain",
-      isArchived: false,
-    });
-    await writeDesktopMetadata(home, "discovered-sidechain", {
-      cliSessionId: "discovered-sidechain",
-      title: "Headless Desktop sidechain",
-      isArchived: false,
-    });
+    for (const [name, cliSessionId, title] of [
+      ["sidechain", "sidechain-session", "Desktop sidechain"],
+      ["cli-sidechain", "cli-sidechain-session", "Interactive Desktop sidechain"],
+      ["discovered-sidechain", "discovered-sidechain", "Headless Desktop sidechain"],
+    ] as const) {
+      await writeDesktopMetadata(home, name, { cliSessionId, title, isArchived: false });
+    }
 
     const sessions = (await listLocalClaudeSessionPage({}, home)).sessions;
     expect(sessions.map((session) => session.threadId).toSorted()).toEqual([
@@ -1616,7 +1563,7 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     await writeUnindexedCliSessions(home, { recovered: "Recovered" });
     const directory = projectFile(home);
-    await writeProject({ home, project: "other", entries: [], transcripts: {} });
+    await writeProject({ home, project: "other", transcripts: {} });
     const otherDirectory = path.join(home, ".claude", "projects", "other");
     const readdir = fs.readdir.bind(fs);
     let failDirectory = true;
@@ -1753,18 +1700,12 @@ describe("Claude session catalog", () => {
     const projectDir = projectFile(home);
     const indexPath = path.join(projectDir, "sessions-index.json");
     const sessionId = "retry-index-session";
-    await writeProject({
+    await writeIndexedSession(
       home,
-      entries: [
-        {
-          sessionId,
-          fullPath: path.join(projectDir, `${sessionId}.jsonl`),
-          summary: "Recovered index",
-          isSidechain: false,
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "Indexed only", 1)] },
-    });
+      sessionId,
+      { summary: "Recovered index", isSidechain: false },
+      "Indexed only",
+    );
     const readFile = fs.readFile.bind(fs);
     let failIndexRead = true;
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
@@ -2286,17 +2227,9 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     process.env.HOME = home;
     const threadId = "node-owned-session";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId: threadId,
-          fullPath: projectFile(home, `${threadId}.jsonl`),
-          projectPath: "/node/catalog/cwd",
-          summary: "Node-owned session",
-        },
-      ],
-      transcripts: { [threadId]: [message(threadId, "user", "hello", 1)] },
+    await writeIndexedSession(home, threadId, {
+      projectPath: "/node/catalog/cwd",
+      summary: "Node-owned session",
     });
     const binDir = path.join(home, "bin");
     await writeClaudeExecutable(binDir, "#!/bin/sh\nexit 1\n");
@@ -2339,18 +2272,7 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-1";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: projectFile(home, `${sessionId}.jsonl`),
-          projectPath: home,
-          summary: "Resume session",
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
-    });
+    await writeIndexedSession(home, sessionId, { projectPath: home, summary: "Resume session" });
     const daemonBinDir = path.join(home, "daemon-bin");
     const shellBinDir = path.join(home, "shell-bin");
     await writeClaudeExecutable(daemonBinDir, "#!/bin/sh\nexit 1\n");
@@ -2409,17 +2331,9 @@ describe("Claude session catalog", () => {
     const home = await createHome();
     process.env.HOME = home;
     const sessionId = "claude-session-broken-shim";
-    await writeProject({
-      home,
-      entries: [
-        {
-          sessionId,
-          fullPath: projectFile(home, `${sessionId}.jsonl`),
-          projectPath: home,
-          summary: "Broken shim session",
-        },
-      ],
-      transcripts: { [sessionId]: [message(sessionId, "user", "hello", 1)] },
+    await writeIndexedSession(home, sessionId, {
+      projectPath: home,
+      summary: "Broken shim session",
     });
     const shellBinDir = path.join(home, "shell-bin");
     await writeBrokenClaudeNpmShim(shellBinDir);

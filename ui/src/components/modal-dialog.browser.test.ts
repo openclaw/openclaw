@@ -103,6 +103,7 @@ async function mountModal(
   modal.className = variant;
   const name = fieldDocument.createElement("input");
   name.autofocus = autofocus;
+  modal.initialFocus = () => (autofocus ? name : null);
   name.value = "Original name";
   name.setAttribute("aria-label", "Name");
   const notes = fieldDocument.createElement("textarea");

@@ -353,6 +353,11 @@ export function writeSessionInputCompletion(
   }
   const succeeded = classifyAgentRunTerminalOutcome(outcome) === "success";
   const completedAt = Date.now();
+  const completionState = {
+    outcome_json: JSON.stringify(outcome),
+    succeeded: succeeded ? 1 : 0,
+    completed_at: completedAt,
+  };
   executeSqliteQuerySync(
     database.db,
     getSessionKysely(database.db)
@@ -363,18 +368,12 @@ export function writeSessionInputCompletion(
         idempotency_key: scope.idempotencyKey,
         run_id: scope.runId,
         request_hash: scope.requestHash,
-        outcome_json: JSON.stringify(outcome),
-        succeeded: succeeded ? 1 : 0,
-        completed_at: completedAt,
+        ...completionState,
       })
       .onConflict((conflict) =>
         conflict
           .columns(["session_id", "idempotency_key"])
-          .doUpdateSet({
-            outcome_json: JSON.stringify(outcome),
-            succeeded: succeeded ? 1 : 0,
-            completed_at: completedAt,
-          })
+          .doUpdateSet(completionState)
           .where("session_input_completions.succeeded", "=", 0),
       ),
   );
@@ -387,9 +386,7 @@ export function writeSessionInputCompletion(
       idempotency_key: scope.idempotencyKey,
       run_id: retained?.run_id ?? scope.runId,
       request_hash: retained?.request_hash ?? scope.requestHash,
-      outcome_json: JSON.stringify(outcome),
-      succeeded: succeeded ? 1 : 0,
-      completed_at: completedAt,
+      ...completionState,
     });
     if (actor.completions.size > MAX_SESSION_ACTOR_COMPLETIONS) {
       actor.completions.delete(actor.completions.keys().next().value!);
@@ -408,14 +405,16 @@ export function writeSessionInputCompletion(
         .where("idempotency_key", "=", scope.idempotencyKey)
         .where("run_id", "=", scope.runId)
         .where("request_hash", "=", scope.requestHash)
-        .where("lifecycle_generation", "=", scope.lifecycleGeneration),
+        .where("lifecycle_generation", "=", scope.lifecycleGeneration)
+        .where("consumed_event_id", "is", null),
     );
     const pending = actor?.pendingInputs.get(scope.idempotencyKey);
     if (
       pending &&
       pending.run_id === scope.runId &&
       pending.request_hash === scope.requestHash &&
-      pending.lifecycle_generation === scope.lifecycleGeneration
+      pending.lifecycle_generation === scope.lifecycleGeneration &&
+      pending.consumed_event_id === null
     ) {
       if (actor) {
         actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);

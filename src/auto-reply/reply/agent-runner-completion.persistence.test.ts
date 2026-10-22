@@ -3,10 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
 import type { defaultCompleteModel } from "../../gateway/session-observer-model.js";
+import * as observerModel from "../../gateway/session-observer-model.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
@@ -22,6 +25,7 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { touchQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 
 let root: string;
 let storePath: string;
@@ -75,6 +79,22 @@ it.for(["ready", "late", "abandoned"] as const)(
     const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
     const published = createDeferred();
     const scheduler = createTestGatewayScheduler();
+    const prepare = vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue({
+      config: cfg,
+      authProfileId: undefined,
+      provider: "test",
+      model: "utility",
+      agentId: "main",
+      agentDir: root,
+      outputTextPolicy: "strict-visible",
+      thinkLevel: "off",
+    });
+    const complete = vi
+      .spyOn(observerModel, "defaultCompleteModel")
+      .mockImplementation(async () => {
+        started.resolve();
+        return result.promise;
+      });
     const service = createSessionActivitySummaries({
       scheduler,
       getConfig: () => cfg,
@@ -82,20 +102,6 @@ it.for(["ready", "late", "abandoned"] as const)(
         if (fixture.read()?.activitySummary) {
           published.resolve();
         }
-      },
-      prepareModel: async () => ({
-        config: cfg,
-        authProfileId: undefined,
-        provider: "test",
-        model: "utility",
-        agentId: "main",
-        agentDir: root,
-        outputTextPolicy: "strict-visible",
-        thinkLevel: "off",
-      }),
-      completeModel: async () => {
-        started.resolve();
-        return result.promise;
       },
     });
     const finishModel = () =>
@@ -161,6 +167,8 @@ it.for(["ready", "late", "abandoned"] as const)(
       await service.dispose();
       await scheduler.stop();
       observer.restore();
+      prepare.mockRestore();
+      complete.mockRestore();
     }
   },
 );
@@ -288,7 +296,7 @@ it.each(["unrelated-error", "writer-replaced"] as const)(
   },
 );
 
-it.each(["publication-failure", "unknown-commit"] as const)(
+it.each(["publication-failure", "unknown-commit", "unknown-storage-commit"] as const)(
   "does not disclose or replay a durable final after %s",
   async (failure) => {
     const fixture = await createFixture();
@@ -302,14 +310,33 @@ it.each(["publication-failure", "unknown-commit"] as const)(
       fixture.context.activeSessionStore = Object.freeze({ ...fixture.context.activeSessionStore });
     }
     const observer = observeCompletionCommands({
-      hideCommittedReceipt: failure === "unknown-commit",
+      hideCommittedReceipt: failure !== "publication-failure",
+      lostReplyError:
+        failure === "unknown-storage-commit"
+          ? new Error("Worker response lost", {
+              cause: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+            })
+          : undefined,
     });
     try {
-      await expect(finalizeReplyAgentRun(fixture.context)).rejects.toThrow(
-        failure === "unknown-commit"
-          ? "Unconfirmed actor settlement"
-          : /read only|readonly|extensible/i,
+      const error = await finalizeReplyAgentRun(fixture.context).catch(
+        (caughtError: unknown) => caughtError,
       );
+      expect(error).toEqual(expect.any(Error));
+      expect(error).toHaveProperty(
+        "message",
+        failure === "unknown-storage-commit"
+          ? "Worker response lost"
+          : failure === "unknown-commit"
+            ? "Unconfirmed actor settlement"
+            : expect.stringMatching(/read only|readonly|extensible/i),
+      );
+      if (failure === "unknown-storage-commit") {
+        expect(error).toHaveProperty("code", "outcome-unknown");
+        expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
+          "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+        );
+      }
       expect(
         observer.commands.filter((command) => command === "session.actor.completeTurn"),
       ).toHaveLength(1);
@@ -326,6 +353,42 @@ it.each(["publication-failure", "unknown-commit"] as const)(
     }
   },
 );
+
+it("preserves storage guidance when queued activity loses its commit reply", async () => {
+  const fixture = await createFixture();
+  const original = fixture.context.activeSessionEntry!;
+  const publish = vi.fn();
+  const observer = observeCompletionCommands({
+    hideCommittedReceipt: true,
+    lostReplyError: new Error("Worker response lost", {
+      cause: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+    }),
+  });
+  try {
+    const error = await touchQueuedReplySessionActivity(
+      {
+        followupRun: fixture.context.followupRun,
+        sessionKey: fixture.context.sessionKey,
+        sessionStore: fixture.context.activeSessionStore,
+        storePath,
+      },
+      original,
+      publish,
+    ).catch((caughtError: unknown) => caughtError);
+    expect(error).toHaveProperty("code", "outcome-unknown");
+    expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
+      "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+    );
+    expect(observer.commands.filter((command) => command === "session.actor.patch")).toHaveLength(
+      1,
+    );
+    expect(fixture.read()?.updatedAt).toBeGreaterThan(original.updatedAt);
+    expect(publish).not.toHaveBeenCalled();
+    expect(fixture.context.activeSessionStore?.[fixture.context.sessionKey!]).toBe(original);
+  } finally {
+    observer.restore();
+  }
+});
 
 it.each(["usage-only", "with-final-custody"] as const)(
   "preserves %s failure semantics after a proven worker rollback",

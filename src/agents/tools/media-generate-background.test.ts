@@ -290,7 +290,6 @@ it("keeps the detached video tool run context registered until terminal status",
   expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
   videoGenerationTaskLifecycle.failTaskRun({
     handle,
-    error: new Error("provider failed"),
   });
   expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });

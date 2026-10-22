@@ -10,7 +10,8 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -35,7 +36,10 @@ import type {
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
 import { readModelContextNavigationPages } from "./session-model-context-pages.js";
-import { projectModelContextEventSql } from "./session-model-context-projection.js";
+import {
+  projectModelContextEventSql,
+  projectPostgresModelContextRowsSql,
+} from "./session-model-context-projection.js";
 import { projectSessionModelContext } from "./session-model-context-read.js";
 import type {
   ContextEntry,
@@ -170,9 +174,7 @@ function validateDetachedSessionTranscriptContext(
     const validate = () => {
       validateSessionTranscriptContextInDatabase(database, resolved, validation, "prefix");
     };
-    return validation.admission
-      ? validate()
-      : runSqliteDeferredTransactionSync(database.db, validate);
+    return validation.admission ? validate() : runSqliteReadSnapshotSync(database.db, validate);
   }, toDatabaseOptions(resolved));
   if (!result.found && (validation.admission || validation.version)) {
     throw new SessionTranscriptReadFenceError(
@@ -292,7 +294,7 @@ function withTranscriptContextSnapshot<T>(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => {
           const db = getSessionKysely(database.db);
@@ -340,19 +342,24 @@ function withTranscriptContextSnapshot<T>(
               through?.rawSeq ?? Infinity,
             ),
             *readRows(after, end) {
-              for (const row of iterateSqliteQuerySync(
-                database.db,
-                base
-                  .select([
-                    "seq",
-                    transcriptEventModelNavigationSql(database.db).as("navigation_json"),
-                    transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
-                    transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
-                  ])
-                  .where("seq", ">", after)
-                  .where("seq", "<=", end)
-                  .orderBy("seq", "asc"),
-              )) {
+              const page = base.where("seq", ">", after).where("seq", "<=", end);
+              const query = isPostgresSqlConnection(database.db)
+                ? db
+                    .selectFrom(
+                      projectPostgresModelContextRowsSql(
+                        page.select(["seq", "event_json", "navigation_json"]),
+                      ).as("context"),
+                    )
+                    .selectAll()
+                : page
+                    .select([
+                      "seq",
+                      transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+                      transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
+                      transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
+                    ])
+                    .orderBy("seq", "asc");
+              for (const row of iterateSqliteQuerySync(database.db, query)) {
                 // Only navigation crosses into JavaScript before the canonical context is selected.
                 yield {
                   // SAFETY: SQL preserves entry discriminants and replaces payloads with readable empty bodies.

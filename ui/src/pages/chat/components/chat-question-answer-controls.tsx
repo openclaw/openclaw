@@ -4,6 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "./chat-composer-dom.ts";
@@ -17,6 +19,7 @@ type QuestionOptionsProps = {
 };
 
 type QuestionFreeTextProps = {
+  getTranscriptElement?: () => HTMLElement | null;
   question: Question;
   value: string;
   selected: boolean;
@@ -137,14 +140,23 @@ type FreeTextControlProps = QuestionFreeTextProps & {
 
 function FreeTextTextarea(props: FreeTextControlProps) {
   let textarea!: HTMLTextAreaElement;
+  let getTranscriptElement: QuestionFreeTextProps["getTranscriptElement"];
   const value = createMemo(() => props.value);
   onSettled(() => {
-    observeTextareaOverflow(textarea);
+    getTranscriptElement = props.getTranscriptElement;
+    observeTextareaOverflow(textarea, () => getTranscriptElement?.() ?? null);
     adjustTextareaHeight(textarea);
     return () => disconnectTextareaOverflowObserver(textarea);
   });
   // Keep the native textarea's measured height in sync with its committed answer.
-  createEffect(value, () => adjustTextareaHeight(textarea), { defer: true });
+  createEffect(
+    () => ({ value: value(), getTranscriptElement: props.getTranscriptElement }),
+    (next) => {
+      getTranscriptElement = next.getTranscriptElement;
+      adjustTextareaHeight(textarea);
+    },
+    { defer: true },
+  );
   return (
     <textarea
       ref={(element) => {
@@ -159,7 +171,17 @@ function FreeTextTextarea(props: FreeTextControlProps) {
       aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
       value={value()}
       disabled={props.disabled}
-      onInput={(event) => props.onInput(event.currentTarget.value)}
+      onInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        props.onInput(event.currentTarget.value);
+      }}
+      onBeforeInput={handleTextareaOverflowInteraction}
+      onCompositionStart={handleTextareaOverflowInteraction}
+      onKeyDown={handleTextareaOverflowInteraction}
+      onBlur={handleTextareaOverflowInteraction}
+      onWheel={handleTextareaOverflowInteraction}
+      onPointerDown={handleTextareaOverflowInteraction}
+      onScroll={handleTextareaOverflowScroll}
     />
   );
 }

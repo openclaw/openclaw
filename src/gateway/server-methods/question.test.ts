@@ -377,6 +377,22 @@ it("rejects secret questions and duplicate normalized option labels", async () =
 
 it.each([
   {
+    behavior: "non-boolean secrecy",
+    questions: [{ ...secretRequestParams.questions[0], isSecret: "true" }],
+  },
+  {
+    behavior: "duplicate allowed hosts",
+    questions: [
+      {
+        ...secretRequestQuestion,
+        secretStore: {
+          ...secretRequestQuestion.secretStore,
+          allowedHosts: ["api.example.test", "api.example.test"],
+        },
+      },
+    ],
+  },
+  {
     behavior: "bindings without the secret-input marker",
     questions: [{ ...secretRequestParams.questions[0], isSecret: false }],
   },

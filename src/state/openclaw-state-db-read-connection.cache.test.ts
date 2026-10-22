@@ -18,6 +18,7 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import {
@@ -110,7 +111,7 @@ function fixture() {
     );
   const value = () => read(({ db }) => db.prepare("SELECT value FROM sample").get()?.value);
   const countOpens = () => opens.mock.calls.filter(([location]) => location === pathname).length;
-  const workerRead = (command: OpenClawStateReadRequest["command"]) =>
+  const workerRead = (command: OpenClawStateReadRequest["command"], expectedIdentity?: string) =>
     worker.read({
       context: {
         environment: { OPENCLAW_STATE_DIR: root },
@@ -118,6 +119,7 @@ function fixture() {
       databasePath: pathname,
       location: pathname,
       checkFreshAdmission: false,
+      expectedIdentity,
       command,
     });
   const workerValue = async () => {
@@ -224,35 +226,22 @@ it("keeps ACP authorizer refusal through batched admission", async () => {
   }
 });
 
-it("validates a SQL NULL marker on first ACP admission", async () => {
-  const { peer, key, command, workerRead, insert } = acpFixture();
-  try {
-    insert(key, "retained");
-    peer
-      .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-      .run(CONTENT_VERSION_KEY, null);
-    const reply = await workerRead(command);
-    expect(reply).toMatchObject({
-      ok: false,
-      message: expect.stringMatching(/invalid shared state schema content version/iu),
-    });
-  } finally {
-    peer.close();
-  }
-});
-
-it.each([{ marker: "{", expected: /invalid shared state schema content version/iu }])(
-  "preserves first-admission marker refusal before an unavailable ACP payload ($marker)",
-  async ({ marker, expected }) => {
-    const { peer, command, workerRead } = acpFixture();
+it.each([null, "{"])(
+  "rejects invalid first-admission marker %s before reading ACP payloads",
+  async (marker) => {
+    const { peer, key, command, workerRead, insert } = acpFixture();
     try {
+      if (marker === null) {
+        insert(key, "retained");
+      } else {
+        peer.exec("DROP TABLE acp_sessions");
+      }
       peer
         .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
         .run(CONTENT_VERSION_KEY, marker);
-      peer.exec("DROP TABLE acp_sessions");
       expect(await workerRead(command)).toMatchObject({
         ok: false,
-        message: expect.stringMatching(expected),
+        message: expect.stringMatching(/invalid shared state schema content version/iu),
       });
     } finally {
       peer.close();
@@ -271,7 +260,9 @@ it("preserves cold schema refusal with a malformed catalog", () => {
     seed.close();
   }
   createDanglingSkillWorkshopReviewIndex(pathname);
+  const before = fs.readFileSync(pathname);
   expect(value).toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/iu);
+  expect(fs.readFileSync(pathname)).toEqual(before);
 });
 
 it("rejects a replacement content marker with a newer version after warm reads", () => {
@@ -399,35 +390,17 @@ it("retries idle reader disposal while other databases remain active", () => {
   expect(first.read(({ db }) => db) === reader).toBe(false);
 });
 
-it.each(["missing", "replacement"] as const)(
-  "retires stale readers after a %s file identity",
-  async (kind) => {
-    const { root, pathname, read, value, workerRead } = fixture();
-    const previous = read(({ db }) => db);
-    if (kind === "missing") {
-      fs.rmSync(pathname);
-      expect(await workerRead({ type: "agentDatabaseRegistry.read" })).toMatchObject({
-        ok: true,
-        result: { status: "unavailable" },
-      });
-      expect(fs.existsSync(pathname)).toBe(false);
-    } else {
-      const replacementPath = path.join(root, "replacement.sqlite");
-      const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
-      replacement.exec("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (7)");
-      replacement.close();
-      fs.renameSync(pathname, path.join(root, "previous.sqlite"));
-      fs.renameSync(replacementPath, pathname);
-      expect(value()).toBe(7);
-      const snapshot = path.join(root, "snapshot.sqlite");
-      fs.copyFileSync(pathname, snapshot);
-      const privateReader = read(({ db }) => db, snapshot);
-      expect(privateReader.isOpen).toBe(false);
-      fs.rmSync(snapshot);
-    }
-    expect(previous.isOpen).toBe(false);
-  },
-);
+it("retires stale readers after a missing file identity", async () => {
+  const { pathname, read, workerRead } = fixture();
+  const previous = read(({ db }) => db);
+  fs.rmSync(pathname);
+  expect(await workerRead({ type: "agentDatabaseRegistry.read" })).toMatchObject({
+    ok: true,
+    result: { status: "unavailable" },
+  });
+  expect(fs.existsSync(pathname)).toBe(false);
+  expect(previous.isOpen).toBe(false);
+});
 
 it("pins audit schema facts and consumes peer DDL publications made during inspection", async () => {
   const { pathname, read, workerRead, workerValue } = fixture();
@@ -531,4 +504,60 @@ it("retains readers, replaces files, and reports cleanup as native close capabil
   expect(failedCleanup.nativeCleanupFailure?.error?.nodes).toEqual(
     expect.arrayContaining([expect.objectContaining({ message: failure.message })]),
   );
+});
+
+it("refuses replacement during worker preparation, then reopens it and keeps private snapshots task-scoped", async () => {
+  const { root, pathname, read, value, workerRead } = fixture();
+  const previous = read(({ db }) => db);
+  const expectedIdentity = readDatabasePathIdentitySync(pathname).key;
+  const replacementPath = path.join(root, "replacement.sqlite");
+  const replacement = sqlite.openNodeSqliteDatabase(replacementPath);
+  replacement.exec("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES (7)");
+  replacement.exec(
+    "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER); INSERT INTO config_machine_state VALUES ('nodeHost.config', '7', 7)",
+  );
+  replacement.close();
+  const preparing = createDeferredCore();
+  const releasePreparation = createDeferredCore();
+  vi.doMock("./config-machine-state.read.worker.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("./config-machine-state.read.worker.js")>();
+    preparing.resolve();
+    await releasePreparation.promise;
+    return actual;
+  });
+  const pending = workerRead(
+    { type: "machineState.read", input: { key: "nodeHost.config" } },
+    expectedIdentity,
+  );
+  try {
+    await Promise.race([
+      preparing.promise,
+      pending.then(() => {
+        throw new Error("Worker read settled before controlled preparation");
+      }),
+    ]);
+    fs.renameSync(pathname, path.join(root, "previous.sqlite"));
+    fs.renameSync(replacementPath, pathname);
+    releasePreparation.resolve();
+    const reply = await pending;
+    expect(reply).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/identity|changed/i),
+    });
+    expect(reply).not.toHaveProperty("sourceAdmitted", true);
+  } finally {
+    releasePreparation.resolve();
+    try {
+      await pending;
+    } finally {
+      vi.doUnmock("./config-machine-state.read.worker.js");
+    }
+  }
+  expect(value()).toBe(7);
+  expect(previous.isOpen).toBe(false);
+  const snapshot = path.join(root, "snapshot.sqlite");
+  fs.copyFileSync(pathname, snapshot);
+  const privateReader = read(({ db }) => db, snapshot);
+  expect(privateReader.isOpen).toBe(false);
+  fs.rmSync(snapshot);
 });

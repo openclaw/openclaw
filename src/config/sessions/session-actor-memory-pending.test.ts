@@ -229,6 +229,16 @@ describe("memory actor pending input custody", () => {
     );
     expect(checked).toEqual(["input-1", "input-2"]);
     expect(receipt).toEqual({ kind: "pending-input-history-interrupted", ids: ["input-2"] });
+    // A second reader carrying the same pre-reconciliation snapshot sees the same disposition.
+    expect(
+      pending.interruptHistory(
+        { ...scope, ids: ["input-2"] },
+        {
+          isProtected: () => false,
+          admit() {},
+        },
+      ),
+    ).toEqual(receipt);
     expect(pending.history(scope).rows.map(({ input_id, state }) => ({ input_id, state }))).toEqual(
       [
         { input_id: "input-2", state: "interrupted" },

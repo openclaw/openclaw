@@ -17,7 +17,7 @@ export function registerNativeDispatchAbortCases(
     dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
     getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
     createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-    listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+    listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
     createDispatchConfig: (diagnostics?: boolean) => OpenClawConfig;
     expectNoReplies: (dispatcher: ReturnType<typeof createDispatcher>) => void;
   },

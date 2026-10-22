@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isEmbeddedRunHandleCompacting } from "../agents/embedded-agent-runner/runs.probes.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
-import { diagnosticLogger as diag } from "../logging/diagnostic-runtime.js";
+import { diagnosticLogger as diag, logSessionStateChange } from "../logging/diagnostic-runtime.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
@@ -401,11 +401,15 @@ export function hasOperationBackendRunId(operation: ReplyOperation, runId: strin
   return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
 }
 
-export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+export function getAttachedBackendAttachment(operation: ReplyOperation) {
   const entry = controllerStorage.controllerEntryByOperation.get(operation);
   return entry?.active === operation && entry.attachment?.operation === operation
     ? entry.attachment.backend
     : undefined;
+}
+
+export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
+  return getAttachedBackendAttachment(operation)?.handle;
 }
 
 // Committed output belongs to the bounded finalization owner. Stale recovery
@@ -536,6 +540,13 @@ export function clearReplyRunState(params: {
     entry.attachment = undefined;
   }
   entry.sourceTurnId = undefined;
+  logSessionStateChange({
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    state: "idle",
+    reason: "reply_operation_ended",
+    consumeQueuedTurn: false,
+  });
   notifyGatewayWorkMetricsChanged();
   notifyReplyRunEnded(entry);
 }
@@ -569,7 +580,7 @@ export {
   acknowledgeReplySessionTransition,
 } from "./session-controller.session-reader.js";
 
-/** Await only this exact startup; neither a successor nor a new backend can satisfy it. */
+/** Await this exact owner's current backend generation, including recovery startup. */
 export async function waitForReplyOperationBackend(
   operation: ReplyOperation,
   signal?: AbortSignal,

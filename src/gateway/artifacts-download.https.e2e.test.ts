@@ -133,7 +133,7 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
                 mode: "test",
                 scopes,
                 deviceIdentity: loadOrCreateDeviceIdentity({
-                  path: state.statePath(`${label}.sqlite`),
+                  path: state.statePath(label, "client", "credentials.sqlite"),
                 }),
               },
               {

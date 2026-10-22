@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import type {
   UserProfile,
   UsersSetAvatarResult,
@@ -42,6 +42,7 @@ import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { IdentitySection } from "./identity-section.tsx";
+import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
@@ -58,6 +59,20 @@ type IdentityChange =
   | { kind: "git-coauthor"; enabled: boolean };
 
 class ProfileState {
+  private publishTarget?: () => void;
+  readonly modelAccountsTarget: ModelAccountsTargetSource = {
+    read: () => ({
+      gateway: this.context.gateway.snapshot,
+      identityId: this.selfUser?.id ?? null,
+      profileId: this.ownProfile?.id ?? null,
+    }),
+    subscribe: (listener) => {
+      this.publishTarget = listener;
+      return () => {
+        this.publishTarget = undefined;
+      };
+    },
+  };
   selfUser: AuthenticatedUser | null = null;
   ownProfile: UserProfile | null = null;
   displayName = "";
@@ -78,9 +93,14 @@ class ProfileState {
 
   constructor(
     readonly context: ApplicationContext,
-    readonly publish: () => void,
+    private readonly invalidate: () => void,
   ) {}
+  publish() {
+    this.invalidate();
+    this.publishTarget?.();
+  }
   dispose() {
+    this.publishTarget = undefined;
     this.identityRequestId += 1;
     this.client = null;
     this.connected = false;
@@ -354,24 +374,28 @@ export function ProfilePage() {
     revision();
     return state;
   };
-  // Retire identity requests synchronously when connection authority changes.
-  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (
-      !state.identityBusy &&
-      event.event === "sessions.changed" &&
-      asOptionalRecord(event.payload)?.reason === "profile-identity"
-    ) {
-      state.identityRequestId += 1;
-      state.identityLoading = false;
-      void state.loadIdentity();
-    }
-  });
-  state.applyGatewaySnapshot(context.gateway.snapshot);
-  onCleanup(() => {
-    stopGateway();
-    stopEvents();
-    state.dispose();
+  onSettled(() => {
+    // Retire identity requests synchronously when connection authority changes.
+    const stopGateway = context.gateway.subscribe((snapshot) =>
+      state.applyGatewaySnapshot(snapshot),
+    );
+    const stopEvents = context.gateway.subscribeEvents((event) => {
+      if (
+        !state.identityBusy &&
+        event.event === "sessions.changed" &&
+        asOptionalRecord(event.payload)?.reason === "profile-identity"
+      ) {
+        state.identityRequestId += 1;
+        state.identityLoading = false;
+        void state.loadIdentity();
+      }
+    });
+    state.applyGatewaySnapshot(context.gateway.snapshot);
+    return () => {
+      stopGateway();
+      stopEvents();
+      state.dispose();
+    };
   });
   const connected = () => view().connected && view().client !== null;
   const hasPresentation = () =>
@@ -539,8 +563,7 @@ export function ProfilePage() {
           />
           <Show when={hasPresentation()}>
             <ModelAccounts
-              identityId={view().selfUser?.id ?? null}
-              profileId={view().ownProfile?.id ?? null}
+              target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
                   ? view().ownProfile!.displayName?.trim() ||

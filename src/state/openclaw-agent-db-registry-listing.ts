@@ -76,7 +76,6 @@ export function hasRegisteredOpenClawAgentDatabasePath(
 ): boolean {
   const { identity } = readOpenClawAgentDatabaseIdentity(database);
   return (
-    typeof identity === "string" &&
     getOrLoadSqliteDatabaseAdmissionForPath(
       resolveDatabasePath(options),
       registeredPathKey({ ...database, identity: `file:${identity}` }),
@@ -459,6 +458,10 @@ class AgentDatabaseRegistryChangedError extends Error {
     super(message);
     this.name = "AgentDatabaseRegistryChangedError";
   }
+}
+
+export function isAgentDatabaseRegistryChangedError(error: unknown): boolean {
+  return error instanceof AgentDatabaseRegistryChangedError;
 }
 
 export function readRegisteredAgentDatabases(

@@ -137,6 +137,68 @@ type StandardNativeApprovalRoutingParams = {
   notifyOriginWhenDmOnly?: boolean;
 };
 
+function createStandardNativeApprovalAvailability(
+  params: StandardNativeApprovalRoutingParams,
+  routeGates: Pick<
+    StandardNativeApprovalRouting,
+    | "canApprovalPotentiallyRouteToChannel"
+    | "canAnyApprovalPotentiallyRouteToChannel"
+    | "isNativeApprovalHandlerConfigured"
+  >,
+): Omit<StandardNativeApprovalRouting, "shouldHandleApprovalRequest" | "native"> {
+  const availabilityState = (enabled: boolean) =>
+    enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
+  return {
+    canApprovalPotentiallyRouteToChannel: routeGates.canApprovalPotentiallyRouteToChannel,
+    canAnyApprovalPotentiallyRouteToChannel: routeGates.canAnyApprovalPotentiallyRouteToChannel,
+    isNativeApprovalHandlerConfigured: routeGates.isNativeApprovalHandlerConfigured,
+    getActionAvailabilityState: ({ cfg, accountId, approvalKind }) =>
+      availabilityState(
+        approvalKind
+          ? routeGates.canApprovalPotentiallyRouteToChannel({ cfg, accountId, approvalKind })
+          : routeGates.canAnyApprovalPotentiallyRouteToChannel({ cfg, accountId }),
+      ),
+    getExecInitiatingSurfaceState: ({ cfg, accountId }) =>
+      availabilityState(
+        routeGates.canApprovalPotentiallyRouteToChannel({ cfg, accountId, approvalKind: "exec" }),
+      ),
+    delivery: {
+      hasConfiguredDmRoute: ({ cfg }) =>
+        params.listAccountIds(cfg).some(
+          (accountId) =>
+            routeGates.canAnyApprovalPotentiallyRouteToChannel({
+              cfg,
+              accountId,
+              nativeSessionOnly: true,
+            }) && params.resolveApprovers({ cfg, accountId }).length > 0,
+        ),
+    },
+  };
+}
+
+function prepareApproverRestrictedSuppression(
+  params: ApproverRestrictedNativeApprovalCommonParams &
+    Pick<
+      ApproverRestrictedNativeApprovalFlatParams,
+      "requireMatchingTurnSourceChannel" | "resolveSuppressionAccountId"
+    >,
+  input: DeliverySuppressionParams,
+) {
+  const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
+  if (
+    channel !== params.channel ||
+    (params.requireMatchingTurnSourceChannel &&
+      normalizeMessageChannel(input.request.request.turnSourceChannel) !== params.channel)
+  ) {
+    return null;
+  }
+  const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
+  const accountId =
+    (resolvedAccountId === undefined ? input.target.accountId?.trim() : resolvedAccountId.trim()) ||
+    undefined;
+  return { cfg: input.cfg, accountId };
+}
+
 function createStandardNativeApprovalRouting(
   channel: string,
   params: StandardNativeApprovalRoutingParams,
@@ -197,38 +259,13 @@ function createStandardNativeApprovalRouting(
       resolveOriginTarget,
       resolveApproverDmTargets,
     });
-  const availabilityState = (enabled: boolean) =>
-    enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
+  const availability = createStandardNativeApprovalAvailability(params, routeGates);
 
   return {
-    canApprovalPotentiallyRouteToChannel: routeGates.canApprovalPotentiallyRouteToChannel,
-    canAnyApprovalPotentiallyRouteToChannel: routeGates.canAnyApprovalPotentiallyRouteToChannel,
-    isNativeApprovalHandlerConfigured: routeGates.isNativeApprovalHandlerConfigured,
+    ...availability,
     shouldHandleApprovalRequest: routeGates.shouldHandleApprovalRequest,
-    getActionAvailabilityState: ({ cfg, accountId, approvalKind }) =>
-      availabilityState(
-        approvalKind
-          ? routeGates.canApprovalPotentiallyRouteToChannel({ cfg, accountId, approvalKind })
-          : routeGates.canAnyApprovalPotentiallyRouteToChannel({ cfg, accountId }),
-      ),
-    getExecInitiatingSurfaceState: ({ cfg, accountId }) =>
-      availabilityState(
-        routeGates.canApprovalPotentiallyRouteToChannel({
-          cfg,
-          accountId,
-          approvalKind: "exec",
-        }),
-      ),
     delivery: {
-      hasConfiguredDmRoute: ({ cfg }) =>
-        params.listAccountIds(cfg).some(
-          (accountId) =>
-            routeGates.canAnyApprovalPotentiallyRouteToChannel({
-              cfg,
-              accountId,
-              nativeSessionOnly: true,
-            }) && params.resolveApprovers({ cfg, accountId }).length > 0,
-        ),
+      ...availability.delivery,
       shouldSuppressForwardingFallback,
     },
     native: {
@@ -293,26 +330,10 @@ export function createApproverRestrictedNativeApprovalCapability(
           return target === "dm" || target === "both";
         }),
       shouldSuppressForwardingFallback: (input: DeliverySuppressionParams) => {
-        const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
-        if (channel !== params.channel) {
-          return false;
-        }
-        if (params.requireMatchingTurnSourceChannel) {
-          const turnSourceChannel = normalizeMessageChannel(
-            input.request.request.turnSourceChannel,
-          );
-          if (turnSourceChannel !== params.channel) {
-            return false;
-          }
-        }
-        const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
-        const accountId =
-          (resolvedAccountId === undefined
-            ? input.target.accountId?.trim()
-            : resolvedAccountId.trim()) || undefined;
+        const prepared = prepareApproverRestrictedSuppression(params, input);
         // Suppress generic forwarding only when this channel's native route can
         // handle the same account; otherwise the fallback is the only delivery path.
-        return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
+        return prepared ? params.isNativeDeliveryEnabled(prepared) : false;
       },
     },
     native:
@@ -393,20 +414,8 @@ export function createApproverRestrictedNativeApprovalCapabilityAsync(
         return false;
       },
       shouldSuppressForwardingFallbackAsync: async (input) => {
-        const channel = normalizeMessageChannel(input.target.channel) ?? input.target.channel;
-        if (
-          channel !== params.channel ||
-          (params.requireMatchingTurnSourceChannel &&
-            normalizeMessageChannel(input.request.request.turnSourceChannel) !== params.channel)
-        ) {
-          return false;
-        }
-        const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
-        const accountId =
-          (resolvedAccountId === undefined
-            ? input.target.accountId?.trim()
-            : resolvedAccountId.trim()) || undefined;
-        return params.isNativeDeliveryEnabled({ cfg: input.cfg, accountId });
+        const prepared = prepareApproverRestrictedSuppression(params, input);
+        return prepared ? params.isNativeDeliveryEnabled(prepared) : false;
       },
     },
     nativeAsync:
@@ -624,38 +633,13 @@ function createStandardNativeApprovalRoutingAsync(
       resolveOriginTarget,
       resolveApproverDmTargets,
     });
-  const availabilityState = (enabled: boolean) =>
-    enabled ? ({ kind: "enabled" } as const) : ({ kind: "disabled" } as const);
+  const availability = createStandardNativeApprovalAvailability(params, routeGates);
 
   return {
-    canApprovalPotentiallyRouteToChannel: routeGates.canApprovalPotentiallyRouteToChannel,
-    canAnyApprovalPotentiallyRouteToChannel: routeGates.canAnyApprovalPotentiallyRouteToChannel,
-    isNativeApprovalHandlerConfigured: routeGates.isNativeApprovalHandlerConfigured,
+    ...availability,
     shouldHandleApprovalRequest: routeGates.shouldHandleApprovalRequest,
-    getActionAvailabilityState: ({ cfg, accountId, approvalKind }) =>
-      availabilityState(
-        approvalKind
-          ? routeGates.canApprovalPotentiallyRouteToChannel({ cfg, accountId, approvalKind })
-          : routeGates.canAnyApprovalPotentiallyRouteToChannel({ cfg, accountId }),
-      ),
-    getExecInitiatingSurfaceState: ({ cfg, accountId }) =>
-      availabilityState(
-        routeGates.canApprovalPotentiallyRouteToChannel({
-          cfg,
-          accountId,
-          approvalKind: "exec",
-        }),
-      ),
     delivery: {
-      hasConfiguredDmRoute: ({ cfg }) =>
-        params.listAccountIds(cfg).some(
-          (accountId) =>
-            routeGates.canAnyApprovalPotentiallyRouteToChannel({
-              cfg,
-              accountId,
-              nativeSessionOnly: true,
-            }) && params.resolveApprovers({ cfg, accountId }).length > 0,
-        ),
+      ...availability.delivery,
       shouldSuppressForwardingFallbackAsync: shouldSuppressForwardingFallback,
     },
     nativeAsync: {

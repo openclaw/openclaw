@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
@@ -9,16 +10,18 @@ import { projectRuntimeConfig } from "../../../lib/reactive/domain-capabilities.
 import { t } from "../../../lib/reactive/i18n.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
 
-export function ReadAloud(props: { text: string }) {
+type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+
+export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
   return (
     <Show when={context}>
-      <ReadAloudControl text={props.text} />
+      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
     </Show>
   );
 }
 
-function ReadAloudControl(props: { text: string }) {
+function ReadAloudControl(props: ReadAloudProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
@@ -53,13 +56,15 @@ function ReadAloudControl(props: { text: string }) {
   createEffect(playbackIdentity, () => {
     stop();
     setError("");
-    // The config capability coalesces this with the other chat consumers.
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
+    // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
+    if (!runtime || !Object.hasOwn(runtime, "tts")) {
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
   });
-  onCleanup(cancelPlayback);
+  onSettled(() => cancelPlayback);
   const available = () => {
-    const snapshot = config.read().state.configSnapshot;
-    const runtime = snapshot?.runtimeConfig ?? snapshot?.config;
+    const runtime = currentDisplaySpeechConfig(config.read().state);
     return (
       Boolean(asOptionalRecord(runtime)?.tts) &&
       canCallGatewayMethod(gateway.read().snapshot, "tts.speak", "operator.write")
@@ -80,13 +85,12 @@ function ReadAloudControl(props: { text: string }) {
     setPlaying(true);
     setError("");
     try {
-      const snapshot = context.runtimeConfig.state.configSnapshot;
       await playback.speak(
         client,
         props.text,
         "tts.speak",
         () => isCurrent() && available() && client.connectionGeneration === connectionGeneration,
-        resolveSpeechTextLimit(snapshot?.runtimeConfig ?? snapshot?.config),
+        resolveSpeechTextLimit(currentDisplaySpeechConfig(context.runtimeConfig.state)),
       );
     } catch (cause) {
       if (isCurrent()) {
@@ -103,6 +107,7 @@ function ReadAloudControl(props: { text: string }) {
     <Show when={playing() || available()}>
       <openclaw-tooltip prop:content={error() || label()}>
         <button
+          ref={(element) => props.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}

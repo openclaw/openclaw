@@ -92,14 +92,11 @@ function templateIdsForProvider(
 
 function buildGoogleTemplateSources(params: {
   providerId: string;
-  templateProviderId?: string;
   family: GoogleForwardCompatFamily;
 }) {
-  const defaultTemplateProviderId = params.templateProviderId?.trim()
-    ? params.templateProviderId
-    : isGoogleGeminiCliProvider(params.providerId)
-      ? "google"
-      : GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  const defaultTemplateProviderId = isGoogleGeminiCliProvider(params.providerId)
+    ? "google"
+    : GOOGLE_GEMINI_CLI_PROVIDER_ID;
   const preferredExternalFirst =
     isGoogleGeminiCliProvider(params.providerId) && params.family[3] === true;
   const orderedTemplateProviderIds = preferredExternalFirst
@@ -210,7 +207,6 @@ export function resolveGoogleStaticModelId(
 
 export function resolveGoogleGeminiForwardCompatModel(params: {
   providerId: string;
-  templateProviderId?: string;
   ctx: ProviderResolveDynamicModelContext;
 }): ProviderRuntimeModel | undefined {
   const trimmed = normalizeGeminiProRequestId(params.ctx.modelId.trim());
@@ -227,7 +223,6 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       get templateSources() {
         return buildGoogleTemplateSources({
           providerId: params.providerId,
-          templateProviderId: params.templateProviderId,
           family,
         });
       },

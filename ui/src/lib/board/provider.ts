@@ -26,7 +26,6 @@ function createNullProvider(sessionKey: string): BoardProvider {
   };
   const widgetAppView = async (): Promise<BoardWidgetAppViewState> => ({
     status: "stale",
-    error: "Session dashboard unavailable",
   });
   return {
     sessionKey,
@@ -56,7 +55,10 @@ type BoardProviderCapabilities = Pick<
 >;
 
 const nullProviders = new Map<string, BoardProvider>();
-const gatewayProviders = new Map<string, { provider: GatewayBoardProvider; consumers: number }>();
+const gatewayProviders = new Map<
+  string,
+  { provider: GatewayBoardProvider; consumers: number; presentationScope?: object }
+>();
 export function boardProviderCacheKey(session: BoardGetParams): string {
   const identity = resolveUiConversationIdentity(
     {},
@@ -85,6 +87,7 @@ export function boardProviderForSession(session: BoardGetParams, available = tru
 
 export type BoardProviderLease = {
   provider: BoardProvider;
+  restoreSnapshot: (snapshot: unknown, receivedAtMs: number) => void;
   update: (
     client: BoardGatewayClient,
     connected: boolean,
@@ -101,15 +104,27 @@ export function acquireBoardProviderForSession(
   canPinMcpApps = false,
   canMutate = true,
   canGrant = true,
+  presentationScope?: object,
+  cacheSnapshot?: (snapshot: BoardSnapshot | null, receivedAtMs: number) => void,
 ): BoardProviderLease {
   const key = boardProviderCacheKey(session);
   let entry = gatewayProviders.get(key);
+  if (entry && entry.presentationScope !== presentationScope) {
+    // Retiring views may still hold leases; they must not lend their account's
+    // loaded transport to the new presentation owner.
+    entry.provider.dispose();
+    entry = undefined;
+  }
   if (!entry) {
     const target = {
       ...session,
       sessionKey: normalizeDefaultMainSessionAliasForUi(session.sessionKey),
     };
-    entry = { provider: new GatewayBoardProvider(target, client, connected), consumers: 0 };
+    entry = {
+      provider: new GatewayBoardProvider(target, client, connected),
+      consumers: 0,
+      presentationScope,
+    };
     gatewayProviders.set(key, entry);
   } else {
     entry.provider.attachClient(client, connected);
@@ -123,12 +138,20 @@ export function acquireBoardProviderForSession(
   };
   entry.consumers += 1;
   let released = false;
+  let leaseConnected = connected;
+  const isCurrent = () => !released && gatewayProviders.get(key) === entry;
   const requireCapability = (allowed: boolean, action: string) => {
     if (!allowed) {
       throw new Error(`Session dashboard ${action} unavailable`);
     }
   };
+  const stopCache = cacheSnapshot ? transport.subscribeCacheSnapshot(cacheSnapshot) : undefined;
   return {
+    restoreSnapshot: (snapshot, receivedAtMs) => {
+      if (isCurrent()) {
+        transport.restoreSnapshot(snapshot, receivedAtMs);
+      }
+    },
     // Transport snapshots are shared; mutation authority belongs to this live lease.
     provider: {
       loadError$: transport.loadError$,
@@ -148,16 +171,16 @@ export function acquireBoardProviderForSession(
         return transport.hasLoadedSnapshot;
       },
       get canPinWidgets() {
-        return !released && capabilities.canPinWidgets;
+        return isCurrent() && leaseConnected && capabilities.canPinWidgets;
       },
       get canPinMcpApps() {
-        return !released && capabilities.canPinMcpApps;
+        return isCurrent() && leaseConnected && capabilities.canPinMcpApps;
       },
       get canMutate() {
-        return !released && capabilities.canMutate;
+        return isCurrent() && leaseConnected && capabilities.canMutate;
       },
       get canGrant() {
-        return !released && capabilities.canGrant;
+        return isCurrent() && leaseConnected && capabilities.canGrant;
       },
       async applyOps(ops) {
         requireCapability(this.canMutate, "mutation");
@@ -177,10 +200,11 @@ export function acquireBoardProviderForSession(
       },
     },
     update: (nextClient, nextConnected, nextCapabilities) => {
-      if (released || gatewayProviders.get(key)?.provider !== entry.provider) {
+      if (!isCurrent()) {
         return;
       }
       capabilities = nextCapabilities;
+      leaseConnected = nextConnected;
       entry.provider.attachClient(nextClient, nextConnected);
     },
     release: () => {
@@ -188,16 +212,15 @@ export function acquireBoardProviderForSession(
         return;
       }
       released = true;
-      const current = gatewayProviders.get(key);
-      if (!current || current.provider !== entry.provider) {
+      stopCache?.();
+      entry.consumers -= 1;
+      if (entry.consumers > 0) {
         return;
       }
-      current.consumers -= 1;
-      if (current.consumers > 0) {
-        return;
+      if (gatewayProviders.get(key) === entry) {
+        gatewayProviders.delete(key);
       }
-      gatewayProviders.delete(key);
-      current.provider.dispose();
+      entry.provider.dispose();
     },
   };
 }

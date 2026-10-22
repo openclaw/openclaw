@@ -6,6 +6,7 @@ import {
   validateSessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createClientTestIdentity } from "../gateway/client.test-support.js";
@@ -385,6 +386,7 @@ describe("GatewayChatClient", () => {
   });
 
   it("passes selected-agent global scope through chat methods", async () => {
+    vi.useFakeTimers();
     const { client, request } = mockClient({ messages: [] });
     const scope = { sessionKey: "global", agentId: "work" };
     const runId = "run-global-work";
@@ -404,6 +406,11 @@ describe("GatewayChatClient", () => {
           deliver: undefined,
           timeoutMs: undefined,
           idempotencyKey: runId,
+        },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
         },
       ],
       ["chat.history", { ...scope, limit: 50 }],
@@ -430,6 +437,7 @@ describe("GatewayChatClient", () => {
   it.each([true, false])(
     "retries legacy creation with succeedsParent=%s",
     async (succeedsParent) => {
+      vi.useFakeTimers();
       const { client, request } = mockClient();
       const result = { ok: true, key: "agent:main:tui-next" };
       request
@@ -442,16 +450,30 @@ describe("GatewayChatClient", () => {
         succeedsParent,
       };
       await expect(client.createSession(opts)).resolves.toEqual(result);
-      expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
-        ...opts,
-        emitCommandHooks: true,
-      });
+      expect(request).toHaveBeenNthCalledWith(
+        1,
+        "sessions.create",
+        {
+          ...opts,
+          emitCommandHooks: true,
+        },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
+      );
       expect(request).toHaveBeenNthCalledWith(
         2,
         "sessions.create",
         succeedsParent
           ? { key: "tui-next", parentSessionKey: "agent:main:main", emitCommandHooks: true }
           : { key: "tui-next", agentId: "main" },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       );
     },
   );

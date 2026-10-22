@@ -22,6 +22,7 @@ import {
   sessionChanges,
 } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
@@ -108,11 +109,14 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   async function enqueue<T>(operation: () => Promise<T>): Promise<T> {
     assertActive();
     // Scheduler cancellation closes admission; accepted work retains its own settlement scope.
-    const pending = acceptedWork.track(() =>
-      tail.then(() => {
-        context.admission.assertCurrent();
-        return operation();
-      }),
+    // Post-commit work must not borrow the completed input writer's custody.
+    const pending = runInDetachedAsyncContext(() =>
+      acceptedWork.track(() =>
+        tail.then(() => {
+          context.admission.assertCurrent();
+          return operation();
+        }),
+      ),
     );
     // Failed work must not poison later FIFO operations.
     tail = pending.then(

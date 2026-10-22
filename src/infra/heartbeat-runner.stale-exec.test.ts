@@ -6,6 +6,7 @@ import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import {
   runHeartbeatOnce,
   setHeartbeatsEnabled,
@@ -61,12 +62,12 @@ describe("stale exec heartbeat wakes", () => {
           lastTo: "-100155462274",
         });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+        bindHeartbeatReply(replySpy);
         const run: Parameters<typeof test>[0]["run"] = (options = {}) =>
           runHeartbeatOnce({
             cfg,
             agentId: "main",
             ...execWake,
-            deps: { getReplyFromConfig: replySpy },
             ...options,
           });
         await test({ sessionKey, replySpy, run });
@@ -148,10 +149,8 @@ describe("stale exec heartbeat wakes", () => {
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
       enqueueSystemEvent("Unrelated queued event", { sessionKey });
       const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
-      const result = await run({
-        scheduledEveryMs: 5 * 60_000,
-        deps: { getReplyFromConfig: replySpy, telegram },
-      });
+      bindHeartbeatSend("telegram", telegram);
+      const result = await run({ scheduledEveryMs: 5 * 60_000 });
       expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
       expect(peekSystemEvents(sessionKey)).toEqual(["Unrelated queued event"]);

@@ -9,25 +9,20 @@ import { Agents, type AgentsProps } from "./view.tsx";
 
 const avatarPng =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDOsAAAAASUVORK5CYII=";
-const identityWithAvatar = {
-  beta: { agentId: "beta", name: "Fetched Beta", avatar: "/avatar/beta?v=1", emoji: "" },
-};
-
-type AgentAvatarView = ReturnType<typeof mountSolid<AgentsProps>> & { props: AgentsProps };
-
-const views: AgentAvatarView[] = [];
+const pngBytes = Uint8Array.from(atob(avatarPng), (character) => character.charCodeAt(0));
+const avatarResponse = () => new Response(pngBytes, { headers: { "content-type": "image/png" } });
+const avatarUrl = (revision: number) => `${globalThis.location.origin}/avatar/beta?v=${revision}`;
+const identity = (revision: number) => ({
+  beta: { agentId: "beta", name: "Fetched Beta", avatar: `/avatar/beta?v=${revision}`, emoji: "" },
+});
 const fetchAvatar = vi.fn<typeof fetch>();
 const fetchOther = vi.fn<typeof fetch>();
 const createObjectURL = vi.fn<typeof URL.createObjectURL>();
-const revokeObjectURL = vi.fn<typeof URL.revokeObjectURL>();
+const disposals: Array<() => void> = [];
+const requestUrls = () =>
+  fetchAvatar.mock.calls.map(([input]) => (input instanceof Request ? input.url : String(input)));
 
-beforeEach(({ onTestFailed }) => {
-  onTestFailed(() => {
-    const urls = fetchAvatar.mock.calls.map(([input]) =>
-      input instanceof Request ? input.url : String(input),
-    );
-    console.error(`[settings avatar request URLs] ${JSON.stringify(urls)}`);
-  });
+beforeEach(() => {
   const nativeFetch = globalThis.fetch;
   fetchAvatar.mockReset();
   fetchOther.mockReset().mockImplementation(nativeFetch);
@@ -36,95 +31,86 @@ beforeEach(({ onTestFailed }) => {
       input instanceof Request ? input.url : String(input),
       globalThis.location.href,
     );
-    // Other mounted UI can fetch resources while this view settles; only the
-    // persisted beta avatar belongs to this fixture's request-count contract.
+    // Only the persisted avatar belongs to the request-count contract.
     return url.origin === globalThis.location.origin && url.pathname === "/avatar/beta"
       ? fetchAvatar(input, init)
       : fetchOther(input, init);
   });
   let sequence = 0;
   createObjectURL.mockReset().mockImplementation(() => `blob:settings-avatar-${++sequence}`);
-  revokeObjectURL.mockReset();
   vi.stubGlobal(
     "URL",
     class extends URL {
       static override createObjectURL = createObjectURL;
-      static override revokeObjectURL = revokeObjectURL;
+      static override revokeObjectURL = vi.fn<typeof URL.revokeObjectURL>();
     },
   );
   setAvatarGatewayOrigin(globalThis.location.origin, ["avatar-token"]);
 });
-
 afterEach(() => {
-  for (const view of views.splice(0)) {
-    view.dispose();
-    view.container.remove();
+  for (const dispose of disposals.splice(0)) {
+    dispose();
   }
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function avatarResponse() {
-  return new Response(
-    Uint8Array.from(atob(avatarPng), (character) => character.charCodeAt(0)),
-    {
-      headers: { "content-type": "image/png" },
-    },
-  );
-}
-
-function createView(overrides: Partial<ReturnType<typeof createProps>> = {}) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const props = createProps({
-    agentsList: {
-      defaultId: "beta",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "beta", name: "Beta" }],
-    },
-    agentIdentityById: identityWithAvatar,
-    ...overrides,
+function createView(avatar: string | null = null) {
+  const container = document.body.appendChild(document.createElement("div"));
+  let props = createProps({
+    agentIdentityById: identity(1),
+    overview: { ...createProps().overview },
+    readData: () => ({
+      ...createProps().readData(),
+      agentsList: {
+        defaultId: "beta",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "beta", name: "Beta" }],
+      },
+      identityDraft: { name: null, emoji: null, avatar },
+    }),
   });
-  const view = { ...mountSolid(Agents, props, container), props };
-  views.push(view);
-  return view;
-}
-
-function avatarRequestUrls() {
-  return fetchAvatar.mock.calls.map(([input]) =>
-    input instanceof Request ? input.url : String(input),
-  );
-}
-
-function avatarImage(view: AgentAvatarView) {
-  return view.container.querySelector<HTMLImageElement>(".agent-identity-editor__avatar img");
-}
-
-async function expectAvatarFallback(view: AgentAvatarView) {
-  await waitForFast(() => {
-    expect(
-      view.container.querySelector(".agent-identity-editor__avatar .identity-avatar__agent-face"),
-    ).not.toBeNull();
+  const view = mountSolid(Agents, props, container);
+  disposals.push(() => {
+    view.dispose();
+    container.remove();
   });
-  expect(
-    view.container.querySelector(".agent-identity-editor__avatar .identity-avatar--agent")
-      ?.classList,
-  ).toContain("is-fallback");
-}
-
-function updateView(view: AgentAvatarView, next: Partial<AgentsProps>) {
-  view.props = { ...view.props, ...next };
-  view.update(view.props);
-}
-
-function changeAvatarRevision(view: AgentAvatarView, revision: number) {
-  updateView(view, {
-    agentIdentityById: {
-      beta: { ...identityWithAvatar.beta, avatar: `/avatar/beta?v=${revision}` },
-    },
-  });
+  const query = (selector: string) => container.querySelector<HTMLElement>(selector);
+  const image = () => query(".agent-identity-editor__avatar img");
+  const classes = () => query(".agent-identity-editor__avatar .identity-avatar--agent")?.classList;
+  const update = (next: Partial<AgentsProps>) => {
+    props = { ...props, ...next };
+    view.update(props);
+  };
+  const loaded = (sequence: number) =>
+    waitForFast(() => {
+      expect(image()?.getAttribute("src")).toBe(`blob:settings-avatar-${sequence}`);
+      return image();
+    });
+  const fallback = async () => {
+    await waitForFast(() =>
+      expect(query(".agent-identity-editor__avatar .identity-avatar__agent-face")).not.toBeNull(),
+    );
+    expect(classes()).toContain("is-fallback");
+  };
+  return {
+    query,
+    image,
+    classes,
+    loaded,
+    fallback,
+    revision: (revision: number) => update({ agentIdentityById: identity(revision) }),
+    rename: () =>
+      update({
+        overview: { ...props.overview },
+        readData: () => ({
+          ...createProps().readData(),
+          identityDraft: { name: "Renamed Beta", emoji: null, avatar: null },
+        }),
+      }),
+  };
 }
 
 it("fetches one persisted settings avatar alongside unrelated requests", async () => {
@@ -134,32 +120,25 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
   const assetResponse = new Response("independent asset");
   fetchOther.mockResolvedValueOnce(assetResponse);
   const asset = fetch(new URL("/fixture/settings-asset", globalThis.location.origin));
-
   try {
-    const avatar = view.container.querySelector(
-      ".agent-identity-editor__avatar .identity-avatar--agent",
-    );
-    expect(avatar?.classList).toContain("is-pending");
-    expect(avatar?.classList).not.toContain("is-fallback");
+    const classes = view.classes();
+    expect(classes).toContain("is-pending");
+    expect(classes).not.toContain("is-fallback");
     expect(fetchAvatar).toHaveBeenCalledWith(
-      `${globalThis.location.origin}/avatar/beta?v=1`,
+      avatarUrl(1),
       expect.objectContaining({
         credentials: "include",
         headers: { Authorization: "Bearer avatar-token" },
         signal: expect.any(AbortSignal),
       }),
     );
-
     response.resolve(avatarResponse());
-    await waitForFast(() => {
-      expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-1");
-    });
-    expect(avatar?.classList).toContain("is-pending");
-    avatarImage(view)?.dispatchEvent(new Event("load"));
-    expect(avatar?.classList).not.toContain("is-pending");
-    expect(avatarRequestUrls(), "requests after the persisted avatar loads").toEqual([
-      globalThis.location.origin + "/avatar/beta?v=1",
-    ]);
+    await view.loaded(1);
+    expect(classes).toContain("is-pending");
+    view.image()?.dispatchEvent(new Event("load"));
+    flush();
+    expect(classes).not.toContain("is-pending");
+    expect(requestUrls()).toEqual([avatarUrl(1)]);
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(await asset).toBe(assetResponse);
   } finally {
@@ -169,106 +148,54 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
 
 it("renders the upload preview without fetching the persisted settings avatar", () => {
   const preview = `data:image/png;base64,${avatarPng}`;
-  const view = createView({
-    overview: {
-      ...createProps().overview,
-      identityDraft: { name: null, emoji: null, avatar: preview },
-    },
-  });
-
-  expect(avatarImage(view)?.getAttribute("src")).toBe(preview);
+  expect(createView(preview).image()?.getAttribute("src")).toBe(preview);
   expect(fetchAvatar).not.toHaveBeenCalled();
 });
 
-it("keeps a missing settings avatar on its fallback and recovers on a new revision", async () => {
-  const expectedRequests = [1, 2].map(
-    (revision) => globalThis.location.origin + "/avatar/beta?v=" + revision,
-  );
-  fetchAvatar
-    .mockResolvedValueOnce(avatarResponse())
-    .mockResolvedValueOnce(new Response(null, { status: 404 }))
-    .mockResolvedValueOnce(avatarResponse());
-  const view = createView();
-  await waitForFast(() => {
-    expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-1");
-  });
-
-  changeAvatarRevision(view, 2);
-  await waitForFast(() =>
-    expect(avatarRequestUrls(), "requests after selecting the missing revision").toEqual(
-      expectedRequests,
-    ),
-  );
-  await waitForFast(() => expect(avatarImage(view)).toBeNull());
-  updateView(view, {
-    overview: {
-      ...view.props.overview,
-      identityDraft: { name: "Renamed Beta", emoji: null, avatar: null },
-    },
-  });
-  expect(avatarImage(view)).toBeNull();
-  await expectAvatarFallback(view);
-  expect(avatarRequestUrls(), "requests after showing the fallback and editing the name").toEqual(
-    expectedRequests,
-  );
-
-  changeAvatarRevision(view, 3);
-  await waitForFast(() => {
-    expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-2");
-  });
-  expect(avatarRequestUrls()).toEqual([
-    ...expectedRequests,
-    globalThis.location.origin + "/avatar/beta?v=3",
-  ]);
-});
-
-it("keeps a decode failure on its fallback across rerenders until the revision changes", async () => {
-  fetchAvatar.mockImplementation(async () => avatarResponse());
-  const view = createView();
-  const failedImage = await waitForFast(() => {
-    const image = avatarImage(view);
-    expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1");
-    return image;
-  });
-  failedImage?.dispatchEvent(new Event("error"));
-  await waitForFast(() => expect(avatarImage(view)).toBeNull());
-  await expectAvatarFallback(view);
-
-  updateView(view, {
-    overview: {
-      ...view.props.overview,
-      identityDraft: { name: "Renamed Beta", emoji: null, avatar: null },
-    },
-  });
-  expect(avatarImage(view)).toBeNull();
-  await expectAvatarFallback(view);
-  expect(fetchAvatar).toHaveBeenCalledOnce();
-
-  changeAvatarRevision(view, 2);
-  await waitForFast(() => {
-    expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-2");
-  });
-  failedImage?.dispatchEvent(new Event("error"));
-  await Promise.resolve();
-  expect(avatarImage(view)?.getAttribute("src")).toBe("blob:settings-avatar-2");
-  expect(fetchAvatar).toHaveBeenCalledTimes(2);
-});
+it.each(["missing", "decode"] as const)(
+  "keeps a %s failure on fallback until a new revision",
+  async (failure) => {
+    fetchAvatar.mockImplementation(async () => avatarResponse());
+    const view = createView();
+    const failedImage = await view.loaded(1);
+    const failedRevision = failure === "missing" ? 2 : 1;
+    const expectedRequests = Array.from({ length: failedRevision }, (_, i) => avatarUrl(i + 1));
+    if (failure === "missing") {
+      fetchAvatar.mockResolvedValueOnce(new Response(null, { status: 404 }));
+      view.revision(2);
+      await waitForFast(() => expect(requestUrls()).toEqual(expectedRequests));
+    } else {
+      failedImage?.dispatchEvent(new Event("error"));
+    }
+    await waitForFast(() => expect(view.image()).toBeNull());
+    await view.fallback();
+    view.rename();
+    expect(view.image()).toBeNull();
+    await view.fallback();
+    expect(requestUrls()).toEqual(expectedRequests);
+    view.revision(failedRevision + 1);
+    await view.loaded(2);
+    expect(requestUrls()).toEqual([...expectedRequests, avatarUrl(failedRevision + 1)]);
+    if (failure === "decode") {
+      failedImage?.dispatchEvent(new Event("error"));
+      await Promise.resolve();
+      expect(view.image()?.getAttribute("src")).toBe("blob:settings-avatar-2");
+      expect(fetchAvatar).toHaveBeenCalledTimes(2);
+    }
+  },
+);
 
 it("keeps a reopened picker preview pending until the authenticated avatar resolves", async () => {
   const response = createDeferred<Response>();
   fetchAvatar.mockReturnValue(response.promise);
   const view = createView();
-  const chooser = view.container.querySelector<HTMLButtonElement>(
-    'button[aria-label="Edit avatar"]',
-  );
-  if (!chooser) {
-    throw new Error("Missing avatar chooser");
-  }
-  chooser.click();
+  const chooser = view.query('button[aria-label="Edit avatar"]');
+  expect(chooser).not.toBeNull();
+  chooser?.click();
   flush();
-  view.container.querySelector<HTMLButtonElement>(".avatar-picker__tab:nth-child(2)")?.click();
+  view.query(".avatar-picker__tab:nth-child(2)")?.click();
   flush();
-  const preview = view.container.querySelector(".avatar-picker__preview .identity-avatar--agent");
+  const preview = view.query(".avatar-picker__preview .identity-avatar--agent");
   const image = preview?.querySelector("img");
   expect(preview?.classList).toContain("is-pending");
   expect(image?.getAttribute("src")).toBeNull();
@@ -276,6 +203,7 @@ it("keeps a reopened picker preview pending until the authenticated avatar resol
   response.resolve(avatarResponse());
   await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
   image?.dispatchEvent(new Event("load"));
+  flush();
   expect(preview?.classList).not.toContain("is-pending");
   expect(fetchAvatar).toHaveBeenCalledOnce();
 });

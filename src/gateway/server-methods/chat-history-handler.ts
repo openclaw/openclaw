@@ -528,7 +528,6 @@ export async function handleChatHistoryRequest({
           const sessionSnapshot = buildGatewaySessionSnapshot({
             sessionRow: sessionInfo,
             agentId: sessionAgentId,
-            includeSession: true,
             activeRunState,
           });
           let delta: Awaited<ReturnType<typeof readChatHistoryDelta>>;

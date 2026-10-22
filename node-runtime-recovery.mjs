@@ -330,15 +330,17 @@ export function resolveRecoveryPath(
   const paths = /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(expanded) ? path.win32 : path;
   const absolute = paths.resolve(expanded);
   const cwd = realNodePath(process.cwd()) ?? process.cwd();
+  // POSIX / is a service startup directory, not a workspace; Windows roots can be mapped checkouts.
+  const guardCwd = !allowCwd && cwd !== "/";
   // Trust only the private recovery root when launching from HOME; reject other cwd symlinks.
   const trusted =
     trustedRoot && path.isAbsolute(trustedRoot) && isPathWithin(absolute, trustedRoot);
   const excluded = (filename) =>
-    !allowCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
+    guardCwd && isPathWithin(filename, cwd) && !(trusted && isPathWithin(filename, trustedRoot));
   if (excluded(absolute)) {
     return null;
   }
-  if (!allowCwd) {
+  if (guardCwd) {
     // A final symlink can hide a workspace-owned intermediate directory.
     for (let prefix = paths.dirname(absolute); ;) {
       if (trusted && !isPathWithin(prefix, trustedRoot)) {

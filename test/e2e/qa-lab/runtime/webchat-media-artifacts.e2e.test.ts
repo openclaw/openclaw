@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 import {
   createQaBusState,
@@ -20,6 +20,7 @@ import { createSolidPngBuffer, createTinyJpegBuffer } from "../../../helpers/ima
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const SESSION_KEY = "agent:qa:main";
+const OFFICE_MIME = "application/vnd.openxmlformats-officedocument";
 const userEventIdentitySchema = z.object({ messageId: z.string().min(1) });
 const FIXTURES = [
   ["artifact.json", "application/json", "attachment", "artifact"],
@@ -34,18 +35,8 @@ const FIXTURES = [
   ["bundle.zip", "application/zip", "attachment", "artifact"],
   ["worker.py", "text/x-python", "attachment", "visible-error"],
   ["script.js", "text/javascript", "attachment", "visible-error"],
-  [
-    "brief.docx",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "attachment",
-    "artifact",
-  ],
-  [
-    "report.xlsx",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "attachment",
-    "artifact",
-  ],
+  ["brief.docx", `${OFFICE_MIME}.wordprocessingml.document`, "attachment", "artifact"],
+  ["report.xlsx", `${OFFICE_MIME}.spreadsheetml.sheet`, "attachment", "artifact"],
   ["tone.wav", "audio/wav", "audio", "artifact"],
   ["voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3", "audio/mpeg", "audio", "artifact"],
   ["voice.ogg", "audio/ogg", "audio", "artifact"],
@@ -88,7 +79,9 @@ afterEach(async () => {
 });
 
 async function writeFixtures(workspaceDir: string): Promise<void> {
-  const textFiles: Record<string, string> = {
+  const archive = new JSZip();
+  archive.file("README.txt", "OpenClaw artifact proof\n");
+  const files = {
     "artifact.json": '{"status":"ready"}\n',
     "table.csv": "name,status\nrabbit,ready\n",
     "config.xml": '<?xml version="1.0"?><artifact ready="true"/>\n',
@@ -104,42 +97,26 @@ async function writeFixtures(workspaceDir: string): Promise<void> {
     "settings.toml": 'name = "media-artifacts"\n',
     "schema.sql": "select 1;\n",
     "events.ndjson": '{"ready":true}\n',
+    "bundle.zip": await archive.generateAsync({ type: "nodebuffer" }),
+    "brief.docx": await officeZip("docx"),
+    "report.xlsx": await officeZip("xlsx"),
+    "tone.wav": createWavBuffer(),
+    "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3": createPlaybackMediaFixture("mp3"),
+    "voice.ogg": createPlaybackMediaFixture("ogg"),
+    "voice.m4a": createPlaybackMediaFixture("m4a"),
+    "voice.flac": createPlaybackMediaFixture("flac"),
+    "clip.webm": createPlaybackMediaFixture("webm"),
+    "clip.mp4": createPlaybackMediaFixture("mp4"),
+    "image.png": createSolidPngBuffer(320, 180, { r: 37, g: 99, b: 235 }),
+    "photo.jpg": createTinyJpegBuffer(),
+    "mystery.blob": Buffer.from([0, 1, 2, 3]),
+    "font.ttf": Buffer.from([0x00, 0x01, 0x00, 0x00]),
+    "font.woff2": Buffer.from("wOF2", "ascii"),
+    "bundle.7z": Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]),
   };
   await Promise.all(
-    Object.entries(textFiles).map(([name, body]) =>
-      fs.writeFile(path.join(workspaceDir, name), body),
-    ),
+    Object.entries(files).map(([name, body]) => fs.writeFile(path.join(workspaceDir, name), body)),
   );
-  const archive = new JSZip();
-  archive.file("README.txt", "OpenClaw artifact proof\n");
-  await fs.writeFile(
-    path.join(workspaceDir, "bundle.zip"),
-    await archive.generateAsync({ type: "nodebuffer" }),
-  );
-  await fs.writeFile(path.join(workspaceDir, "brief.docx"), await officeZip("docx"));
-  await fs.writeFile(path.join(workspaceDir, "report.xlsx"), await officeZip("xlsx"));
-  await fs.writeFile(path.join(workspaceDir, "tone.wav"), createWavBuffer());
-  await fs.writeFile(
-    path.join(workspaceDir, "voice---a75c70c7-0112-4d07-8fb5-40c82c979ee8.mp3"),
-    createPlaybackMediaFixture("mp3"),
-  );
-  await fs.writeFile(path.join(workspaceDir, "voice.ogg"), createPlaybackMediaFixture("ogg"));
-  await fs.writeFile(path.join(workspaceDir, "voice.m4a"), createPlaybackMediaFixture("m4a"));
-  await fs.writeFile(path.join(workspaceDir, "voice.flac"), createPlaybackMediaFixture("flac"));
-  await fs.writeFile(path.join(workspaceDir, "clip.webm"), createPlaybackMediaFixture("webm"));
-  await fs.writeFile(
-    path.join(workspaceDir, "image.png"),
-    createSolidPngBuffer(320, 180, { r: 37, g: 99, b: 235 }),
-  );
-  await fs.writeFile(path.join(workspaceDir, "photo.jpg"), createTinyJpegBuffer());
-  await fs.writeFile(path.join(workspaceDir, "mystery.blob"), Buffer.from([0, 1, 2, 3]));
-  await fs.writeFile(path.join(workspaceDir, "font.ttf"), Buffer.from([0x00, 0x01, 0x00, 0x00]));
-  await fs.writeFile(path.join(workspaceDir, "font.woff2"), Buffer.from("wOF2", "ascii"));
-  await fs.writeFile(
-    path.join(workspaceDir, "bundle.7z"),
-    Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0x00, 0x04]),
-  );
-  await fs.writeFile(path.join(workspaceDir, "clip.mp4"), createPlaybackMediaFixture("mp4"));
 }
 
 async function officeZip(kind: "docx" | "xlsx"): Promise<Buffer> {
@@ -147,8 +124,8 @@ async function officeZip(kind: "docx" | "xlsx"): Promise<Buffer> {
   const root = kind === "docx" ? "word/document.xml" : "xl/workbook.xml";
   const mime =
     kind === "docx"
-      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
-      : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+      ? `${OFFICE_MIME}.wordprocessingml.document.main+xml`
+      : `${OFFICE_MIME}.spreadsheetml.sheet.main+xml`;
   zip.file(
     "[Content_Types].xml",
     `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/${root}" ContentType="${mime}"/></Types>`,
@@ -175,39 +152,19 @@ function createWavBuffer(): Buffer {
   return body;
 }
 
-function isExpectedMediaBlock(block: unknown, expected: (typeof FIXTURES)[number]): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const [name, mimeType, type] = expected;
-  const candidate = block as Record<string, unknown>;
-  if (type === "attachment") {
-    const attachment = candidate.attachment;
-    return (
-      candidate.type === "attachment" &&
-      Boolean(attachment) &&
-      typeof attachment === "object" &&
-      (attachment as Record<string, unknown>).label === name &&
-      (attachment as Record<string, unknown>).mimeType === mimeType
-    );
-  }
-  const label = type === "image" ? candidate.alt : candidate.fileName;
-  return candidate.type === type && candidate.mimeType === mimeType && label === name;
+function expectedMediaBlock([name, mimeType, type]: (typeof FIXTURES)[number]) {
+  return expect.objectContaining(
+    type === "attachment"
+      ? { type, attachment: expect.objectContaining({ label: name, mimeType }) }
+      : { type, mimeType, [type === "image" ? "alt" : "fileName"]: name },
+  );
 }
 
-function isExpectedFailureBlock(block: unknown, label: string, code: string): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const candidate = block as Record<string, unknown>;
-  const attachment = candidate.attachment;
-  return (
-    candidate.type === "attachment_error" &&
-    Boolean(attachment) &&
-    typeof attachment === "object" &&
-    (attachment as Record<string, unknown>).label === label &&
-    (attachment as Record<string, unknown>).code === code
-  );
+function expectedFailureBlock(label: string, code: string) {
+  return expect.objectContaining({
+    type: "attachment_error",
+    attachment: expect.objectContaining({ label, code }),
+  });
 }
 
 async function connectWebchat(
@@ -261,175 +218,108 @@ async function sendMediaReply(
   return Array.isArray(assistant?.content) ? assistant.content : [];
 }
 
-describe("WebChat managed media artifact matrix", () => {
-  it(
-    "renders every MEDIA reference as one named success or failure outcome",
-    { timeout: 180_000 },
-    async () => {
-      const state = createQaBusState();
-      const transport = createQaChannelTransport(state);
-      bus = await startQaBusServer({ state });
-      gatewayOwner = createQaLiveLaneGateway();
-      const harness = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        transport,
-        transportBaseUrl: bus.baseUrl,
-        controlUiAllowedOrigins: ["http://127.0.0.1"],
-        controlUiEnabled: false,
+it(
+  "WebChat managed media artifact matrix renders every MEDIA reference as one named success or failure outcome",
+  { timeout: 180_000 },
+  async () => {
+    const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
+    bus = await startQaBusServer({ state });
+    gatewayOwner = createQaLiveLaneGateway();
+    const harness = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      transport,
+      transportBaseUrl: bus.baseUrl,
+      controlUiAllowedOrigins: ["http://127.0.0.1"],
+      controlUiEnabled: false,
+    });
+    await transport.waitReady({ gateway: harness.gateway });
+    await writeFixtures(harness.gateway.workspaceDir);
+    const events: Array<{ event: string; payload?: unknown }> = [];
+    client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token, (event) =>
+      events.push(event),
+    );
+    await client.request("sessions.subscribe", {});
+    const content = await sendMediaReply(
+      client,
+      SESSION_KEY,
+      ARTIFACT_FIXTURES.map((fixture) => fixture[0]),
+    );
+    expect(content).toEqual(expect.arrayContaining(ARTIFACT_FIXTURES.map(expectedMediaBlock)));
+    for (const fixture of REJECTED_FIXTURES) {
+      const sessionKey = `agent:qa:rejected-${fixture[0].replace(/[^a-z0-9]+/giu, "-")}`;
+      const rejectedContent = await sendMediaReply(client, sessionKey, [fixture[0]], false);
+      const serialized = JSON.stringify(rejectedContent);
+      expect(rejectedContent, fixture[0]).toEqual(
+        expect.arrayContaining([expectedFailureBlock(fixture[0], "unsupported-format")]),
+      );
+      expect(rejectedContent).not.toEqual(expect.arrayContaining([expectedMediaBlock(fixture)]));
+      expect(serialized).not.toContain("MEDIA:./");
+      expect(serialized).not.toContain("Media failed");
+      const artifactList = await client.request<{ artifacts?: unknown[] }>("artifacts.list", {
+        sessionKey,
       });
-      await transport.waitReady({ gateway: harness.gateway });
-      await writeFixtures(harness.gateway.workspaceDir);
-      const events: Array<{ event: string; payload?: unknown }> = [];
-      client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token, (event) =>
-        events.push(event),
-      );
-      await client.request("sessions.subscribe", {});
-      const content = await sendMediaReply(
-        client,
-        SESSION_KEY,
-        ARTIFACT_FIXTURES.map((fixture) => fixture[0]),
-      );
-      const accepted = ARTIFACT_FIXTURES.map((fixture) => ({
-        name: fixture[0],
-        mimeType: fixture[1],
-        type: fixture[2],
-        outcome: fixture[3],
-        present: content.some((block) => isExpectedMediaBlock(block, fixture)),
-      }));
-      const rejected: Array<{
-        name: string;
-        mimeType: string;
-        type: string;
-        outcome: string;
-        present: boolean;
-      }> = [];
-      for (const fixture of REJECTED_FIXTURES) {
-        const sessionKey = `agent:qa:rejected-${fixture[0].replace(/[^a-z0-9]+/giu, "-")}`;
-        const rejectedContent = await sendMediaReply(client, sessionKey, [fixture[0]], false);
-        const serialized = JSON.stringify(rejectedContent);
-        expect(
-          rejectedContent.some((block) =>
-            isExpectedFailureBlock(block, fixture[0], "unsupported-format"),
-          ),
-          fixture[0],
-        ).toBe(true);
-        expect(rejectedContent.some((block) => isExpectedMediaBlock(block, fixture))).toBe(false);
-        expect(serialized).not.toContain("MEDIA:./");
-        expect(serialized).not.toContain("Media failed");
-        const artifactList = await client.request<{ artifacts?: unknown[] }>("artifacts.list", {
-          sessionKey,
-        });
-        expect(artifactList.artifacts ?? [], fixture[0]).toEqual([]);
-        rejected.push({
-          name: fixture[0],
-          mimeType: fixture[1],
-          type: fixture[2],
-          outcome: fixture[3],
-          present: true,
-        });
-      }
-      const missingContent = await sendMediaReply(
-        client,
-        "agent:qa:missing-attachment",
-        ["missing-proof.yaml"],
-        false,
-      );
-      expect(missingContent).toEqual([
-        expect.objectContaining({
-          type: "attachment_error",
-          attachment: expect.objectContaining({
-            code: "file-not-found",
-            label: "missing-proof.yaml",
-          }),
-        }),
-      ]);
+      expect(artifactList.artifacts ?? [], fixture[0]).toEqual([]);
+    }
+    const missingContent = await sendMediaReply(
+      client,
+      "agent:qa:missing-attachment",
+      ["missing-proof.yaml"],
+      false,
+    );
+    expect(missingContent).toEqual([expectedFailureBlock("missing-proof.yaml", "file-not-found")]);
 
-      const mixedContent = await sendMediaReply(
-        client,
-        "agent:qa:mixed-attachment-outcomes",
-        MIXED_BATCH.map(([name]) => name),
-      );
-      const mixedOutcomes = MIXED_BATCH.map(([name, outcome]) => ({
-        name,
-        outcome,
-        present:
+    const mixedContent = await sendMediaReply(
+      client,
+      "agent:qa:mixed-attachment-outcomes",
+      MIXED_BATCH.map(([name]) => name),
+    );
+    expect(mixedContent).toEqual(
+      expect.arrayContaining(
+        MIXED_BATCH.map(([name, outcome]) =>
           outcome === "artifact"
-            ? mixedContent.some(
-                (block) =>
-                  Boolean(block) &&
-                  typeof block === "object" &&
-                  (block as Record<string, unknown>).type === "attachment" &&
-                  ((block as Record<string, unknown>).attachment as Record<string, unknown>)
-                    ?.label === name,
-              )
-            : mixedContent.some((block) => isExpectedFailureBlock(block, name, outcome)),
-      }));
-      expect(mixedOutcomes.every((entry) => entry.present)).toBe(true);
-      expect(JSON.stringify(mixedContent)).not.toContain("Media failed");
-      expect(JSON.stringify(mixedContent)).not.toContain("MEDIA:./");
-      const observed = [...accepted, ...rejected];
-      const sessionEvents = events.filter((event) => {
-        if (event.event !== "chat" && event.event !== "session.message") {
-          return false;
-        }
-        const payload = event.payload as { sessionKey?: unknown } | undefined;
-        return payload?.sessionKey === SESSION_KEY;
-      });
-      const userEvents = sessionEvents.filter(
-        (event) =>
-          (event.payload as { message?: { role?: string } } | undefined)?.message?.role === "user",
-      );
-      const userMessageIds = userEvents.map(
-        (event) => userEventIdentitySchema.parse(event.payload).messageId,
-      );
-      expect(userMessageIds.length).toBeGreaterThan(0);
-      expect(new Set(userMessageIds).size, JSON.stringify(userMessageIds)).toBe(1);
-      const history = await client.request<{ messages?: Array<{ role?: string }> }>(
-        "chat.history",
-        {
-          sessionKey: SESSION_KEY,
-          limit: 20,
-        },
-      );
-      expect(history.messages?.filter((message) => message.role === "user")).toHaveLength(1);
-      expect(JSON.stringify(userEvents)).toContain("MEDIA:./artifact.json");
-      const displayEvents = sessionEvents.filter((event) => !userEvents.includes(event));
-      expect(
-        displayEvents.some(
-          (event) =>
-            event.event === "session.message" &&
-            (event.payload as { message?: { role?: string } } | undefined)?.message?.role ===
-              "assistant",
+            ? expect.objectContaining({
+                type: "attachment",
+                attachment: expect.objectContaining({ label: name }),
+              })
+            : expectedFailureBlock(name, outcome),
         ),
-      ).toBe(true);
-      const verdict = {
-        expected: FIXTURES.length,
-        observed: observed.filter((entry) => entry.present).length,
-        missing: observed.filter((entry) => !entry.present).map((entry) => entry.name),
-        missingPath: isExpectedFailureBlock(
-          missingContent[0],
-          "missing-proof.yaml",
-          "file-not-found",
-        ),
-        mixedBatch: mixedOutcomes,
-        displayEvents: displayEvents.length,
-        rawMediaVisible: JSON.stringify({ content, displayEvents }).includes("MEDIA:./"),
-      };
-
-      expect(verdict).toEqual({
-        expected: 24,
-        observed: 24,
-        missing: [],
-        missingPath: true,
-        mixedBatch: MIXED_BATCH.map(([name, outcome]) => ({ name, outcome, present: true })),
-        displayEvents: expect.any(Number),
-        rawMediaVisible: false,
-      });
-      expect(verdict.displayEvents).toBeGreaterThan(0);
-      console.log(`WEBCHAT_MEDIA_ARTIFACTS_PROOF=${JSON.stringify(verdict)}`);
-    },
-  );
-});
+      ),
+    );
+    expect(JSON.stringify(mixedContent)).not.toContain("Media failed");
+    expect(JSON.stringify(mixedContent)).not.toContain("MEDIA:./");
+    const sessionEvents = events.filter(
+      ({ event, payload }) =>
+        (event === "chat" || event === "session.message") &&
+        (payload as { sessionKey?: unknown } | undefined)?.sessionKey === SESSION_KEY,
+    );
+    const userEvents = sessionEvents.filter(
+      (event) =>
+        (event.payload as { message?: { role?: string } } | undefined)?.message?.role === "user",
+    );
+    const userMessageIds = userEvents.map(
+      (event) => userEventIdentitySchema.parse(event.payload).messageId,
+    );
+    expect(userMessageIds.length).toBeGreaterThan(0);
+    expect(new Set(userMessageIds).size, JSON.stringify(userMessageIds)).toBe(1);
+    const history = await client.request<{ messages?: Array<{ role?: string }> }>("chat.history", {
+      sessionKey: SESSION_KEY,
+      limit: 20,
+    });
+    expect(history.messages?.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(JSON.stringify(userEvents)).toContain("MEDIA:./artifact.json");
+    const displayEvents = sessionEvents.filter((event) => !userEvents.includes(event));
+    expect(displayEvents).toContainEqual(
+      expect.objectContaining({
+        event: "session.message",
+        payload: expect.objectContaining({
+          message: expect.objectContaining({ role: "assistant" }),
+        }),
+      }),
+    );
+    expect(JSON.stringify({ content, displayEvents })).not.toContain("MEDIA:./");
+  },
+);

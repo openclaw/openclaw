@@ -10,6 +10,7 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  hasSessionControllerQueuedWork,
   isCompetingSessionControllerWorkActive,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
@@ -40,6 +41,7 @@ export async function removeCronRunContinuationSessionIfIdle(
   sessionKey: string,
   settledDeliveryId?: string,
   queueContext?: OpenClawStateWorkerContext,
+  capturedStorePath?: string,
 ): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
@@ -50,10 +52,12 @@ export async function removeCronRunContinuationSessionIfIdle(
   const context = queueContext ?? captureOpenClawStateWorkerContext();
   const assertCurrent = () => assertSubagentReadContext(context);
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-    agentId,
-    env: context.environment,
-  });
+  const storePath =
+    capturedStorePath ??
+    resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+      agentId,
+      env: context.environment,
+    });
   const readEntry = () =>
     withSessionEntryReadOnlyInWorker(
       {
@@ -80,7 +84,10 @@ export async function removeCronRunContinuationSessionIfIdle(
     scope: storePath,
     identities: [sessionKey, original.sessionId],
     run: async () => {
-      if (isCompetingSessionControllerWorkActive(storePath, [sessionKey, original.sessionId])) {
+      if (
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, original.sessionId]) ||
+        hasSessionControllerQueuedWork(storePath, [sessionKey, original.sessionId])
+      ) {
         return;
       }
       const pendingSessionDeliveries = await loadPendingSessionDeliveries(context);
@@ -96,13 +103,14 @@ export async function removeCronRunContinuationSessionIfIdle(
       ) {
         return;
       }
-      const descendants = await prepareCronDescendantDeletion([sessionKey]);
+      const descendants = await prepareCronDescendantDeletion([sessionKey], context);
       assertCurrent();
       if (descendants.hasUnsettled(sessionKey)) {
         return;
       }
       await deleteSessionEntryLifecycle({
         agentId,
+        env: context.environment,
         commitGuard: () => {
           assertCurrent();
           if (

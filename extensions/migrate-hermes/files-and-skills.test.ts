@@ -26,8 +26,19 @@ const fixture = useHermesFixture(async (root) => {
 });
 const makeTestContext = fixture.context;
 
+function discoverSource(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") {
+  vi.stubEnv("HERMES_HOME", env.HERMES_HOME);
+  vi.stubEnv("HERMES_S6_SUPERVISED_CHILD", env.HERMES_S6_SUPERVISED_CHILD);
+  vi.stubEnv("LOCALAPPDATA", env.LOCALAPPDATA);
+  vi.stubEnv("XDG_DATA_HOME", env.XDG_DATA_HOME);
+  vi.stubEnv("HOME", env.HOME ?? fixture.paths.root);
+  vi.stubEnv("USERPROFILE", env.USERPROFILE ?? fixture.paths.root);
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  return discoverHermesSource();
+}
+
 async function discoverRoot(env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") {
-  return (await discoverHermesSource(undefined, { env, platform })).root;
+  return (await discoverSource(env, platform)).root;
 }
 
 function readText(...parts: string[]) {
@@ -163,10 +174,7 @@ describe("Hermes migration file and skill items", () => {
       },
     });
 
-    const source = await discoverHermesSource(undefined, {
-      env: { HOME: home },
-      platform: "darwin",
-    });
+    const source = await discoverSource({ HOME: home });
     expect(source.root).toBe(profileRoot);
     expect(source.globalAuthPath).toBe(path.join(hermesRoot, "auth.json"));
     const ctx = makeTestContext({ source: profileRoot, includeSecrets: true });

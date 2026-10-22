@@ -17,6 +17,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
@@ -36,15 +37,19 @@ import {
 } from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
-import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
+import {
+  SettingsSaveIndicator,
+  type SettingsSaveIndicatorProps,
+} from "./settings-save-indicator.tsx";
+import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
-import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 import "./agent-select-registration.ts";
-import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
-import "./sidebar-build-chip.tsx";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
+
+registerSettingsEnglish();
 
 type AgentRosterRow = AgentsListResult["agents"][number];
 
@@ -85,16 +90,6 @@ type SettingsNavigationItemView = {
   routeId: RouteId;
   blocks: readonly SettingsSearchBlock[];
 };
-
-function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
-  if (block.pathname) {
-    return false;
-  }
-  const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
-  return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
-    (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
-  );
-}
 
 function filterSettingsNavigationGroups(
   searchQuery: string,
@@ -162,9 +157,15 @@ function filterSettingsNavigationGroups(
       labelKey: null,
       items: pageRoutes.map((routeId) => ({
         routeId,
-        blocks: (blocksByRoute.get(routeId) ?? []).filter(
-          (block) => !isRedundantRouteBlock(routeId, block),
-        ),
+        blocks: (blocksByRoute.get(routeId) ?? []).filter((block) => {
+          if (block.pathname) {
+            return true;
+          }
+          const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
+          return ![settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
+            (label) => normalizeLowercaseStringOrEmpty(label) === blockLabel,
+          );
+        }),
       })),
     },
     ...searchableRoutes
@@ -358,7 +359,7 @@ function SettingsConnectionStatus(props: SettingsSidebarProps) {
   return (
     <Show
       when={props.connectionStatus !== null}
-      fallback={<openclaw-settings-save-indicator prop:props={props.saveIndicator} />}
+      fallback={<SettingsSaveIndicator {...props.saveIndicator} />}
     >
       <GatewayStatus
         kind={props.connectionStatus}
@@ -546,13 +547,13 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               )}
             </Show>
             <div class="settings-sidebar__connection">
-              <openclaw-settings-save-indicator prop:props={props.saveIndicator} />
+              <SettingsSaveIndicator {...props.saveIndicator} />
             </div>
-            <openclaw-sidebar-build-chip
-              prop:basePath={props.basePath}
-              prop:gatewayVersion={props.gatewayVersion || null}
-              prop:variant="settings"
-              prop:onNavigate={() => props.onNavigate("about")}
+            <SidebarBuildChip
+              basePath={props.basePath}
+              gatewayVersion={props.gatewayVersion || null}
+              variant="settings"
+              onNavigate={() => props.onNavigate("about")}
             />
           </footer>
         </aside>

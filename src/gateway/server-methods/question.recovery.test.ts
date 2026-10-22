@@ -133,10 +133,12 @@ beforeEach(async () => {
       watchdogAttempt,
       embeddedRunToolAuthorityBinding: (registration) => ({
         source: "reply",
+        acceptsRequesterOrigin: () => false,
         operation,
         watchdogAttempt,
         project: () => undefined,
         projectAsync: async () => undefined,
+        assertRegistrationActive: () => assertSessionControllerOperation(operation),
         assertActive: () => {
           assertSessionControllerOperation(operation);
           if (registration.handle !== handle) {

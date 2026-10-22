@@ -1,19 +1,27 @@
+import type {
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+} from "openclaw/plugin-sdk/media-understanding";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import plugin from "./index.js";
+
+const mediaProviders: MediaUnderstandingProvider[] = [];
+plugin.register(
+  createTestPluginApi({
+    registerMediaUnderstandingProvider: (provider) => mediaProviders.push(provider),
+  }),
+);
 
 installPinnedHostnameTestHooks();
 
-type VideoRequest = Parameters<
-  NonNullable<typeof moonshotMediaUnderstandingProvider.describeVideo>
->[0];
-
-async function describeVideo(params: Partial<VideoRequest>) {
-  const handler = moonshotMediaUnderstandingProvider.describeVideo;
+async function describeVideo(params: Partial<VideoDescriptionRequest>) {
+  const handler = mediaProviders[0]?.describeVideo;
   if (!handler) {
     throw new Error("expected Moonshot video description support");
   }

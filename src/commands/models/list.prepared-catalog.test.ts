@@ -1,6 +1,8 @@
+import { Chalk } from "chalk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import * as terminalTheme from "../../../packages/terminal-core/src/theme.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -20,7 +22,6 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { modelsListCommand } from "./list.list-command.js";
-import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import * as configLoader from "./load-config.js";
 
@@ -109,11 +110,7 @@ beforeEach(() => {
       { assertCurrent() {} },
     ),
   );
-  vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
-    sourceConfig: cfg,
-    resolvedConfig: cfg,
-    diagnostics: [],
-  });
+  vi.spyOn(configLoader, "loadModelsConfig").mockResolvedValue(cfg);
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
     pid: 123,
@@ -192,14 +189,14 @@ describe("models list published transport", () => {
   );
 
   it("refreshes the selected Gateway's inventory without resolving local provider secrets", async () => {
-    vi.mocked(configLoader.loadModelsConfigWithSource).mockRejectedValue(
+    vi.mocked(configLoader.loadModelsConfig).mockRejectedValue(
       new Error("Local provider secret unavailable"),
     );
     vi.mocked(gateway.callGateway).mockResolvedValue({
       models: [model, { provider: "catalog-provider", id: "reader", name: "Unknown route" }],
     });
     await list({ agent: "work", provider: "catalog-provider", json: true, refresh: true });
-    expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
+    expect(configLoader.loadModelsConfig).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
     expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
     expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
@@ -372,11 +369,7 @@ describe("models list published transport", () => {
       { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
       { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
     ];
-    vi.mocked(configLoader.loadModelsConfigWithSource).mockResolvedValue({
-      sourceConfig: claudeCfg,
-      resolvedConfig: claudeCfg,
-      diagnostics: [],
-    });
+    vi.mocked(configLoader.loadModelsConfig).mockResolvedValue(claudeCfg);
     vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.cliBackends.push({
@@ -432,16 +425,17 @@ describe("models list published transport", () => {
 });
 
 describe("model list terminal table", () => {
-  const makeRow = (key: string): ModelRow => ({
-    key,
-    name: key,
-    input: "text",
+  const makeModel = (provider: string, id: string): ModelChoice => ({
+    provider,
+    id,
+    name: `${provider}/${id}`,
+    input: ["text"],
     contextWindow: 128_000,
     local: false,
     available: true,
     tags: [],
   });
-  it("prints context caps with sanitized tags in their original order", () => {
+  it("prints context caps with sanitized tags in their original order", async () => {
     const tags = [
       "\u001b[31mdefault\u001b[0m",
       "fallback#2",
@@ -451,17 +445,18 @@ describe("model list terminal table", () => {
       "default",
     ];
     const originalTags = [...tags];
-    const rows = [
+    const rows: ModelChoice[] = [
       {
-        ...makeRow("openai/gpt-5.5"),
-        input: "text+image",
+        ...makeModel("openai", "gpt-5.5"),
+        input: ["text", "image"],
         contextWindow: 400_000,
         contextTokens: 272_000,
         tags,
       },
     ];
 
-    printModelTable(rows, runtime);
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
 
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
@@ -472,11 +467,12 @@ describe("model list terminal table", () => {
     expect(rows[0]?.tags).toEqual(originalTags);
   });
 
-  it("keeps fixed-width rows aligned when model keys contain wide graphemes", () => {
-    const wideKey = `${"a".repeat(41)}表`;
-    const rows = [makeRow(wideKey)];
+  it("keeps fixed-width rows aligned when model keys contain wide graphemes", async () => {
+    const wideKey = `${"a".repeat(39)}表`;
+    const rows = [makeModel("a", wideKey)];
 
-    printModelTable(rows, runtime);
+    vi.mocked(gateway.callGateway).mockResolvedValue({ models: rows });
+    await list({});
 
     const [header, row] = runtime.log.mock.calls.map(([line]) => line);
     expect(typeof header).toBe("string");
@@ -488,5 +484,53 @@ describe("model list terminal table", () => {
     expect(visibleWidth((row as string).slice(0, rowInputIndex))).toBe(
       visibleWidth((header as string).slice(0, headerInputIndex)),
     );
+  });
+
+  it("sanitizes rich tags before selecting their color roles", async () => {
+    const color = new Chalk({ level: 1 });
+    vi.spyOn(terminalTheme, "isRich").mockReturnValue(true);
+    vi.spyOn(terminalTheme.theme, "success").mockImplementation(color.green);
+    vi.spyOn(terminalTheme.theme, "accentBright").mockImplementation(color.cyan);
+    vi.spyOn(terminalTheme.theme, "accent").mockImplementation(color.blue);
+    vi.spyOn(terminalTheme.theme, "error").mockImplementation(color.red);
+    vi.spyOn(terminalTheme.theme, "warn").mockImplementation(color.yellow);
+    vi.spyOn(terminalTheme.theme, "accentDim").mockImplementation(color.magenta);
+    vi.spyOn(terminalTheme.theme, "muted").mockImplementation(color.gray);
+    const tags = [
+      "\u001b[31mdefault\u001b[0m",
+      "image",
+      "configured",
+      "missing",
+      "fallback#2",
+      "img-fallback#1",
+      "alias:a\tb",
+      "unknown",
+    ];
+    const originalTags = [...tags];
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      models: [{ ...makeModel("openai", "gpt-5.5"), tags }],
+    });
+
+    await list({});
+
+    const row = runtime.log.mock.calls.at(-1)?.[0] as string;
+    expect(
+      row.endsWith(
+        [
+          "\u001b[32mdefault\u001b[39m",
+          "\u001b[36mimage\u001b[39m",
+          "\u001b[34mconfigured\u001b[39m",
+          "\u001b[31mmissing\u001b[39m",
+          "\u001b[33mfallback#2\u001b[39m",
+          "\u001b[33mimg-fallback#1\u001b[39m",
+          "\u001b[35malias:a\\tb\u001b[39m",
+          "\u001b[90munknown\u001b[39m",
+        ].join(","),
+      ),
+    ).toBe(true);
+    expect(stripAnsi(row)).toBe(
+      "openai/gpt-5.5                             text       128k        no    yes   default,image,configured,missing,fallback#2,img-fallback#1,alias:a\\tb,unknown",
+    );
+    expect(tags).toEqual(originalTags);
   });
 });

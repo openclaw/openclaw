@@ -12,7 +12,7 @@ import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { requestChatSessionSnapshot } from "./chat-history-request.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -75,10 +75,6 @@ function mayPrefetchHistory(
     snapshot?.presentedTranscriptsReady === true &&
     Boolean(snapshot.intentSessionKey && (!sessionKey || snapshot.intentSessionKey === sessionKey))
   );
-}
-
-function sessionActivityAt(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
 // Synchronous request/cache owner; the page adapter below owns its lifetime.
@@ -338,7 +334,7 @@ class SessionPrefetcher {
     if (openKeys.has(snapshotKey) || openKeys.size >= MAX_CACHED_CHAT_SESSIONS) {
       return null;
     }
-    const activityAt = sessionActivityAt(row);
+    const activityAt = row.lastActivityAt ?? row.updatedAt ?? 0;
     const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
     if (savedAt !== null && savedAt >= activityAt) {
       return null;
@@ -444,7 +440,7 @@ export function createSessionPrefetch(
     }
     const source = context;
     // The shell owns these sibling panes, whose public host properties describe readiness.
-    const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+    const panes = chatPanesWithin(paneRoot).filter(
       (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
     const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));

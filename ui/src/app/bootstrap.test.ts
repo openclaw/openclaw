@@ -9,8 +9,11 @@ import {
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import * as gatewayStore from "./gateway-store.ts";
 import { autoPromptNotificationsOnSend } from "./notifications-auto-prompt.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
@@ -182,19 +185,13 @@ describe("bootstrapApplication", () => {
   );
 
   it("replaces a released dashboard query bookmark before router start", async () => {
-    const initialLocation = {
-      pathname: "/chat",
-      search: "?session=agent%3Aresearch%3Arelease-deadbeef&face=dashboard&draft=ship",
-      hash: "",
-    };
-    const gateway = {
-      snapshot: {
-        phase: "connected",
-        client: {},
-        hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
-      },
-      subscribe: vi.fn(() => () => undefined),
-    } as unknown as ApplicationContext["gateway"];
+    const initialLocation = makeLocation(
+      "/chat",
+      "?session=agent%3Aresearch%3Arelease-deadbeef&face=dashboard&draft=ship",
+    );
+    const { gateway } = makeRoutingGateway({
+      hello: { snapshot: { sessionDefaults: { mainKey: "main" } } },
+    });
     const canonicalLocation = await resolveInitialApplicationLocation({
       location: initialLocation,
       basePath: "",
@@ -225,7 +222,7 @@ describe("bootstrapApplication", () => {
   it("starts the first-run redirect after installing the persisted session location", async () => {
     const { promise: initialLocationReady, resolve: resolveInitialLocation } =
       createDeferred<RouteLocation>();
-    let currentLocation: RouteLocation = { pathname: "/", search: "", hash: "" };
+    let currentLocation = makeLocation();
     const replaceLocation = vi.fn((location: RouteLocation) => {
       currentLocation = location;
     });
@@ -236,21 +233,9 @@ describe("bootstrapApplication", () => {
       setupComplete: false,
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    const subscribe = vi.fn((next: GatewayListener) => {
-      listener = next;
-      return () => undefined;
-    });
     const replaceRoute = vi.fn();
-    const gateway = {
-      snapshot: {
-        phase: "connecting",
-        client: null,
-        hello: null,
-      } as Parameters<GatewayListener>[0],
-      subscribe,
-    };
+    const routing = makeRoutingGateway({ phase: "connecting", client: null });
+    const { gateway } = routing;
     const context = {
       gateway,
       agentSelection: {
@@ -259,7 +244,7 @@ describe("bootstrapApplication", () => {
       },
       replace: replaceRoute,
     } as unknown as ApplicationContext;
-    const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
+    const canonicalLocation = makeLocation("/chat/main");
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -267,18 +252,13 @@ describe("bootstrapApplication", () => {
       history: { location: () => currentLocation, replace: replaceLocation },
       initialLocationReady,
     });
-    expect(subscribe).not.toHaveBeenCalled();
+    expect(gateway.subscribe).not.toHaveBeenCalled();
 
     resolveInitialLocation(canonicalLocation);
     await redirectReady;
     expect(replaceLocation).toHaveBeenCalledWith(canonicalLocation);
-    expect(subscribe).toHaveBeenCalledOnce();
-
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected first-run gateway listener");
-    }
-    gateway.snapshot = {
+    expect(gateway.subscribe).toHaveBeenCalledOnce();
+    routing.publish({
       phase: "connected",
       client,
       hello: {
@@ -288,22 +268,21 @@ describe("bootstrapApplication", () => {
           sessionDefaults: { defaultAgentId: "main", modelConfigured: false },
         },
       },
-    } as Parameters<GatewayListener>[0];
-    connectedListener(gateway.snapshot);
+    });
     expect(request).not.toHaveBeenCalled();
     expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
   it("does not replace a user route with the deferred default chat location", async () => {
-    const currentLocation = { pathname: "/new", search: "", hash: "" };
+    const currentLocation = makeLocation("/new");
     const installLocation = vi.fn();
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context: {} as ApplicationContext,
       enabled: false,
       history: { location: () => currentLocation, replace: vi.fn() },
-      initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
+      initialLocationReady: Promise.resolve(makeLocation("/chat/main")),
       installLocation,
       shouldInstallLocation: () => isDefaultChatLanding(currentLocation, "", routeIdFromPath),
     });
@@ -606,7 +585,7 @@ describe("bootstrapApplication", () => {
     }
   });
 
-  it("refreshes chat browser chrome on route and breakpoint changes", () => {
+  it("refreshes registered chat browser chrome on breakpoint changes", () => {
     const listeners = new Set<() => void>();
     let mobile = false;
     const removeEventListener = vi.fn((_: string, listener: () => void) => {
@@ -629,6 +608,7 @@ describe("bootstrapApplication", () => {
     darkMeta.name = "theme-color";
     darkMeta.media = "(prefers-color-scheme: dark)";
     document.head.append(style, meta, darkMeta);
+    bindControlUiDocumentHead({ themeColors: [meta, darkMeta], favicons: [] });
     saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
     const runtime = bootstrapApplication();
 
@@ -648,16 +628,16 @@ describe("bootstrapApplication", () => {
         document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
       ).toBe("#123456");
 
-      document.body.innerHTML = '<div class="shell--chat"></div>';
+      syncControlUiSystemChrome(false, true);
       mobile = true;
       publish();
       expectChrome("#abcdef");
 
-      document.body.replaceChildren();
+      syncControlUiSystemChrome(false, false);
       publish();
       expect(meta.content).toBe("#123456");
 
-      document.body.innerHTML = '<div class="shell--chat"></div>';
+      syncControlUiSystemChrome(false, true);
       publish();
       expect(meta.content).toBe("#abcdef");
 
@@ -666,6 +646,8 @@ describe("bootstrapApplication", () => {
       expect(meta.content).toBe("#123456");
     } finally {
       runtime.stop();
+      syncControlUiSystemChrome(false, false);
+      bindControlUiDocumentHead({ themeColors: [], favicons: [] });
       document.body.replaceChildren();
       expect(removeEventListener).toHaveBeenCalled();
       style.remove();

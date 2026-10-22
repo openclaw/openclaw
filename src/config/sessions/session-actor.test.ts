@@ -1,15 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
-import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { observeSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionActor,
@@ -22,7 +29,8 @@ import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
-import { acquireSessionInputActor } from "./session-input-actor.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
+import { acquireSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -177,6 +185,55 @@ it.each([false, true])(
       if (oversized) {
         seedSessionActorOutcomeTransferEntry(fixture);
       }
+      const address = {
+        channel: "slack",
+        accountId: "default",
+        kind: "channel" as const,
+        peerId: "channel:C_ACTOR_SYNTHETIC",
+      };
+      const routed = {
+        ...fixture.read()!,
+        chatType: "channel" as const,
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: address.channel,
+            accountId: address.accountId,
+            to: address.peerId,
+          },
+        }),
+      };
+      replaceSessionEntrySync(fixture.scope, routed);
+      const competitor = { ...fixture.scope, sessionKey: "agent:main:actor-competitor", env };
+      replaceSessionEntrySync(competitor, {
+        ...routed,
+        sessionId: "competitor",
+        skillsSnapshot: undefined,
+      });
+      // Equal route observations leave node activity as the winner's tie-breaker.
+      await patchSessionEntryCore(competitor, () => ({ updatedAt: 100 }), {
+        skipMaintenance: true,
+        preserveActivity: true,
+      });
+      const current = await captureSessionEntryCurrentCheckAsyncInternal({
+        ...competitor,
+        sessionId: "competitor",
+        alternatives: [{ conversations: [{ ...address, sessionKey: competitor.sessionKey }] }],
+      });
+      using currentLease = { assertCurrent: current.source, [Symbol.dispose]: current.release };
+      const expectConversationCurrent = (expected: boolean) => {
+        const sql = observeMainThreadSql();
+        try {
+          if (expected) {
+            expect(() => currentLease.assertCurrent()).not.toThrow();
+          } else {
+            expect(() => currentLease.assertCurrent()).toThrow("selected session changed");
+          }
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+      };
+      expectConversationCurrent(true);
       const identity = readOpenClawAgentDatabaseIdentity(fixture.database);
       if (typeof identity.identity !== "string") {
         throw new Error("Fixture requires durable storage");
@@ -206,6 +263,22 @@ it.each([false, true])(
         identity.identity,
         ageChanges,
       );
+      let rejectPublication = false;
+      const pendingConversation = vi.fn();
+      const stopConversation = conversationPublication.subscribeFacts((change) => {
+        if (
+          "kind" in change &&
+          change.kind === "pending" &&
+          change.databaseIdentity === identity.identity
+        ) {
+          pendingConversation();
+          expectConversationCurrent(false);
+          if (rejectPublication) {
+            rejectPublication = false;
+            throw new Error("synthetic publication failure before grant");
+          }
+        }
+      });
       try {
         const beforeEntry = fixture.read();
         const revoked = await actor.patch(
@@ -214,6 +287,7 @@ it.each([false, true])(
             assertCurrent() {},
             authorize(stage) {
               if (stage === "commit") {
+                expectConversationCurrent(true);
                 throw new Error("synthetic live authority revocation");
               }
             },
@@ -225,6 +299,18 @@ it.each([false, true])(
         });
         expect(fixture.read()).toEqual(beforeEntry);
         expect(ageChanges).not.toHaveBeenCalled();
+        expectConversationCurrent(true);
+        expect(pendingConversation).not.toHaveBeenCalled();
+
+        rejectPublication = true;
+        const rolledBack = await actor.patch(activity("publication-rollback", 542), authority);
+        expect(rolledBack).toMatchObject({
+          kind: "rolled-back",
+          error: { message: "Conversation fact installation failed" },
+        });
+        expect(pendingConversation).toHaveBeenCalledTimes(1);
+        expect(fixture.read()).toEqual(beforeEntry);
+        expectConversationCurrent(true);
 
         const retained = retainPreparedSessionEntryPredicate({
           databaseIdentity: `file:${identity.identity}`,
@@ -233,18 +319,31 @@ it.each([false, true])(
           matches: (before, after) => before?.updatedAt === after?.updatedAt,
         });
         using _ = { [Symbol.dispose]: retained.release };
-        const result = await actor.patch(activity("durable", 543), authority, {
-          committed: () => {
-            expect(retained.isCurrent()).toBe(false);
-            expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
-              sessionKey: fixture.scope.sessionKey,
-              entry: expect.objectContaining({ updatedAt: 543 }),
-              previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
-            });
+        const result = await actor.patch(
+          activity("durable", 543),
+          {
+            assertCurrent() {},
+            authorize() {
+              expectConversationCurrent(true);
+            },
           },
-        });
+          {
+            committed: () => {
+              expectConversationCurrent(false);
+              expect(pendingConversation).toHaveBeenCalledTimes(2);
+              expect(retained.isCurrent()).toBe(false);
+              expect(ageChanges).toHaveBeenCalledExactlyOnceWith({
+                sessionKey: fixture.scope.sessionKey,
+                entry: expect.objectContaining({ updatedAt: 543 }),
+                previousEntry: expect.objectContaining({ updatedAt: beforeEntry?.updatedAt }),
+              });
+            },
+          },
+        );
         expect(result.kind).toBe("committed");
         assert(result.kind === "committed");
+        expect(result.failure).toBeUndefined();
+        expectConversationCurrent(false);
         expect(result.receipt.postimage.transcript.idempotency).toEqual([]);
         expect(result.receipt.postimage.transcript.anchors).toEqual([]);
         expect(actor.snapshot(authority)?.entry?.sessionId).toBe(fixture.scope.sessionId);
@@ -274,6 +373,7 @@ it.each([false, true])(
           sequence: before.version.sequence + 1,
         });
       } finally {
+        stopConversation();
         stopAgeChanges();
         await actor.release();
       }
@@ -721,7 +821,33 @@ it.each([false, true])(
   },
 );
 
-it("retains rollback state and fences unknown commits until an explicit read", async () => {
+it.each([
+  [
+    Object.assign(new SqliteWorkerError("SQLite worker stopped", "outcome-unknown"), {
+      cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    }),
+    "SQLITE_FULL",
+    "unknown",
+    false,
+    undefined,
+  ],
+  [new Error("database or disk is full"), "SQLITE_FULL", "unknown-result", false, undefined],
+  [new Error("Ordinary reply lost"), "session_actor_reconciliation", "unknown", false, undefined],
+  [
+    Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+    "SQLITE_FULL",
+    "normal",
+    true,
+    undefined,
+  ],
+  [
+    new Error("Ordinary reply lost"),
+    "SQLITE_FULL",
+    "unknown",
+    false,
+    Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
+  ],
+] as const)("retains %s (%s, %s)", async (cause, expected, reply, rollback, settlementError) => {
   await withActor(async ({ actor, commands, fault }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
@@ -746,7 +872,11 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     const rolledBack = actor.snapshot(authority) ?? (await actor.read(authority));
     expect(rolledBack.entry?.updatedAt).toBe(initial.entry?.updatedAt);
     expect(retained.isCurrent()).toBe(true);
-    fault.reply = "unknown";
+    fault.reply = reply;
+    fault.replyError = cause;
+    fault.transactionError = rollback ? cause : undefined;
+    fault.settlementLost = rollback;
+    fault.settlementError = settlementError;
     const unknown = await actor.patch(
       activity("unknown", 456, { expected: rolledBack.version }),
       authority,
@@ -755,14 +885,75 @@ it("retains rollback state and fences unknown commits until an explicit read", a
     expect(retained.isCurrent()).toBe(false);
     expect(actor.snapshot(authority)).toBeUndefined();
     const before = commands.length;
-    expect(
-      (await actor.patch({ commandId: "unknown", phaseId: "turn", reducers: [] }, authority)).kind,
-    ).toBe("unknown");
+    const refused = await actor.patch(
+      { commandId: "unknown", phaseId: "turn", reducers: [] },
+      authority,
+    );
+    assert(refused.kind === "unknown");
+    let failure: unknown;
+    try {
+      throwSessionInputActorFailure(refused);
+    } catch (error) {
+      failure = error;
+    }
+    expect(classifyGatewayStorageFailure(failure)).toBe(expected);
+    if (expected === "SQLITE_FULL") {
+      expect(
+        renderAssistantRequestFailureCopy({
+          storageFailure: classifyGatewayStorageFailure(failure),
+        }),
+      ).toContain("disk is full. Free up space");
+    }
+    const diagnostic = formatErrorMessageWithCode(failure);
+    expect(diagnostic).toContain("Session actor requires reconciliation before another command");
+    expect(diagnostic).toContain(cause.message);
+    if (settlementError) {
+      expect(diagnostic).toContain(settlementError.message);
+    }
+    await expect(
+      appendSessionManagerActor({
+        actor,
+        toolResult: false,
+        assertCurrent() {},
+        append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
+      }),
+    ).rejects.toSatisfy((error: unknown) => classifyGatewayStorageFailure(error) === expected);
     expect(commands).toHaveLength(before);
     fault.reply = "normal";
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(456);
+    expect((await actor.read(authority)).entry?.updatedAt).toBe(
+      rollback ? initial.entry?.updatedAt : 456,
+    );
   });
 });
+
+it.each(["command", "flush"] as const)(
+  "preserves storage guidance when a phase %s has an unknown outcome",
+  async (stage) => {
+    await withActor(async ({ actor, fault, commands }) => {
+      await actor.read(authority);
+      fault.reply = "unknown-result";
+      fault.replyError = new Error("database or disk is full");
+      await expect(
+        actor.withPhase("turn", authority, async (phase) => {
+          if (stage === "command") {
+            await phase.actor.patch(activity("unknown", 456), authority);
+          } else {
+            phase.patch([{ kind: "activity", updatedAt: 456 }]);
+          }
+        }),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: classifyGatewayStorageFailure(error),
+          }),
+        ).toContain("disk is full. Free up space");
+        expect(formatErrorMessageWithCode(error)).toContain("database or disk is full");
+        return true;
+      });
+      expect(commands.filter((command) => command === "session.actor.patch")).toHaveLength(1);
+    });
+  },
+);
 
 it("release waits actual native settlement and flushes accepted phase work after an await", async () => {
   await withActor(async ({ actor, fault, commands }) => {

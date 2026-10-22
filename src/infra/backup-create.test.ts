@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { formatBackupCreateSummary } from "../commands/backup-summary.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
@@ -23,6 +22,7 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import * as sleepModule from "../utils/sleep.js";
 import {
   createOwnedSqliteDatabase,
   declarePluginSqliteResources,
@@ -30,10 +30,10 @@ import {
 } from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import {
-  makeBackupResult,
   createBackupClassificationInventory,
   listArchiveEntries,
   listArchiveEntryDetails,
+  useIsolatedBackupTempRoot,
 } from "./backup-create.test-support.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
@@ -68,6 +68,7 @@ function expectRow(database: import("node:sqlite").DatabaseSync, sql: string, ro
 }
 
 const APPLE_DOUBLE_MAGIC = Buffer.from([0x00, 0x05, 0x16, 0x07]);
+useIsolatedBackupTempRoot();
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
@@ -144,49 +145,6 @@ function resolveCanonicalTestSqlitePath(
     : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
 }
 
-describe("formatBackupCreateSummary", () => {
-  const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
-
-  it.each([
-    {
-      name: "formats created archives with included and skipped paths",
-      result: makeBackupResult({
-        verified: true,
-        skippedVolatileCount: 3,
-        assets: [
-          {
-            kind: "state",
-            sourcePath: "/state",
-            archivePath: "archive/state",
-            displayPath: "~/.openclaw",
-          },
-        ],
-        skipped: [
-          {
-            kind: "workspace",
-            sourcePath: "/workspace",
-            displayPath: "~/Projects/openclaw",
-            reason: "covered",
-            coveredBy: "~/.openclaw",
-          },
-        ],
-      }),
-      expected: [
-        backupArchiveLine,
-        "Included 1 path:",
-        "- state: ~/.openclaw",
-        "Skipped 1 path:",
-        "- workspace: ~/Projects/openclaw (covered by ~/.openclaw)",
-        "Created /tmp/openclaw-backup.tar.gz",
-        "Skipped 3 volatile files (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).",
-        "Archive verification: passed",
-      ],
-    },
-  ])("$name", ({ result, expected }) => {
-    expect(formatBackupCreateSummary(result)).toEqual(expected);
-  });
-});
-
 describe("writeTarArchiveWithRetry", () => {
   const eof = Object.assign(new Error("encountered unexpected EOF"), {
     code: "EOF",
@@ -229,13 +187,12 @@ describe("writeTarArchiveWithRetry", () => {
     }
     runTar.mockResolvedValue("complete");
     const log = vi.fn();
-    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    using sleep = vi.spyOn(sleepModule, "sleep").mockResolvedValue(undefined);
     const rmSpy = vi.spyOn(fs, "rm");
     try {
       const result = writeTarArchiveWithRetry({
         tempArchivePath,
         runTar,
-        sleepMs: sleep,
         log: failure ? undefined : log,
       });
       if (failure) {
@@ -252,7 +209,7 @@ describe("writeTarArchiveWithRetry", () => {
       if (attempts > 2) {
         expect(runTar).toHaveBeenNthCalledWith(3, `${tempArchivePath}.retry-3`);
       }
-      expect(sleep.mock.calls).toEqual(backoffs.map((ms) => [ms]));
+      expect(sleep.mock.calls).toEqual(backoffs.map((ms) => [ms, undefined]));
       expect(log).toHaveBeenCalledTimes(failure ? 0 : backoffs.length);
       expect(rmSpy).not.toHaveBeenCalled();
     } finally {
@@ -999,11 +956,6 @@ describe("createBackupArchive", () => {
 
   it("creates, verifies, and restores foreign SQLite files as opaque bytes", async () => {
     await withBackupState("openclaw-backup-foreign-sqlite-", async (state) => {
-      // Keep concurrent backups out of this fixture's warning inventory.
-      const scratchRoot = state.path("scratch");
-      await fs.mkdir(scratchRoot);
-      Object.assign(state.envVars, { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot });
-      state.applyEnv();
       const databasePaths = [
         state.statePath("browser", "foreign-browser.sqlite"),
         state.statePath("plugins", "dedicated", "foreign-plugin.sqlite"),

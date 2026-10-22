@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -68,27 +69,25 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const key = "agent:main:dashboard:incognito-reply-admission";
     const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const database = { agentId: "main", path: storePath };
     const scope = { agentId: "main", storePath, sessionKey: key };
     await sessionEntries.replaceSessionEntry(scope, { sessionId, updatedAt: 1, incognito: true });
-    const owner = memorySessionActorOwners.read({
-      agentId: "main",
-      path: storePath,
-    });
+    const owner = memorySessionActorOwners.read(database);
     expect(owner).toBeDefined();
+    const expectMemoryOwner = () => {
+      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
+      expect(memorySessionActorOwners.read(database)).toBe(owner);
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
+    };
     const result = await admit(storePath, { agentId: "main", sessionKey: key });
     try {
-      if (result.status !== "owned" || !result.databaseClaim) {
-        throw new Error("Incognito admission must retain its memory claim");
-      }
+      assert(result.status === "owned" && result.databaseClaim);
       const { operation, databaseClaim } = result;
       expect(getReplyOperationSessionTarget(operation)).toMatchObject({
         agentId: "main",
         storePath,
-        readSource: {
-          agentId: "main",
-          path: storePath,
-          databaseIdentity: owner?.identity.incarnation,
-        },
+        readSource: { ...database, databaseIdentity: owner?.identity.incarnation },
         target: { canonicalKey: key, storeKeys: [key] },
       });
       expect(databaseClaim).toMatchObject({
@@ -98,29 +97,20 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       });
       const actor = await acquireReplyOperationSessionActor(operation);
       expect(actor?.target).toEqual({ database: owner?.identity, sessionKey: key });
-      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({
-        sessionId,
-        incognito: true,
-        updatedAt: 1,
-      });
-      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
-      expect(fs.existsSync(storePath)).toBe(false);
+      expectMemoryOwner();
+      expect(sessionEntries.loadSessionEntry(scope)?.incognito).toBe(true);
       expect(databaseClaim.isCurrent()).toBe(true);
       operation.complete();
       expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
       expect(() => getReplyOperationSessionTarget(operation)).toThrow();
       expect(
-        await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
+        await withinTest(controllerWait.waitForReplyRunSuccessorAdmission(key, null), signal),
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
-      expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
-      expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBe(owner);
-      expect(getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: storePath })).toBeUndefined();
-      expect(fs.existsSync(storePath)).toBe(false);
+      expectMemoryOwner();
     } finally {
       complete(result);
-      await registry.waitForReplyRunSuccessorAdmission(key, null);
+      await controllerWait.waitForReplyRunSuccessorAdmission(key, null);
     }
   });
 });
@@ -128,14 +118,11 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
 it.each(["cancelled", "request-changed"] as const)(
   "does not admit a delayed healthy rotation after %s",
   async (change) => {
-    const root = tempDirs.make("reply-delayed-rotation-");
-    const storePath = path.join(root, "owner.sqlite");
+    const storePath = path.join(tempDirs.make("reply-delayed-rotation-"), "owner.sqlite");
     const nextSessionId = "after-compaction";
     seed(storePath);
     const owner = await admit(storePath);
-    if (owner.status !== "owned" || !owner.databaseClaim) {
-      throw new Error("Fixture requires an admitted physical database owner");
-    }
+    assert(owner.status === "owned" && owner.databaseClaim);
     const captured =
       createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
     const release = createDeferred();
@@ -162,12 +149,11 @@ it.each(["cancelled", "request-changed"] as const)(
       },
     });
     try {
-      const snapshot = await Promise.race([
+      const snapshot = await awaitGateBeforeSettlement(
         captured.promise,
-        pending.then(() => {
-          throw new Error("Admission completed before its final snapshot was captured");
-        }),
-      ]);
+        pending,
+        "Admission completed before its final snapshot was captured",
+      );
       expect(snapshot.entry?.sessionId).toBe(sessionId);
       expect(snapshot.databaseClaim.isCurrent()).toBe(true);
       expect(snapshot.databaseClaim.identity).toBe(owner.databaseClaim.identity);
@@ -179,35 +165,30 @@ it.each(["cancelled", "request-changed"] as const)(
       owner.operation.complete();
       if (change === "cancelled") {
         controller.abort();
-      } else if (change === "request-changed") {
+      } else {
         requestFailure = new Error("Original caller was retired during preparation");
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
       }
       release.resolve();
       if (change === "cancelled") {
         await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
-        expect(reads).toBe(2);
-      } else if (change === "request-changed") {
+      } else {
         // Caller refusal keeps precedence over a concurrent physical-store retirement.
         await expect(pending).rejects.toBe(requestFailure);
-        expect(reads).toBe(2);
       }
+      expect(reads).toBe(2);
       expect(registry.getSessionControllerOperation(sessionKey)).toBeUndefined();
     } finally {
       release.resolve();
       owner.operation.complete();
-      const result = await pending.catch(() => undefined);
-      complete(result);
+      complete(await pending.catch(() => undefined));
     }
   },
 );
 
 it.for(
   (["active", "delivery"] as const).flatMap((wait) =>
-    (["unchanged", "same-inode"] as const).map((replacement) => ({
-      wait,
-      replacement,
-    })),
+    (["unchanged", "same-inode"] as const).map((replacement) => ({ wait, replacement })),
   ),
 )(
   "keeps the exact database owner across $wait wait, replacement=$replacement",
@@ -220,10 +201,7 @@ it.for(
     fs.symlinkSync(originalPath, storePath);
     const release = createDeferred();
     const admitted = await admit(storePath);
-    expect(admitted.status).toBe("owned");
-    if (admitted.status !== "owned") {
-      throw new Error("fixture requires an admitted blocking owner");
-    }
+    assert(admitted.status === "owned");
     const owner = admitted.operation;
     if (wait === "delivery") {
       owner.completeWithAfterClearBarrier(release.promise);
@@ -236,7 +214,7 @@ it.for(
         enteredWait.resolve();
         return waitForIdle(...args);
       });
-    } else if (wait === "delivery") {
+    } else {
       const waitForAdmission = controllerWait.waitForReplyRunFollowupAdmission;
       vi.spyOn(controllerWait, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
         enteredWait.resolve();
@@ -260,9 +238,7 @@ it.for(
         signal,
       );
       const observed = loaded.mock.results.at(-1);
-      if (observed?.type !== "return") {
-        throw new Error("fixture requires a completed authoritative row read");
-      }
+      assert(observed?.type === "return");
       const claim = (await observed.value).databaseClaim;
       expect(claim.isCurrent()).toBe(true);
       if (replacement !== "unchanged") {
@@ -285,8 +261,7 @@ it.for(
       owner.complete();
       release.resolve();
       controller.abort();
-      const result = await pending.catch(() => undefined);
-      complete(result);
+      complete(await pending.catch(() => undefined));
     }
   },
 );
@@ -298,15 +273,13 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
   vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(
     async (_scope, preparation) => {
       const signal = preparation?.signal;
-      if (!signal) {
-        throw new Error("Admission read requires its cancellation signal");
-      }
+      assert(signal);
       started.resolve(signal);
       return await new Promise<never>((_resolve, reject) => {
-        const abort = () =>
-          reject(
-            signal.reason instanceof Error ? signal.reason : new Error("Admission read aborted"),
-          );
+        const abort = () => {
+          assert(signal.reason instanceof Error);
+          reject(signal.reason);
+        };
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) {
           abort();
@@ -316,12 +289,9 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
   );
   const upstream = new AbortController();
   const pending = Promise.allSettled([
-    admitReplyTurn({
-      storePath,
+    admit(storePath, {
       sessionKey: interruptedKey,
       sessionId: "interrupted-read",
-      kind: "visible",
-      resetTriggered: false,
       upstreamAbortSignal: upstream.signal,
     }),
   ]);

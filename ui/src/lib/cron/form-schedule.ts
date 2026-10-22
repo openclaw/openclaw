@@ -1,10 +1,19 @@
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../../../../src/infra/format-time/parse-offsetless-zoned-datetime.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { parseCronDurationMs } from "./decimal.ts";
 import type { CronFormState } from "./types.ts";
+
+export function parseCronScheduleAt(input: string): string | undefined {
+  const parsed = parseOffsetlessIsoDateTimeInTimeZone(
+    input,
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
+  return parsed.ok ? parsed.iso : undefined;
+}
 
 export function formatDateTimeLocal(input: string): string {
   const ms = Date.parse(input);
@@ -124,11 +133,11 @@ export function buildCronSchedule(form: CronFormState, previous?: CronJob["sched
     };
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    const at = parseCronScheduleAt(form.scheduleAt);
+    if (!at) {
       throw new Error(t("cron.errors.invalidRunTime"));
     }
-    return { kind: "at" as const, at: new Date(ms).toISOString() };
+    return { kind: "at" as const, at };
   }
   if (form.scheduleKind === "every") {
     const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);

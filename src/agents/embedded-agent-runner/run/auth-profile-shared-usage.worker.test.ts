@@ -3,6 +3,7 @@ import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as backoff from "../../../infra/backoff.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
@@ -20,6 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
 import {
   buildPersistedAuthProfileSecretsStore,
@@ -38,8 +40,9 @@ import type {
   AuthProfileFailureReason,
   AuthProfileStore,
 } from "../../auth-profiles/types.js";
+import { isProfileInCooldown } from "../../auth-profiles/usage-state.js";
 import { markEmbeddedRunAuthProfileSuccess } from "./auth-profile-success.js";
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { createRetryController } from "./failover-retry-controller.test-support.js";
 
 const provider = "anthropic";
 const sharedId = "anthropic:used";
@@ -134,22 +137,10 @@ async function fixture(
   const scope = owner === "personal" ? "personal" : "shared";
   const runId = `${scope}-usage-run`;
   const sessionId = `${scope}-usage-session`;
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: {
-        runId,
-        sessionId,
-        sessionFile: state.path("synthetic-session.jsonl"),
-        workspaceDir: state.workspaceDir,
-        prompt: `synthetic ${scope}-account failure`,
-        timeoutMs: 60_000,
-        config,
-      },
-      globalLane: `${scope}-usage-test`,
-      agentDir,
-      fallbackConfigured: false,
-    },
-    preparedRuntime: {
+  const controller = createRetryController({
+    agentDir,
+    runParams: { runId, sessionId, workspaceDir: state.workspaceDir, config },
+    runtime: {
       provider: accountProvider,
       modelId: "synthetic-model",
       profileFailureStore: store,
@@ -158,12 +149,10 @@ async function fixture(
         pluginHarnessOwnsTransport: false,
         agentHarness: { id: "embedded" },
       }),
-      getApiKeyInfo: () => null,
-      advanceAttemptAuthProfile: async () => false,
     },
-    getSessionId: () => sessionId,
   });
   return {
+    controller,
     profileId: selectedId,
     store,
     initial,
@@ -197,6 +186,48 @@ function withFixture(
     run(await fixture(state, owner, credential)),
   );
 }
+
+it("publishes a same-model Retry-After cooldown before waiting so another run selects a sibling", () =>
+  withFixture(async (f) => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    maintenance.run(f.succeed);
+    await maintenance.close();
+    const retryAfterMs = 1_600_000;
+    const readDuringWait = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
+      const concurrentStore = ensureAuthProfileStore(f.agentDir);
+      const stats = concurrentStore.usageStats?.[f.profileId];
+      expect(stats).toMatchObject({
+        errorCount: 1,
+        failureCounts: { rate_limit: 1 },
+        cooldownReason: "rate_limit",
+        cooldownModel: "synthetic-model",
+      });
+      expect(stats?.cooldownUntil).toBe((stats?.lastFailureAt ?? 0) + retryAfterMs);
+      expect(isProfileInCooldown(concurrentStore, f.profileId, Date.now(), "synthetic-model")).toBe(
+        true,
+      );
+      expect(
+        resolveAuthProfileOrder({
+          store: concurrentStore,
+          provider,
+          forModel: "synthetic-model",
+        })[0],
+      ).toBe(siblingId);
+    });
+    f.controller.observeAttempt({ providerRetryMaxRetries: 1 });
+    await expect(
+      f.controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs }),
+    ).resolves.toBe(true);
+    expect(readDuringWait).toHaveBeenCalledExactlyOnceWith(retryAfterMs, undefined);
+    await expect(
+      f.controller.maybeRetryTransient({ reason: "rate_limit", retryAfterMs }),
+    ).resolves.toBe(false);
+    expect(
+      loadPersistedAuthProfileStore(f.ownerDir)?.usageStats?.[f.profileId]?.failureCounts,
+    ).toEqual({
+      rate_limit: 1,
+    });
+  }));
 
 function interceptWorker(
   intercept: (execute: () => Promise<unknown>) => Promise<unknown>,

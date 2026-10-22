@@ -108,7 +108,6 @@ export class SubagentsPanelData {
   private readonly narration = createSidebarNarration();
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
-  private readonly visibilityChanged = () => this.reconcile();
   private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
@@ -147,7 +146,7 @@ export class SubagentsPanelData {
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
     this.stopVisibility = this.visibilityDocument
-      ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
+      ? listen(this.visibilityDocument, "visibilitychange", () => this.reconcile())
       : undefined;
   }
 
@@ -507,11 +506,12 @@ export class SubagentsPanelData {
     const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
-      const tool = isSessionRunStateActive(session)
+      const active = isSessionRunStateActive(session);
+      const tool = active
         ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
       const headline =
-        isSessionRunStateActive(session) && metrics
+        active && metrics
           ? selectActivityHeadline(
               [...metrics.calls]
                 .filter(([identity, item]) => {
@@ -538,16 +538,13 @@ export class SubagentsPanelData {
         activity:
           tool?.text ||
           headline?.title ||
-          (isSessionRunStateActive(session) &&
+          (active &&
           session.observerDigest?.runId &&
           session.activeRunIds?.includes(session.observerDigest.runId)
             ? session.observerDigest.headline.trim() || undefined
             : undefined),
         toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
-        canStop:
-          isSessionRunStateActive(session) &&
-          session.activeRunIds?.length === 1 &&
-          stopAccess.allowed,
+        canStop: active && session.activeRunIds?.length === 1 && stopAccess.allowed,
         stopping: this.stopping.has(session.key),
         stopAccess,
       };

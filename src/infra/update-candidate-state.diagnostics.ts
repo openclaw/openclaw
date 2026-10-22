@@ -41,6 +41,13 @@ const ProgressSchema = z.object({
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
 
+export function formatUpdateStateInspectionProgress(
+  progress: UpdateStateInspectionProgress,
+): string {
+  const { phase, path, snapshot } = progress;
+  return `${phase}${snapshot ? `: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds` : ""}${path ? ` for ${path}` : ""}`;
+}
+
 export function createUpdateStateSnapshotReporter(
   path: string,
   phase: string,
@@ -86,15 +93,15 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       return;
     }
     let line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`;
-    if (legacy && emittedBytes + Buffer.byteLength(line) > 12_000) {
-      // Released parents cap stderr at 20 KB. Stop naming an active source once
-      // progress is suppressed, and leave room for the worker's final error.
-      exhausted = true;
+    const omitDetails = legacy && emittedBytes + Buffer.byteLength(line) > 12_000;
+    if (omitDetails) {
+      // Released parents cap stderr at 20 KB; reserve room for the worker's final error.
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
-    emittedBytes += Buffer.byteLength(line);
     try {
       writeSync(2, line);
+      emittedBytes += Buffer.byteLength(line);
+      exhausted = omitDetails;
     } catch (error) {
       // Advisory progress must not fail inspection when the nonblocking pipe is full.
       const code = extractErrorCode(error);
@@ -120,6 +127,8 @@ export function createUpdateStateInspectionDiagnostics(params: {
     phase: params.phase,
     ...(params.paths.length === 1 ? { path: params.paths[0] } : {}),
   };
+  let progressAt = startedAt;
+  let lastSnapshot: UpdateStateInspectionProgress | undefined;
   let pending = "";
   let tail = "";
   let diagnosticBytes = 0;
@@ -139,6 +148,10 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const value = ProgressSchema.safeParse(decoded);
       if (value.success) {
         progress = value.data;
+        progressAt = Date.now();
+        if (progress.snapshot) {
+          lastSnapshot = progress;
+        }
         params.onProgress?.(progress);
         return;
       }
@@ -173,6 +186,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
           ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
           : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
+      const idle = Math.max(0, Date.now() - progressAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
@@ -191,7 +205,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
             : " Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
       const error = new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}`,
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}\nLast progress ${idle.toFixed(3)} seconds ago: ${formatUpdateStateInspectionProgress(progress)}${lastSnapshot && lastSnapshot !== progress ? `\nLast snapshot: ${formatUpdateStateInspectionProgress(lastSnapshot)}` : ""}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
       // The supervisor's SIGTERM is a consequence of this recorded stop reason.

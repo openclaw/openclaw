@@ -1,7 +1,7 @@
 import "../../styles/approval.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, Show, For } from "solid-js";
+import { onCleanup, Show, For } from "solid-js";
 import {
   validateApprovalGetResult,
   validateApprovalResolveResult,
@@ -21,13 +21,19 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { renderApprovalPresentation } from "./approval-presentation.tsx";
+import {
+  approvalTitle,
+  decisionLabel,
+  renderApprovalPresentation,
+  terminalDescription,
+  terminalTitle,
+  type ResolutionOrigin,
+} from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
-type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
 function isUnavailableApprovalError(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError)) {
@@ -38,16 +44,6 @@ function isUnavailableApprovalError(error: unknown): boolean {
     reason === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "INVALID_REQUEST"
-  );
-}
-
-function decisionLabel(decision: ApprovalDecision): string {
-  return t(
-    {
-      "allow-once": "execApproval.allowOnce",
-      "allow-always": "execApproval.alwaysAllow",
-      deny: "execApproval.deny",
-    }[decision],
   );
 }
 
@@ -75,62 +71,13 @@ function ApprovalChip(props: { kind: "plugin" | "tool" | "agent"; value?: string
   );
 }
 
-function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhere");
-  }
-  if (origin === "here" && approval.status === "allowed") {
-    return t("approvalPage.approvedHere");
-  }
-  if (origin === "here" && approval.status === "denied") {
-    return t("approvalPage.deniedHere");
-  }
-  return t(
-    {
-      allowed: "approvalPage.approved",
-      denied: "approvalPage.denied",
-      expired: "approvalPage.expired",
-      cancelled: "approvalPage.cancelled",
-      pending: "approvalPage.pending",
-    }[approval.status],
-  );
-}
-
-function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhereDescription");
-  }
-  if (approval.status === "allowed") {
-    return t(
-      approval.decision === "allow-always"
-        ? "approvalPage.allowedAlwaysDescription"
-        : "approvalPage.allowedOnceDescription",
-    );
-  }
-  return t(
-    {
-      denied: "approvalPage.deniedDescription",
-      expired: "approvalPage.expiredDescription",
-      cancelled: "approvalPage.cancelledDescription",
-      pending: "approvalPage.pendingDescription",
-    }[approval.status],
-  );
-}
-
-function approvalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  return approval.status === "pending"
-    ? approval.presentation.kind === "plugin"
-      ? approval.presentation.title
-      : t("approvalPage.execTitle")
-    : terminalTitle(approval, origin);
-}
-
 type ApprovalPageProps = { approvalId: string };
+
+const approvalIdHandlers = new WeakMap<HTMLElement, () => void>();
 
 /** Approval admission stays synchronous; rendering observes the request owner's facts. */
 function createApprovalPage(
   context: ApplicationContext,
-  props: ApprovalPageProps,
   host: SolidBridgeElement<ApprovalPageProps>,
 ) {
   // The bridge owns this live value; callbacks must see changes before the next render.
@@ -178,7 +125,8 @@ function createApprovalPage(
     current.approvalGrantAccess &&
     readGatewayOperatorAccess(context.gateway.snapshot).canGrantApprovals;
 
-  function bindApprovalId(force = false, id = approvalId()) {
+  function bindApprovalId(force = false) {
+    const id = approvalId();
     try {
       if (!force && boundApprovalId === id) {
         return;
@@ -192,7 +140,13 @@ function createApprovalPage(
       state.requestError = id ? null : "unavailable";
       state.resolutionOrigin = "observed";
       if (id && state.connected && clientOwner && hasApprovalAccess()) {
-        void loadApproval({ id });
+        const generation = operationGeneration;
+        // Retire decisions immediately, but coalesce native ID writes before the lookup.
+        queueMicrotask(() => {
+          if (operationGeneration === generation) {
+            void loadApproval({ id });
+          }
+        });
       }
     } finally {
       notify();
@@ -447,18 +401,15 @@ function createApprovalPage(
   // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   applyGatewaySnapshot(context.gateway.snapshot);
+  approvalIdHandlers.set(host, () => bindApprovalId());
   onCleanup(() => {
+    approvalIdHandlers.delete(host);
     stopVisibility();
     stopGateway();
     operationGeneration += 1;
     clearPollTimer();
     clientOwner = null;
   });
-  // Gateway requests and the browser title follow the currently bound approval ID.
-  createEffect(
-    () => props.approvalId,
-    (id) => bindApprovalId(false, id),
-  );
   createDocumentTitle(() => {
     const current = view.read();
     const pageTitle =
@@ -488,9 +439,9 @@ function createApprovalPage(
 
 defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
-  (props, host) => {
+  (_props, host) => {
     const context = useApplication();
-    const page = createApprovalPage(context, props, host);
+    const page = createApprovalPage(context, host);
     const read = page.read;
     const missingScope = () => read().connected && !read().approvalsAccess;
     const disconnected = () => read().requestError === "connection" && !read().approval;
@@ -603,7 +554,10 @@ defineSolidBridge<ApprovalPageProps>(
       </main>
     );
   },
-  { properties: { approvalId: { default: "", attribute: "approval-id" } } },
+  {
+    properties: { approvalId: { default: "", attribute: "approval-id" } },
+    propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
+  },
 );
 
 function ApprovalContent(props: {
@@ -707,8 +661,10 @@ function ApprovalContent(props: {
                 onClick={() => void props.page.resolveApproval(decision())}
               >
                 {props.page.read().resolvingDecision === decision()
-                  ? t("approvalPage.resolvingDecision", { decision: decisionLabel(decision()) })
-                  : decisionLabel(decision())}
+                  ? t("approvalPage.resolvingDecision", {
+                      decision: decisionLabel(decision(), presentation()),
+                    })
+                  : decisionLabel(decision(), presentation())}
               </button>
             )}
           </For>

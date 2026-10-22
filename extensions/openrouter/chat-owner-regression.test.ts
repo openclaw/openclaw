@@ -324,4 +324,15 @@ describe("OpenRouter chat owner invariants", () => {
       { role: "assistant", content: "done", reasoning_content: "" },
     ]);
   });
+
+  it("backfills reasoning replay for the dated DeepSeek V4.1 model", async () => {
+    const payload = await captureProviderPayload("deepseek/deepseek-v4.1-flash-1017", "high", {
+      messages: [{ role: "assistant", content: "done" }],
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "high" });
+    expect(payload.messages).toEqual([
+      { role: "assistant", content: "done", reasoning_content: "" },
+    ]);
+  });
 });

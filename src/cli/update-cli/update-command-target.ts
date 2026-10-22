@@ -57,6 +57,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
@@ -72,7 +73,6 @@ import type { resolvePackageRuntimePreflight } from "./update-command-runtime-pr
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
-import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
 /** A fresh profile must be initialized by an identified, schema-declaring target. */
 export async function resolveFreshUpdateMetadata(target: {
@@ -422,6 +422,7 @@ export async function resolveUpdateCommandTarget(
           }
           const report = {
             root,
+            before: { version: currentVersion },
             serviceRoot: managedServiceRoot,
             installKind,
             reason: error.reason,

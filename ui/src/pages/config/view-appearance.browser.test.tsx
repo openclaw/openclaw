@@ -61,7 +61,7 @@ describe("config appearance preferences", () => {
       devices: [{ deviceId, label }],
       permissionRequired: false,
       selectedDeviceId: deviceId,
-      loading: false,
+      discovery: null,
       error: null,
     };
   }
@@ -201,7 +201,6 @@ describe("config appearance preferences", () => {
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
     renderConfigInto(props, container);
     const importButton = findButtonByText(container, "Import theme", false);
 
@@ -257,6 +256,11 @@ describe("config appearance preferences", () => {
     document.body.append(otherInput);
     const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
     document.body.append(container);
+    props.onOpenCustomThemeImport = () => {
+      props.customThemeImportExpanded = true;
+      renderConfigInto(props, container);
+    };
+    renderConfigInto(props, container);
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     const requestFrame = vi
@@ -276,8 +280,7 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
@@ -291,7 +294,7 @@ describe("config appearance preferences", () => {
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
 
-    props.customThemeImportFocusToken = 2;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     expect(frames.size).toBe(1);
     cleanupSolid();
@@ -493,7 +496,7 @@ describe("config appearance preferences", () => {
       const onRefresh = vi.fn();
       const state = {
         devices: [...devices],
-        loading,
+        discovery: loading ? new Promise<string | null>(() => {}) : null,
         permissionRequired: true,
         selectedDeviceId: "",
         error: null,
@@ -583,7 +586,10 @@ describe("config appearance preferences", () => {
   it("labels hidden session sections from the catalog and keeps ids as the fallback", () => {
     const { container, props } = renderAppearance({
       hiddenSessionCatalogIds: new Set(["claude", "offline-catalog"]),
-      hiddenSessionCatalogLabels: new Map([["claude", "Claude Code"]]),
+      hiddenSessionCatalogLabels: {
+        read: () => new Map([["claude", "Claude Code"]]),
+        scope: null,
+      },
     });
 
     const heading = Array.from(container.querySelectorAll("h3")).find(

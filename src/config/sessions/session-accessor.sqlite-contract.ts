@@ -93,7 +93,7 @@ export type SqliteSessionReclamationDiagnostics = {
 /** One validated request owns this record until its observed release event. */
 export type SqliteSessionReclamationAdmissionDiagnostics = {
   admissionId: number;
-  releaseCause?: "worker-release" | "worker-exit";
+  releaseCause?: "preliminary-release" | "worker-release" | "worker-exit";
 };
 
 export type SqliteSessionDatabaseAdmissionDiagnostics = {

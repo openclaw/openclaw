@@ -406,11 +406,61 @@
   height: var(--control-ui-text-xs);
 }
 
-.model-providers__defaults .model-picker {
-  width: min(420px, 100%);
+.model-providers__defaults .settings-row__control {
+  flex: 0 1 420px;
+  width: 420px;
+}
+
+.model-providers__defaults .model-picker,
+.model-providers__defaults .settings-segmented {
+  width: 100%;
+}
+
+.model-providers__defaults .model-picker .picker-select__trigger {
+  min-height: 48px;
+}
+
+/* Access metadata belongs to the option list, beside the model name. */
+.model-providers__defaults .model-picker .picker-select__option .picker-select__copy {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-providers__defaults .model-picker .picker-select__option .picker-select__label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.model-providers__defaults .model-picker .picker-select__option .picker-select__description {
+  flex: 0 1 auto;
+  max-width: 50%;
+  color: var(--muted);
+  text-align: end;
+  white-space: nowrap;
+}
+
+.model-providers__defaults .settings-segmented__btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 @media (max-width: 768px) {
+  .model-providers__defaults .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .model-providers__defaults .settings-row__control {
+    flex: 0 1 auto;
+    width: 100%;
+    max-width: none;
+  }
+
   .model-providers__head {
     align-items: flex-start;
     flex-wrap: wrap;

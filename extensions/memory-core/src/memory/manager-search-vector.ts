@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 import { createEmbeddingScorer } from "./manager-search-scorer.js";
 import {
@@ -10,6 +9,7 @@ import {
   type MemorySearchRow,
   type SearchRowResult,
 } from "./manager-search-shared.js";
+import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 // Bound scan batches so worker cancellation can interrupt large vectorless indexes.
 const FALLBACK_VECTOR_BATCH_SIZE = 256;
@@ -28,7 +28,7 @@ export async function searchVector(params: {
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
   runFallback: () => Promise<SearchRowResult[]>;
-  sourceFilterVec: { sql: string; params: MemorySource[] };
+  sourceFilterVec: MemorySourceFilter;
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
@@ -65,7 +65,7 @@ export async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   providerModelAliases?: string[];
-  sourceFilter: { sql: string; params: MemorySource[] };
+  sourceFilter: MemorySourceFilter;
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
@@ -86,7 +86,8 @@ export async function searchChunksByEmbedding(params: {
   const projection = `SELECT rowid AS rowid, embedding
   FROM memory_index_chunks
  WHERE ${modelFilter}${candidateFilter}`;
-  const ordering = `${params.sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
+  const sourceFilter = buildSqliteMemorySourceFilter(params.sourceFilter);
+  const ordering = `${sourceFilter.sql}\n ORDER BY rowid ASC\n LIMIT ?`;
   // The first batch includes zero and negative identities, including INT64_MIN;
   // later batches retain an indexed range predicate and the exact native cursor.
   const firstStmt = params.db.prepare(`${projection}${ordering}`);
@@ -109,7 +110,7 @@ export async function searchChunksByEmbedding(params: {
       ...providerModels,
       ...(params.candidateIds ?? []),
       ...(lastRowid === undefined ? [] : [lastRowid]),
-      ...params.sourceFilter.params,
+      ...sourceFilter.params,
       FALLBACK_VECTOR_BATCH_SIZE,
     );
     // SAFETY: Both scans read INTEGER rowids as bigint and embeddings from a STRICT BLOB column.

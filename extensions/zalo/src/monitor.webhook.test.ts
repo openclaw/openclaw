@@ -1,4 +1,3 @@
-// Zalo tests cover monitor.webhook plugin behavior.
 import type { RequestListener } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -27,37 +26,30 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   config: {},
 };
 
-function createWebhookRequestHandler(): RequestListener {
-  return (req, res) => {
-    void (async () => {
-      const handled = await handleZaloWebhookRequestInternal(req, res);
-      if (!handled) {
-        res.statusCode = 404;
-        res.end("not found");
-      }
-    })();
-  };
-}
-
-const webhookRequestHandler = createWebhookRequestHandler();
+const webhookRequestHandler: RequestListener = (req, res) => {
+  void (async () => {
+    const handled = await handleZaloWebhookRequestInternal(req, res);
+    if (!handled) {
+      res.statusCode = 404;
+      res.end("not found");
+    }
+  })();
+};
 
 const unregisterTargets: Array<() => void> = [];
 
 function registerTarget(params: {
   path: string;
-  secret?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  account?: ResolvedZaloAccount;
   config?: OpenClawConfig;
-  runtime?: Partial<ZaloRuntimeEnv>;
   acceptWebhook?: (rawEvent: string) => Promise<void>;
 }): void {
   unregisterTargets.push(
     registerZaloWebhookTarget({
-      account: params.account ?? DEFAULT_ACCOUNT,
-      config: params.config ?? ({} as OpenClawConfig),
-      runtime: (params.runtime ?? {}) as ZaloRuntimeEnv,
-      secret: params.secret ?? "secret",
+      account: DEFAULT_ACCOUNT,
+      config: params.config ?? {},
+      runtime: {} as ZaloRuntimeEnv,
+      secret: "secret",
       path: params.path,
       acceptWebhook:
         params.acceptWebhook ??
@@ -77,20 +69,38 @@ function registerTarget(params: {
   );
 }
 
-async function postWebhook(params: {
-  baseUrl: string;
-  path: string;
-  body: string;
-  secret?: string;
-}) {
-  return await fetch(`${params.baseUrl}${params.path}`, {
+async function postWebhook(
+  baseUrl: string,
+  path: string,
+  body = "{}",
+  { secret = "secret", contentType = "application/json", forwardedFor = "" } = {},
+) {
+  return await fetch(`${baseUrl}${path}`, {
     method: "POST",
     headers: {
-      "x-bot-api-secret-token": params.secret ?? "secret",
-      "content-type": "application/json",
+      "x-bot-api-secret-token": secret,
+      "content-type": contentType,
+      ...(forwardedFor ? { "x-forwarded-for": forwardedFor } : {}),
     },
-    body: params.body,
+    body,
   });
+}
+
+async function reachesRateLimit(
+  request: (index: number) => Promise<Response>,
+  attempts: number,
+  checkUnauthorized = false,
+) {
+  for (let i = 0; i < attempts; i += 1) {
+    const response = await request(i);
+    if (checkUnauthorized) {
+      expect([401, 429]).toContain(response.status);
+    }
+    if (response.status === 429) {
+      return true;
+    }
+  }
+  return false;
 }
 
 describe("handleZaloWebhookRequest", () => {
@@ -102,21 +112,23 @@ describe("handleZaloWebhookRequest", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("returns 400 for non-object payloads", async () => {
+  it.each([
+    ["non-object payload", "null", {}, 400],
+    ["non-JSON content type", "{}", { contentType: "text/plain" }, 415],
+    [
+      "invalid secret before invalid content type",
+      "not-json",
+      { secret: "invalid-token", contentType: "text/plain" }, // pragma: allowlist secret
+      401,
+    ],
+  ] as const)("rejects %s", async (_name, body, headers, status) => {
     registerTarget({ path: "/hook" });
-
     await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/hook`, {
-        method: "POST",
-        headers: {
-          "x-bot-api-secret-token": "secret",
-          "content-type": "application/json",
-        },
-        body: "null",
-      });
-
-      expect(response.status).toBe(400);
-      expect(await response.text()).toBe("Bad Request");
+      const response = await postWebhook(baseUrl, "/hook", body, headers);
+      expect(response.status).toBe(status);
+      if (status === 400) {
+        expect(await response.text()).toBe("Bad Request");
+      }
     });
   });
 
@@ -127,14 +139,7 @@ describe("handleZaloWebhookRequest", () => {
     registerTarget({ path: "/hook", statusSink: sinkB });
 
     await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/hook`, {
-        method: "POST",
-        headers: {
-          "x-bot-api-secret-token": "secret",
-          "content-type": "application/json",
-        },
-        body: "{}",
-      });
+      const response = await postWebhook(baseUrl, "/hook");
 
       expect(response.status).toBe(401);
       expect(sinkA).not.toHaveBeenCalled();
@@ -142,119 +147,62 @@ describe("handleZaloWebhookRequest", () => {
     });
   });
 
-  it("returns 415 for non-json content-type", async () => {
-    registerTarget({ path: "/hook-content-type" });
-
-    await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/hook-content-type`, {
-        method: "POST",
-        headers: {
-          "x-bot-api-secret-token": "secret",
-          "content-type": "text/plain",
-        },
-        body: "{}",
+  it.each([false, true])(
+    "acknowledges only successful durable admission (failed=%s)",
+    async (failed) => {
+      const admission = Promise.withResolvers<void>();
+      const acceptWebhook = vi.fn(async () => {
+        await admission.promise;
       });
+      const body = '{ "event_name": "message.text.received", "extra": true }';
+      registerTarget({ path: "/hook-durable-ack", acceptWebhook });
 
-      expect(response.status).toBe(415);
-    });
-  });
+      try {
+        await withServer(webhookRequestHandler, async (baseUrl) => {
+          let settled = false;
+          const responsePromise = postWebhook(baseUrl, "/hook-durable-ack", body).then(
+            (response) => {
+              settled = true;
+              return response;
+            },
+          );
 
-  it("waits for durable admission before acknowledging", async () => {
-    let releaseAdmission = () => {};
-    const admission = new Promise<void>((resolve) => {
-      releaseAdmission = resolve;
-    });
-    const acceptWebhook = vi.fn(async () => {
-      await admission;
-    });
-    const body = '{ "event_name": "message.text.received", "extra": true }';
-    registerTarget({ path: "/hook-durable-ack", acceptWebhook });
-
-    try {
-      await withServer(webhookRequestHandler, async (baseUrl) => {
-        let settled = false;
-        const responsePromise = postWebhook({
-          baseUrl,
-          path: "/hook-durable-ack",
-          body,
-        }).then((response) => {
-          settled = true;
-          return response;
+          await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
+          expect(acceptWebhook).toHaveBeenCalledWith(body);
+          expect(settled).toBe(false);
+          if (failed) {
+            admission.reject(new Error("sqlite unavailable"));
+          } else {
+            admission.resolve();
+          }
+          const response = await responsePromise;
+          expect(response.status).toBe(failed ? 500 : 200);
+          expect(response.headers.get("x-openclaw-delivery-accepted")).toBe(
+            failed ? null : "durable",
+          );
         });
-
-        await vi.waitFor(() => expect(acceptWebhook).toHaveBeenCalledTimes(1));
-        expect(acceptWebhook).toHaveBeenCalledWith(body);
-        expect(settled).toBe(false);
-        releaseAdmission();
-        const response = await responsePromise;
-        expect(response.status).toBe(200);
-        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
-      });
-    } finally {
-      releaseAdmission();
-    }
-  });
-
-  it("does not acknowledge a durable admission failure", async () => {
-    const acceptWebhook = vi.fn(async () => {
-      throw new Error("sqlite unavailable");
-    });
-    registerTarget({ path: "/hook-append-failure", acceptWebhook });
-
-    await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await postWebhook({
-        baseUrl,
-        path: "/hook-append-failure",
-        body: '{"event_name":"message.text.received"}',
-      });
-      expect(response.status).toBe(500);
-      expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
-    });
-  });
-
-  it("does not grow status counters when query strings churn on unauthorized requests", async () => {
-    registerTarget({ path: "/hook-query-status" });
-
-    await withServer(webhookRequestHandler, async (baseUrl) => {
-      let saw429 = false;
-      for (let i = 0; i < 200; i += 1) {
-        const response = await fetch(`${baseUrl}/hook-query-status?nonce=${i}`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
-            "content-type": "application/json",
-          },
-          body: "{}",
-        });
-        expect([401, 429]).toContain(response.status);
-        if (response.status === 429) {
-          saw429 = true;
-          break;
-        }
+      } finally {
+        admission.resolve();
       }
+    },
+  );
 
-      expect(saw429).toBe(true);
-      expect(getZaloWebhookStatusCounterSizeForTest()).toBe(2);
-    });
-  });
-
-  it("rate limits authenticated requests even when query strings churn", async () => {
-    registerTarget({ path: "/hook-query-rate" });
-
+  it.each([true, false])("rate limits query churn (unauthorized=%s)", async (unauthorized) => {
+    const path = unauthorized ? "/hook-query-status" : "/hook-query-rate";
+    registerTarget({ path });
     await withServer(webhookRequestHandler, async (baseUrl) => {
-      let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
-        const response = await postWebhook({
-          baseUrl,
-          path: `/hook-query-rate?nonce=${i}`,
-          body: "{}",
-        });
-        if (response.status === 429) {
-          saw429 = true;
-          break;
-        }
-      }
+      const saw429 = await reachesRateLimit(
+        (i) =>
+          postWebhook(baseUrl, `${path}?nonce=${i}`, "{}", {
+            secret: unauthorized ? "invalid-token" : "secret", // pragma: allowlist secret
+          }),
+        unauthorized ? 200 : 130,
+        unauthorized,
+      );
       expect(saw429).toBe(true);
+      if (unauthorized) {
+        expect(getZaloWebhookStatusCounterSizeForTest()).toBe(2);
+      }
     });
   });
 
@@ -262,56 +210,28 @@ describe("handleZaloWebhookRequest", () => {
     registerTarget({
       path: "/hook-preauth-split",
       config: {
-        gateway: {
-          trustedProxies: ["127.0.0.1"],
-        },
+        gateway: { trustedProxies: ["127.0.0.1"] },
       } as OpenClawConfig,
     });
 
     await withServer(webhookRequestHandler, async (baseUrl) => {
-      for (let i = 0; i < 130; i += 1) {
-        const response = await fetch(`${baseUrl}/hook-preauth-split?nonce=${i}`, {
-          method: "POST",
-          headers: {
-            "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
-            "content-type": "application/json",
-            "x-forwarded-for": "203.0.113.10",
-          },
-          body: "{}",
-        });
-        if (response.status === 429) {
-          break;
-        }
-      }
+      await reachesRateLimit(
+        (i) =>
+          postWebhook(baseUrl, `/hook-preauth-split?nonce=${i}`, "{}", {
+            secret: "invalid-token", // pragma: allowlist secret
+            forwardedFor: "203.0.113.10",
+          }),
+        130,
+      );
 
-      const validResponse = await fetch(`${baseUrl}/hook-preauth-split`, {
-        method: "POST",
-        headers: {
-          "x-bot-api-secret-token": "secret",
-          "content-type": "application/json",
-          "x-forwarded-for": "198.51.100.20",
-        },
-        body: JSON.stringify({ event_name: "message.unsupported.received" }),
-      });
+      const validResponse = await postWebhook(
+        baseUrl,
+        "/hook-preauth-split",
+        JSON.stringify({ event_name: "message.unsupported.received" }),
+        { forwardedFor: "198.51.100.20" },
+      );
 
       expect(validResponse.status).toBe(200);
-    });
-  });
-
-  it("still returns 401 before 415 when both secret and content-type are invalid", async () => {
-    registerTarget({ path: "/hook-auth-before-type" });
-
-    await withServer(webhookRequestHandler, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/hook-auth-before-type`, {
-        method: "POST",
-        headers: {
-          "x-bot-api-secret-token": "invalid-token", // pragma: allowlist secret
-          "content-type": "text/plain",
-        },
-        body: "not-json",
-      });
-
-      expect(response.status).toBe(401);
     });
   });
 });

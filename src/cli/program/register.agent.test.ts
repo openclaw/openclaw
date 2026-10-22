@@ -138,7 +138,6 @@ describe("agent command registration", () => {
       await runCli(["agents", "add", ...args]);
       expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining(options),
-        runtime,
         { hasAutomationFlags },
       );
       expect(mocks.agentsAddCommandMock.mock.calls[0]?.[0].workspace).toBe(workspace);
@@ -197,11 +196,7 @@ describe("agent command registration", () => {
     "dispatches agents %s",
     async (args, command, options, operation?: "bind" | "unbind") => {
       await runCli(["agents", ...(args ? args.split(" ") : [])]);
-      expect(command).toHaveBeenCalledExactlyOnceWith(
-        ...(operation ? [operation] : []),
-        options,
-        runtime,
-      );
+      expect(command).toHaveBeenCalledExactlyOnceWith(...(operation ? [operation] : []), options);
     },
   );
 

@@ -199,9 +199,7 @@ export async function refreshChromeMcpCleanupProcess(session: ChromeMcpSession):
     }
     throw err;
   } finally {
-    if (session.processCleanupRefresh === refresh) {
-      session.processCleanupRefresh = undefined;
-    }
+    session.processCleanupRefresh = undefined;
   }
 }
 

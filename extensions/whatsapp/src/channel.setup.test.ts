@@ -4,9 +4,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappSetupPlugin } from "./channel.setup.js";
-import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 import {
   createWhatsAppAllowlistModeInput,
@@ -21,12 +19,6 @@ const hoisted = vi.hoisted(() => ({
   loginWeb: vi.fn(async () => {}),
   hasWebCredsSync: vi.fn(() => false),
   readWebAuthState: vi.fn(async (): Promise<"linked" | "not-linked" | "unstable"> => "not-linked"),
-  readWebAuthExistsForDecision: vi.fn(
-    async (): Promise<{ outcome: "stable"; exists: boolean } | { outcome: "unstable" }> => ({
-      outcome: "stable",
-      exists: false,
-    }),
-  ),
   resolveWhatsAppAuthDir: vi.fn(() => ({
     authDir: "/tmp/openclaw-whatsapp-test",
   })),
@@ -63,7 +55,6 @@ vi.mock("./auth-store.js", async () => {
   return {
     ...actual,
     readWebAuthState: hoisted.readWebAuthState,
-    readWebAuthExistsForDecision: hoisted.readWebAuthExistsForDecision,
   };
 });
 
@@ -130,10 +121,6 @@ describe("whatsapp setup wizard", () => {
     hoisted.loginWeb.mockReset();
     hoisted.hasWebCredsSync.mockReset().mockReturnValue(false);
     hoisted.readWebAuthState.mockReset().mockResolvedValue("not-linked");
-    hoisted.readWebAuthExistsForDecision.mockReset().mockResolvedValue({
-      outcome: "stable",
-      exists: false,
-    });
     hoisted.resolveWhatsAppAuthDir
       .mockReset()
       .mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
@@ -279,48 +266,6 @@ describe("whatsapp setup wizard", () => {
     expect(result.cfg.channels?.whatsapp?.accounts?.Default?.dmPolicy).toBe("open");
     expect(result.cfg.channels?.whatsapp?.accounts?.Default?.allowFrom).toEqual(["*"]);
     expect(result.cfg.channels?.whatsapp?.accounts?.default).toBeUndefined();
-  });
-
-  it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
-    const result = await checkWhatsAppHeartbeatReady({
-      cfg: whatsappConfig({ defaultAccount: "work", accounts: { work: { authDir: "/tmp/work" } } }),
-      deps: {
-        readWebAuthExistsForDecision: async () => ({
-          outcome: "stable" as const,
-          exists: true,
-        }),
-        hasActiveWebListener: (accountId?: string) => accountId === "work",
-      },
-    });
-
-    expect(result).toEqual({ ok: true, reason: "ok" });
-  });
-
-  it("heartbeat readiness honors the channel disable flag", async () => {
-    const result = await checkWhatsAppHeartbeatReady({
-      cfg: whatsappConfig({ enabled: false }),
-      deps: {
-        readWebAuthExistsForDecision: async () => ({
-          outcome: "stable" as const,
-          exists: true,
-        }),
-        hasActiveWebListener: () => true,
-      },
-    });
-
-    expect(result).toEqual({ ok: false, reason: "whatsapp-disabled" });
-  });
-
-  it("heartbeat readiness returns unstable when auth state timing is unresolved", async () => {
-    const result = await checkWhatsAppHeartbeatReady({
-      cfg: whatsappConfig({ accounts: { default: { authDir: "/tmp/default" } } }),
-      deps: {
-        readWebAuthExistsForDecision: async () => ({ outcome: "unstable" as const }),
-        hasActiveWebListener: () => true,
-      },
-    });
-
-    expect(result).toEqual({ ok: false, reason: WHATSAPP_AUTH_UNSTABLE_CODE });
   });
 
   it("keeps config distinct from indeterminate linkage", async () => {

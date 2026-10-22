@@ -158,7 +158,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   const assistantProfileFailoverReason =
     assistantFailoverReason ??
     (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
-  const assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
+  let assistantProfileFailureReason = input.failover.resolveAuthProfileFailureReason(
     assistantProfileFailoverReason,
     {
       providerStarted: assistantProviderStarted,
@@ -418,15 +418,22 @@ export async function handleEmbeddedAssistantFailure(input: {
       logFallbackDecision: logFailoverDecision,
     });
 
+    if (assistantProfileFailureReason === "timeout" && !rotated && !runInput.fallbackConfigured) {
+      // A cooldown without a recovery target would only block subsequent turns.
+      assistantProfileFailureReason = null;
+    }
     const markFailedProfilePromise = markFailedProfile();
     if (timedOut && !runInput.isProbeSession && failedProfileId) {
       const timeoutLabel = idleTimedOut ? "idle timeout (model silent)" : "timed out";
       // Existing credentials are rotation targets only when config authorizes them.
-      log.warn(
-        rotated
-          ? `Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`
-          : `Profile ${failedProfileId} ${timeoutLabel}. No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover.`,
-      );
+      const recoveryHint = rotated
+        ? "Trying next account..."
+        : runInput.fallbackConfigured
+          ? "No further authorized account for this provider; trying the next configured model."
+          : assistantProfileFailureReason
+            ? "No further authorized account for this provider; create a backup auth profile and add its id to auth.order to enable failover."
+            : "No failover target is available; leaving the profile available for the next turn.";
+      log.warn(`Profile ${failedProfileId} ${timeoutLabel}. ${recoveryHint}`);
     }
     if (cloudCodeAssistFormatError && failedProfileId) {
       log.warn(

@@ -323,9 +323,9 @@ function ModelAccountRows(props: StateProps) {
 
 export function ModelAccountsSection(props: StateProps) {
   const state = () => props.readState();
-  const snapshot = () => state().context.gateway.snapshot;
+  const snapshot = () => state().props.target.read().gateway;
   const person = () =>
-    snapshot().selfUser?.id === state().props.identityId ? snapshot().selfUser : null;
+    snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
   const personLabel = () =>
     person() || state().target
       ? state().props.personLabel ||

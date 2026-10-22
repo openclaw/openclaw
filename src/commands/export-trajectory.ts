@@ -1,4 +1,6 @@
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { pathScope } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString, readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -14,13 +16,11 @@ import {
   resolveSessionTranscriptReadTarget,
 } from "../config/sessions/session-accessor.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { root } from "../infra/fs-safe.js";
+import { isPathStrictlyInside } from "../infra/path-guards.js";
 import { classifySessionKeyShape, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  exportTrajectoryForCommand,
-  formatTrajectoryCommandExportSummary,
-  type TrajectoryCommandExportSummary,
-} from "../trajectory/command-export.js";
+import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "../trajectory/export.js";
 import { resolveExplicitSessionStorePath } from "./session-store-targets.js";
 
 type ExportTrajectoryCommandOptions = {
@@ -145,20 +145,73 @@ export async function exportTrajectoryCommand(
   } catch (error) {
     throwExpectedCliError(`Failed to resolve session file: ${formatErrorMessage(error)}`);
   }
-  let summary: TrajectoryCommandExportSummary;
+  let summary;
   try {
-    summary = await exportTrajectoryForCommand({
-      outputPath: resolvedOpts.output,
-      sessionTarget: {
-        agentId: sessionTarget.agentId ?? targetAgentId,
-        sessionId: sessionTarget.sessionId,
-        sessionKey: sessionTarget.sessionKey ?? sessionKey,
-        storePath: sessionTarget.storePath,
+    const outputPath = resolvedOpts.output;
+    const exportTarget = {
+      agentId: sessionTarget.agentId ?? targetAgentId,
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey ?? sessionKey,
+      storePath: sessionTarget.storePath,
+    };
+    const sessionId = entry.sessionId;
+    const workspaceDir = path.resolve(resolvedOpts.workspace ?? process.cwd());
+    const realWorkspace = await fsp.realpath(workspaceDir);
+    const relativeBase = path.join(".openclaw", "trajectory-exports");
+    const prepared = await pathScope(realWorkspace, { label: "workspace" }).ensureDir(
+      relativeBase,
+      {
+        mode: 0o700,
       },
-      sessionId: entry.sessionId,
+    );
+    if (!prepared.ok) {
+      throw prepared.diagnostic ?? new Error(prepared.error);
+    }
+    const baseDir = path.join(workspaceDir, relativeBase);
+    const raw = outputPath?.trim();
+    let outputDir: string;
+    if (!raw) {
+      const defaultDir = resolveDefaultTrajectoryExportDir({ workspaceDir, sessionId });
+      outputDir = path.join(baseDir, path.basename(defaultDir));
+    } else {
+      if (path.isAbsolute(raw) || raw.startsWith("~")) {
+        throw new Error(
+          "Output path must be relative to the workspace trajectory exports directory",
+        );
+      }
+      const resolvedBase = path.resolve(baseDir);
+      outputDir = path.resolve(resolvedBase, raw);
+      const relative = path.relative(resolvedBase, outputDir);
+      if (!isPathStrictlyInside(resolvedBase, outputDir)) {
+        throw new Error("Output path must stay inside the workspace trajectory exports directory");
+      }
+      // Prefix with `./` so normalized literal `~/...` names do not expand to HOME.
+      await (await root(prepared.path)).resolve(`.${path.sep}${relative}`);
+    }
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionTarget: exportTarget,
+      sessionId,
       sessionKey,
-      workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),
+      workspaceDir,
     });
+    const relativePath = path.relative(workspaceDir, bundle.outputDir);
+    const displayPath =
+      relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
+        ? relativePath
+        : path.basename(bundle.outputDir);
+    summary = {
+      outputDir: bundle.outputDir,
+      displayPath,
+      sessionId,
+      eventCount: bundle.manifest.eventCount,
+      runtimeEventCount: bundle.manifest.runtimeEventCount,
+      transcriptEventCount: bundle.manifest.transcriptEventCount,
+      files: [
+        ...bundle.files.filter((file) => !bundle.supplementalFiles.includes(file)),
+        ...bundle.supplementalFiles,
+      ],
+    };
   } catch (error) {
     throwExpectedCliError(`Failed to export trajectory: ${formatErrorMessage(error)}`);
   }
@@ -167,5 +220,16 @@ export async function exportTrajectoryCommand(
     writeRuntimeJson(runtime, summary);
     return;
   }
-  runtime.log(formatTrajectoryCommandExportSummary(summary));
+  runtime.log(
+    [
+      "✅ Trajectory exported!",
+      "",
+      `📦 Bundle: ${summary.displayPath}`,
+      `🧵 Session: ${summary.sessionId}`,
+      `📊 Events: ${summary.eventCount}`,
+      `🧪 Runtime events: ${summary.runtimeEventCount}`,
+      `📝 Transcript events: ${summary.transcriptEventCount}`,
+      `📁 Files: ${summary.files.join(", ")}`,
+    ].join("\n"),
+  );
 }

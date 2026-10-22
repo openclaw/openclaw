@@ -9,10 +9,17 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailureReason } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { readGatewayLogTailLines } from "../../daemon/diagnostics.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 
-/** Reads the last non-empty lines from a gateway log file, returning an empty list on read failure. */
+/** Reads a bounded log tail, keeping unavailable files visible in the diagnostic report. */
 export async function readFileTailLines(filePath: string, maxLines: number): Promise<string[]> {
-  const lines = await readGatewayLogTailLines(filePath).catch(() => []);
+  const lines = await readGatewayLogTailLines(filePath).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      // Logs may not exist before the first service start.
+      return [];
+    }
+    return ["Log unavailable; check this file's path and permissions, then retry."];
+  });
   const out = lines.slice(Math.max(0, lines.length - maxLines));
   return out.map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
 }

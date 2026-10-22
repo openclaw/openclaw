@@ -16,8 +16,8 @@ import type {
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
-  captureCurrentReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {

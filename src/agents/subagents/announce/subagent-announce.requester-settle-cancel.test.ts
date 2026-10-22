@@ -24,7 +24,6 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../registry/subagent-registry-helpers.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -41,7 +40,6 @@ import {
   settleRequesterAfterSessionSpawns,
 } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
-import { rowToSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -52,30 +50,6 @@ import {
 import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
 const fixture = useSubagentControlFixture();
-function rejectRegistryWrites(reject: (row: SubagentRunRecord) => boolean, message: string) {
-  fixture.worker.mockImplementation((context, operation, options) =>
-    runSubagentStateWorkerOperation(
-      context,
-      (scope) =>
-        operation({
-          execute: async (command, executeOptions) => {
-            if (
-              isSubagentRegistryWriteCommand(command) &&
-              command.input.values.some((value) => {
-                const row = rowToSubagentRunRecord(value);
-                return row !== null && reject(row);
-              })
-            ) {
-              throw new Error(message);
-            }
-            return scope.execute(command, executeOptions);
-          },
-        }),
-      options,
-    ),
-  );
-}
-
 afterEach(() => {
   setSubagentAnnounceDeliveryDepsForTest();
   resetSessionControllerStateForTest();
@@ -277,7 +251,7 @@ it.each([
       await admitted.promise;
     }
     if (phase === "failed persistence") {
-      rejectRegistryWrites(
+      fixture.rejectRegistryWrites(
         (row) => row.runId === entry.runId && row.suppressCompletionDelivery === true,
         "completion cancellation write rejected",
       );
@@ -529,7 +503,7 @@ it.each([
       expect(requesterExecutionRunId).not.toBe(originalRequester.runId);
     }
     if (phase === "failed kill") {
-      rejectRegistryWrites(
+      fixture.rejectRegistryWrites(
         (row) => row.runId === "requester" && Boolean(row.killIntent),
         "requester kill intent rejected",
       );

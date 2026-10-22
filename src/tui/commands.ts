@@ -175,6 +175,7 @@ const TUI_COMMAND_ROWS = [
   ],
   ["btw", undefined, "/btw <side question>", undefined, { shared: true }],
   ["queue", undefined, "/queue [mode]", undefined, { shared: true }],
+  ["followup", undefined, "/followup <message>", undefined, { shared: true }],
   ["stop", undefined, "/stop", undefined, { shared: true }],
   ["new", "Spawn a new isolated session", "/new or /reset"],
   ["reset", "Reset the current session"],

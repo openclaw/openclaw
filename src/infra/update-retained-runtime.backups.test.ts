@@ -37,40 +37,41 @@ it.each(
     );
     const base = await fs.realpath(dirs.make("retained-package-backup-"));
     const { params, globalRoot, packageRoot: installed } = await createPackageSwapFixture(base);
+    async function writeTree(root: string, files: Record<string, string>) {
+      for (const [file, content] of Object.entries(files)) {
+        const destination = path.join(root, file);
+        await fs.mkdir(path.dirname(destination), { recursive: true });
+        await fs.writeFile(destination, content);
+      }
+    }
+    const read = (file: string) => fs.readFile(file, "utf8");
     const dependency = path.join(globalRoot, "fixture");
     const backupName = ".openclaw.package-backup-123-1700000000000";
     const backup = path.join(globalRoot, backupName);
     const checkout = kind === "symlink" ? path.join(base, "checkout") : backup;
-    for (const directory of [
-      path.join(installed, "dist"),
-      dependency,
-      path.join(checkout, ".claude"),
-      path.join(checkout, ".agents/skills"),
-      path.join(checkout, "node_modules"),
-    ]) {
-      await fs.mkdir(directory, { recursive: true });
-    }
-    await fs.writeFile(
-      path.join(installed, "package.json"),
-      JSON.stringify({
+    const asset = path.join("dist", backupName, "asset.txt");
+    const assetContent = "runtime asset outside module owner";
+    await writeTree(installed, {
+      "package.json": JSON.stringify({
         name: "openclaw",
         version: "1.0.0",
         type: "module",
         dependencies: { fixture: "1.0.0" },
       }),
-    );
-    await fs.writeFile(
-      path.join(installed, "dist/updater.mjs"),
-      'export { value } from "fixture";',
-    );
-    await fs.writeFile(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "fixture", type: "module", exports: "./index.js" }),
-    );
-    await fs.writeFile(path.join(dependency, "index.js"), 'export const value = "hoisted";');
-    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}');
+      "dist/updater.mjs": 'export { value } from "fixture";',
+      [asset]: assetContent,
+    });
+    await writeTree(dependency, {
+      "package.json": JSON.stringify({ name: "fixture", type: "module", exports: "./index.js" }),
+      "index.js": 'export const value = "hoisted";',
+    });
+    await writeTree(checkout, {
+      "package.json": '{"name":"openclaw"}',
+      ".agents/skills/keep.txt": "operator checkout",
+    });
     const sentinel = path.join(checkout, ".agents/skills/keep.txt");
-    await fs.writeFile(sentinel, "operator checkout");
+    await fs.mkdir(path.join(checkout, ".claude"));
+    await fs.mkdir(path.join(checkout, "node_modules"));
     await fs.symlink("../.agents/skills", path.join(checkout, ".claude/skills"), "dir");
     await fs.symlink(checkout, path.join(checkout, "node_modules/openclaw"), "junction");
     if (kind === "symlink") {
@@ -81,11 +82,7 @@ it.each(
       path.join(globalRoot, ".openclaw-package-backup-124-1700000000000"),
       "junction",
     );
-    await fs.mkdir(`${backup}.databases`);
-    await fs.writeFile(path.join(`${backup}.databases`, "snapshot.sqlite"), "recovery data");
-    const asset = path.join("dist", backupName, "asset.txt");
-    await fs.mkdir(path.dirname(path.join(installed, asset)), { recursive: true });
-    await fs.writeFile(path.join(installed, asset), "runtime asset outside module owner");
+    await writeTree(`${backup}.databases`, { "snapshot.sqlite": "recovery data" });
     const original = await fs.lstat(backup, { bigint: true });
     const moduleUrl = pathToFileURL(path.join(installed, "dist/updater.mjs"));
     await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
@@ -100,10 +97,8 @@ it.each(
       const retainedModules = path.resolve(path.dirname(fileURLToPath(retainedUrl)), "../..");
       expect((await fs.readdir(retainedModules)).toSorted()).toEqual(["fixture", "openclaw"]);
       expect((await import(retainedUrl.href)).value).toBe("hoisted");
-      expect(await fs.readFile(path.join(retainedModules, "openclaw", asset), "utf8")).toBe(
-        "runtime asset outside module owner",
-      );
-      expect(await fs.readFile(sentinel, "utf8")).toBe("operator checkout");
+      expect(await read(path.join(retainedModules, "openclaw", asset))).toBe(assetContent);
+      expect(await read(sentinel)).toBe("operator checkout");
       expect(await fs.lstat(backup, { bigint: true })).toMatchObject({
         dev: original.dev,
         ino: original.ino,
@@ -117,19 +112,15 @@ it.each(
       });
       expect(result.status, result.step.stderrTail ?? "").toBe("committed");
       expect(await transaction!.complete({ activationVerified: true }, () => {})).toBeUndefined();
-      expect(
-        JSON.parse(await fs.readFile(path.join(installed, "package.json"), "utf8")),
-      ).toMatchObject({
+      expect(JSON.parse(await read(path.join(installed, "package.json")))).toMatchObject({
         version: "2.0.0",
       });
     });
     if (kind === "symlink") {
-      expect(await fs.readFile(sentinel, "utf8")).toBe("operator checkout");
+      expect(await read(sentinel)).toBe("operator checkout");
       expect(await fs.readlink(path.join(checkout, ".claude/skills"))).toBe("../.agents/skills");
     }
-    expect(await fs.readFile(path.join(`${backup}.databases`, "snapshot.sqlite"), "utf8")).toBe(
-      "recovery data",
-    );
+    expect(await read(path.join(`${backup}.databases`, "snapshot.sqlite"))).toBe("recovery data");
     await expect(fs.lstat(backup)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );

@@ -6,6 +6,21 @@ export function composedParent(element: Element): Element | null {
   );
 }
 
+/** Include slot, shadow-root and document nodes for presentation observation. */
+export function composedAncestors(start: Node | null): Node[] {
+  const ancestors: Node[] = [];
+  for (let node = start; node;) {
+    ancestors.push(node);
+    node =
+      node instanceof Element && node.assignedSlot
+        ? node.assignedSlot
+        : node instanceof ShadowRoot
+          ? node.host
+          : node.parentNode;
+  }
+  return ancestors;
+}
+
 /** Ordinary primary click without modifiers; anything else keeps native link behavior. */
 export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (

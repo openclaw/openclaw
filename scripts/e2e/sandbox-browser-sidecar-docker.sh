@@ -91,7 +91,7 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends docker.io \
+ && apt-get install -y --no-install-recommends docker.io docker-cli \
  && rm -rf /var/lib/apt/lists/*
 USER appuser
 EOF

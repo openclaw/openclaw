@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { parseOptionalPositiveInteger, parseOptionalTimeoutMs } from "./shared.js";
+import {
+  parseOptionalPositiveInteger,
+  parseOptionalTimeoutMs,
+  requireProviderModelOverride,
+} from "./shared.js";
+
+describe("capability CLI model overrides", () => {
+  it.each([undefined, "", " \t"])("keeps a blank override %j absent", (raw) => {
+    expect(requireProviderModelOverride(raw)).toBeUndefined();
+  });
+
+  it.each(["model", "/model", "provider/"])("rejects incomplete override %j", (raw) => {
+    expect(() => requireProviderModelOverride(raw)).toThrow(
+      "Model overrides must use the form <provider/model>.",
+    );
+  });
+
+  it("preserves model paths and segment whitespace after trimming the override", () => {
+    expect(requireProviderModelOverride(" provider / model/revision ")).toEqual({
+      provider: "provider ",
+      model: " model/revision",
+    });
+  });
+});
 
 describe("capability CLI numeric option parsing", () => {
   it("keeps omitted optional values absent and parses valid values", () => {

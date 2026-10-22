@@ -50,7 +50,6 @@ import {
 } from "../../shared/device-bootstrap-profile.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -87,7 +86,6 @@ type StartupConnectResponse = {
 };
 
 const connectionCleanups = new Set<() => Promise<void>>();
-const identityCleanups = new Set<() => Promise<void>>();
 
 function ownStartupCleanup(owners: Set<() => Promise<void>>, run: () => Promise<unknown>) {
   // A failed drain stays owned; a later teardown cannot turn it into a clean reset.
@@ -150,7 +148,6 @@ async function withStartupTestState<T>(
     async () => {
       await work.drain();
       await drainStartupCleanups(connectionCleanups);
-      await drainStartupCleanups(identityCleanups);
       await state.cleanup();
     },
   );
@@ -158,7 +155,6 @@ async function withStartupTestState<T>(
 
 afterEach(async () => {
   await drainStartupCleanups(connectionCleanups);
-  await drainStartupCleanups(identityCleanups);
   await closeOpenClawStateDatabaseAsync();
   resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
@@ -176,7 +172,6 @@ async function attachStartupNodeConnect(params: {
   onNodeRegistered?: () => void;
 }) {
   const identityPath = params.identityPath;
-  ownStartupCleanup(identityCleanups, () => closeOpenClawStateDatabaseByPathAsync(identityPath));
   const sent: unknown[] = [];
   const connectResponse = createDeferred<StartupConnectResponse>();
   const setupCompletion = createDeferred<unknown>();
@@ -577,7 +572,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             throw new Error("expected pending cloud-worker setup token");
           }
           const enrollment = await beginEnrollment();
-          const identityPath = state.path("startup-retrying-node.sqlite");
+          const identityPath = state.path("startup-retrying-node", "client", "credentials.sqlite");
           const identity = loadOrCreateDeviceIdentity({ path: identityPath });
           const verification = {
             token: issued.token,
@@ -679,7 +674,11 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           if (connectionKind === "cloud bootstrap") {
             await beginEnrollment();
           }
-          const identityPath = state.path("startup-drain-race-node.sqlite");
+          const identityPath = state.path(
+            "startup-drain-race-node",
+            "client",
+            "credentials.sqlite",
+          );
           if (connectionKind === "paired shared-token") {
             const identity = loadOrCreateDeviceIdentity({ path: identityPath });
             const devicePairing = await requestDevicePairing({
@@ -785,7 +784,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         }
         const nonCloudHarness = await attachStartupNodeConnect({
           bootstrapToken: nonCloud.token,
-          identityPath: state.path("non-cloud-node.sqlite"),
+          identityPath: state.path("non-cloud-node", "client", "credentials.sqlite"),
           isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
             store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
         });
@@ -809,7 +808,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         });
         const wrongSetupHarness = await attachStartupNodeConnect({
           bootstrapToken: wrongSetup.token,
-          identityPath: state.path("wrong-setup-node.sqlite"),
+          identityPath: state.path("wrong-setup-node", "client", "credentials.sqlite"),
           isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
             store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
         });
@@ -854,7 +853,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
               ...(credentialShape === "mixed bootstrap and shared token"
                 ? { sharedToken: "invalid-shared-token", gatewayToken: "expected-shared-token" }
                 : {}),
-              identityPath: state.path("invalid-token-node.sqlite"),
+              identityPath: state.path("invalid-token-node", "client", "credentials.sqlite"),
               isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
                 store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
               rateLimiter,

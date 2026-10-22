@@ -1162,9 +1162,7 @@ describe("runCopilotAttempt", () => {
         (tool) => tool.name,
       ),
     ).toEqual(["message"]);
-    expect(requireSystemMessage(sdk)).toContain(
-      "Visible source replies are not automatically delivered",
-    );
+    expect(requireSystemMessage(sdk)).toContain("This turn has no current conversation.");
   });
 
   it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
@@ -1522,7 +1520,7 @@ describe("runCopilotAttempt", () => {
       expect(content).toContain("## Skill Workshop");
       expect(content).toContain("## Delegation");
       expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("is your complete reply.");
+      expect(content).toContain("automatically to the caller.");
       expect(llmInput).toHaveBeenCalledWith(
         expect.objectContaining({ systemPrompt: content }),
         expect.any(Object),

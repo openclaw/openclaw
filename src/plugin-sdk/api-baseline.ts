@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   SymbolFlags,
   type Checker,
   type Printer,
   type Program,
   type Symbol as CompilerSymbol,
-} from "typescript/unstable/sync";
+} from "typescript/sync";
 import { CompilerInputSnapshot } from "../../scripts/lib/compiler-input-snapshot.mts";
 import { createDeclarationFileSystem } from "../../scripts/lib/native-declaration-filesystem.mts";
 import { emitNativeDeclarationsInSubprocess } from "../../scripts/lib/native-declaration-subprocess.mts";

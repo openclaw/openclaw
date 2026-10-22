@@ -204,6 +204,40 @@ it.each([false, true])(
   },
 );
 
+it("refuses a pending mention write after the recipient loses access", () =>
+  withInbox(
+    async (f) => {
+      await f.items();
+      const prepared = createDeferred();
+      const release = createDeferred();
+      const commit = mentionWorker.commitMentionChanges;
+      vi.spyOn(mentionWorker, "commitMentionChanges").mockImplementationOnce(async (...args) => {
+        prepared.resolve();
+        await release.promise;
+        return commit(...args);
+      });
+      const pending = f.post("revoked-before-commit");
+      try {
+        await awaitGateBeforeSettlement(
+          prepared.promise,
+          pending,
+          "Mention did not prepare its write",
+        );
+        setUserProfileRole(f.bob.id, "denied");
+        invalidateOperatorRolePolicy(f.bob.id);
+        release.resolve();
+        await pending;
+        expect(storedSnapshot()?.sources ?? []).toEqual([]);
+        expect(f.push).not.toHaveBeenCalled();
+        expectMentionError(await listInbox(f.inbox, f.bobClient), "FORBIDDEN");
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    },
+    mentionRoles({ denied: { agents: [], scopes: [], sessions: { others: "none" } } }),
+  ));
+
 it("drains accepted committed input during disposal while refusing new input", () =>
   withInbox(async (f) => {
     const accepted = f.post("accepted-before-dispose");

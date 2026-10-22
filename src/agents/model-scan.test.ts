@@ -9,11 +9,14 @@ const jsonResponse = (body: BodyInit) =>
 const createFetchFixture = (payload: unknown): typeof fetch =>
   withFetchPreconnect(async () => jsonResponse(JSON.stringify(payload)));
 
-const scan = (data: unknown[], options: Parameters<typeof scanOpenRouterModels>[0] = {}) =>
-  scanOpenRouterModels({ fetchImpl: createFetchFixture({ data }), probe: false, ...options });
+const scan = (data: unknown[], options: Parameters<typeof scanOpenRouterModels>[0] = {}) => {
+  vi.stubGlobal("fetch", createFetchFixture({ data }));
+  return scanOpenRouterModels({ probe: false, ...options });
+};
 
 describe("scanOpenRouterModels", () => {
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -99,7 +102,8 @@ describe("scanOpenRouterModels", () => {
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
     const fetchImpl = withFetchPreconnect(async () => response);
 
-    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(/HTTP 503/);
+    vi.stubGlobal("fetch", fetchImpl);
+    await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(/HTTP 503/);
 
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -125,7 +129,8 @@ describe("scanOpenRouterModels", () => {
       ),
     );
 
-    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
+    vi.stubGlobal("fetch", fetchImpl);
+    await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(
       /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
@@ -139,7 +144,8 @@ describe("scanOpenRouterModels", () => {
     ["envelope", "{}", /OpenRouter \/models.*malformed JSON response/],
   ] as const)("rejects a malformed catalog %s", async (_kind, body, error) => {
     const fetchImpl = withFetchPreconnect(async () => jsonResponse(body));
-    await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(error);
+    vi.stubGlobal("fetch", fetchImpl);
+    await expect(scanOpenRouterModels({ probe: false })).rejects.toThrow(error);
   });
 
   it("requires an API key when probing", async () => {
@@ -157,9 +163,10 @@ describe("scanOpenRouterModels", () => {
         // Deliberately ignore cancellation to prove the timeout race settles independently.
       });
 
-    const pending = expect(
-      scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs: 1 }),
-    ).rejects.toThrow(/OpenRouter model scan timed out/);
+    vi.stubGlobal("fetch", fetchImpl);
+    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs: 1 })).rejects.toThrow(
+      /OpenRouter model scan timed out/,
+    );
 
     await vi.advanceTimersByTimeAsync(1);
     await pending;
@@ -212,9 +219,10 @@ describe("scanOpenRouterModels", () => {
       );
     });
 
-    const pending = expect(
-      scanOpenRouterModels({ fetchImpl, probe: false, timeoutMs }),
-    ).rejects.toThrow(/timed out/i);
+    vi.stubGlobal("fetch", fetchImpl);
+    const pending = expect(scanOpenRouterModels({ probe: false, timeoutMs })).rejects.toThrow(
+      /timed out/i,
+    );
 
     await vi.advanceTimersByTimeAsync(timeoutMs - 1);
     expect({ chunkCount, abortCount }).toEqual({ chunkCount: 3, abortCount: 0 });

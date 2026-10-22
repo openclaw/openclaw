@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { buildGatewayClawAddPlan, projectGatewayClawAddPlan } from "./gateway-add-plan.js";
+import {
+  buildGatewayClawAddPlan,
+  projectGatewayClawAddPlan,
+  type GatewayClawAddPlanningContext,
+} from "./gateway-add-plan.js";
+import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import type { ClawReadResult } from "./types.js";
@@ -15,11 +20,28 @@ vi.mock("./packages.js", () => ({ preflightClawPackage }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
-async function readGatewayPackageFixture(fixture: string): Promise<ClawReadResult> {
-  const source = await readClawManifestFile(fixture);
+async function readFixture(
+  name = "workspace-agent",
+): Promise<Extract<ClawReadResult, { ok: true }>> {
+  const source = await readClawManifestFile(path.resolve(`src/claws/fixtures/${name}.claw.json`));
   if (!source.ok) {
-    return source;
+    throw new Error(JSON.stringify(source.diagnostics));
   }
+  return source;
+}
+
+const trust = {
+  riskAcknowledgementRequired: false,
+  trustRecord: {
+    clawhubTrustDisposition: "clean" as const,
+    clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
+  },
+};
+
+async function readGatewayPackageFixture(
+  name = "workspace-agent",
+): Promise<Extract<ClawReadResult, { ok: true }>> {
+  const source = await readFixture(name);
   return {
     ...source,
     source: {
@@ -31,93 +53,84 @@ async function readGatewayPackageFixture(fixture: string): Promise<ClawReadResul
   };
 }
 
+const buildPlan = (
+  source: Extract<ClawReadResult, { ok: true }>,
+  config: GatewayClawAddPlanningContext["config"] = { agents: { entries: {} } },
+  agentId?: string,
+) => buildGatewayClawAddPlan(source, { config, agentId, sourceMcpServers: {} });
+
 describe("Gateway Claw Add plan", () => {
-  it("allocates the next numbered ordinary agent without reusing a missing suffix", async () => {
-    const stateDir = tempDirs.make("openclaw-claws-numbered-add-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
-    const config = {
-      agents: {
-        entries: {
-          "workspace-agent": { name: "Workspace Agent" },
-          "workspace-agent-3": { name: "Workspace Agent 3" },
-        },
-      },
-    };
-
-    const first = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
-    const pinned = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: first.agent.finalId,
-      sourceMcpServers: {},
+  it("compares relocated plan paths without treating sibling paths as source contents", () => {
+    const previewRoot = path.resolve("preview-claw");
+    const persistedRoot = path.resolve("persisted-claw");
+    const external = path.resolve("external-claw");
+    const plan = (root: string, outside = external) => ({
+      planIntegrity: root,
+      paths: [root, { file: path.join(root, "nested", "asset"), outside }],
+      relative: "nested/asset",
+      scalar: [null, 7, true],
     });
-
-    expect(first.agent.finalId).toBe("workspace-agent-4");
-    expect(first.agent.config.name).toBe("Workspace Agent 4");
-    expect(first.agent.workspace).toBe(path.join(stateDir, "workspace-workspace-agent-4"));
-    expect(first.blockers).toEqual([]);
-    expect(pinned.planIntegrity).toBe(first.planIntegrity);
+    expect(
+      plansMatchAcrossSourceRoots({
+        preview: plan(previewRoot),
+        previewRoot,
+        persisted: plan(persistedRoot),
+        persistedRoot,
+      }),
+    ).toBe(true);
+    expect(
+      plansMatchAcrossSourceRoots({
+        preview: plan(previewRoot, `${previewRoot}-sibling`),
+        previewRoot,
+        persisted: plan(persistedRoot, `${persistedRoot}-sibling`),
+        persistedRoot,
+      }),
+    ).toBe(false);
   });
 
-  it("allocates copy 11 after copy 10 and gives it the numbered display name", async () => {
-    const stateDir = tempDirs.make("openclaw-claws-double-digit-add-");
+  it.each([
+    [3, 4],
+    [10, 11],
+  ])("allocates copy %i's successor %i without filling gaps", async (last, next) => {
+    const stateDir = tempDirs.make("openclaw-claws-numbered-add-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
     const config = {
       agents: {
         entries: {
           "workspace-agent": { name: "Workspace Agent" },
-          "workspace-agent-10": { name: "Workspace Agent 10" },
+          [`workspace-agent-${last}`]: { name: `Workspace Agent ${last}` },
         },
       },
     };
-
-    const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
-
-    expect(plan.agent.finalId).toBe("workspace-agent-11");
-    expect(plan.agent.config.name).toBe("Workspace Agent 11");
-    expect(plan.blockers).toEqual([]);
+    const plan = await buildPlan(source, config);
+    const pinned = await buildPlan(source, config, plan.agent.finalId);
+    expect(plan).toMatchObject({
+      agent: {
+        finalId: `workspace-agent-${next}`,
+        config: { name: `Workspace Agent ${next}` },
+        workspace: path.join(stateDir, `workspace-workspace-agent-${next}`),
+      },
+      blockers: [],
+    });
+    expect(pinned.planIntegrity).toBe(plan.planIntegrity);
   });
 
   it("uses the canonical planner and keeps source paths out of reviewed facts", async () => {
-    const fixture = path.resolve("src/claws/fixtures/workspace-agent.claw.json");
-    const source = await readGatewayPackageFixture(fixture);
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
-    const plan = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "claw-gateway-add-fixture",
-      sourceMcpServers: {},
-    });
-    const projected = projectGatewayClawAddPlan(
-      plan,
-      source,
-      {
-        riskAcknowledgementRequired: false,
-        trustRecord: {
-          clawhubTrustDisposition: "clean",
-          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-        },
-      },
-      config,
-    );
+    const plan = await buildPlan(source, config, "claw-gateway-add-fixture");
+    const projected = projectGatewayClawAddPlan(plan, source, trust, config);
 
-    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(3);
+    expect(plan.actions.filter((action) => action.kind === "workspaceFile")).toHaveLength(2);
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "cronJob",
+        id: "$portable-heartbeat",
+        scratch:
+          "# Incident Heartbeat\n\nCheck active incidents, unresolved owners, and overdue status updates.\n",
+      }),
+    );
     expect(projected).toMatchObject({
       operation: "add",
       target: { agentId: "claw-gateway-add-fixture" },
@@ -129,32 +142,12 @@ describe("Gateway Claw Add plan", () => {
   });
 
   it("returns a blocked preview when the requested agent ID already exists", async () => {
-    const fixture = path.resolve("src/claws/fixtures/workspace-agent.claw.json");
-    const source = await readGatewayPackageFixture(fixture);
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readGatewayPackageFixture();
     const config = { agents: { entries: { "claw-gateway-add-fixture": {} } } };
-    const plan = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "claw-gateway-add-fixture",
-      sourceMcpServers: {},
-    });
+    const plan = await buildPlan(source, config, "claw-gateway-add-fixture");
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "agent_id_collision" }));
 
-    const projected = projectGatewayClawAddPlan(
-      plan,
-      source,
-      {
-        riskAcknowledgementRequired: false,
-        trustRecord: {
-          clawhubTrustDisposition: "clean",
-          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-        },
-      },
-      config,
-    );
+    const projected = projectGatewayClawAddPlan(plan, source, trust, config);
     expect(projected).toMatchObject({
       target: { agentId: "claw-gateway-add-fixture" },
       blockers: expect.arrayContaining([
@@ -166,21 +159,11 @@ describe("Gateway Claw Add plan", () => {
   });
 
   it("preflights plugin grants with the config that Add will install under", async () => {
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/incident-response.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture("incident-response");
     const config = {
       plugins: { entries: { "plugin-pager-duty": { hooks: { allowConversationAccess: true } } } },
     };
-    await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "claw-gateway-plugin-config-fixture",
-      sourceMcpServers: {},
-    });
+    await buildPlan(source, config, "claw-gateway-plugin-config-fixture");
     expect(preflightClawPackage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "plugin" }),
       expect.any(String),
@@ -194,19 +177,9 @@ describe("Gateway Claw Add plan", () => {
       "openclaw-claws-gateway-add-isolated-state",
     );
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
 
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: { agents: { entries: {} } },
-      agentId: "claw-gateway-state-root-fixture",
-      sourceMcpServers: {},
-    });
+    const plan = await buildPlan(source, undefined, "claw-gateway-state-root-fixture");
 
     expect(plan.agent.workspace).toBe(
       path.join(stateDir, "workspace-claw-gateway-state-root-fixture"),
@@ -219,32 +192,11 @@ describe("Gateway Claw Add plan", () => {
     const retained = path.join(stateDir, "workspace-workflow-operator");
     mkdirSync(retained);
     writeFileSync(path.join(retained, "USER.md"), "retained operator note");
-    const source = await readGatewayPackageFixture(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
 
-    const plan = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
-    const projected = projectGatewayClawAddPlan(
-      plan,
-      source,
-      {
-        riskAcknowledgementRequired: false,
-        trustRecord: {
-          clawhubTrustDisposition: "clean",
-          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-        },
-      },
-      config,
-    );
+    const plan = await buildPlan(source, config, "workflow-operator");
+    const projected = projectGatewayClawAddPlan(plan, source, trust, config);
 
     expect(plan.agent.workspace).toBe(`${retained}-2`);
     expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
@@ -252,52 +204,18 @@ describe("Gateway Claw Add plan", () => {
     expect(readFileSync(path.join(retained, "USER.md"), "utf8")).toBe("retained operator note");
   });
 
-  it("skips an occupied sibling without merging into either workspace", async () => {
-    const stateDir = tempDirs.make("openclaw-claws-gateway-occupied-sibling-");
+  it.each([
+    [2, 3],
+    [1024, 1025],
+  ])("skips %i occupied workspaces and selects sibling %i", async (occupied, next) => {
+    const stateDir = tempDirs.make("openclaw-claws-gateway-siblings-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const base = path.join(stateDir, "workspace-workflow-operator");
-    mkdirSync(base);
-    mkdirSync(`${base}-2`);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
-
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: { agents: { entries: {} } },
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
-
-    expect(plan.agent.workspace).toBe(`${base}-3`);
-    expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
-  });
-
-  it("keeps looking past many retained siblings", async () => {
-    const stateDir = tempDirs.make("openclaw-claws-gateway-many-siblings-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const base = path.join(stateDir, "workspace-workflow-operator");
-    for (let index = 1; index <= 1024; index += 1) {
+    for (let index = 1; index <= occupied; index += 1) {
       mkdirSync(index === 1 ? base : `${base}-${index}`);
     }
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
-
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: { agents: { entries: {} } },
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
-
-    expect(plan.agent.workspace).toBe(`${base}-1025`);
+    const plan = await buildPlan(await readFixture(), undefined, "workflow-operator");
+    expect(plan.agent.workspace).toBe(`${base}-${next}`);
     expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
   });
 
@@ -306,19 +224,13 @@ describe("Gateway Claw Add plan", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const base = path.join(stateDir, "workspace-workflow-operator");
     mkdirSync(base);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
 
-    const plan = await buildGatewayClawAddPlan(source, {
-      config: { agents: { entries: { researcher: { workspace: `${base}-2` } } } },
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
+    const plan = await buildPlan(
+      source,
+      { agents: { entries: { researcher: { workspace: `${base}-2` } } } },
+      "workflow-operator",
+    );
 
     expect(plan.agent.workspace).toBe(`${base}-3`);
     expect(plan.blockers.map((blocker) => blocker.code)).not.toContain("workspace_collision");
@@ -329,34 +241,13 @@ describe("Gateway Claw Add plan", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const base = path.join(stateDir, "workspace-workflow-operator");
     mkdirSync(base);
-    const source = await readGatewayPackageFixture(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readGatewayPackageFixture();
     const config = { agents: { entries: {} } };
-    const trust = {
-      riskAcknowledgementRequired: false,
-      trustRecord: {
-        clawhubTrustDisposition: "clean" as const,
-        clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-      },
-    };
-    const reviewed = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
+    const reviewed = await buildPlan(source, config, "workflow-operator");
     const reviewedProjection = projectGatewayClawAddPlan(reviewed, source, trust, config);
 
     mkdirSync(`${base}-2`);
-    const current = await buildGatewayClawAddPlan(source, {
-      config,
-      agentId: "workflow-operator",
-      sourceMcpServers: {},
-    });
+    const current = await buildPlan(source, config, "workflow-operator");
     const currentProjection = projectGatewayClawAddPlan(current, source, trust, config);
 
     expect(reviewedProjection.target.workspace).toBe(`${base}-2`);
@@ -367,13 +258,7 @@ describe("Gateway Claw Add plan", () => {
   it("keeps a new Claw workspace outside the default agent workspace", async () => {
     const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-default-root");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
     const mainWorkspace = path.join(stateDir, "workspace");
     const plan = await buildGatewayClawAddPlan(source, {
       config: {
@@ -395,13 +280,7 @@ describe("Gateway Claw Add plan", () => {
   it("uses a sibling workspace when an implicit main agent owns the default root", async () => {
     const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-legacy-root");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
     const mainWorkspace = path.join(stateDir, "workspace");
     const plan = await buildGatewayClawAddPlan(source, {
       config: { agents: { defaults: { workspace: mainWorkspace } } },
@@ -418,13 +297,7 @@ describe("Gateway Claw Add plan", () => {
   it("keeps an explicitly configured workspace for a blocked agent", async () => {
     const stateDir = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-explicit-root");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const source = await readClawManifestFile(
-      path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-    );
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readFixture();
     const mainWorkspace = path.join(stateDir, "workspace");
     const explicitWorkspace = path.join(mainWorkspace, "existing-agent");
     const plan = await buildGatewayClawAddPlan(source, {
@@ -449,13 +322,7 @@ describe("Gateway Claw Add plan", () => {
   it.each(["is inside", "contains"] as const)(
     "blocks a new workspace that %s an existing agent workspace",
     async (relationship) => {
-      const source = await readClawManifestFile(
-        path.resolve("src/claws/fixtures/workspace-agent.claw.json"),
-      );
-      expect(source.ok).toBe(true);
-      if (!source.ok) {
-        return;
-      }
+      const source = await readFixture();
       const workspace = path.join(realpathSync(os.tmpdir()), "openclaw-claws-gateway-deep-overlap");
       const nested = path.join(workspace, "nested-agent");
       const plan = await buildClawAddPlan({
@@ -480,12 +347,7 @@ describe("Gateway Claw Add plan", () => {
   );
 
   it("reviews configured access and recurring work without exposing source secrets", async () => {
-    const fixture = path.resolve("src/claws/fixtures/incident-response.claw.json");
-    const source = await readGatewayPackageFixture(fixture);
-    expect(source.ok).toBe(true);
-    if (!source.ok) {
-      return;
-    }
+    const source = await readGatewayPackageFixture("incident-response");
     const config = { agents: { entries: {} } };
     const plan = await buildGatewayClawAddPlan(source, {
       config,
@@ -496,18 +358,7 @@ describe("Gateway Claw Add plan", () => {
         message: "Package install is unavailable in this preview test.",
       }),
     });
-    const projected = projectGatewayClawAddPlan(
-      plan,
-      source,
-      {
-        riskAcknowledgementRequired: false,
-        trustRecord: {
-          clawhubTrustDisposition: "clean",
-          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-        },
-      },
-      config,
-    );
+    const projected = projectGatewayClawAddPlan(plan, source, trust, config);
 
     expect(projected.configuredAccess).toMatchObject({
       coverage: "configuration-only",
@@ -517,12 +368,24 @@ describe("Gateway Claw Add plan", () => {
           excluded: expect.arrayContaining(["exec", "browser"]),
         },
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
-        heartbeat: { enabled: true, intervalMs: 1_800_000 },
+        heartbeat: { enabled: false, intervalMs: null },
       },
     });
     expect(projected.scheduledJobs).toEqual({
       coverage: "package-declarations",
       jobs: [
+        {
+          id: "$portable-heartbeat",
+          action: "schedule",
+          blocked: false,
+          proposed: {
+            schedule: { everyMs: 1_800_000 },
+            session: "isolated",
+            delivery: "owner",
+            message: expect.stringContaining("Review your automation scratch checklist"),
+            messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+          },
+        },
         {
           id: "heartbeat-summary",
           action: "schedule",
@@ -546,18 +409,10 @@ describe("Gateway Claw Add plan", () => {
     expect(response).not.toContain("${STATUSPAGE_TOKEN}");
     expect(response).toContain("Review active incidents");
 
-    const changed = projectGatewayClawAddPlan(
-      plan,
-      source,
-      {
-        riskAcknowledgementRequired: false,
-        trustRecord: {
-          clawhubTrustDisposition: "clean",
-          clawhubTrustCheckedAt: "2026-09-30T00:00:00.000Z",
-        },
-      },
-      { ...config, tools: { deny: ["web_fetch"] } },
-    );
+    const changed = projectGatewayClawAddPlan(plan, source, trust, {
+      ...config,
+      tools: { deny: ["web_fetch"] },
+    });
     expect(changed.configuredAccess?.desired?.tools.excluded).toContain("web_fetch");
     expect(changed.planIntegrity).not.toBe(projected.planIntegrity);
   });

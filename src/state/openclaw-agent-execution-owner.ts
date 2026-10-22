@@ -44,6 +44,7 @@ import {
   assertBorrowedAgentDatabaseFileIdentity,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -245,16 +246,7 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ??
-          fileIdentity ??
-          (identity.key.startsWith("file:")
-            ? {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                birthtime: identity.birthtime,
-                nativeLocation: identity.canonicalPath,
-              }
-            : undefined),
+        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
@@ -689,13 +681,12 @@ export function createAgentDatabaseExecution(
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (sharedIdentity) => {
-        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
-          );
-          await acceptedWork.closeAccepted(() => owner.close());
-        }
+      admission: context.admission,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+        );
+        await acceptedWork.closeAccepted(() => owner.close());
       },
     });
     return owner.borrow(

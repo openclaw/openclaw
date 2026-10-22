@@ -26,16 +26,14 @@ import {
 const NOTIFY_POLL_INTERVAL_MS = 10_000;
 
 // Gateway services and workspace command registries have distinct APIs but share these stores.
-const notifyStateListeners = new Set<() => void>();
+let wakeNotifier: (() => void) | undefined;
 
 async function writeNotifyState<T>(write: () => Promise<T>): Promise<T> {
   try {
     return await write();
   } finally {
     // Failed replies can follow durable writes; wake the owner to reconcile either outcome.
-    for (const listener of notifyStateListeners) {
-      listener();
-    }
+    wakeNotifier?.();
   }
 }
 
@@ -427,17 +425,20 @@ export function startPairingNotifier(
     });
   }
 
-  const wake = () => {
+  wakeNotifier = () => {
     if (running) {
       wakeRequested = true;
     } else {
       scheduleNext();
     }
   };
-  notifyStateListeners.add(wake);
-  scheduler.signal.addEventListener("abort", () => notifyStateListeners.delete(wake), {
-    once: true,
-  });
+  scheduler.signal.addEventListener(
+    "abort",
+    () => {
+      wakeNotifier = undefined;
+    },
+    { once: true },
+  );
   // Keep the first scan off Gateway readiness; retirement joins delivery and its receipt.
   scheduleNext();
 }

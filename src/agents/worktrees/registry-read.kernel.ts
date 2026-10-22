@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
@@ -301,7 +301,7 @@ export const worktreeReadOperations = {
     db,
   ) => ({
     type: "worktrees.sessionBinding" as const,
-    value: runSqliteDeferredTransactionSync(db, () => {
+    value: runSqliteReadSnapshotSync(db, () => {
       const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
       return bound && bound.removedAt === undefined
         ? bound

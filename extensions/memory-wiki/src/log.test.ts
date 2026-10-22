@@ -177,18 +177,11 @@ it.each(["EIO", "ENOENT"])(
   },
 );
 
-it("closes after stat failure and preserves both read and close errors in order", async () => {
+it("closes after stat failure and propagates the read error", async () => {
   const { root } = await createJournal();
   const readError = new Error("stat failed");
-  const closeError = new Error("close failed");
-  const calls = observeIO({ statError: readError, closeError });
-  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => {
-    assert.ok(error instanceof AggregateError);
-    assert.deepEqual(error.errors, [readError, closeError]);
-    assert.equal(error.cause, closeError);
-    assert.equal(error.message, "Memory Wiki journal read and close failed.");
-    return true;
-  });
+  const calls = observeIO({ statError: readError });
+  await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === readError);
   assert.equal(calls.closes, 1);
 });
 

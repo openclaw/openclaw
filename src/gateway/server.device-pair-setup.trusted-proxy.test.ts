@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
 import type { DevicePairSetupCodeResult } from "../../packages/gateway-protocol/src/index.js";
@@ -66,9 +68,7 @@ test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profil
   const started = await startServerWithClient(undefined, { auth, wsHeaders: PROXY_HEADERS });
   const sockets = [started.ws];
   try {
-    // Existing paired operators supply the authority to mint, independently
-    // from the proxy identity and the new phone's bootstrap credential.
-    for (const scopes of [["operator.pairing"], ["operator.admin"]]) {
+    const mintSetup = async (scopes: string[]) => {
       const operator = await issueOperatorToken({
         name: `setup-${scopes[0]}`,
         approvedScopes: scopes,
@@ -83,120 +83,109 @@ test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profil
         deviceIdentityPath: operator.identityPath,
         scopes,
       });
-      const result = await rpcReq<DevicePairSetupCodeResult>(ws, "device.pair.setupCode", {
+      return rpcReq<DevicePairSetupCodeResult>(ws, "device.pair.setupCode", {
         includeQr: false,
         publicUrl: "wss://gateway.example.test",
         ...(profile === "node" ? { bootstrapProfile: "node" } : {}),
       });
-      if (!scopes.includes("operator.admin")) {
-        expect(result.ok).toBe(false);
-        expect(result.error?.message).toBe("missing scope: operator.admin");
-        expect(Object.keys(loadDeviceBootstrapTokenRecords())).toEqual([]);
-        continue;
-      }
-      expect(result.ok, JSON.stringify(result.error)).toBe(true);
-      expect(result.payload).toMatchObject({
-        auth: "trusted-proxy",
-        access: profile === "node" ? "node" : "full",
-      });
-      const setup = result.payload;
-      if (!setup) {
-        throw new Error("missing setup result");
-      }
-      const payload = decodePairingSetupCode(setup.setupCode);
-      expect(payload).not.toHaveProperty("token");
-      expect(payload).not.toHaveProperty("password");
-      expect(payload.expiresAtMs).toBeGreaterThan(Date.now());
-      expect(payload.expiresAtMs).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
-      const phone = loadDeviceIdentity("trusted-proxy-setup-phone");
-      const nodeClient = {
-        id: profile === "node" ? GATEWAY_CLIENT_NAMES.NODE_HOST : "openclaw-ios",
-        version: "2026.9.1",
-        platform: profile === "node" ? "linux" : "iOS 26.6.1",
-        ...(profile === "mobile" ? { deviceFamily: "iPhone" } : {}),
-        mode: "node" as const,
-      };
-      // Machine routes preserve proxy attribution but assert no operator identity.
-      const nodeHeaders: Record<string, string> = { ...PROXY_HEADERS };
-      if (profile === "node") {
-        delete nodeHeaders["x-forwarded-user"];
-      }
-      const node = await openTrackedWs(started.port, nodeHeaders);
-      sockets.push(node);
-      const connected = await connectReq(node, {
+    };
+    // Proxy identity alone and operator.pairing cannot mint the bootstrap credential.
+    const denied = await mintSetup(["operator.pairing"]);
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+    expect(Object.keys(loadDeviceBootstrapTokenRecords())).toEqual([]);
+    const result = await mintSetup(["operator.admin"]);
+    expect(result.ok, JSON.stringify(result.error)).toBe(true);
+    expect(result.payload).toMatchObject({
+      auth: "trusted-proxy",
+      access: profile === "node" ? "node" : "full",
+    });
+    const setup = expectDefined(result.payload, "setup result");
+    const payload = decodePairingSetupCode(setup.setupCode);
+    expect(payload).not.toHaveProperty("token");
+    expect(payload).not.toHaveProperty("password");
+    expect(payload.expiresAtMs).toBeGreaterThan(Date.now());
+    expect(payload.expiresAtMs).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+    const phone = loadDeviceIdentity("trusted-proxy-setup-phone");
+    const nodeClient = {
+      id: profile === "node" ? GATEWAY_CLIENT_NAMES.NODE_HOST : "openclaw-ios",
+      version: "2026.9.1",
+      platform: profile === "node" ? "linux" : "iOS 26.6.1",
+      ...(profile === "mobile" ? { deviceFamily: "iPhone" } : {}),
+      mode: "node" as const,
+    };
+    // Machine routes preserve proxy attribution but assert no operator identity.
+    const anonymousHeaders: Record<string, string> = { ...PROXY_HEADERS };
+    delete anonymousHeaders["x-forwarded-user"];
+    const nodeHeaders = profile === "node" ? anonymousHeaders : PROXY_HEADERS;
+    const connectDevice = async (
+      overrides: Parameters<typeof connectReq>[1],
+      headers = nodeHeaders,
+    ) => {
+      const deviceWs = await openTrackedWs(started.port, headers);
+      sockets.push(deviceWs);
+      const response = await connectReq(deviceWs, {
         skipDefaultAuth: true,
-        bootstrapToken: payload.bootstrapToken,
         role: "node",
         scopes: [],
         client: nodeClient,
         deviceIdentityPath: phone.identityPath,
+        ...overrides,
       });
-      expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
-      const handoff = connected.payload?.auth;
-      expect(isRecord(handoff)).toBe(true);
-      if (!isRecord(handoff)) {
-        throw new Error("missing bootstrap handoff");
-      }
-      expect(handoff).toMatchObject({
-        role: "node",
-        scopes: [],
-        deviceToken: expect.any(String),
-      });
-      if (profile === "mobile") {
-        expect(handoff.deviceTokens).toContainEqual(
-          expect.objectContaining({
-            role: "operator",
-            scopes: HANDOFF_SCOPES,
-            deviceToken: expect.any(String),
-          }),
-        );
-        expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator?.scopes).toEqual(
-          HANDOFF_SCOPES,
-        );
-      } else {
-        expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator).toBeUndefined();
-        expect(await rpcReq(node, "config.get", {})).toMatchObject({ ok: false });
-        // Reconnect with the issued node token, without proxy identity or setup code.
-        for (const role of ["node", "operator"] as const) {
-          const reconnect = await openTrackedWs(started.port, nodeHeaders);
-          sockets.push(reconnect);
-          const reconnected = await connectReq(reconnect, {
-            skipDefaultAuth: true,
-            deviceToken: String(handoff.deviceToken),
-            role,
-            scopes: role === "node" ? [] : ["operator.admin"],
-            client: nodeClient,
-            deviceIdentityPath: phone.identityPath,
-          });
-          expect(reconnected.ok, JSON.stringify(reconnected.error)).toBe(role === "node");
-        }
-      }
-      expect((await listDevicePairing()).pending).toEqual([]);
-      expect(Object.keys(loadDeviceBootstrapTokenRecords())).toEqual([]);
-
-      for (const authenticatedProxy of [true, false]) {
-        // A paired phone may still authenticate through the proxy. Remove only
-        // its identity assertion to test the consumed bootstrap as the sole credential.
-        const headers: Record<string, string> = { ...PROXY_HEADERS };
-        if (!authenticatedProxy) {
-          delete headers["x-forwarded-user"];
-        }
-        const replay = await openTrackedWs(started.port, headers);
-        sockets.push(replay);
-        const reconnected = await connectReq(replay, {
-          skipDefaultAuth: true,
-          bootstrapToken: payload.bootstrapToken,
-          role: "node",
-          scopes: [],
-          client: nodeClient,
-          deviceIdentityPath: phone.identityPath,
+      return { ws: deviceWs, response };
+    };
+    const { ws: node, response: connected } = await connectDevice({
+      bootstrapToken: payload.bootstrapToken,
+    });
+    expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
+    const handoff = connected.payload?.auth;
+    assert(isRecord(handoff), "missing bootstrap handoff");
+    expect(handoff).toMatchObject({
+      role: "node",
+      scopes: [],
+      deviceToken: expect.any(String),
+    });
+    if (profile === "mobile") {
+      expect(handoff.deviceTokens).toContainEqual(
+        expect.objectContaining({
+          role: "operator",
+          scopes: HANDOFF_SCOPES,
+          deviceToken: expect.any(String),
+        }),
+      );
+      expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator?.scopes).toEqual(
+        HANDOFF_SCOPES,
+      );
+    } else {
+      expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator).toBeUndefined();
+      expect(await rpcReq(node, "config.get", {})).toMatchObject({ ok: false });
+      // Reconnect with the issued node token, without proxy identity or setup code.
+      for (const role of ["node", "operator"] as const) {
+        const { response: reconnected } = await connectDevice({
+          deviceToken: String(handoff.deviceToken),
+          role,
+          scopes: role === "node" ? [] : ["operator.admin"],
         });
-        expect(reconnected.ok).toBe(authenticatedProxy);
-        if (!authenticatedProxy) {
-          expect(reconnected.error?.details).toMatchObject({
-            authReason: "bootstrap_token_invalid",
-          });
-        }
+        expect(reconnected.ok, JSON.stringify(reconnected.error)).toBe(role === "node");
+      }
+    }
+    expect((await listDevicePairing()).pending).toEqual([]);
+    expect(Object.keys(loadDeviceBootstrapTokenRecords())).toEqual([]);
+
+    for (const authenticatedProxy of [true, false]) {
+      // A paired phone may still authenticate through the proxy. Remove only
+      // its identity assertion to test the consumed bootstrap as the sole credential.
+      const { response: reconnected } = await connectDevice(
+        { bootstrapToken: payload.bootstrapToken },
+        authenticatedProxy ? PROXY_HEADERS : anonymousHeaders,
+      );
+      expect(reconnected.ok).toBe(authenticatedProxy);
+      if (!authenticatedProxy) {
+        expect(reconnected.error?.details).toMatchObject({
+          authReason: "bootstrap_token_invalid",
+        });
       }
     }
   } finally {

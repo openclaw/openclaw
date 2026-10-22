@@ -50,6 +50,8 @@ export function readAuthProfileStoreInWorker<T>(
       readStore: async (agentDir, readOptions) =>
         runInCapturedScope(() => host.loadAuthProfileStoreForAgent(agentDir, readOptions, env)),
       assertCurrent: () => worker.assertOwner(env),
+      readFreshStore: async () =>
+        runInCapturedScope(() => host.loadRuntimeAuthProfileStore(effectiveAgentDir, options, env)),
       materializePersonalProfile: async (store) =>
         !scope.isolated && profileId && isUserModelAuthProfileId(profileId)
           ? runInCapturedScope(() => materializePersonalAuthProfile(store, profileId))

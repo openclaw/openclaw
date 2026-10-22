@@ -15,8 +15,5 @@ export async function readClawInventory(
   if (!reply) {
     return { installs: [], packages: [], workspaceFiles: [], mcpServers: [], cronJobs: [] };
   }
-  if (!reply.ok || reply.type !== "claws.inventory") {
-    throw new Error("Claw lifecycle inventory could not be read.");
-  }
   return reply.inventory;
 }

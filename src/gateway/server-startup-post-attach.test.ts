@@ -56,7 +56,10 @@ import { restartSentinelMocks } from "./server-startup-background.test-support.j
 import "./server-startup-outcomes.test-support.js";
 import type { GatewayStartupModuleMocks } from "./server-startup-module-mocks.test-support.js";
 import { markGatewayStartupMainSessionOrphans } from "./server-startup-observers.js";
-import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
+import {
+  createStartupMethodUnlocker,
+  registerGatewayStartupReadinessTests,
+} from "./server-startup-readiness.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
 
 const { installGatewayStartupModuleMocks, installGatewayHookModuleLoad } =
@@ -437,14 +440,6 @@ function firstStartupLog(): { loadedPluginIds?: string[] } {
   return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
 }
 
-function createStartupMethodUnlocker(unavailableGatewayMethods: Set<string>): () => void {
-  return () => {
-    for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
-      unavailableGatewayMethods.delete(method);
-    }
-  };
-}
-
 function createStartupTraceRecorder() {
   const details: Array<{
     name: string;
@@ -582,7 +577,8 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("re-enables startup-gated methods after post-attach sidecars start", async () => {
-    const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
+    const methods = ["chat.history", "models.list", "chat.send"];
+    const unavailableGatewayMethods = new Set(methods);
     const startupOrder: string[] = [];
     const postReadyWork = createDeferred();
     const recoveryActivated = createDeferred();
@@ -606,9 +602,9 @@ describe("startGatewayPostAttachRuntime", () => {
       getConfig: () => currentConfig,
       waitForPostReadyWork: () => postReadyWork.promise,
       log,
-      unlockStartupMethods: () => {
+      unlockStartupMethods: (options) => {
         startupOrder.push("unlock");
-        createStartupMethodUnlocker(unavailableGatewayMethods)();
+        createStartupMethodUnlocker(unavailableGatewayMethods)(options);
       },
       onSidecarsReady,
     });
@@ -616,7 +612,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => {
       expect(onSidecarsReady).toHaveBeenCalledTimes(1);
     });
-    expect([...unavailableGatewayMethods]).toStrictEqual([]);
+    expect([...unavailableGatewayMethods]).toStrictEqual(["chat.send"]);
     expect(hoisted.startPluginServices).toHaveBeenCalledTimes(1);
     expect(hoisted.prepareInternalHooks).toHaveBeenCalledWith(
       { hooks: { internal: { enabled: false } } },
@@ -647,9 +643,12 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startupOrder).toEqual(["unlock", "ready"]);
     postReadyWork.resolve();
     await recoveryActivated.promise;
+    await waitForGatewayTestState(() => {
+      expect([...unavailableGatewayMethods]).toStrictEqual([]);
+    });
     expect(hoisted.activateSubagentRegistry).toHaveBeenCalledWith(expect.any(Function), undefined);
-    expect(startupOrder).toEqual(["unlock", "ready", "registry"]);
-    expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
+    expect(startupOrder).toEqual(["unlock", "ready", "registry", "unlock"]);
+    expect(methodsAtRecoveryRegistration).toStrictEqual([methods]);
   });
 
   registerGatewayStartupReadinessTests({
@@ -2557,7 +2556,7 @@ describe("startGatewayPostAttachRuntime", () => {
       "worker-ready",
       "gateway-sidecars",
     ]);
-    expect([...unavailableGatewayMethods]).toEqual([]);
+    expect([...unavailableGatewayMethods].filter((method) => method !== "chat.send")).toEqual([]);
     expect(publishedConnectionDependentSidecars.has(workerSidecar)).toBe(true);
     expect(onGatewayLifetimeSidecars).not.toHaveBeenCalledWith(workerSidecar);
   });
@@ -3149,7 +3148,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     minimalTestGateway: false,
     cfgAtStart: { hooks: { internal: { enabled: false } } } as never,
     getConfig: () => ({ hooks: { internal: { enabled: false } } }) as never,
-    getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
     port: 18789,
     log: { info: vi.fn(), warn: vi.fn() },
     isNixMode: false,

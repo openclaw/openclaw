@@ -1,7 +1,7 @@
 import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { setWorkboardCards } from "../../lib/workboard/card-state.ts";
 import { resetWorkboardConnectionState } from "../../lib/workboard/index.ts";

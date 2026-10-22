@@ -1,6 +1,4 @@
 /**
- * Plugin Command Handler
- *
  * Handles commands registered by plugins, bypassing the LLM agent.
  * This handler is called before built-in command handlers.
  */
@@ -67,48 +65,60 @@ export const handlePluginCommand: CommandHandler = async (params, allowTextComma
       }
     : undefined;
 
-  const result = await executePluginCommandDispatch(dispatch, {
-    ...buildPluginCommandContext(params),
-    sessionId: targetSessionEntry?.sessionId,
-    sessionTarget,
-    sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
-    authProfileId: targetSessionEntry?.authProfileOverride,
-    commandBody: command.commandBodyNormalized,
-    ...(sessionTarget
-      ? {
-          runtimeContext: {
-            compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
-              if (!params.command.isAuthorizedSender) {
-                return { compacted: false, reason: "compaction requires authorization" };
-              }
-              const compaction = await handleCompactCommand(
-                {
-                  ...params,
-                  command: { ...params.command, commandBodyNormalized: "/compact" },
-                  commandInvocationSignal: invocationSignal,
-                  compactionSessionEntry: targetSessionEntry,
-                  opts: {
-                    ...params.opts,
-                    abortSignal:
-                      invocationSignal && params.opts?.abortSignal
-                        ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
-                        : (invocationSignal ?? params.opts?.abortSignal),
-                  },
-                },
-                true,
-                assertOwnerCurrent,
-              );
-              return (
-                compaction?.sessionCompaction ?? {
-                  compacted: false,
-                  reason: "compaction unavailable",
+  const execute = async (
+    createSubagents?: import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory,
+  ) =>
+    await executePluginCommandDispatch(dispatch, {
+      ...buildPluginCommandContext(params),
+      sessionId: targetSessionEntry?.sessionId,
+      sessionTarget,
+      sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
+      authProfileId: targetSessionEntry?.authProfileOverride,
+      commandBody: command.commandBodyNormalized,
+      ...(sessionTarget
+        ? {
+            runtimeContext: {
+              createSubagents,
+              compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
+                if (!params.command.isAuthorizedSender) {
+                  return { compacted: false, reason: "compaction requires authorization" };
                 }
-              );
+                const compaction = await handleCompactCommand(
+                  {
+                    ...params,
+                    command: { ...params.command, commandBodyNormalized: "/compact" },
+                    commandInvocationSignal: invocationSignal,
+                    compactionSessionEntry: targetSessionEntry,
+                    opts: {
+                      ...params.opts,
+                      abortSignal:
+                        invocationSignal && params.opts?.abortSignal
+                          ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
+                          : (invocationSignal ?? params.opts?.abortSignal),
+                    },
+                  },
+                  true,
+                  assertOwnerCurrent,
+                );
+                return (
+                  compaction?.sessionCompaction ?? {
+                    compacted: false,
+                    reason: "compaction unavailable",
+                  }
+                );
+              },
             },
-          },
-        }
-      : {}),
-  });
+          }
+        : {}),
+    });
+  const withNative = params.opts?.withCommandNativeSubagents;
+  const result =
+    withNative && targetSessionEntry?.sessionId
+      ? await withNative(
+          { agentId: targetAgentId, sessionKey: params.sessionKey, entry: targetSessionEntry },
+          execute,
+        )
+      : await execute();
   const { continueAgent, ...reply } = result;
 
   return {

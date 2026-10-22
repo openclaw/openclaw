@@ -10,12 +10,8 @@ import {
 } from "./actions.js";
 import { handleLineCardCommand } from "./card-command.js";
 import { createActionCard, createInfoCard } from "./flex-templates/basic-cards.js";
-import {
-  createAppleTvRemoteCard,
-  createDeviceControlCard,
-  createMediaPlayerCard,
-} from "./flex-templates/media-control-cards.js";
 import { createEventCard } from "./flex-templates/schedule-cards.js";
+import { renderLineCard } from "./rich-messages.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
@@ -53,6 +49,17 @@ const templateMessage = (template: messagingApi.Template) =>
   normalizeLineMessage({ type: "template", altText: "Pick", template });
 const flexMessage = (contents: messagingApi.FlexContainer) =>
   normalizeLineMessage({ type: "flex", altText: "Controls", contents });
+const flexBox = (
+  contents: messagingApi.FlexComponent[],
+  action?: Action,
+): messagingApi.FlexBox => ({
+  type: "box",
+  layout: "vertical",
+  contents,
+  ...(action ? { action } : {}),
+});
+const deviceCard = (controls: Array<{ label: string; action: string }>) =>
+  renderLineCard({ type: "device", name: "Device", controls }).contents;
 
 type FlexMessage = Pick<messagingApi.FlexMessage, "altText" | "contents">;
 async function runLineFlexCardCommand(args: string): Promise<FlexMessage> {
@@ -125,15 +132,21 @@ describe("LINE message cards", () => {
   });
 
   it("limits device controls to 6", () => {
-    const card = createDeviceControlCard({
-      deviceName: "Device",
-      controls: Array.from({ length: 10 }, (_, i) => ({
+    const card = deviceCard(
+      Array.from({ length: 10 }, (_, i) => ({
         label: `Control ${i}`,
-        data: `action=${i}`,
+        action: `action=${i}`,
       })),
-    });
+    );
 
-    expect(card.footer?.contents.length).toBeLessThanOrEqual(3);
+    expect(card.footer?.contents).toHaveLength(3);
+    expect(cardButtons(card.footer).map((button) => button.action)).toEqual(
+      Array.from({ length: 6 }, (_, i) => ({
+        type: "postback",
+        label: `Control ${i}`,
+        data: `line.action=action%3D${i}&line.device=device`,
+      })),
+    );
   });
 
   it("keeps event-card optional fields together", () => {
@@ -200,13 +213,13 @@ describe("LINE message cards", () => {
 
   it("device control postback labels count grapheme clusters", () => {
     const label = `${"x".repeat(17)}😀`;
-    const card = createDeviceControlCard({
-      deviceName: "Device",
-      controls: [{ label, data: "extra" }],
-    });
+    const card = deviceCard([{ label, action: "extra" }]);
     const extraAction = cardButtons(card.footer)
       .map((button) => button.action)
-      .find((action) => action.type === "postback" && action.data === "extra");
+      .find(
+        (action) =>
+          action.type === "postback" && action.data === "line.action=extra&line.device=device",
+      );
 
     expect(extraAction?.label).toBe(label);
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
@@ -303,18 +316,14 @@ describe("LINE message cards", () => {
     expect(normalized.template.columns[0]?.action).toEqual({ type: "uri", uri: "line://app" });
     const flex = flexMessage({
       type: "bubble",
-      body: {
-        type: "box",
-        layout: "vertical",
-        contents: [
-          { type: "button", action: { type: "uri", uri: "https://example.com" } },
-          {
-            type: "text",
-            text: "Status",
-            action: { type: "richmenuswitch", richMenuAliasId: "menu", data: "" },
-          },
-        ],
-      },
+      body: flexBox([
+        { type: "button", action: { type: "uri", uri: "https://example.com" } },
+        {
+          type: "text",
+          text: "Status",
+          action: { type: "richmenuswitch", richMenuAliasId: "menu", data: "" },
+        },
+      ]),
     });
     expect(flexBody(flex)).toMatchObject([
       { type: "button", action: { type: "message", label: "Unavailable" } },
@@ -371,12 +380,7 @@ describe("LINE message cards", () => {
     const normalized = flexMessage({
       type: "bubble",
       hero: { type: "image", url: "https://e.example/image.jpg", action: oversizedUri },
-      body: {
-        type: "box",
-        layout: "vertical",
-        action: oversizedUri,
-        contents: [{ type: "text", text: "Event", action: oversizedPostback }],
-      },
+      body: flexBox([{ type: "text", text: "Event", action: oversizedPostback }], oversizedUri),
     });
     expect(normalized).toMatchObject({
       contents: {
@@ -393,41 +397,13 @@ describe("LINE message cards", () => {
     expect(JSON.stringify(normalized)).not.toContain('"action":');
   });
 
-  it("media control cards visibly disable overlong opaque callbacks", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      controls: {
-        previous: { data: overlongData },
-        play: { data: overlongData },
-        pause: { data: overlongData },
-        next: { data: overlongData },
-      },
-    });
-    const actions = cardButtons(card.footer).map((button) => button.action);
-
-    expect(actions).toEqual(Array.from({ length: 4 }, () => expectedUnavailableCallbackAction));
-  });
-
-  it("Apple TV controls visibly disable overlong opaque callbacks", () => {
-    const card = createAppleTvRemoteCard({
-      deviceName: "TV",
-      actionData: {
-        up: overlongData,
-        down: overlongData,
-        left: overlongData,
-        right: overlongData,
-        select: overlongData,
-        menu: overlongData,
-        home: overlongData,
-        play: overlongData,
-        pause: overlongData,
-        volumeUp: overlongData,
-        volumeDown: overlongData,
-        mute: overlongData,
-      },
-    });
-    const actions = cardButtons(card.body).map((button) => button.action);
-
-    expect(actions).toEqual(Array.from({ length: 12 }, () => expectedUnavailableCallbackAction));
+  it.each([
+    [{ type: "media_player", title: "Track", source: "d".repeat(301) }, "footer", 4],
+    [{ type: "appletv_remote", name: "d".repeat(301) }, "body", 12],
+  ] as const)("%j visibly disables overlong opaque callbacks", (input, section, count) => {
+    const { contents: card } = renderLineCard(input);
+    expect(cardButtons(card[section]).map((button) => button.action)).toEqual(
+      Array.from({ length: count }, () => expectedUnavailableCallbackAction),
+    );
   });
 });
