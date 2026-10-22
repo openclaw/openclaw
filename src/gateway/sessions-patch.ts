@@ -59,7 +59,6 @@ import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entr
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -110,7 +109,6 @@ type SessionPatchProjectionParams = {
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
   archivedBy?: SessionEntry["archivedBy"];
-  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
@@ -645,9 +643,6 @@ function* projectSessionPatchSteps(
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
         recordedProvider,
-        ...(params.providerAuthMetadataSnapshot
-          ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
-          : {}),
         markLiveSwitchPending: statusModelPatch || raw !== null,
       });
       if (raw === null && !statusModelPatch) {
