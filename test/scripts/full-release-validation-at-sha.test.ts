@@ -14,7 +14,9 @@ import {
   assertTrustedWorkflowHarness,
   dispatchInputsDigest,
   fullReleaseConcurrencyBranchPrefix,
+  formatCandidateToolingLagWarning,
   parseArgs,
+  parseCandidateToolingLag,
   releaseProfileForVersion,
   releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
@@ -45,6 +47,25 @@ function rejectArgs(args: string[], error: string) {
 }
 
 describe("full-release-validation-at-sha", () => {
+  it("reports patch-inequivalent main FRV tooling without changing Q=C", () => {
+    const candidateSha = "a".repeat(40);
+    const mainSha = "b".repeat(40);
+    const commits = parseCandidateToolingLag(
+      `${"c".repeat(40)}\tfix(release): retain large SDK evidence\n${"d".repeat(40)}\tfix(ci): retry FRV job listings\n`,
+    );
+
+    expect(formatCandidateToolingLagWarning(candidateSha, mainSha, commits)).toBe(
+      [
+        `WARNING: candidate-owned Q=C tooling ${candidateSha} lacks 2 patch-inequivalent FRV tooling commit(s) from main ${mainSha}. Main cannot repair this candidate harness; review and port applicable commits before dispatch:`,
+        `- ${"c".repeat(12)} fix(release): retain large SDK evidence`,
+        `- ${"d".repeat(12)} fix(ci): retry FRV job listings`,
+      ].join("\n"),
+    );
+    expect(() => parseCandidateToolingLag("not-a-record")).toThrow(
+      "Invalid candidate tooling lag record",
+    );
+  });
+
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
     const fixture = createDispatchFixture({ omitPurpose: true });
     const result = fixture.run();
