@@ -540,7 +540,7 @@ async function openSessionRailFixture(width: number, height: number) {
                     <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
                       <div class="chat-session-rail__thread">
                         <article class="chat-session-rail__exchange">
-                          <div class="chat-group user chat-session-rail__message"><div class="chat-bubble chat-session-rail__question">What should I check next?</div></div>
+                          <div class="chat-group user chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">What should I check next?</div></div></div>
                           <div class="chat-group assistant chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">${LONG_SESSION_RAIL_BODY}</div></div></div>
                           <span class="chat-session-rail__pr-checks">2 passed</span>
                           <div class="chat-session-rail__hint">Side chat is already answering a question.</div>

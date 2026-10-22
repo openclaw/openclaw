@@ -24,10 +24,9 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
-import { MessageMarkdown } from "./chat-message-text-view.tsx";
+import { StreamGroup } from "./chat-message-stream-view.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
-import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -57,27 +56,28 @@ const COMPANION_HINT_KEYS = {
   Parameters<typeof t>[0]
 >;
 
-// Answers render as main-transcript assistant groups, so the bubble, footer
-// identity, relative timestamp and message actions share one owner.
-function companionAnswerGroup(
-  answer: Extract<ChatSessionCompanionTurn, { status: "answered" }>,
+// Questions and answers render as main-transcript groups, so bubbles, footer
+// identity, relative timestamps and message actions share one owner.
+function companionGroup(
+  role: "user" | "assistant",
+  content: string,
+  timestamp: number,
 ): MessageGroupData {
-  const key = `side-chat:${answer.ts}`;
+  const key = `side-chat:${role}:${timestamp}`;
   return {
     kind: "group",
     key,
-    role: "assistant",
-    messages: [
-      {
-        key,
-        message: { role: "assistant", content: answer.answer, timestamp: answer.ts },
-        hasVisibleContent: true,
-      },
-    ],
+    role,
+    messages: [{ key, message: { role, content, timestamp }, hasVisibleContent: true }],
     visibleContent: "text",
-    timestamp: answer.ts,
+    timestamp,
     isStreaming: false,
   };
+}
+
+// Side chat history records one time per exchange; local turns keep their send time.
+function companionQuestionTime(turn: ChatSessionCompanionTurn): number {
+  return turn.status === "answered" ? turn.ts : turn.startedAt;
 }
 
 type ChatSessionRailProps = {
@@ -199,6 +199,16 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       cancelLayout(thread);
     };
   });
+  const groupOptions = createMemo(() => ({
+    showReasoning: false,
+    showToolCalls: false,
+    // Side chat is one person and one agent: identity sits in the footer, as in
+    // direct main chats without an avatar gutter, and own questions stay unnamed.
+    avatarPlacement: "footer" as const,
+    showOwnSenderName: false,
+    assistantName: props.assistantName,
+    agentId: props.agentId ?? undefined,
+  }));
   const showPullRequests = () =>
     props.digest &&
     (!props.running || (props.activeRunId && props.digest.runId === props.activeRunId));
@@ -279,33 +289,27 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                   },
                 ]}
               >
-                <div class="chat-group user chat-session-rail__message">
-                  <div class="chat-bubble chat-session-rail__question">
-                    <MessageMarkdown
-                      markdown={turn().question}
-                      messageKey={turn().question}
-                      options={{ role: "user", isStreaming: false }}
-                      markdownOptions={{ codeBlockChrome: "none", codeBlockInteraction: "static" }}
-                    />
-                  </div>
-                </div>
+                <MessageGroup
+                  group={companionGroup("user", turn().question, companionQuestionTime(turn()))}
+                  options={groupOptions()}
+                />
                 <Show
                   when={answered()}
                   fallback={
                     <>
                       <Show when={working()}>
                         {(waiting) => (
-                          // Same working indicator the main transcript shows while a run has no output yet.
-                          <div class="chat-group assistant chat-session-rail__message">
-                            <ChatWorkingIndicator
-                              part={{
+                          // The main transcript's working group, shown while a run has no output yet.
+                          <StreamGroup
+                            parts={[
+                              {
                                 kind: "reading-indicator",
                                 key: `side-chat:${waiting().startedAt}`,
                                 startedAt: waiting().startedAt,
-                              }}
-                              options={{}}
-                            />
-                          </div>
+                              },
+                            ]}
+                            options={{}}
+                          />
                         )}
                       </Show>
                       <Show when={failed()}>
@@ -332,14 +336,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                 >
                   {(answer) => (
                     <MessageGroup
-                      group={companionAnswerGroup(answer())}
-                      options={{
-                        showReasoning: false,
-                        showToolCalls: false,
-                        avatarPlacement: "none",
-                        assistantName: props.assistantName,
-                        agentId: props.agentId ?? undefined,
-                      }}
+                      group={companionGroup("assistant", answer().answer, answer().ts)}
+                      options={groupOptions()}
                     />
                   )}
                 </Show>
