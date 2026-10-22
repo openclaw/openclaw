@@ -509,22 +509,31 @@ export function createCronPromptExecutor(
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
-                const authProfileId = allowCliAuthProfileForwarding
-                  ? await resolveCliExecutionAuthProfileId({
-                      cliExecutionProvider: executionProvider,
-                      authProfileProvider: providerOverride,
-                      config: params.cfgWithAgentDefaults,
-                      agentDir: params.agentDir,
-                      sessionBinding: cliSessionBinding,
-                      selected: params.liveSelection.authProfileId
+                const resolveForwardedProfile = (
+                  selected: Parameters<typeof resolveCliExecutionAuthProfileId>[0]["selected"],
+                ) =>
+                  allowCliAuthProfileForwarding
+                    ? resolveCliExecutionAuthProfileId({
+                        cliExecutionProvider: executionProvider,
+                        authProfileProvider: providerOverride,
+                        config: params.cfgWithAgentDefaults,
+                        agentDir: params.agentDir,
+                        sessionBinding: cliSessionBinding,
+                        selected,
+                      })
+                    : Promise.resolve(undefined);
+                // A recorded account runs only when this backend forwards exactly that account.
+                const authProfileId = inference
+                  ? await inference.resolveCliAuthProfile(resolveForwardedProfile)
+                  : await resolveForwardedProfile(
+                      params.liveSelection.authProfileId
                         ? {
                             authProfileId: params.liveSelection.authProfileId,
                             authProfileIdSource:
                               params.liveSelection.authProfileIdSource === "user" ? "user" : "auto",
                           }
                         : undefined,
-                    })
-                  : undefined;
+                    );
                 if (trigger === "cron" && !binding && authProfileId) {
                   const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
@@ -554,6 +563,13 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  // Keep the recorded credential lifetime live through CLI preparation and launch.
+                  assertCurrent: inference
+                    ? () => {
+                        assertSettlementCurrent();
+                        inference.runParams.authProfileBinding?.assertCurrent();
+                      }
+                    : undefined,
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,

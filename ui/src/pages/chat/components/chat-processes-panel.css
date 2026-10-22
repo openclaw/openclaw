@@ -93,7 +93,7 @@
   border-top-color: currentColor;
   border-radius: 50%;
   background: var(--bg);
-  animation: chat-processes-spin 1.6s linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 .chat-processes__open {
   white-space: normal;
@@ -593,11 +593,6 @@
   .chat-processes__panel[data-mobile="true"] .chat-processes__list,
   .chat-processes__panel[data-mobile="true"] .chat-processes__output {
     mask-image: none;
-  }
-}
-@keyframes chat-processes-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 @keyframes chat-processes-shimmer {

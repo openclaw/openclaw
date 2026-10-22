@@ -53,7 +53,6 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
@@ -66,7 +65,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { createMediaDevicePreferences, refreshMediaDevice } from "./media-device-discovery.ts";
+import { createMediaDevicePreferences } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -163,7 +162,6 @@ export function createConfigPage(
     commandLifetime = Promise.withResolvers<void>();
   }
   const updates = createConfigUpdatesPresentation(context);
-  let mediaDeviceWatch: (() => void) | null = null;
   const mediaDeviceOwner = createMediaDevicePreferences(
     (videoDeviceId) => applySettings({ realtimeTalkVideoDeviceId: videoDeviceId }),
     invalidate,
@@ -314,12 +312,7 @@ export function createConfigPage(
       countdown = undefined;
     }
     if (pageId === "appearance") {
-      for (const kind of ["microphone", "camera"] as const) {
-        if (!mediaDevices[kind].loaded) {
-          mediaDevices[kind].loaded = true;
-          void refreshMediaDevice(mediaDevices[kind], kind, false, invalidate);
-        }
-      }
+      mediaDeviceOwner.load();
       if (snapshot.phase === "connected") {
         void context.agentIdentity.ensure([context.agentSelection.state.selectedId]);
       }
@@ -848,16 +841,14 @@ export function createConfigPage(
         selectedDeviceId: settings.realtimeTalkInputDeviceId ?? "",
       },
       composerHoldToRecord: settings.composerHoldToRecord !== false,
-      onMicrophoneRefresh: () =>
-        void refreshMediaDevice(mediaDevices.microphone, "microphone", true, invalidate),
+      onMicrophoneRefresh: () => void mediaDeviceOwner.refresh("microphone", true),
       onMicrophoneSelect: (deviceId: string) =>
         applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...mediaDevices.camera,
         selectedDeviceId: settings.realtimeTalkVideoDeviceId ?? "",
       },
-      onCameraRefresh: () =>
-        void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
+      onCameraRefresh: () => void mediaDeviceOwner.refresh("camera", true),
       onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
@@ -900,7 +891,6 @@ export function createConfigPage(
       context.agentSelection,
       context.overlays,
     ].map((source) => source.subscribe(refresh));
-    subscriptions.push(mediaDeviceOwner.observeNavigation(context.router));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh));
     let location = context.router.getState().location;
@@ -922,10 +912,7 @@ export function createConfigPage(
       listen(window, "focus", synchronize),
     );
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
-    mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void refreshMediaDevice(mediaDevices.microphone, "microphone", false, invalidate);
-      void refreshMediaDevice(mediaDevices.camera, "camera", false, invalidate);
-    });
+    subscriptions.push(mediaDeviceOwner.observe(context.router));
     synchronize();
     return () => {
       commandLifetime.resolve();
@@ -933,8 +920,6 @@ export function createConfigPage(
       connected = false;
       customThemeImportOwner.retireImport();
       mediaDeviceOwner.retire();
-      mediaDeviceWatch?.();
-      mediaDeviceWatch = null;
       clearInterval(poll);
       clearInterval(countdown);
       abortRequests();
