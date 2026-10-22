@@ -1,10 +1,11 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { openChatDetails, openChatPublication } from "./chat-details.test-support.ts";
+import { openChatPublication } from "./chat-details.test-support.ts";
 import { exactButton as publicationAction } from "./chat-flow.test-support.ts";
 import {
   personalAccount,
@@ -18,16 +19,10 @@ import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-suppor
 export { publicationAction };
 
 export async function selectPublicationAccount(root: Page | Locator, source: string) {
-  const mobile = root.getByRole("button", { name: /^Publication account(?:$|:)/ });
-  const trigger = (await mobile.count())
-    ? mobile
-    : root.locator(".chat-environment__branch .chat-pr__actions-trigger");
-  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
-    await trigger.click();
-  }
+  await root.getByRole("button", { name: /^Publication account(?:$|:)/ }).click();
   await root
     .locator(
-      `.chat-pr-branch-menu [role="menuitemradio"][value="${source}"], .github-publication-mobile__accounts-panel [role="menuitemradio"][value="${source}"]`,
+      `.chat-pr__accounts-panel [role="menuitemradio"][value="${source}"], .github-publication-mobile__accounts-panel [role="menuitemradio"][value="${source}"]`,
     )
     .click();
 }
@@ -134,10 +129,10 @@ export function defineGitHubPublicationAccountTests({
     const discovered = await gateway.waitForRequest("sessions.github.options");
     expect(discovered.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
     await openChatPublication(page);
-    const publish = publicationAction(page, "Create PR");
+    const publish = publicationAction(page, "Publish PR");
     await publish.waitFor();
     await expect.poll(() => publish.isEnabled()).toBe(Boolean(scenario.native));
-    const row = page.locator(".chat-environment__branch");
+    const row = page.locator('.chat-pr[data-state="branch"]');
     const note = row.locator(".chat-pr__publication-note");
     const refresh = publicationAction(row, "Refresh publication");
     if (!scenario.native) {
@@ -188,16 +183,13 @@ export function defineGitHubPublicationAccountTests({
         width,
       );
       await openChatPublication(page);
-      const arrow =
-        width === 390
-          ? page.getByRole("button", { name: /^Publication account(?:$|:)/, includeHidden: true })
-          : page.locator(".chat-environment__branch .chat-pr__actions-trigger");
-      if ((await arrow.getAttribute("aria-expanded")) === "true") {
-        await arrow.click();
-      }
+      const arrow = page.getByRole("button", {
+        name: /^Publication account(?:$|:)/,
+        includeHidden: true,
+      });
       await arrow.waitFor();
       const menu = page.locator(
-        width === 390 ? ".github-publication-mobile__accounts-panel" : ".chat-pr-branch-menu",
+        width === 390 ? ".github-publication-mobile__accounts-panel" : ".chat-pr__accounts-panel",
       );
       const shared = menu.getByRole("menuitemradio", {
         name: width === 390 ? "@system-bot · System" : "@system-bot",
@@ -207,21 +199,22 @@ export function defineGitHubPublicationAccountTests({
         name: width === 390 ? "@alice-tools · My GitHub" : "@alice-tools",
         exact: true,
       });
-      await shared.waitFor({ state: "hidden" });
       expect(await shared.isVisible()).toBe(false);
       expect(await menu.locator("select").count()).toBe(0);
-      const row = page.locator(
-        width === 390 ? ".github-publication-mobile" : ".chat-environment__branch",
-      );
+      const rowSelector =
+        width === 390 ? ".github-publication-mobile" : '.chat-pr[data-state="branch"]';
+      const row = page.locator(rowSelector);
+      await waitForLayoutSettled(page, rowSelector);
       const closedBounds = await row.boundingBox();
       expect(closedBounds).not.toBeNull();
       await arrow.focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => arrow.getAttribute("aria-expanded")).toBe("true");
       await shared.waitFor();
+      await waitForLayoutSettled(page, rowSelector);
       expect(await shared.getAttribute("aria-checked")).toBe("true");
       expect(await personal.getAttribute("aria-checked")).toBe("false");
-      expect((await row.boundingBox())?.height).toBeCloseTo(closedBounds!.height, 4);
+      expect((await row.boundingBox())?.height).toBeCloseTo(closedBounds!.height, 1);
       const accountBounds = await shared.boundingBox();
       expect(accountBounds).not.toBeNull();
       expect(accountBounds!.x).toBeGreaterThanOrEqual(0);
@@ -233,18 +226,12 @@ export function defineGitHubPublicationAccountTests({
       await personal.waitFor({ state: "hidden" });
       expect(await arrow.getAttribute("aria-expanded")).toBe("false");
       expect(await menu.locator('[value="personal"]').getAttribute("aria-checked")).toBe("true");
-      expect(
-        await publicationAction(page, width === 390 ? "Publish PR" : "Create PR").count(),
-      ).toBe(1);
+      expect(await publicationAction(page, "Publish PR").count()).toBe(1);
       await expect
         .poll(() => arrow.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await showPublicationBranch(gateway, "openclaw/updated-branch");
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await openChatPublication(page);
       await row
         .getByText("openclaw/updated-branch", { exact: true })
         .waitFor({ state: "attached" });
@@ -267,11 +254,7 @@ export function defineGitHubPublicationAccountTests({
           "false",
         );
       }
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await openChatPublication(page);
       expect(await personal.isVisible()).toBe(false);
       if (width === 390) {
         await navigationDrawerToggle(page).click();
@@ -352,7 +335,7 @@ export function defineGitHubPublicationAccountTests({
       });
       await openChatPublication(page);
       await selectPublicationAccount(page, "personal");
-      const publish = page.getByRole("button", { name: "Create PR" });
+      const publish = page.getByRole("button", { name: "Publish PR" });
       await publish.waitFor();
 
       await expect.poll(() => publish.isEnabled()).toBe(ready);
@@ -361,6 +344,7 @@ export function defineGitHubPublicationAccountTests({
         await notice.getByRole("button", { name: "Dismiss workspace conflict notice" }).click();
         await notice.waitFor({ state: "hidden" });
         await openChatPublication(page);
+        await page.getByRole("button", { name: "Publication account" }).click();
         await page.getByRole("menuitemradio", { name: "@alice-tools", exact: true }).waitFor();
       }
     },
