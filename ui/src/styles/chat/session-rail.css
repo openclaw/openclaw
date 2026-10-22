@@ -49,7 +49,6 @@ openclaw-chat-session-rail {
 }
 
 .chat-session-rail__pr-checks,
-.chat-session-rail__timestamp,
 .chat-session-rail__hint {
   color: var(--muted);
 }
@@ -88,13 +87,21 @@ openclaw-chat-session-rail {
   padding: 0;
 }
 
+/* Answers are main-transcript assistant groups, footer included. The panel has
+   no avatar gutter, so their grid collapses to one full-width column. */
+.chat-session-rail__exchange > .chat-group.assistant {
+  --chat-avatar-column: 0px;
+  --chat-avatar-gap: 0px;
+  --chat-message-column-max: 100%;
+  margin: 0;
+}
+
 .chat-session-rail__message .chat-session-rail__question {
   width: fit-content;
   max-width: 90%;
   margin-inline-start: auto;
 }
 
-.chat-session-rail__timestamp,
 .chat-session-rail__hint {
   font-size: var(--control-ui-text-sm);
 }

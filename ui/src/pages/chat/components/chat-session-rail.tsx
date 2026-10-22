@@ -11,7 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { formatTimeMs } from "../../../lib/format.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
@@ -23,6 +23,7 @@ import type {
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import { MessageMarkdown } from "./chat-message-text-view.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
@@ -56,9 +57,34 @@ const COMPANION_HINT_KEYS = {
   Parameters<typeof t>[0]
 >;
 
+// Answers render as main-transcript assistant groups, so the bubble, footer
+// identity, relative timestamp and message actions share one owner.
+function companionAnswerGroup(
+  answer: Extract<ChatSessionCompanionTurn, { status: "answered" }>,
+): MessageGroupData {
+  const key = `side-chat:${answer.ts}`;
+  return {
+    kind: "group",
+    key,
+    role: "assistant",
+    messages: [
+      {
+        key,
+        message: { role: "assistant", content: answer.answer, timestamp: answer.ts },
+        hasVisibleContent: true,
+      },
+    ],
+    visibleContent: "text",
+    timestamp: answer.ts,
+    isStreaming: false,
+  };
+}
+
 type ChatSessionRailProps = {
   presentation?: "desktop" | "mobile";
   sessionKey: string;
+  agentId?: string | null;
+  assistantName?: string;
   digest: SessionObserverDigest | null;
   running: boolean;
   activeRunId: string | null;
@@ -305,30 +331,16 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                   }
                 >
                   {(answer) => (
-                    <>
-                      <div class="chat-group assistant chat-session-rail__message">
-                        <div class="chat-bubble chat-session-rail__answer">
-                          <MessageMarkdown
-                            markdown={answer().answer}
-                            messageKey={String(answer().ts)}
-                            options={{ role: "assistant", isStreaming: false }}
-                            markdownOptions={{ codeBlockInteraction: "interactive" }}
-                          />
-                        </div>
-                      </div>
-                      <time
-                        class="chat-session-rail__timestamp"
-                        datetime={new Date(answer().ts).toISOString()}
-                      >
-                        {t("chat.rail.asOf", {
-                          time: formatTimeMs(
-                            answer().ts,
-                            { hour: "numeric", minute: "2-digit" },
-                            "",
-                          ),
-                        })}
-                      </time>
-                    </>
+                    <MessageGroup
+                      group={companionAnswerGroup(answer())}
+                      options={{
+                        showReasoning: false,
+                        showToolCalls: false,
+                        avatarPlacement: "none",
+                        assistantName: props.assistantName,
+                        agentId: props.agentId ?? undefined,
+                      }}
+                    />
                   )}
                 </Show>
               </article>
@@ -372,6 +384,8 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
   properties: {
     presentation: { default: undefined, attribute: false },
     sessionKey: { default: "", attribute: false },
+    agentId: { default: undefined, attribute: false },
+    assistantName: { default: undefined, attribute: false },
     digest: { default: null, attribute: false },
     running: { default: false, attribute: false },
     activeRunId: { default: null, attribute: false },
