@@ -79,36 +79,23 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       id: randomUUID(),
     };
   }
+
+  async function note(message: string, title?: string): Promise<void> {
+    await prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
+  }
+
   return {
     cancel(message) {
       throw new WizardCancelledError(message);
     },
-    async intro(title: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message: "",
-        executor: "client",
-      });
-    },
-
-    async outro(message: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title: "Done",
-        message,
-        executor: "client",
-      });
-    },
-
-    async note(message: string, title?: string): Promise<void> {
-      await prompt({
-        type: "note",
-        title,
-        message,
-        executor: "client",
-      });
-    },
+    intro: (title) => note("", title),
+    outro: (message) => note(message, "Done"),
+    note,
 
     async deviceCode(params): Promise<void> {
       const externalUrl = session.consumeExternalUrl(true);
