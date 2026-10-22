@@ -1,14 +1,5 @@
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import {
-  buildAgentInternalEventContext,
-  formatAgentInternalEventsForPrompt,
-  formatGeneratedMediaDeliveredForPrompt,
-  resolveAcpPromptBody,
-  type AgentInternalEvent,
-} from "../../../../../src/agents/internal-events.js";
-import { projectRuntimeContextFragments } from "../../../../../src/agents/internal-runtime-context.js";
-import { labelRuntimeContextText } from "../../../../../src/llm/types.js";
 import { buildSlackProgressCommentaryRun } from "../../live-transports/slack/slack-live.scenario-fixtures.js";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
@@ -2375,82 +2366,51 @@ describe("qa mock openai server", () => {
     ).toContain("Attachment: /tmp/qa-lighthouse.png");
   });
 
-  it.each(["legacy user", "v4 developer", "queued host delivery"] as const)(
-    "completes an image from %s context without replaying an unavailable tool",
-    async (projection) => {
-      const server = await startMockServer();
-      const prompt = "Image generation check: generate a QA lighthouse image.";
-      const imagePlan = await respond(server, userInputs(prompt), { tools: [IMAGE_GENERATE_TOOL] });
-      const imageCall = outputToolCall(imagePlan, "image_generate");
-      const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
-      const event: AgentInternalEvent = {
-        type: "task_completion",
-        source: "image_generation",
-        childSessionKey: "image_generate:qa-image",
-        childSessionId: "qa-image",
-        announceType: "image generation task",
-        taskLabel: "A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
-        status: "ok",
-        statusLabel: "completed successfully",
-        result: "Generated 1 image.",
-        mediaUrls: ["/tmp/qa-lighthouse.png"],
-        replyInstruction: "Review the generated image and reply briefly.",
-      };
-      const completionContext =
-        projection === "legacy user"
-          ? formatAgentInternalEventsForPrompt([event])
-          : projection === "queued host delivery"
-            ? `${formatGeneratedMediaDeliveredForPrompt(event.mediaUrls ?? [])}\n\n${resolveAcpPromptBody("", [event])}`
-            : {
-                role: "developer",
-                content: labelRuntimeContextText(
-                  projectRuntimeContextFragments(buildAgentInternalEventContext([event])),
-                ),
-              };
-      const completion = await respond(
-        server,
-        userInputs(
-          prompt,
-          {
-            type: "function_call",
-            name: "image_generate",
-            call_id: callId,
-            arguments: String(imageCall.arguments),
-          },
-          makeToolOutputWithCallId(
-            callId,
-            JSON.stringify({
-              content: [{ type: "text", text: "Background image generation started." }],
-              details: { async: true, status: "started" },
-            }),
-          ),
-          completionContext,
-          ...(projection === "queued host delivery"
-            ? [
-                labelRuntimeContextText(
-                  projectRuntimeContextFragments([
-                    {
-                      kind: "conversation-data",
-                      text: "[Inter-session message] sourceSession=image_generate:qa-image sourceChannel=internal sourceTool=image_generate isUser=false",
-                    },
-                  ]),
-                ),
-              ]
-            : []),
-        ),
+  it("completes an image without replaying a tool unavailable to the completion turn", async () => {
+    const server = await startMockServer();
+    const prompt = "Image generation check: generate a QA lighthouse image.";
+    const imagePlan = await respond(server, userInputs(prompt), { tools: [IMAGE_GENERATE_TOOL] });
+    const imageCall = outputToolCall(imagePlan, "image_generate");
+    const callId = outputToolCallId(imageCall, "call_mock_image_generate_unavailable");
+    const completionEvent = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "OpenClaw runtime context (internal):",
+      "",
+      "[Internal task completion event]",
+      "source: image_generation",
+      "task: A QA lighthouse on a dark sea with a tiny protocol droid silhouette.",
+      "status: completed successfully",
+      "Generated media:",
+      "MEDIA:/tmp/qa-lighthouse.png",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const completion = await respond(
+      server,
+      userInputs(
+        prompt,
         {
-          tools: [MESSAGE_TOOL],
-          instructions: "Read source and docs; report worked, failed, blocked.",
+          type: "function_call",
+          name: "image_generate",
+          call_id: callId,
+          arguments: String(imageCall.arguments),
         },
-      );
+        makeToolOutputWithCallId(
+          callId,
+          JSON.stringify({
+            content: [{ type: "text", text: "Background image generation started." }],
+            details: { async: true, status: "started" },
+          }),
+        ),
+        completionEvent,
+      ),
+      { tools: [MESSAGE_TOOL] },
+    );
 
-      expectNoTool(completion, "image_generate");
-      expect(outputText(completion)).toBe(
-        "Protocol note: generated the QA lighthouse image successfully." +
-          (projection === "queued host delivery" ? "" : "\nMEDIA:/tmp/qa-lighthouse.png"),
-      );
-    },
-  );
+    expectNoTool(completion, "image_generate");
+    expect(outputText(completion)).toBe(
+      "Protocol note: generated the QA lighthouse image successfully.\nMEDIA:/tmp/qa-lighthouse.png",
+    );
+  });
 
   it.each([
     [

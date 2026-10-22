@@ -243,4 +243,4 @@ flow:
                   expr: >-
                     `image_generate tool_search discovery
                     ${formatToolSearchDiscoveryReceipt('happy', imageSearchDiscovery)}`
-      detailsExpr: "`${outbound.text}\\n${imageSearchDiscoveryDetails}\\nIMAGE_PATH:${generatedPath}`"
+      detailsExpr: "`${completionReplies[0].text}\\n${imageSearchDiscoveryDetails}\\nIMAGE_PATH:${generatedPath}`"
