@@ -84,7 +84,7 @@ function extractLastJsonObject(raw: string): unknown {
         arrayDepth = 0;
         candidateHasContent = false;
       }
-    } else if (character === "}" && starts.length > 0) {
+    } else if (character === "}") {
       const start = starts.pop();
       if (start !== undefined && starts.length === 0) {
         ranges.push({ start, end: index });
