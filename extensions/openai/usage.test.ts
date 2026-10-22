@@ -28,9 +28,7 @@ async function fetchAdminUsage(
   projectId?: string,
   apiKey = "sk-admin-test",
 ) {
-  const auth = await resolveAuth({
-    env: { OPENAI_ADMIN_KEY: apiKey },
-  });
+  const auth = await resolveAuth({ env: { OPENAI_ADMIN_KEY: apiKey } });
   if (!("token" in auth) || !auth.token) {
     throw new Error("expected encoded OpenAI admin token");
   }
@@ -170,14 +168,7 @@ describe("OpenAI provider usage", () => {
   it("prefers an explicit admin key over ChatGPT OAuth", async () => {
     const result = await resolveAuth({
       config: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://proxy.example.test/v1",
-              models: [],
-            },
-          },
-        },
+        models: { providers: { openai: { baseUrl: "https://proxy.example.test/v1", models: [] } } },
       },
       env: { OPENAI_ADMIN_KEY: "sk-admin-explicit" },
       resolveApiKeyFromConfigAndStore: () => "sk-proj-fallback",
