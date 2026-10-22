@@ -79,7 +79,7 @@ function authority(reason: string | Error) {
   let current = true;
   const error = typeof reason === "string" ? new Error(reason) : reason;
   return {
-    assertCurrent() {
+    assertCurrent: () => {
       if (!current) {
         throw error;
       }

@@ -582,6 +582,13 @@ describe("restart tombstone channel feedback", () => {
   let recoverySessionKey: string;
   let messageId: number;
 
+  const recoveryMarker = (cycleId = "failed-cycle") => ({
+    cycleId,
+    revision: 4,
+    chargedAttempts: 3,
+    tombstone: { reason: "automatic recovery exhausted" },
+  });
+
   beforeEach(() => {
     clearAgentHarnesses();
     setActivePluginRegistry(
@@ -606,12 +613,7 @@ describe("restart tombstone channel feedback", () => {
       sessionId: "failed-session",
       updatedAt: Date.now(),
       status: "failed",
-      mainRestartRecovery: {
-        cycleId: "failed-cycle",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
+      mainRestartRecovery: recoveryMarker(),
     };
     setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
     loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
@@ -706,10 +708,7 @@ describe("restart tombstone channel feedback", () => {
     if (change === "session") {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
-      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
-        ...sessionStoreMocks.currentEntry!.mainRestartRecovery,
-        cycleId: "replacement-cycle",
-      };
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = recoveryMarker("replacement-cycle");
     }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);

@@ -100,9 +100,13 @@ it.each([
       await prompt;
       expect(
         acp.sessionUpdate.mock.calls
-          .flatMap(([{ update }]) =>
-            update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
-          )
+          .flatMap(([{ update }]) => {
+            if (update.sessionUpdate !== "agent_message_chunk") {
+              return [];
+            }
+            expect(update.content.type).toBe("text");
+            return update.content.type === "text" ? [update.content.text] : [];
+          })
           .join(""),
       ).toBe(expected);
     } finally {
