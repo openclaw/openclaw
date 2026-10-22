@@ -3792,7 +3792,6 @@
 ["src/commands/auth-choice.apply.plugin-provider.test.ts","../wizard/setup.post-install-migration.js","2e54236c9237705f3792de18395b3a78524808600d880a5f7fe68dfeca3e2518",1]
 ["src/commands/auth-choice.preferred-provider.test.ts","../plugins/provider-wizard.js","aaf0863ec31c9c059d14ccb79051a58eecf872a437d33a49d037ff4b4aa78959",1]
 ["src/commands/auth-choice.preferred-provider.test.ts","../plugins/providers.runtime.js","ee3d30427865569e80847bd48f4c3d031dfa156ccd5a0aabccdfaed0c7b9dac2",1]
-["src/commands/auth-choice.test.ts","../agents/agent-scope.js","f0fe9cb3877652ebb0cda94bf7a6f3ea8deb6c416e416f22067e22db167fba9a",1]
 ["src/commands/auth-choice.test.ts","../agents/auth-profiles.js","bc1123c1b8225b4a05d07c8a325dfd00ce71ca4fb7106781c96a26df3f34c5f5",1]
 ["src/commands/auth-choice.test.ts","../agents/workspace.js","06ee6e019f32fd3ef7cf90e4a753a1bbff2875bf739964e0c9e1b370f3a9a42e",1]
 ["src/commands/auth-choice.test.ts","../infra/browser-open.js","33832a96a0d2dd12c7d91b3659ef4acf408dd835164a6a60f7319fa292b7b072",1]
