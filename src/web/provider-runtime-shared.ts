@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, isLegacySecretRefEnvMarker } from "../config/types.secrets.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
@@ -26,15 +27,7 @@ export function resolveWebProviderConfig(
   cfg: WebProviderConfigSource | undefined,
   kind: "search" | "fetch",
 ): Record<string, unknown> | undefined {
-  const webConfig = cfg?.tools?.web;
-  if (!webConfig || typeof webConfig !== "object") {
-    return undefined;
-  }
-  const toolConfig = webConfig[kind];
-  if (!toolConfig || typeof toolConfig !== "object") {
-    return undefined;
-  }
-  return toolConfig as Record<string, unknown>;
+  return asOptionalObjectRecord(cfg?.tools?.web?.[kind]);
 }
 
 export function readWebProviderEnvValue(

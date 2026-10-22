@@ -10,6 +10,20 @@ describe("resolveWebProviderConfig", () => {
     const search = { provider: "search-provider" };
     expect(resolveWebProviderConfig({ tools: { web: { search } } }, "search")).toBe(search);
   });
+
+  it("selects array-backed fetch config by identity", () => {
+    const fetch: unknown[] = [];
+    const web = Object.assign([], { fetch, search: { provider: "not-selected" } });
+    expect(resolveWebProviderConfig({ tools: { web } }, "fetch")).toBe(fetch);
+    expect(resolveWebProviderConfig(undefined, "fetch")).toBeUndefined();
+  });
+
+  it.each([undefined, null, false, 1, "text", () => ({})])(
+    "rejects non-object selected tool config: %j",
+    (search) => {
+      expect(resolveWebProviderConfig({ tools: { web: { search } } }, "search")).toBeUndefined();
+    },
+  );
 });
 
 describe("readWebProviderEnvValue", () => {
