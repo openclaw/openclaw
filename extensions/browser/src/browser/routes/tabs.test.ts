@@ -13,6 +13,7 @@ const navigation = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Observe tab URL policy decisions without resolving or connecting fixture addresses.
 vi.mock("../navigation-guard.js", () => navigation);
 
 const { registerBrowserTabRoutes } = await import("./tabs.js");

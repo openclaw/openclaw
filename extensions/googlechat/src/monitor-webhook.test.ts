@@ -27,6 +27,7 @@ vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
   withResolvedWebhookRequestPipeline,
 }));
 
+// mock-isolation: Drive webhook authentication outcomes without fetching Google's signing keys.
 vi.mock("./auth.js", () => ({ verifyGoogleChatRequest }));
 
 let createGoogleChatWebhookRequestHandler: typeof import("./monitor-webhook.js").createGoogleChatWebhookRequestHandler;

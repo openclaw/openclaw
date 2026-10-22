@@ -90,6 +90,7 @@ vi.mock("../chrome-mcp.js", () => ({
 // mock-isolation: Observe navigation policy checks without resolving or connecting fixture URLs.
 vi.mock("../navigation-guard.js", () => navigation);
 
+// mock-isolation: Supply synthetic profile and tab ownership without starting a browser service.
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({
     ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },

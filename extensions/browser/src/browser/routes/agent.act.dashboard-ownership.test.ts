@@ -52,9 +52,11 @@ vi.mock("../paths.js", async (importOriginal) => ({
     paths: requestedPaths,
   }),
 }));
+// mock-isolation: Hold output preparation without creating real download directories.
 vi.mock("../output-directories.js", () => ({
   ensureOutputDirectory: async () => await transferPreparation.output(),
 }));
+// mock-isolation: Use synthetic output paths while testing dashboard authority, not filesystem policy.
 vi.mock("./output-paths.js", () => ({
   resolveWritableOutputPathOrRespond: async ({ requestedPath }: { requestedPath: string }) =>
     requestedPath,
@@ -69,6 +71,7 @@ vi.mock("../pw-session-connection.js", async (importOriginal) => ({
   getPageForTargetId: () => sessionMocks().getPageForTargetId(),
 }));
 
+// mock-isolation: Select synthetic action modules without loading a live browser connection.
 vi.mock("../pw-ai-module.js", () => ({
   getPwAiModule: async () => {
     if (suite.mode === "transfers") {

@@ -18,6 +18,7 @@ vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
   warnMissingProviderGroupPolicyFallbackOnce,
 }));
 
+// mock-isolation: Record access-policy replies without contacting the Google Chat API.
 vi.mock("./api.js", () => ({ sendGoogleChatMessage }));
 
 function createCore() {

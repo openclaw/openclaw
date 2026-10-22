@@ -513,7 +513,7 @@ export function describeOpenAIProviderRuntimeContract(
       );
     });
 
-    it("owns refresh fallback for accountId extraction failures", async () => {
+    it("propagates accountId refresh failures to the credential owner", async () => {
       const provider = getProvider("openai");
       const credential = {
         type: "oauth" as const,
@@ -523,11 +523,10 @@ export function describeOpenAIProviderRuntimeContract(
         expires: Date.now() - 60_000,
       };
 
-      refreshOpenAICodexTokenMock.mockRejectedValueOnce(
-        new Error("Failed to extract accountId from token"),
-      );
+      const failure = new Error("Failed to extract accountId from token");
+      refreshOpenAICodexTokenMock.mockRejectedValueOnce(failure);
 
-      await expect(provider.refreshOAuth?.(credential)).resolves.toEqual(credential);
+      await expect(provider.refreshOAuth?.(credential)).rejects.toBe(failure);
     });
 
     it("uses the subscription budget with a manifest-backed startup registry", async () => {

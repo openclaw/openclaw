@@ -105,6 +105,7 @@ const transportMocks = vi.hoisted(() => ({
   dispatch: vi.fn<(request: BrowserDispatchRequest) => Promise<BrowserDispatchResponse>>(),
 }));
 
+// mock-isolation: Record local dispatch without starting the browser control service.
 vi.mock("../local-dispatch.runtime.js", () => ({
   dispatchBrowserControlRequest: transportMocks.dispatch,
 }));
@@ -133,6 +134,7 @@ const navigation = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+// mock-isolation: Exercise route ownership with a synthetic Chrome MCP session, never a live browser.
 vi.mock("../chrome-mcp.js", () => ({
   ...mcp,
   closeChromeMcpTab: vi.fn(async () => {}),
@@ -142,6 +144,7 @@ vi.mock("../chrome-mcp.js", () => ({
   resizeChromeMcpPage: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Route screenshots through the synthetic MCP target used by this suite.
 vi.mock("../chrome-mcp-actions.js", () => ({
   takeChromeMcpScreenshotOnTarget: async (params: unknown) => await screenshotMock(params),
 }));
@@ -184,8 +187,10 @@ vi.mock("../chrome-mcp-routing.js", async (importOriginal) => ({
   ),
 }));
 
+// mock-isolation: Keep CDP capture unavailable while proving existing-session routing.
 vi.mock("../cdp.js", () => ({ captureScreenshot: vi.fn(), snapshotAria: vi.fn() }));
 
+// mock-isolation: Control navigation decisions without resolving or connecting synthetic targets.
 vi.mock("../navigation-guard.js", () => navigation);
 
 vi.mock("../pw-ai-module.js", () => ({
