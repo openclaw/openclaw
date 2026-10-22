@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { stateTest, useState } from "./plugin-state-fixtures.test-support.js";
+import { keyedStore, stateTest, useState } from "./plugin-state-fixtures.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
@@ -150,10 +150,7 @@ describe("plugin-state-store.retained", () => {
         )
         .get(pluginId, "@retained.history", key(9)),
     ).toEqual({ value_json: raw, created_at: 9, expires_at: null });
-    const foreign = createPluginStateKeyedStore<{ body: string }>("other-plugin", {
-      namespace: "history",
-      maxEntries: 10,
-    });
+    const foreign = keyedStore<{ body: string }>("other-plugin", "history");
     expect(await foreign.lookup("9")).toEqual({ body: "foreign" });
     await retained.register(key(99), { body: "99" });
     await retained.register(key(100), { body: "100" });

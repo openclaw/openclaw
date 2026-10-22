@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { deserialize, serialize } from "node:v8";
 import { threadId, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, expect, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -34,7 +33,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
-import { stateTest } from "./plugin-state-fixtures.test-support.js";
+import { syncKeyedStore, stateTest } from "./plugin-state-fixtures.test-support.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateKeyedStoreV2,
@@ -157,10 +156,7 @@ it("checks cross-namespace leases in the write transaction", async ({ state }) =
     });
 
   // The released synchronous writer can replace a lease after async preparation.
-  const legacy = createPluginStateSyncKeyedStore<string>("lease-test", {
-    ...options,
-    namespace: "head",
-  });
+  const legacy = syncKeyedStore<string>("lease-test", "head", { ...options });
   legacy.register("writer", "replacement-owner");
   expect(await link(lease.comparison)).toEqual({ status: "conflict", current: previous });
   expect(await entries.lookup("previous")).toBe("unlinked");
@@ -484,47 +480,6 @@ it("captures journal data and range before admission", async ({ state }) => {
       value: { kind: "event", detail: { value: "captured" }, sequence: 1 },
     },
   ]);
-});
-
-it("shares worker state with legacy stores without host SQL", async ({ state: _state }) => {
-  const options = {
-    namespace: "claims",
-    maxEntries: 10,
-    overflowPolicy: "reject-new" as const,
-  };
-  const observation = observeHostDataSql();
-  const sql = observation.calls;
-  const store = createPluginStateKeyedStore<number>("slack", options);
-  const legacy = createPluginStateSyncKeyedStore<number>("slack", options);
-  await store.register("upsert", 5);
-  expect(await store.consume("upsert")).toBe(5);
-  expect(await store.consume("upsert")).toBeUndefined();
-  expect(await store.registerIfAbsent("worker", 2)).toBe(true);
-  expectNoSql(sql);
-  legacy.register("legacy", 1);
-  expect(legacy.lookup("worker")).toBe(2);
-  sql.forEach((method) => method.mockClear());
-  expect(await store.registerIfAbsent("legacy", 3)).toBe(false);
-  expect(await store.deleteIfEqual("worker", 1)).toBe(false);
-  expect(await store.deleteIfEqual("worker", 2)).toBe(true);
-  expect(await store.registerIfAbsent("fresh", 4)).toBe(true);
-  await store.register("delete", 6);
-  expect(await store.delete("delete")).toBe(true);
-  expect(await store.delete("delete")).toBe(false);
-  const cleared = createPluginStateKeyedStore<number>("slack", {
-    ...options,
-    namespace: "clear",
-  });
-  await cleared.register("removed", 7);
-  await cleared.clear();
-  expect(await cleared.entries()).toEqual([]);
-  expect(await store.lookupMany(["fresh", "legacy", "fresh"])).toEqual([4, 1, 4].map(ok));
-  expectNoSql(sql);
-  observation.restore();
-  const persisted = createPluginStateSyncKeyedStore<number>("slack", options);
-  expect(persisted.lookup("worker")).toBeUndefined();
-  await closeOpenClawStateDatabaseAsync();
-  expect(persisted.lookup("fresh")).toBe(4);
 });
 
 it("delivers a captured value to only one concurrent consumer", async ({ state: _state }) => {

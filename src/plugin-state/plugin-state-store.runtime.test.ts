@@ -27,7 +27,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
-import { stateTest } from "./plugin-state-fixtures.test-support.js";
+import { keyedStore, stateTest } from "./plugin-state-fixtures.test-support.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateKeyedStoreV2,
@@ -78,8 +78,7 @@ describe("plugin-state-store.authority", () => {
         createdAt: Date.now(),
         expiresAt: Date.now() + 1_000,
       };
-      const store = createPluginStateKeyedStore<typeof previous>(pluginId, {
-        namespace: "visitor-grants",
+      const store = keyedStore<typeof previous>(pluginId, "visitor-grants", {
         maxEntries: 500,
         overflowPolicy: "reject-new",
         env: state.env,
@@ -356,11 +355,7 @@ describe("plugin-state-store.authority", () => {
   it.for(["update conflict", "delete conflict"] as const)(
     "withholds a %s observation when authority closes after transaction admission",
     async (operation, { state }) => {
-      const store = createPluginStateKeyedStore<string>("private-records", {
-        namespace: "observations",
-        maxEntries: 10,
-        env: state.env,
-      });
+      const store = keyedStore<string>("private-records", "observations", { env: state.env });
       await store.register("key", "before");
       const observed = await store.observe("key");
       await store.register("key", "private current value");

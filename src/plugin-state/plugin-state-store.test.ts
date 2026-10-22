@@ -26,7 +26,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { useState } from "./plugin-state-fixtures.test-support.js";
+import { keyedStore, keyedStores, useState } from "./plugin-state-fixtures.test-support.js";
 import { withPluginStateDatabaseReadOnly } from "./plugin-state-store.database.js";
 import {
   getPluginStateCapacity,
@@ -54,7 +54,7 @@ function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginI
   return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
 }
 function stores<T>(options: Partial<OpenKeyedStoreOptions>, pluginId = "discord") {
-  return { sync: syncStore<T>(options, pluginId), store: openAsyncStore<T>(options, pluginId) };
+  return keyedStores<T>(pluginId, { ...defaults, ...options });
 }
 function maintenance(namespace: string) {
   const scope = { pluginId: "codex", namespace };
@@ -284,9 +284,7 @@ describe("plugin-state-store", () => {
     expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
       PluginStateStoreError,
     );
-    expect(() =>
-      createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
-    ).toThrow(PluginStateStoreError);
+    expect(() => keyedStore("core:not-a-plugin", "bad")).toThrow(PluginStateStoreError);
   });
 
   it("treats a missing plugin-state database as empty without creating it", async () => {

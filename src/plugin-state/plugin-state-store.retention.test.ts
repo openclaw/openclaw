@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { useState } from "./plugin-state-fixtures.test-support.js";
+import { keyedStore, useState } from "./plugin-state-fixtures.test-support.js";
 import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
@@ -146,10 +146,7 @@ describe("plugin state keyed store", () => {
   });
 
   it("protects a worker claim when existing rows have later timestamps", async () => {
-    const store = createPluginStateKeyedStore<number>("discord", {
-      namespace: "evict-worker-claim",
-      maxEntries: 1,
-    });
+    const store = keyedStore<number>("discord", "evict-worker-claim", { maxEntries: 1 });
     seedPluginStateEntriesForTests([
       {
         pluginId: "discord",
