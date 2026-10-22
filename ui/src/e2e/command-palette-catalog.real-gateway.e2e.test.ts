@@ -2,7 +2,6 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -14,7 +13,6 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiInitialRoster,
@@ -375,51 +373,7 @@ suite.define(() => {
           const retry = settings
             .locator('.model-providers__catalog-progress[role="alert"]')
             .getByRole("button", { name: "Retry", exact: true });
-          try {
-            await retry.waitFor({ state: "visible" });
-          } catch (error) {
-            await withTimeout(
-              page.evaluate(() => {
-                const pageRoot = document.querySelector("openclaw-model-providers-page");
-                const feedback = [
-                  ...(pageRoot?.querySelectorAll(".model-providers__catalog-progress") ?? []),
-                ];
-                const buttons = feedback.flatMap((node) => [...node.querySelectorAll("button")]);
-                const visible = (node: Element) =>
-                  node.checkVisibility({ visibilityProperty: true });
-                return {
-                  catalogPresentationCaptured: true,
-                  catalogPagePresent: pageRoot !== null,
-                  catalogFeedbackRootCount:
-                    pageRoot?.querySelectorAll(".model-providers__catalog-feedback").length ?? 0,
-                  catalogFeedbackCount: feedback.length,
-                  catalogFeedbackVisibleCount: feedback.filter(visible).length,
-                  catalogAlertCount: feedback.filter(
-                    (node) => node.getAttribute("role") === "alert",
-                  ).length,
-                  catalogStatusCount: feedback.filter(
-                    (node) => node.getAttribute("role") === "status",
-                  ).length,
-                  catalogButtonCount: buttons.length,
-                  catalogButtonVisibleCount: buttons.filter(visible).length,
-                  catalogButtonDisabledCount: buttons.filter((button) => button.disabled).length,
-                  catalogRetryLabelCount: buttons.filter(
-                    (button) =>
-                      (button.getAttribute("aria-label") || button.textContent)?.trim() === "Retry",
-                  ).length,
-                  catalogRefreshDisabled:
-                    pageRoot?.querySelector<HTMLButtonElement>(".model-providers__refresh-button")
-                      ?.disabled ?? null,
-                };
-              }),
-              1_000,
-            )
-              .then((facts) => recordControlUiE2eFailureFacts(page, facts))
-              .catch(() =>
-                recordControlUiE2eFailureFacts(page, { catalogPresentationCaptured: false }),
-              );
-            throw error;
-          }
+          await retry.waitFor({ state: "visible" });
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
           expect(acquisitions()).toBe(initialAcquisitions + 3);
           await open();
