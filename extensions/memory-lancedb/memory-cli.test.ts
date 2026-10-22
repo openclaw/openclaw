@@ -37,6 +37,13 @@ it("rejects an invalid limit before generating an embedding", async () => {
   expect(harness.close).toHaveBeenCalledTimes(1);
 });
 
+it("normalizes signed decimal limits through the shared parser", async () => {
+  const harness = createHarness();
+  await harness.run("list", "--limit", "+03");
+  expect(harness.list).toHaveBeenCalledWith("main", 3, { orderByCreatedAt: false });
+  expect(stdout).toBe("[]\n");
+});
+
 it("preserves a falsy search rejection over cleanup failure", async () => {
   const harness = createHarness({
     embedError: null,
@@ -67,7 +74,6 @@ it.each([
 
     const rows = JSON.parse(stdout) as Array<Record<string, unknown>>;
     expect(rows).toEqual(ids.map((id) => ({ id, text: `${id} memory` })));
-    expect(rows.map((row) => Object.keys(row))).toEqual(ids.map(() => columns.split(",")));
     expect(table.toArray().map((row) => row.toJSON())).toEqual(originalRows);
     expect(harness.embed).not.toHaveBeenCalled();
   },

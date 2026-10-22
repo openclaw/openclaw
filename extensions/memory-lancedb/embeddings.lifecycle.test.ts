@@ -145,6 +145,28 @@ function scopedProviderHarness() {
   return { requests, closedAgentDirs, createProvider, embeddings: createEmbeddings(api) };
 }
 
+function authProviderHarness(
+  profileId: string,
+  resolveAgentDir: (config: unknown, agentId: string) => string,
+) {
+  loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
+  const requests: Array<{ agentDir: string; credential: string; text: string }> = [];
+  const close = vi.fn(async (_agentDir: string, _credential: string) => {});
+  const create = vi.fn(async (options: { agentDir?: string }) => {
+    const agentDir = expectDefined(options.agentDir, "auth owner");
+    const credential = readCredential(agentDir, profileId);
+    return providerResult({
+      embedQuery: async (text) => {
+        requests.push({ agentDir, credential, text });
+        return [0.1, 0.2, 0.3];
+      },
+      close: async () => close(agentDir, credential),
+    });
+  });
+  useProvider(create);
+  return { requests, close, create, embeddings: createEmbeddings(createApi({}, resolveAgentDir)) };
+}
+
 it("isolates concurrent agent providers and retires every account exactly once", async () => {
   const { requests, closedAgentDirs, createProvider, embeddings } = scopedProviderHarness();
   await Promise.all([
@@ -196,44 +218,32 @@ it("invalidates only the matching normalized auth owner and unregisters on close
 });
 
 it("rotates actual private auth snapshots without replacing the runtime config", async () => {
-  loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
-  const config = {};
   const agentDir = "/tmp/openclaw-lancedb-private-auth-rotation";
   const profileId = "openai:private";
-  const requests: Array<{ text: string; credential: string }> = [];
   const publishCredential = (credential?: string) =>
     publishPrivateCredential(agentDir, profileId, credential);
-  const closeProvider = vi.fn(async () => {});
-  const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-    const credential = readCredential(options.agentDir, profileId);
-    return providerResult({
-      embedQuery: vi.fn(async (text: string) => {
-        requests.push({ text, credential });
-        return [0.1, 0.2, 0.3];
-      }),
-      close: closeProvider,
-    });
-  });
-  useProvider(createProvider, "openai");
-  const api = createApi(config, () => agentDir);
-  const embeddings = createEmbeddings(api);
+  const { requests, create, close, embeddings } = authProviderHarness(profileId, () => agentDir);
   try {
     publishCredential("fixture-old-account");
     await embed(embeddings, "private", "before-account-rotation");
     publishCredential("fixture-new-account");
     await embed(embeddings, "private", "private-secret-after-account-rotation");
     expect(requests).toEqual([
-      { text: "before-account-rotation", credential: "fixture-old-account" },
-      { text: "private-secret-after-account-rotation", credential: "fixture-new-account" },
+      { agentDir, text: "before-account-rotation", credential: "fixture-old-account" },
+      {
+        agentDir,
+        text: "private-secret-after-account-rotation",
+        credential: "fixture-new-account",
+      },
     ]);
-    expect(createProvider).toHaveBeenCalledTimes(2);
-    expect(closeProvider).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledOnce();
     publishCredential(undefined);
     await expect(embed(embeddings, "private", "private-secret-after-revocation")).rejects.toThrow(
       "Private agent credentials were revoked",
     );
     expect(requests).toHaveLength(2);
-    expect(closeProvider).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(2);
   } finally {
     await embeddings.close?.();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -241,14 +251,11 @@ it("rotates actual private auth snapshots without replacing the runtime config",
 });
 
 it("invalidates every inheriting agent when the actual main auth snapshot rotates", async () => {
-  loadAuthProfileStoreForRuntime(undefined, { readOnly: true, externalCli: { mode: "none" } });
-  const config = {};
   const agentDirs = {
     private: "/tmp/openclaw-lancedb-inherited-private",
     secondary: "/tmp/openclaw-lancedb-inherited-secondary",
   };
   const profileId = "openai:inherited";
-  const requests: Array<{ agentDir: string; credential: string; text: string }> = [];
   const publishMainCredential = (credential: string) => {
     replaceRuntimeAuthProfileStoreSnapshots([
       { store: credentialStore(profileId, credential) },
@@ -258,21 +265,10 @@ it("invalidates every inheriting agent when the actual main auth snapshot rotate
       })),
     ]);
   };
-  const closeProvider = vi.fn(async (_agentDir: string, _credential: string) => {});
-  const createProvider = vi.fn(async (options: { agentDir?: string }) => {
-    const agentDir = expectDefined(options.agentDir, "inherited agent owner");
-    const credential = readCredential(agentDir, profileId);
-    return providerResult({
-      embedQuery: vi.fn(async (text: string) => {
-        requests.push({ agentDir, credential, text });
-        return [0.1, 0.2, 0.3];
-      }),
-      close: async () => closeProvider(agentDir, credential),
-    });
-  });
-  useProvider(createProvider, "openai");
-  const api = createApi(config, (_config, agentId) => agentDirs[agentId as keyof typeof agentDirs]);
-  const embeddings = createEmbeddings(api);
+  const { requests, create, close, embeddings } = authProviderHarness(
+    profileId,
+    (_config, agentId) => agentDirs[agentId as keyof typeof agentDirs],
+  );
   try {
     publishMainCredential("fixture-inherited-old");
     await Promise.all([
@@ -284,8 +280,8 @@ it("invalidates every inheriting agent when the actual main auth snapshot rotate
       embed(embeddings, "private", "private new inherited credential"),
       embed(embeddings, "secondary", "secondary new inherited credential"),
     ]);
-    expect(createProvider).toHaveBeenCalledTimes(4);
-    expect(closeProvider.mock.calls).toEqual(
+    expect(create).toHaveBeenCalledTimes(4);
+    expect(close.mock.calls).toEqual(
       expect.arrayContaining([
         [agentDirs.private, "fixture-inherited-old"],
         [agentDirs.secondary, "fixture-inherited-old"],
@@ -305,8 +301,8 @@ it("invalidates every inheriting agent when the actual main auth snapshot rotate
     await embeddings.close?.();
     clearRuntimeAuthProfileStoreSnapshots();
   }
-  expect(closeProvider.mock.calls).toHaveLength(4);
-  expect(closeProvider.mock.calls).toEqual(
+  expect(close.mock.calls).toHaveLength(4);
+  expect(close.mock.calls).toEqual(
     expect.arrayContaining([
       [agentDirs.private, "fixture-inherited-old"],
       [agentDirs.secondary, "fixture-inherited-old"],
