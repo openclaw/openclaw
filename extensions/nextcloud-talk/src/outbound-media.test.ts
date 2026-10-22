@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
