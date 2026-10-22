@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, onSettled, Show } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { handleContextMenuEvent, isMacContextMenuClick } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -88,7 +88,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
-  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
+  const openMenuFromEvent: JSX.EventHandler<HTMLElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
       const catalogMenu = display()?.catalogMenu;
       if (catalogMenu) {
@@ -215,7 +215,13 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         draggable="false"
         aria-current={session().visuallyActive ? "page" : undefined}
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
-        onClick={(event: MouseEvent) => host().handleSessionRowClick(event, session())}
+        onClick={(event) => {
+          if (isMacContextMenuClick(event)) {
+            openMenuFromEvent(event);
+            return;
+          }
+          host().handleSessionRowClick(event, session());
+        }}
       >
         {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">

@@ -1,5 +1,15 @@
 export { resolveAsciiShortcutKey } from "../../../src/shared/keyboard-shortcuts.ts";
 
+/** macOS Control-click is a secondary click, not a new-tab gesture. */
+export function isMacContextMenuClick(event: MouseEvent): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    event.ctrlKey &&
+    navigator.platform.startsWith("Mac")
+  );
+}
+
 export function handleContextMenuEvent(
   event: MouseEvent | KeyboardEvent,
   trigger: HTMLElement | null,

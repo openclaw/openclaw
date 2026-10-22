@@ -7,7 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
+import { handleContextMenuEvent, isMacContextMenuClick } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -146,9 +146,7 @@ export function renderCatalogSessionRow(
     params.host.sidebarMenus.catalogMenu.open(catalogMenu(), x, y, trigger);
   const CatalogRow = () => {
     const controls: CatalogRowControls = {};
-    const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
-      event,
-    ) =>
+    const openMenuFromEvent: JSX.EventHandler<HTMLElement, MouseEvent | KeyboardEvent> = (event) =>
       handleContextMenuEvent(
         event,
         event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
@@ -190,7 +188,11 @@ export function renderCatalogSessionRow(
           href={target().href}
           class="sidebar-recent-session__link"
           aria-current={active() ? "page" : undefined}
-          onClick={(event: MouseEvent) => {
+          onClick={(event) => {
+            if (isMacContextMenuClick(event)) {
+              openMenuFromEvent(event);
+              return;
+            }
             if (!shouldHandleNavigationClick(event)) {
               return;
             }

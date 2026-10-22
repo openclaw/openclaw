@@ -61,15 +61,56 @@ describe("AppSidebar multi-select", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("lets Control-click open session links through the browser", async () => {
+  it.each(["MacIntel", "Win32", "Linux x86_64"])(
+    "treats Control-click as a session context menu only on Mac (%s)",
+    async (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { sidebar, navigate, dom } = await selection();
+      const clickEvent = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        clientX: 24,
+        clientY: 36,
+      });
+
+      rowLink(sidebar, "agent:main:a").dispatchEvent(clickEvent);
+      await dom.update();
+
+      expect(clickEvent.defaultPrevented).toBe(platform === "MacIntel");
+      expect(selectedRowKeys(sidebar)).toEqual([]);
+      expect(navigate).not.toHaveBeenCalled();
+      if (platform === "MacIntel") {
+        const menu = await sessionMenu(sidebar);
+        expect(menuItem(menu, "Copy link").disabled).toBe(false);
+      } else {
+        expect(sidebar.querySelector("openclaw-session-menu")).toBeNull();
+      }
+    },
+  );
+
+  it("preserves Command-click and right-click session menus on Mac", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     const { sidebar, navigate, dom } = await selection();
-    const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true });
-
-    rowLink(sidebar, "agent:main:a").dispatchEvent(clickEvent);
+    const link = rowLink(sidebar, "agent:main:a");
+    const commandClick = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    });
+    link.dispatchEvent(commandClick);
     await dom.update();
-
-    expect(clickEvent.defaultPrevented).toBe(false);
-    expect(selectedRowKeys(sidebar)).toEqual([]);
+    expect(commandClick.defaultPrevented).toBe(false);
+    expect(sidebar.querySelector("openclaw-session-menu")).toBeNull();
+    const secondaryClick = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    link.dispatchEvent(secondaryClick);
+    await dom.update();
+    expect(secondaryClick.defaultPrevented).toBe(true);
+    expect(menuItem(await sessionMenu(sidebar), "Copy link").disabled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -284,6 +325,28 @@ describe("AppSidebar catalog session rows", () => {
     expect(
       dom.text('[data-session-section="catalog:codex"] .sidebar-session-group-count')?.trim(),
     ).toBe("2");
+  });
+
+  it("opens a catalog menu on Mac Control-click without launching its terminal", async () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    const { dom, navigate } = await mountWithCatalog({ canOpenTerminal: true });
+    await dom.update({ catalogOpenTarget: "terminal", terminalAvailable: true });
+    const link = dom.query<HTMLAnchorElement>(
+      '[data-session-key*="thread-1"] .sidebar-recent-session__link',
+    )!;
+    const clickEvent = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+    });
+    link.dispatchEvent(clickEvent);
+    await dom.update();
+    expect(clickEvent.defaultPrevented).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    const menu = dom.query("openclaw-catalog-session-menu");
+    expect(menu).not.toBeNull();
+    await menu!.updateComplete;
+    expect(menu!.querySelector('[data-value="viewer"]')).not.toBeNull();
   });
 
   it.each([true, false])(
