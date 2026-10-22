@@ -258,6 +258,18 @@ export function formatConcreteConfigPath(
   }, "");
 }
 
+/** Reads raw object paths without applying config mutation key restrictions. */
+export function readObjectPath(root: unknown, path: readonly string[]): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
 /** Joins path segments into their dotted-path representation. */
 export function toDotPath(segments: readonly string[]): string {
   return segments.join(".");
