@@ -155,15 +155,13 @@ export async function startDebugProxyServer(params: {
   host?: string;
   port?: number;
   settings: DebugProxySettings;
-  env?: NodeJS.ProcessEnv;
   captureStore?: DebugProxyCliStore;
 }) {
   const settings = { ...params.settings };
-  const env = { ...(params.env ?? process.env) };
   await ensureDebugProxyCa(settings.certDir);
   const lease = params.captureStore
     ? { store: params.captureStore, release: undefined }
-    : await acquireDebugProxyCaptureStoreAsync({ env });
+    : await acquireDebugProxyCaptureStoreAsync();
   const store = lease.store;
   const childSessionId = settings.sessionId;
   const token = randomBytes(32).toString("base64url");

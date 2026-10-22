@@ -11,10 +11,10 @@ const view = vi.hoisted(() => {
   return { ready, resolve, started: vi.fn() };
 });
 
-vi.mock("./modal-dialog.ts", async (importOriginal) => {
+vi.mock("./modal-dialog.tsx", async (importOriginal) => {
   view.started();
   await view.ready;
-  return { ...(await importOriginal<typeof import("./modal-dialog.ts")>()) };
+  return { ...(await importOriginal<typeof import("./modal-dialog.tsx")>()) };
 });
 
 let restoreDialog: () => void;

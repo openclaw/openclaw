@@ -1,11 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { showConfirmDialog, type ConfirmDialogOptions } from "../../components/confirm-dialog.ts";
+import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
+  RotatedDeviceTokenOutcome,
 } from "../../lib/nodes/page-operations.ts";
 import {
   rejectDevicePairing,
@@ -34,6 +36,7 @@ export type DevicesDialogHost = {
   gatewayClient: () => GatewayBrowserClient | null;
   gatewayUrl: () => string;
   runPageTask: <T>(task: (pageState: DevicesPageDataState) => T | Promise<T>) => Promise<T>;
+  runInventoryTask: (task: (pageState: DevicesPageDataState) => unknown) => Promise<void>;
   setDevicesError: (message: string) => void;
 };
 
@@ -198,7 +201,7 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     ) {
       return;
     }
-    await host.runPageTask(run);
+    await host.runInventoryTask(run);
   }
   return {
     cancel,
@@ -208,4 +211,28 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     confirmTokenRevoke,
     confirmExecApprovalsDiscard,
   };
+}
+
+export async function showDeviceRotationOutcome(
+  deviceName: string,
+  role: string,
+  outcome: RotatedDeviceTokenOutcome,
+) {
+  await (outcome.delivery === "in-band"
+    ? showSecretRevealDialog({
+        title: t("devices.inventory.rotatePromptTitle", { role }),
+        message: t("devices.inventory.rotatePromptBody"),
+        secret: outcome.token,
+        acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
+        dismissHint: t("devices.inventory.rotateDismissHint"),
+      })
+    : showSecretRevealDialog({
+        // The title names the device; the body reassures about the outcome.
+        title: t("devices.inventory.rotateWithheldTitle", { device: deviceName }),
+        status: "success",
+        message: t("devices.inventory.rotateWithheldNext"),
+        callout: t("devices.inventory.rotateWithheldException"),
+        acknowledgeLabel: t("common.close"),
+        note: t("devices.inventory.rotateWithheldNote"),
+      }));
 }

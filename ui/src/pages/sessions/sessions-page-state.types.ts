@@ -23,7 +23,7 @@ export type SessionsPageState = {
   result: SessionsListResult | null;
   loading: boolean;
   refreshing: boolean;
-  error: string | null;
+  error: unknown;
   activeMinutes: string;
   limit: string;
   includeGlobal: boolean;
