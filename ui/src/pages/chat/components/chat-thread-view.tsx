@@ -36,6 +36,7 @@ import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
@@ -72,6 +73,7 @@ export function ChatThread(input: {
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => root && registerTranscriptElement(paneId(), root));
+  onSettled(() => root && watchChatSearchHighlight(root, getTranscriptState(paneId()).search));
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );

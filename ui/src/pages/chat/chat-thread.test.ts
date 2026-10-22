@@ -1240,6 +1240,42 @@ describe("buildCachedChatItems", () => {
     }
   });
 
+  it.each([
+    ["inline code", "Title: fix(review)", "Title: `fix(review): keep proof`"],
+    ["emphasis", "ready for review", "**Ready** for _review_"],
+    ["link label", "see the docs", "See [the docs](https://docs.openclaw.ai/chat)"],
+    ["link target", "docs.openclaw.ai/chat", "See [the docs](https://docs.openclaw.ai/chat)"],
+    ["html block", "proof steps", "<details>\n<summary>Proof</summary>\n\nsteps\n</details>"],
+    ["shortened file link", "open foo.ts now", "Open `/tmp/src/foo.ts` now"],
+  ])("matches transcript search across %s", (_case, query, source) => {
+    const texts = messageGroups({
+      messages: [
+        user("Unrelated prompt", 1_000),
+        assistant(source, 1_001),
+        assistant("Title: fix(other)", 1_002),
+      ],
+      searchOpen: true,
+      searchQuery: query,
+    }).flatMap((group) => group.messages.map(({ message }) => normalizeMessage(message).content));
+
+    expect(texts).toEqual([[{ type: "text", text: source }]]);
+  });
+
+  it.each([
+    ["raw HTML", "hello <b>world</b>"],
+    ["a message above the parse budget", `**hello** world ${"x".repeat(40_000)}`],
+    ["a JSON message", '{"value":"**hello** world"}'],
+    ["text around an image", "Hello ![chart](https://example.com/chart.png) world"],
+  ])("does not match across content the transcript renders differently: %s", (_case, source) => {
+    const groups = messageGroups({
+      messages: [assistant(source, 1_000)],
+      searchOpen: true,
+      searchQuery: "hello world",
+    });
+
+    expect(groups).toEqual([]);
+  });
+
   it("deduplicates Gateway-embedded previews by Canvas URL alone", () => {
     const text = "The App is ready.";
     const groups = messageGroups({

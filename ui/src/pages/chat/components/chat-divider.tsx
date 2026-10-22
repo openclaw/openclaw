@@ -3,9 +3,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
@@ -125,6 +127,7 @@ function FailureNotice(props: ChatNoticeProps) {
 function NoticeBody(props: { text: string }) {
   return (
     <MarkdownHtml
+      ref={elementRef(registerChatSearchTextBlock)}
       class="chat-text chat-notice__body"
       dir={detectTextDirection(props.text)}
       markdown={props.text}

@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
+import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { stripThinkingTags } from "../../lib/strip-thinking-tags.ts";
+import { phraseQueryPattern } from "../../lib/text-match.ts";
 import {
   messageRecoveryKey,
   resolveCappedMessageId,
@@ -83,15 +85,24 @@ export function messageMatchesSearchQuery(
     recovery && messageId
       ? recovery.messages.get(messageRecoveryKey(recovery.agentId, messageId))
       : undefined;
+  // Source text keeps link targets and literal syntax searchable; the visible
+  // projection matches what transcript highlighting can mark on screen.
+  const phrase = phraseQueryPattern(query);
+  const matches = (owner: unknown, markdown: string | null) =>
+    normalizeLowercaseStringOrEmpty(markdown).includes(normalizedQuery) ||
+    (markdown !== null &&
+      phrase !== null &&
+      markdownVisibleText(owner, markdown).search(phrase) >= 0);
   if (expansion?.status === "loaded") {
     const role = normalizeRoleForGrouping(normalizeMessage(message).role);
     if (resolveCappedMessageId(message, role)) {
-      return normalizeLowercaseStringOrEmpty(
+      return matches(
+        expansion,
         role === "assistant" ? stripThinkingTags(expansion.markdown) : expansion.markdown,
-      ).includes(normalizedQuery);
+      );
     }
   }
-  return normalizeLowercaseStringOrEmpty(extractTextCached(message)).includes(normalizedQuery);
+  return matches(message, extractTextCached(message));
 }
 
 type ChatMessagePreview = NonNullable<ReturnType<typeof readChatMessagePreview>>;

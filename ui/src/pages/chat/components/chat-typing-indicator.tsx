@@ -1,9 +1,11 @@
 import { createMemo, For, Show } from "solid-js";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { getLocale, t } from "../../../lib/reactive/i18n.ts";
 import { ChatAvatar } from "../chat-avatar.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { registerChatSearchTextBlock } from "./chat-search-highlight.ts";
 
 let listFormatter: Intl.ListFormat | undefined;
 let listLocale: string | undefined;
@@ -93,6 +95,7 @@ function TypingRow(props: { actor: ChatTypingActorView; avatarPlacement: AvatarP
                   }
                 >
                   <span
+                    ref={elementRef(registerChatSearchTextBlock)}
                     class="chat-text agent-chat__typing-preview-text"
                     dir="auto"
                     data-paused={props.actor.paused ? "" : undefined}
