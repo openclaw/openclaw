@@ -881,7 +881,6 @@ extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	1
 extensions/xai/realtime-voice-config.ts	2
 extensions/xai/src/tool-auth-shared.ts	2
-extensions/xai/src/web-search-provider.runtime.ts	2
 extensions/xai/src/x-search-config.ts	3
 extensions/xai/stream.ts	3
 extensions/xai/tts.ts	1
@@ -1477,7 +1476,7 @@ src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
-src/cli/capability-cli/web.ts	5
+src/cli/capability-cli/web.ts	3
 src/cli/channel-auth.ts	4
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.runtime.ts	1
@@ -2033,7 +2032,6 @@ src/logging/diagnostic-support-redaction.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/logger.ts	7
-src/logging/parse-log-line.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
@@ -2076,7 +2074,6 @@ src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1
-src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
 src/node-host/node-worker-transfer-client.ts	1
