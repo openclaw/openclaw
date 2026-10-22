@@ -78,10 +78,14 @@ async function mount() {
     mountDefault: () => () => {},
   };
   const container = document.body.appendChild(document.createElement("div"));
-  const view = registered.mount(container, context);
-  onTestFinished(() => {
+  let view = registered.mount(container, context);
+  function dispose() {
     abort.abort();
     view?.dispose?.();
+    view = undefined;
+  }
+  onTestFinished(() => {
+    dispose();
     if (typeof stop === "function") {
       stop();
     }
@@ -96,6 +100,7 @@ async function mount() {
     request,
     connection,
     notify: () => notify(),
+    dispose,
     update(presented: boolean) {
       context = { ...context, presented };
       view?.update?.(context);
@@ -143,16 +148,12 @@ it("keeps serial admission, redacted failures, and the draft through a held retr
   expect(container.textContent).toContain("Account added");
 });
 
-it("retires a failed read when hidden and restores only fresh administrator data", async () => {
+it("retires hidden and disposed reads while restoring only fresh administrator data", async () => {
   const f = await mount();
   const pending = Promise.withResolvers<XAllowlistSnapshot>();
   f.request.mockReturnValueOnce(pending.promise);
   f.container.querySelector<HTMLButtonElement>("header button")!.click();
   f.update(false);
-  pending.reject(new Error("Retired failure"));
-  await pending.promise.catch(() => {});
-  flush();
-  expect(f.container.textContent).not.toContain("Retired failure");
   const successor = Promise.withResolvers<XAllowlistSnapshot>();
   f.request.mockReturnValueOnce(successor.promise);
   f.update(true);
@@ -163,6 +164,11 @@ it("retires a failed read when hidden and restores only fresh administrator data
     expect(f.container.textContent).toContain("@maintainer");
   });
   expect(f.container.querySelector('time[datetime="1970-01-01T00:00:00.000Z"]')).not.toBeNull();
+  pending.reject(new Error("Retired failure"));
+  await Promise.resolve();
+  flush();
+  expect(f.container.querySelector('[role="alert"]')).toBeNull();
+  expect(f.container.textContent).toContain("@maintainer");
   f.connection.canAdmin = false;
   f.notify();
   flush();
@@ -170,4 +176,11 @@ it("retires a failed read when hidden and restores only fresh administrator data
     expect(f.container.textContent).toContain("Administrator access is required"),
   );
   expect(f.container.textContent).not.toContain("@maintainer");
+  const disposed = Promise.withResolvers<XAllowlistSnapshot>();
+  f.request.mockReturnValueOnce(disposed.promise);
+  f.connection.canAdmin = true;
+  f.notify();
+  f.dispose();
+  disposed.reject(new Error("Disposed failure"));
+  await Promise.resolve();
 });
