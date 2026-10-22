@@ -138,6 +138,7 @@ export function createFixture(mocks: {
       stopAcceptingSteerMessages: vi.fn(),
       getBeforeAgentFinalizeRevisionReason,
       getBeforeAgentFinalizeRevisionEntryId,
+      getFinalPresentation: () => undefined,
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),

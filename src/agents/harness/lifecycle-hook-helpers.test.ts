@@ -36,6 +36,25 @@ function retry<Key>(instruction: string, idempotencyKey: Key) {
 }
 
 describe("agent harness lifecycle hook helpers", () => {
+  it("carries presentation only on a supported accepted candidate, never an exhausted revision", async () => {
+    const finalPresentation = { blocks: [{ type: "text", text: "Summary" }] };
+    const supported = { ...EVENT, supportsFinalPresentation: true as const };
+    await expect(finalizer({ finalPresentation }, supported)()).resolves.toEqual({
+      action: "continue",
+      finalPresentation,
+    });
+    await expect(finalizer({ finalPresentation })()).resolves.toEqual({ action: "continue" });
+    await expect(
+      finalizer({ action: "finalize", reason: "Done", finalPresentation }, supported)(),
+    ).resolves.toEqual({ action: "finalize", reason: "Done", finalPresentation });
+    const revise = finalizer(
+      { action: "revise", retry: retry("Correct the answer", "presentation"), finalPresentation },
+      supported,
+    );
+    await expect(revise()).resolves.toEqual({ action: "revise", reason: "Correct the answer" });
+    await expect(revise()).resolves.toEqual({ action: "continue" });
+  });
+
   afterEach(() => {
     log.warn.mockClear();
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.pluginFinalizeRetryBudget"));

@@ -322,6 +322,35 @@ Copilot harness does not dispatch it.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 
+#### Presentation on an accepted final
+
+When `event.supportsFinalPresentation === true`, a handler can return
+`{ finalPresentation: MessagePresentation }` with or without an action. Compute
+the presentation from this invocation's candidate answer; returning it does not
+send a message or force finalization. OpenClaw normalizes it through the existing
+presentation model and carries it only with the selected ordinary final reply.
+Adapters retain rendering, text fallback, routing and delivery ownership.
+
+The first presentation in hook priority order wins. A revision decision discards
+the candidate's presentation, even when the revision budget is exhausted. An
+explicit `finalize` decision still overrides revisions under the existing rules;
+if it follows a revision, only its own presentation can accompany that decision.
+Later handlers cannot change an already-forced finalization. Timeout or failure
+does not accept a late handler result.
+
+Support currently covers natural final answers in the embedded runner. It does
+not create an answer for an empty, silent, failed, canceled or incomplete turn,
+or decorate explicit tool/approval output. The native Codex relay, Copilot and
+settled-tool finalization do not advertise this capability. Missing support must
+not be treated as successful preparation. The flag describes the finalization
+path, not whether the destination renders cards or other structured content.
+
+This contract has no cross-hook staging or preparation tool. Do not use a
+session-keyed or run-keyed map to infer the accepted candidate: a run can contain
+multiple attempts. A tool-prepared presentation needs a separately supported
+execution/attempt association. Existing `reply_payload_sending` hooks still apply
+their sequential transformations and cancellation before delivery.
+
 When returning `action: "revise"`, plugins can include `retry` metadata to
 bound repeated revision requests within a run:
 

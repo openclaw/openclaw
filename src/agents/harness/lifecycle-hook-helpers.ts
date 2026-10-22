@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { BeforeAgentFinalizeResultWithRetryCandidates } from "../../plugins/hook-runner-types.js";
 import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
+  PluginHookBeforeAgentFinalizeResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -97,9 +99,16 @@ export async function awaitAgentHarnessAgentEndHook(
 }
 
 type AgentHarnessBeforeAgentFinalizeOutcome =
-  | { action: "continue" }
+  | {
+      action: "continue";
+      finalPresentation?: PluginHookBeforeAgentFinalizeResult["finalPresentation"];
+    }
   | { action: "revise"; reason: string }
-  | { action: "finalize"; reason?: string };
+  | {
+      action: "finalize";
+      reason?: string;
+      finalPresentation?: PluginHookBeforeAgentFinalizeResult["finalPresentation"];
+    };
 
 /** Runs before-finalize hooks and normalizes finalize/revise/continue decisions. */
 export async function runAgentHarnessBeforeAgentFinalizeHook(
@@ -133,12 +142,20 @@ function normalizeBeforeAgentFinalizeResult(
   result: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
   event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
+  const finalPresentation =
+    event?.supportsFinalPresentation === true && result?.action !== "revise"
+      ? normalizeMessagePresentation(result?.finalPresentation)
+      : undefined;
   if (result?.action === "finalize") {
     const reason = normalizeTrimmedString(result.reason);
-    return reason ? { action: "finalize", reason } : { action: "finalize" };
+    return {
+      action: "finalize",
+      ...(reason ? { reason } : {}),
+      ...(finalPresentation ? { finalPresentation } : {}),
+    };
   }
   if (result?.action !== "revise") {
-    return { action: "continue" };
+    return { action: "continue", ...(finalPresentation ? { finalPresentation } : {}) };
   }
   const retryCandidates = result.retryCandidates?.length
     ? result.retryCandidates

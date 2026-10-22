@@ -44,6 +44,7 @@ type ResultInput = {
   messagingToolSentMediaUrls?: string[];
   didSendViaMessagingTool?: boolean;
   assistantTexts?: readonly string[];
+  finalPresentation?: EmbeddedRunAttemptResult["finalPresentation"];
   allowedToolNames?: string[];
 };
 
@@ -120,7 +121,16 @@ function createResultFixture(params: ResultInput = {}) {
         trajectoryRecorder: params?.trajectoryRecorder,
       },
     },
-    preparedStreamRuntime: { stream: { subscription }, cache: {} },
+    preparedStreamRuntime: {
+      stream: {
+        subscription,
+        getFinalPresentation: (assistant: EmbeddedRunAttemptResult["lastAssistant"]) =>
+          assistant === params.currentAttemptCompletedAssistant
+            ? params.finalPresentation
+            : undefined,
+      },
+      cache: {},
+    },
   };
   return { input, state, settled, prompt, hookRunner };
 }
@@ -174,6 +184,7 @@ describe("attempt result projection", () => {
     [["Legacy context.", "Signed answer."], "Legacy context.\nSigned answer.", 1],
     [["Legacy context.", "Signed answer.\n\nNO_REPLY"], "Signed answer.", 1],
   ])("preserves native answer boundaries for %j", (parts, text, signedIndex) => {
+    const finalPresentation = { blocks: [{ type: "text" as const, text: "Answer summary" }] };
     const assistant = makeAssistantMessageFixture({
       stopReason: "stop",
       content: parts.map((part, index) => ({
@@ -188,7 +199,9 @@ describe("attempt result projection", () => {
       currentAttemptCompletedAssistant: assistant,
       assistantTexts: parts,
       hasSuccessfulModelResponse: true,
+      finalPresentation,
     });
+    expect(result.finalPresentation).toEqual(finalPresentation);
     expect(result.preparedTerminalReply).toEqual({
       text,
       terminalReply: { disposition: "visible", text },

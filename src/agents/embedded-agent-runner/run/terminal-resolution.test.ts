@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
@@ -45,6 +50,219 @@ describe("terminal resolution", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGeneratedMediaTaskActivityForTests();
+  });
+
+  const finalPresentation: NonNullable<ReplyPayload["presentation"]> = {
+    title: "Result summary",
+    blocks: [{ type: "text", text: "Three checks passed." }],
+  };
+
+  it.each([false, true])(
+    "preserves final payload media and metadata when presentation is enabled=%s",
+    async (enabled) => {
+      const text = "All checks passed. Report attached.";
+      const first = { text: "The checks are complete." };
+      const last = setReplyPayloadMetadata(
+        { text, mediaUrls: ["https://example.invalid/report.pdf"], replyToId: "source-message" },
+        { assistantMessageIndex: 4, assistantTranscriptOwned: true, replyToIdExplicit: true },
+      );
+      const notice = setReplyPayloadMetadata({ text: "Host status" }, { hostNotice: true });
+      const resolved = await resolveTerminal({
+        assistant: textAssistant(text),
+        attemptOverrides: { finalPresentation: enabled ? finalPresentation : undefined },
+        payloadsWithToolMedia: [first, last, notice],
+      });
+
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([
+        first,
+        { ...last, ...(enabled ? { presentation: finalPresentation } : {}) },
+        notice,
+      ]);
+      expect(resolved.result.payloads?.[0]).toBe(first);
+      expect(resolved.result.payloads?.[2]).toBe(notice);
+      const delivered = resolved.result.payloads?.[1];
+      if (!delivered) {
+        throw new Error("Expected the ordinary final payload");
+      }
+      expect(getReplyPayloadMetadata(delivered)).toEqual({
+        assistantMessageIndex: 4,
+        assistantTranscriptOwned: true,
+        replyToIdExplicit: true,
+      });
+      expect(last).not.toHaveProperty("presentation");
+      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
+    },
+  );
+
+  it.each([
+    { kind: "failed", source: "prompt", error: new Error("Provider failed") },
+    { kind: "aborted", source: "external" },
+    { kind: "timeout", phase: "prompt", source: "runtime" },
+  ] satisfies NonNullable<Parameters<typeof assistantAttempt>[1]>["terminal"][])(
+    "does not attach presentation to a $kind terminal outcome",
+    async (terminal) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("Partial answer."),
+        attemptOverrides: { terminal, finalPresentation },
+        payloadsWithToolMedia: [{ text: "Partial answer." }],
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ presentation: finalPresentation })]),
+      );
+    },
+  );
+
+  it.each([
+    { yieldDetected: true },
+    { didSendDeterministicApprovalPrompt: true },
+    { clientToolCalls: [{ name: "client_tool", params: {} }] },
+  ] satisfies NonNullable<Parameters<typeof assistantAttempt>[1]>[])(
+    "keeps presentation off non-ordinary terminal completion %j",
+    async (attemptOverrides) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("Waiting for the next step."),
+        attemptOverrides: { ...attemptOverrides, finalPresentation },
+        payloadsWithToolMedia: [{ text: "Waiting for the next step." }],
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ presentation: finalPresentation })]),
+      );
+    },
+  );
+
+  it.each(["", SILENT_REPLY_TOKEN])(
+    "does not turn absent or silent final text %j into presentation output",
+    async (text) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant(text),
+        attemptOverrides: { finalPresentation },
+        runParams: { terminalReplyExpectation: "optional" },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toBeUndefined();
+      expect(resolved.result.meta.terminalReply?.disposition).toBe(text ? "silent" : "empty");
+    },
+  );
+
+  it.each([false, true])(
+    "preserves unsent media=%s after the ordinary answer already streamed",
+    async (withMedia) => {
+      const text = "The streamed answer is complete.";
+      const assistant = textAssistant(text);
+      const mediaUrl = "https://example.invalid/report.pdf";
+      const attempt = assistantAttempt(assistant, {
+        assistantTexts: [text],
+        finalPresentation,
+        toolMediaUrls: withMedia ? [mediaUrl] : undefined,
+      });
+      const prepared = await prepareAttempt({
+        attempt,
+        currentAttemptCompletedAssistant: assistant,
+        replyDeliveryState: "delivered",
+        sourceReplyDeliveryState: "delivered",
+      });
+      expect(prepared.payloadsWithToolMedia).toEqual(
+        withMedia
+          ? [
+              {
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+                audioAsVoice: undefined,
+                trustedLocalMedia: undefined,
+              },
+            ]
+          : [],
+      );
+
+      const resolved = await resolveTerminal({ attempt, prepared });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([
+        ...(prepared.payloadsWithToolMedia ?? []),
+        { presentation: finalPresentation },
+      ]);
+      if (withMedia) {
+        expect(resolved.result.payloads?.[0]).toBe(prepared.payloadsWithToolMedia?.[0]);
+      }
+      expect(resolved.result.meta.terminalReply).toEqual({ disposition: "visible", text });
+    },
+  );
+
+  it.each(
+    ["message-tool", "message-tool-only", "pending", "missing"].flatMap((delivery) =>
+      [false, true].map((withMedia) => ({ delivery, withMedia })),
+    ),
+  )(
+    "does not synthesize a presentation residual for $delivery delivery with media=$withMedia",
+    async ({ delivery, withMedia }) => {
+      const payloads = withMedia ? [{ mediaUrls: ["https://example.invalid/report.pdf"] }] : [];
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("An answer exists."),
+        attemptOverrides: {
+          finalPresentation,
+          ...(delivery === "message-tool" ? { didDeliverSourceReplyViaMessageTool: true } : {}),
+        },
+        replyDeliveryState: delivery === "missing" ? "missing" : "delivered",
+        payloadsWithToolMedia: payloads,
+        sourceReplyDeliveryState: delivery === "pending" ? "pending" : "delivered",
+        runParams: {
+          ...(delivery === "message-tool-only"
+            ? { sourceReplyDeliveryMode: "message_tool_only" }
+            : {}),
+          terminalReplyExpectation: "optional",
+        },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads ?? []).toEqual(payloads);
+    },
+  );
+
+  it.each([
+    { text: "Existing presentation", presentation: { blocks: [{ type: "text", text: "Owned" }] } },
+    { text: "Approval", channelData: { execApproval: { id: "approval-1" } } },
+    { text: "Legacy interaction", interactive: { blocks: [{ type: "text", text: "Owned" }] } },
+    { text: "Side answer", btw: { question: "Side question?" } },
+    { text: "Commentary", isCommentary: true },
+    { mediaUrls: ["https://example.invalid/tool-output.png"], presentation: finalPresentation },
+    { mediaUrls: ["https://example.invalid/tool-output.png"], isError: true },
+    setReplyPayloadMetadata(
+      { mediaUrls: ["https://example.invalid/tool-output.png"] },
+      { deliverDespiteSourceReplySuppression: true },
+    ),
+    setReplyPayloadMetadata({ text: "Earlier input" }, { precedingInputAnswer: true }),
+    setReplyPayloadMetadata(
+      { text: "Explicit tool reply" },
+      { sourceReplyTranscriptMirror: { sessionKey: "agent:main:test" } },
+    ),
+  ] satisfies ReplyPayload[])(
+    "does not retarget a protected or non-text payload %j",
+    async (payload) => {
+      const resolved = await resolveTerminal({
+        assistant: textAssistant("The ordinary answer."),
+        attemptOverrides: { finalPresentation },
+        payloadsWithToolMedia: [payload],
+        replyDeliveryState: "delivered",
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual([payload]);
+      expect(resolved.result.payloads?.[0]).toBe(payload);
+    },
+  );
+
+  it("does not move presentation to earlier text when the final payload is already structured", async () => {
+    const payloads: ReplyPayload[] = [
+      { text: "Earlier text." },
+      { text: "Final answer.", presentation: { blocks: [{ type: "text", text: "Owned" }] } },
+    ];
+    const resolved = await resolveTerminal({
+      assistant: textAssistant("Final answer."),
+      attemptOverrides: { finalPresentation },
+      payloadsWithToolMedia: payloads,
+    });
+    expectComplete(resolved);
+    expect(resolved.result.payloads).toEqual(payloads);
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {
@@ -497,6 +715,7 @@ describe("terminal resolution", () => {
   it("retries reasoning-only output and surfaces a retained presentation after exhaustion", async () => {
     const assistant = reasoningAssistant("rs_terminal", "internal reasoning");
     const attempt = assistantAttempt(assistant, {
+      finalPresentation,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     const retryInput = makeTerminalInput({
@@ -641,6 +860,7 @@ describe("terminal resolution", () => {
         assistant: textAssistant(text, { stopReason: "length" }),
         attemptOverrides: {
           assistantTexts: [text],
+          finalPresentation,
           toolMediaUrls,
           currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
         },

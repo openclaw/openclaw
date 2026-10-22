@@ -220,7 +220,7 @@ export function projectSettledProviderFailureAttempt(
         state: {},
       },
     },
-    preparedStreamRuntime: { stream: { subscription } },
+    preparedStreamRuntime: { stream: { subscription, getFinalPresentation: () => undefined } },
   };
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }

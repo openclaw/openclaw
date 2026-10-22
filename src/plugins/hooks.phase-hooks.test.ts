@@ -534,6 +534,24 @@ function finalize(...results: PluginHookBeforeAgentFinalizeResult[]) {
 }
 
 describe("before_agent_finalize", () => {
+  it("keeps the first presentation producer without changing finalization precedence", async () => {
+    const first = { title: "First", blocks: [{ type: "text" as const, text: "Summary" }] };
+    const second = { blocks: [{ type: "text" as const, text: "Other summary" }] };
+    await expect(
+      finalize({ finalPresentation: first }, { action: "continue", finalPresentation: second }),
+    ).resolves.toEqual({ action: "continue", finalPresentation: first });
+    await expect(
+      finalize({ finalPresentation: first }, { action: "revise", reason: "Correct the answer" }),
+    ).resolves.toEqual({ action: "revise", reason: "Correct the answer" });
+    await expect(
+      finalize(
+        { finalPresentation: first },
+        { action: "revise", reason: "Correct the answer" },
+        { action: "finalize", finalPresentation: second },
+      ),
+    ).resolves.toEqual({ action: "finalize", finalPresentation: second });
+  });
+
   it("retains valid retry candidates in order while discarding invalid instructions", async () => {
     const result = await finalize(
       { action: "revise", reason: "empty", retry: { instruction: "   ", idempotencyKey: "empty" } },
