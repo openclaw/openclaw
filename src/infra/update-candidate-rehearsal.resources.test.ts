@@ -541,7 +541,7 @@ const { registerPolicyDoctorChecks } = await loadBundledPluginFacade<{
 }>({ pluginId: "policy", artifactBasename: "api.ts" });
 
 it.each(["token", "password"] as const)(
-  "preserves policy rate limits while isolating %s authentication",
+  "preserves deployment policy settings for %s authentication",
   async (mode) => {
     const root = tempDirs.make("candidate-policy-");
     await materializeUpdateCandidateStateWorker(root);
@@ -593,21 +593,7 @@ it.each(["token", "password"] as const)(
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
-      expect(copied.gateway).toMatchObject({
-        bind: "loopback",
-        port: rehearsal.port,
-        trustedProxies: config.gateway?.trustedProxies,
-        auth: {
-          mode: "token",
-          rateLimit: config.gateway?.auth?.rateLimit,
-          identityScopes: config.gateway?.auth?.identityScopes,
-          trustedProxy: config.gateway?.auth?.trustedProxy,
-          allowTailscale: false,
-          token: expect.any(String),
-        },
-      });
-      expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      expect(copied.gateway?.auth?.password).toBeUndefined();
+      expect(copied.gateway).toEqual(config.gateway);
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import JSON5 from "json5";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
@@ -46,6 +47,7 @@ export type UpdateCandidateRehearsal = {
   snapshotWarnings?: string[];
   cleanupDirectories: string[];
   pluginCodeLinks?: UpdateCandidatePluginCodeLink[];
+  prepareRuntime: (assertCurrent: () => void) => Promise<void>;
   cleanup: (assertDirectoryCurrent?: (directory: string) => void) => Promise<void>;
 };
 
@@ -53,7 +55,6 @@ function isolatedConfig(
   config: OpenClawConfigWithLegacyRoster,
   sourceRoot: string,
   stateDir: string,
-  port: number,
   sourceEnv: NodeJS.ProcessEnv,
   pluginPaths: Record<string, string>,
   migrationPolicy?: "rehearse" | "startup-only",
@@ -130,16 +131,24 @@ function isolatedConfig(
   }
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
-  delete copied.diagnostics;
   delete copied.session?.store;
   copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
-  copied.gateway = {
-    ...copied.gateway,
+  return copied;
+}
+
+/** Apply runtime-only isolation after deployment config checks have finished. */
+function isolatedRuntimeConfig(
+  config: OpenClawConfigWithLegacyRoster,
+  port: number,
+): OpenClawConfigWithLegacyRoster {
+  delete config.diagnostics;
+  config.gateway = {
+    ...config.gateway,
     mode: "local",
     bind: "loopback",
     port,
     auth: {
-      ...copied.gateway?.auth,
+      ...config.gateway?.auth,
       mode: "token",
       token: randomUUID(),
       password: undefined,
@@ -149,14 +158,14 @@ function isolatedConfig(
     tailscale: { mode: "off" },
     controlUi: { enabled: false },
   };
-  copied.cron = { ...copied.cron, enabled: false, triggers: { enabled: false } };
-  copied.hooks = { enabled: false, internal: { enabled: false } };
-  copied.transcripts = { enabled: false, autoStart: [] };
-  copied.discovery = { mdns: { mode: "off" } };
-  if (copied.mcp?.apps) {
-    copied.mcp.apps.enabled = false;
+  config.cron = { ...config.cron, enabled: false, triggers: { enabled: false } };
+  config.hooks = { enabled: false, internal: { enabled: false } };
+  config.transcripts = { enabled: false, autoStart: [] };
+  config.discovery = { mdns: { mode: "off" } };
+  if (config.mcp?.apps) {
+    config.mcp.apps.enabled = false;
   }
-  return copied;
+  return config;
 }
 
 /** Prepare one disposable generation for candidate diagnostics. */
@@ -270,7 +279,6 @@ export async function prepareUpdateCandidateRehearsal(params: {
         params.config,
         path.resolve(params.stateDir),
         tempDir,
-        port,
         sourceEnv,
         pluginPaths,
         params.migrationPolicy,
@@ -293,6 +301,15 @@ export async function prepareUpdateCandidateRehearsal(params: {
       snapshotWarnings,
       cleanupDirectories,
       pluginCodeLinks,
+      prepareRuntime: async (assertCurrent) => {
+        const config: OpenClawConfigWithLegacyRoster = JSON5.parse(
+          await fs.readFile(configPath, "utf8"),
+        );
+        assertCurrent();
+        await fs.writeFile(configPath, JSON.stringify(isolatedRuntimeConfig(config, port)), {
+          mode: 0o600,
+        });
+      },
       cleanup,
     };
   } catch (error) {
