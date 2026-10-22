@@ -20,7 +20,7 @@ import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capa
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, ToolInputError } from "./common.js";
+import { jsonResult, ToolInputError } from "./common.js";
 
 const MAX_WAIT_IDS = 1_000;
 
@@ -357,11 +357,13 @@ export function createAgentsWaitTool(opts: {
     outputSchema: AgentsWaitOutputSchema,
     execute: async (toolCallId, args, signal) => {
       const params = args as Static<typeof AgentsWaitToolSchema>;
+      if (!Array.isArray(params?.ids) || params.ids.some((id) => typeof id !== "string")) {
+        throw new ToolInputError("agents_wait ids must be an array of run id strings.");
+      }
       const scope = nativeCollectorOwner.getStore();
       return jsonResult(
         await collectNativeSubagentResults({
           ...params,
-          ids: readStringArrayParam(asOptionalRecord(args) ?? {}, "ids") ?? [],
           currentSessionKeys: new Set(
             [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
               Boolean(key?.trim()),
