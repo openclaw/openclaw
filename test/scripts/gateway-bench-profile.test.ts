@@ -107,14 +107,12 @@ function heapBytesUnder(
 it("attributes broadcast allocations through deep stacks without double counting", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
-  let id = 0;
   const frame = (
     functionName: string,
     file: string,
     selfSize: number,
     children: HeapProfiler.SamplingHeapProfileNode[] = [],
   ): HeapProfiler.SamplingHeapProfileNode => ({
-    id: ++id,
     callFrame: { functionName, scriptId: "1", url: file, lineNumber: 0, columnNumber: 0 },
     selfSize,
     children,
@@ -134,7 +132,6 @@ it("attributes broadcast allocations through deep stacks without double counting
       frame("unrelated", "", 1000),
       frame("broadcastInternal", "server-broadcast.ts", 100, [projection]),
     ]),
-    samples: [],
   };
   const file = path.join(directory, "allocation.heapprofile");
   await writeFile(file, JSON.stringify(profile));
