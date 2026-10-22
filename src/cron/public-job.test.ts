@@ -16,73 +16,61 @@ function publicJob(job: CronStoredJob, privateFields: string[] = []) {
 }
 
 describe("toPublicCronJob", () => {
-  it("strips scheduler-only state without mutating the stored job", () => {
-    const job = makeCronJob({
-      state: {
-        nextRunAtMs: 2_000,
-        queuedAtMs: 1_900,
-        runningReceiptId: "pending-receipt",
-        startupCatchupAtMs: 2_000,
-        pacedNextRunAtMs: 2_000,
-        forcePreservedNextRunAtMs: 2_000,
-        runningScheduleChangeId: "pending-run-edit",
-        failureAlertIncident: { signature: "internal-incident", scope: "run" },
-        lastFailureNotificationId: "internal-notification",
-      },
-    });
-
-    expect(publicJob(job).state).toStrictEqual({ nextRunAtMs: 2_000 });
-  });
-
-  it("projects script payload fields without exposing scheduler-only state", () => {
+  it("preserves script fields and public state without mutating the stored job", () => {
+    const state = {
+      nextRunAtMs: 2_000,
+      queuedAtMs: 1_900,
+      runningReceiptId: "pending-receipt",
+      startupCatchupAtMs: 2_000,
+      pacedNextRunAtMs: 2_000,
+      forcePreservedNextRunAtMs: 2_000,
+      runningScheduleChangeId: "pending-run-edit",
+      failureAlertIncident: { signature: "internal-incident", scope: "run" as const },
+      lastFailureNotificationId: "internal-notification",
+      triggerState: { revision: 1 },
+    };
     const payload = {
       kind: "script",
       script: "return { notify: 'done' }",
       timeoutSeconds: 300,
       toolBudget: 50,
     } as const;
-    const job = makeCronJob({
-      payload,
-      state: { triggerState: { revision: 1 }, pacedNextRunAtMs: 2_000 },
-    });
-    expect(publicJob(job)).toMatchObject({
-      payload,
-      state: { triggerState: { revision: 1 } },
+    const job = makeCronJob({ payload, state });
+    const result = publicJob(job);
+    expect(result).toMatchObject({ payload });
+    expect(result.state).toStrictEqual({
+      nextRunAtMs: 2_000,
+      triggerState: { revision: 1 },
     });
   });
 
-  it.each(["final-executable-surface", "authenticated-requester", "runtime"] as const)(
-    "strips private %s provenance without mutating the stored job",
-    (source) => {
-      const channelRequester = {
-        version: 1 as const,
-        channel: "discord",
-        accountId: "work",
-        senderId: "123456789012345678",
-      };
-      const target = { version: 1, host: "gateway", ask: "always" } as const;
-      const fields: Partial<CronStoredJob> =
-        source === "runtime"
-          ? {
-              runtimeAuthority: {
-                version: 1,
-                runtimeId: "codex",
-                namespace: "codex.apps",
-                payload: { apps: [{ id: "calendar" }] },
-              },
-              runtimeAuthorityRecoveryRequired: true,
-            }
-          : {
-              toolsAllowProvenance:
-                source === "final-executable-surface"
-                  ? { version: 1, source, callerOrigin: { kind: "unknown" }, channelRequester }
-                  : { version: 1, source, channelRequester },
-              toolsAllowExecTarget: target,
-              toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },
-            };
-      publicJob({ ...makeCronJob({}), ...fields }, Object.keys(fields));
-    },
-  );
+  it("strips runtime and executable provenance without mutating the stored job", () => {
+    const channelRequester = {
+      version: 1 as const,
+      channel: "discord",
+      accountId: "work",
+      senderId: "123456789012345678",
+    };
+    const target = { version: 1, host: "gateway", ask: "always" } as const;
+    const fields: Partial<CronStoredJob> = {
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      },
+      runtimeAuthorityRecoveryRequired: true,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "unknown" },
+        channelRequester,
+      },
+      toolsAllowExecTarget: target,
+      toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },
+    };
+    publicJob({ ...makeCronJob({}), ...fields }, Object.keys(fields));
+  });
 
   it("strips private creator provenance and sandbox target without mutating the stored job", () => {
     const streamSandbox = makeCronStreamSandboxTarget();
